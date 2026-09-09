@@ -1,0 +1,219 @@
+[
+  {
+    "id": "xai-api",
+    "name": "xAI API",
+    "suit": "diamonds",
+    "amount": 246.98,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "status": "hot",
+    "notes": "Usage-based API spend, trending up fast this cycle.",
+    "alert": {
+      "level": "critical",
+      "message": "xAI usage running hot this cycle"
+    }
+  },
+  {
+    "id": "claude-sub",
+    "name": "Claude Sub",
+    "suit": "diamonds",
+    "amount": 34,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Base subscription."
+  },
+  {
+    "id": "claude-usage",
+    "name": "Claude Usage",
+    "suit": "diamonds",
+    "amount": 144.62,
+    "currency": "AUD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Metered usage billed in AUD \u2014 kept separate, not converted."
+  },
+  {
+    "id": "cursor-pro",
+    "name": "Cursor Pro",
+    "suit": "diamonds",
+    "amount": 20,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "status": "alert",
+    "notes": "Monthly seat.",
+    "alert": {
+      "level": "critical",
+      "message": "Payment unsuccessful \u2014 $109.42 failed to process"
+    }
+  },
+  {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "suit": "diamonds",
+    "amount": 49.98,
+    "currency": "USD",
+    "cadence": "balance",
+    "mode": "full",
+    "notes": "Prepaid balance remaining, drawn down by usage."
+  },
+  {
+    "id": "supergrok",
+    "name": "SuperGrok",
+    "suit": "diamonds",
+    "amount": 50,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Monthly plan."
+  },
+  {
+    "id": "vercel",
+    "name": "Vercel",
+    "suit": "spades",
+    "amount": 254,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "status": "hot",
+    "notes": "Two recent charges this cycle: $195 + $59.",
+    "alert": {
+      "level": "warning",
+      "message": "Vercel spend spike \u2014 two charges this cycle"
+    }
+  },
+  {
+    "id": "neon",
+    "name": "Neon",
+    "suit": "spades",
+    "amount": 46.87,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Estimated."
+  },
+  {
+    "id": "resend",
+    "name": "Resend",
+    "suit": "spades",
+    "amount": 20,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Email sending plan."
+  },
+  {
+    "id": "improvmx",
+    "name": "ImprovMX",
+    "suit": "spades",
+    "amount": 9,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Email forwarding plan."
+  },
+  {
+    "id": "mongodb",
+    "name": "MongoDB",
+    "suit": "spades",
+    "amount": null,
+    "currency": "USD",
+    "cadence": "unknown",
+    "mode": "pause",
+    "status": "pending",
+    "notes": "Plan / amount TBD \u2014 not yet counted in the burn total."
+  },
+  {
+    "id": "digitalocean",
+    "name": "DigitalOcean",
+    "suit": "spades",
+    "amount": 0,
+    "currency": "USD",
+    "cadence": "one-time",
+    "mode": "pause",
+    "status": "closed",
+    "notes": "Account closed \u2014 kept here for history, not counted."
+  },
+  {
+    "id": "comfy",
+    "name": "Comfy",
+    "suit": "hearts",
+    "amount": 35,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Estimated."
+  },
+  {
+    "id": "elevenlabs",
+    "name": "ElevenLabs",
+    "suit": "hearts",
+    "amount": 22,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Voice generation plan."
+  },
+  {
+    "id": "suno",
+    "name": "Suno",
+    "suit": "hearts",
+    "amount": 50,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Music generation plan."
+  },
+  {
+    "id": "siray",
+    "name": "Siray",
+    "suit": "hearts",
+    "amount": 20,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Estimated."
+  },
+  {
+    "id": "odds-api",
+    "name": "Odds API",
+    "suit": "hearts",
+    "amount": 30,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Data API plan."
+  },
+  {
+    "id": "icloud-plus",
+    "name": "iCloud+",
+    "suit": "clubs",
+    "amount": 4.49,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Storage plan."
+  },
+  {
+    "id": "x-premium",
+    "name": "X Premium",
+    "suit": "clubs",
+    "amount": 16,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Subscription."
+  },
+  {
+    "id": "meta",
+    "name": "Meta / Facebook",
+    "suit": "clubs",
+    "amount": 22,
+    "currency": "USD",
+    "cadence": "monthly",
+    "mode": "full",
+    "notes": "Estimated."
+  }
+]
