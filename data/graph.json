@@ -1,0 +1,37 @@
+{
+  "nodes": [
+    {
+      "id": "skidmarks",
+      "label": "Skidmarks",
+      "kind": "project",
+      "role": "Sibling project. Not wired into the control plane yet \u2014 mapped here to the Make lane as a v0 placeholder guess, not a confirmed integration.",
+      "suit": "hearts"
+    },
+    {
+      "id": "aiglitch",
+      "label": "AIG!itch / aiglitch-api",
+      "kind": "project",
+      "role": "Sibling project / API. Mapped here to the Models lane as a v0 placeholder guess \u2014 swap this once it's actually calling check()/report() against the control-plane stub.",
+      "suit": "diamonds"
+    },
+    {
+      "id": "new-project",
+      "label": "+ project",
+      "kind": "placeholder",
+      "role": "Nothing here yet. When a new project is real, give it a card, a suit lane (or leave it unmapped), and a metering edge into Deck.",
+      "suit": null
+    },
+    {
+      "id": "tab",
+      "label": "Deck / The Tab",
+      "kind": "hub",
+      "role": "This app \u2014 the cost scoreboard and control-plane stub. Every project's spend is meant to surface here eventually.",
+      "suit": null
+    }
+  ],
+  "edges": [
+    { "from": "skidmarks", "to": "aiglitch", "label": "content" },
+    { "from": "skidmarks", "to": "tab", "label": "metering" },
+    { "from": "aiglitch", "to": "tab", "label": "metering" }
+  ]
+}

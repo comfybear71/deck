@@ -23,9 +23,15 @@ interface TabCardProps {
   meters: Meter[];
   lastMailSync: LastSync;
   onCollapse: () => void;
+  onOpenGraph: () => void;
 }
 
-export function TabCard({ meters, lastMailSync, onCollapse }: TabCardProps) {
+export function TabCard({
+  meters,
+  lastMailSync,
+  onCollapse,
+  onOpenGraph,
+}: TabCardProps) {
   const [openSuit, setOpenSuit] = useState<Suit | null>(null);
   const { modes, setMode } = useDialModes();
 
@@ -55,6 +61,25 @@ export function TabCard({ meters, lastMailSync, onCollapse }: TabCardProps) {
   return (
     <div className="flex min-h-dvh w-full items-center justify-center bg-black px-0 py-0 sm:px-6 sm:py-10">
       <div className="relative w-full max-w-md rounded-none border-0 bg-zinc-950/80 p-5 sm:rounded-3xl sm:border sm:border-white/10 sm:p-7 sm:shadow-[0_0_60px_-15px_rgba(0,0,0,0.9)]">
+        <button
+          type="button"
+          onClick={onOpenGraph}
+          aria-label="Open Deck graph"
+          className="absolute left-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/80 ring-1 ring-white/20 transition-colors hover:bg-white/20 hover:text-white sm:left-4 sm:top-4"
+        >
+          <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+            <circle cx="4.5" cy="5" r="1.6" fill="currentColor" />
+            <circle cx="15.5" cy="5" r="1.6" fill="currentColor" />
+            <circle cx="10" cy="15" r="1.6" fill="currentColor" />
+            <path
+              d="M6 5.9L13.6 4.8M6.1 6.4L9 13.3M13.9 6.4L11 13.3"
+              stroke="currentColor"
+              strokeWidth="1"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+
         <button
           type="button"
           onClick={onCollapse}

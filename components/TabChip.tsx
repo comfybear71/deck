@@ -7,20 +7,42 @@ import { formatMoney, glowIntensity, laneHasHot, sumLaneUSD, totalBurnUSD } from
 interface TabChipProps {
   meters: Meter[];
   onExpand: () => void;
+  onOpenGraph: () => void;
 }
 
 /**
  * Collapsed, glanceable view of The Tab — a floating pill instead of the
- * full-screen card. Default view on load; tap to expand into TabCard.
+ * full-screen card. Default view on load; tap to expand into TabCard. A
+ * small satellite "Deck" button opens the v0 project graph directly,
+ * without expanding the card first.
  */
-export function TabChip({ meters, onExpand }: TabChipProps) {
+export function TabChip({ meters, onExpand, onOpenGraph }: TabChipProps) {
   const burnUSD = totalBurnUSD(meters);
   const intensity = glowIntensity(burnUSD, LEASH_GOAL_USD);
   const overGoal = burnUSD > LEASH_GOAL_USD;
   const alertCount = meters.filter((m) => m.alert).length;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:inset-x-auto sm:right-6 sm:bottom-6 sm:justify-end sm:px-0 sm:pb-6">
+    <div className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-center gap-2 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:inset-x-auto sm:right-6 sm:bottom-6 sm:justify-end sm:px-0 sm:pb-6">
+      <button
+        type="button"
+        onClick={onOpenGraph}
+        aria-label="Open Deck graph"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-zinc-950/90 text-white/70 shadow-xl backdrop-blur-md transition-colors active:scale-[0.97] hover:bg-zinc-900 hover:text-white"
+      >
+        <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-5 w-5">
+          <circle cx="4.5" cy="5" r="1.8" fill="currentColor" />
+          <circle cx="15.5" cy="5" r="1.8" fill="currentColor" />
+          <circle cx="10" cy="15" r="1.8" fill="currentColor" />
+          <path
+            d="M6 5.9L13.6 4.8M6.1 6.4L9 13.3M13.9 6.4L11 13.3"
+            stroke="currentColor"
+            strokeWidth="1.1"
+            strokeLinecap="round"
+          />
+        </svg>
+      </button>
+
       <button
         type="button"
         onClick={onExpand}

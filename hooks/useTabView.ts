@@ -4,9 +4,11 @@ import { useCallback, useSyncExternalStore } from "react";
 
 const STORAGE_KEY = "the-tab:view-mode";
 
-export type TabViewMode = "chip" | "expanded";
+export type TabViewMode = "chip" | "expanded" | "graph";
 
 const SERVER_SNAPSHOT: TabViewMode = "chip";
+
+const VALID_MODES: readonly TabViewMode[] = ["chip", "expanded", "graph"];
 
 let cachedSnapshot: TabViewMode | null = null;
 
@@ -15,7 +17,9 @@ function readMode(): TabViewMode {
   let next: TabViewMode;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    next = raw === "expanded" ? "expanded" : "chip";
+    next = (VALID_MODES as string[]).includes(raw ?? "")
+      ? (raw as TabViewMode)
+      : "chip";
   } catch {
     next = "chip";
   }
@@ -52,16 +56,18 @@ function writeMode(mode: TabViewMode) {
 }
 
 /**
- * Tracks whether The Tab is shown as the compact chip or the full expanded
- * card, persisted to localStorage (same useSyncExternalStore pattern as
- * useDialModes). Defaults to "chip" — the full-screen card was impractical
- * to glance at on iPhone.
+ * Tracks which of the three surfaces The Tab is showing — the compact
+ * chip, the full expanded card, or the v0 project graph — persisted to
+ * localStorage (same useSyncExternalStore pattern as useDialModes).
+ * Defaults to "chip" — the full-screen card was impractical to glance at
+ * on iPhone, and the graph is a deliberate second surface, not the default.
  */
 export function useTabView() {
   const mode = useSyncExternalStore(subscribe, getSnapshot, () => SERVER_SNAPSHOT);
 
   const expand = useCallback(() => writeMode("expanded"), []);
   const collapse = useCallback(() => writeMode("chip"), []);
+  const openGraph = useCallback(() => writeMode("graph"), []);
 
-  return { mode, expand, collapse };
+  return { mode, expand, collapse, openGraph };
 }
