@@ -7,7 +7,9 @@ multi-page nav.
 ## Stack
 
 - Next.js (App Router) + TypeScript + Tailwind CSS, at the repo root.
-- No backend, no auth, no live billing APIs. Everything is seed data.
+- No auth, no live billing APIs. Cost data is still all seed data — the
+  only backend is the small `/api/control-plane/*` stub described below,
+  which exists to make the dials bite, not to bill anything.
 
 ## What's here
 
@@ -15,18 +17,63 @@ multi-page nav.
   cadence, mode, notes, optional alert).
 - `lib/` — types + pure helpers (lane/burn sums, money formatting, glow
   intensity vs. the leash goal).
-- `hooks/useDialModes.ts` — per-lane **Full / Slow / Pause** dial state,
-  persisted to `localStorage`. **UI-only in v0** — see the stub comment next
-  to `dialAffectsBurn` in `lib/meters.ts` for where a future control-plane
-  `setMode(suit, mode)` call would plug in to actually pause/throttle a
-  lane's live integrations.
+- `lib/control-plane.ts` / `lib/control-plane-server.ts` — the v0
+  control-plane stub. See "Control plane (v0 stub)" below.
+- `app/api/control-plane/` — App Router routes (`mode`, `check`, `report`)
+  that back the stub's server side.
+- `hooks/useDialModes.ts` — per-lane **Full / Slow / Pause** dial state.
+  Calls straight into `lib/control-plane.ts`'s `setMode`, so the dial and
+  the plane share one source of truth (`localStorage`, mirrored to the
+  server stub). Dials actually gate things now — see below.
 - `hooks/useTabView.ts` — whether The Tab is shown as the compact chip or
   the full expanded card, persisted to `localStorage`. Defaults to the chip.
 - `components/` — `TabWidget` (switches between chip/card), `TabChip` (the
   default collapsed pill), `TabCard` (the full expanded screen), `BigBurn`
   (big number + glow halo), `AlertsStrip`, `SuitLane` (one of the four
   suits), `DialControl`, `BottomSheet` (tap a suit to see its individual
-  meters).
+  meters), `ControlPlaneDemo` (the "Simulate spend" panel, expanded-view
+  only).
+
+## Control plane (v0 stub)
+
+Stuart wants Full / Slow / Pause to mean something, not just look like a
+toggle. This app now ships a **thin local control-plane stub** — not a
+separate service, just enough to make the dials bite and to give a future
+project (Skidmarks, or `aiglitch-api`) an obvious shape to call into.
+
+- `check(lane)` \u2192 `{ allowed, mode, reason?, maxConcurrent?, delayMs? }`.
+  **Pause** denies (`allowed: false`). **Slow** allows but returns a
+  throttle hint (`maxConcurrent: 1`, `delayMs: 1200`). **Full** allows
+  outright. Synchronous and local — reads the same store a dial just wrote,
+  so it works instantly, even offline.
+- `report(lane, amount?, meta?)` records a spend event. It's a
+  client-persisted log in `localStorage` (`the-tab:spend-log`, capped at the
+  last 100 events) plus a best-effort POST to `/api/control-plane/report`,
+  which appends to an in-memory server-side log
+  (`lib/control-plane-server.ts`). The server mirror is fire-and-forget —
+  the UI never blocks on it, and it resets on redeploy/cold start, which is
+  expected for a stub.
+- `setMode(lane, mode)` persists the dial position to `localStorage`
+  (`the-tab:dial-modes` — the same key `useDialModes` reads) and
+  best-effort mirrors it to `/api/control-plane/mode`. The suit dials call
+  this directly, so the UI and the plane can't drift apart.
+- **`ControlPlaneDemo`** — an expandable "Control-plane demo" section at the
+  bottom of the expanded `TabCard` (not shown in chip mode). Each suit has a
+  "Simulate spend" button that runs the real `check` \u2192 `report` round
+  trip and shows **allowed** / **throttled** / **denied**, so the leash is
+  felt on a phone without plugging in a real spend source yet.
+
+### How a future project calls this
+
+`Skidmarks` / `aiglitch-api` isn't wired to this stub — that's explicitly
+out of scope here. When it is, the intended integration is: before an
+expensive call, hit `GET /api/control-plane/check?lane=<diamonds|spades|hearts|clubs>`
+and honor `allowed`/`delayMs`/`maxConcurrent`; after it, `POST
+/api/control-plane/report` with `{ lane, amount, meta }`. Both routes are
+plain JSON over HTTP with no auth in v0 (same-origin, no secrets) — a real
+control plane will very likely be its **own service**, not nested inside
+this app; these routes exist so the request/response shape is proven out
+first.
 
 ## Chip mode
 
