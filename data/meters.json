@@ -7,12 +7,8 @@
     "currency": "USD",
     "cadence": "monthly",
     "mode": "full",
-    "status": "hot",
-    "notes": "Usage-based API spend, trending up fast this cycle.",
-    "alert": {
-      "level": "critical",
-      "message": "xAI usage running hot this cycle"
-    }
+    "status": "active",
+    "notes": "Aug figure ($246.98) is historical \u2014 spend has been backed off since, currently being watched to bring the run rate down."
   },
   {
     "id": "claude-sub",
@@ -42,12 +38,8 @@
     "currency": "USD",
     "cadence": "monthly",
     "mode": "full",
-    "status": "alert",
-    "notes": "Monthly seat.",
-    "alert": {
-      "level": "critical",
-      "message": "Payment unsuccessful \u2014 $109.42 failed to process"
-    }
+    "status": "active",
+    "notes": "Monthly seat. Earlier $109.42 failed charge has since been paid \u2014 resolved."
   },
   {
     "id": "deepseek",
