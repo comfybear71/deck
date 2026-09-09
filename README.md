@@ -20,9 +20,23 @@ multi-page nav.
   to `dialAffectsBurn` in `lib/meters.ts` for where a future control-plane
   `setMode(suit, mode)` call would plug in to actually pause/throttle a
   lane's live integrations.
-- `components/` — `TabCard` (the whole screen), `BigBurn` (big number + glow
-  halo), `AlertsStrip`, `SuitLane` (one of the four suits), `DialControl`,
-  `BottomSheet` (tap a suit to see its individual meters).
+- `hooks/useTabView.ts` — whether The Tab is shown as the compact chip or
+  the full expanded card, persisted to `localStorage`. Defaults to the chip.
+- `components/` — `TabWidget` (switches between chip/card), `TabChip` (the
+  default collapsed pill), `TabCard` (the full expanded screen), `BigBurn`
+  (big number + glow halo), `AlertsStrip`, `SuitLane` (one of the four
+  suits), `DialControl`, `BottomSheet` (tap a suit to see its individual
+  meters).
+
+## Chip mode
+
+The Tab loads as a small floating chip by default — a glanceable pill
+showing the estimated burn, four tiny suit dots (lit up if that lane has
+spend, pulsing if hot), and an ambient glow that scales with spend against
+the leash goal, same as the full card. Tap the chip to expand into the full
+`TabCard`; tap the circular chevron in its top-right corner (or press Esc)
+to collapse back to the chip. The choice is persisted to `localStorage`
+(`the-tab:view-mode`), defaulting to the chip on first load.
 
 ## The four lanes
 

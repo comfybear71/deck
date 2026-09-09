@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Meter, Suit } from "@/lib/types";
 import { SUIT_ORDER } from "@/lib/constants";
 import {
@@ -18,11 +18,21 @@ import { BottomSheet } from "./BottomSheet";
 
 interface TabCardProps {
   meters: Meter[];
+  onCollapse: () => void;
 }
 
-export function TabCard({ meters }: TabCardProps) {
+export function TabCard({ meters, onCollapse }: TabCardProps) {
   const [openSuit, setOpenSuit] = useState<Suit | null>(null);
   const { modes, setMode } = useDialModes();
+
+  useEffect(() => {
+    if (openSuit) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCollapse();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [openSuit, onCollapse]);
 
   const burnUSD = useMemo(() => totalBurnUSD(meters), [meters]);
   const burnAUD = useMemo(() => totalBurnAUD(meters), [meters]);
@@ -40,7 +50,24 @@ export function TabCard({ meters }: TabCardProps) {
 
   return (
     <div className="flex min-h-dvh w-full items-center justify-center bg-black px-0 py-0 sm:px-6 sm:py-10">
-      <div className="w-full max-w-md rounded-none border-0 bg-zinc-950/80 p-5 sm:rounded-3xl sm:border sm:border-white/10 sm:p-7 sm:shadow-[0_0_60px_-15px_rgba(0,0,0,0.9)]">
+      <div className="relative w-full max-w-md rounded-none border-0 bg-zinc-950/80 p-5 sm:rounded-3xl sm:border sm:border-white/10 sm:p-7 sm:shadow-[0_0_60px_-15px_rgba(0,0,0,0.9)]">
+        <button
+          type="button"
+          onClick={onCollapse}
+          aria-label="Collapse to chip"
+          className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/80 ring-1 ring-white/20 transition-colors hover:bg-white/20 hover:text-white sm:right-4 sm:top-4"
+        >
+          <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+            <path
+              d="M5 8l5 5 5-5"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+
         <BigBurn burnUSD={burnUSD} burnAUD={burnAUD} />
 
         <div className="mb-4">
