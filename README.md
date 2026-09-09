@@ -39,6 +39,9 @@ multi-page nav.
   the chip.
 - `data/graph.json` / `lib/graph.ts` — the v0 project graph's seed data and
   pure helpers. See "Graph (v0 map)" below.
+- `data/budju.json` / `lib/budju.ts` — Budju portfolio glance seed data and
+  pure helpers (signal sort/format, buy/sell band position). See "Budju
+  node (portfolio glance)" below.
 - `components/` — `TabWidget` (switches between chip/card/graph), `TabChip`
   (the default collapsed pill), `TabCard` (the full expanded screen),
   `BigBurn` (big number + glow halo), `AlertsStrip`, `SuitLane` (one of the
@@ -46,7 +49,8 @@ multi-page nav.
   individual meters), `ControlPlaneDemo` (the "Simulate spend" panel,
   expanded-view only), `MailSyncLine` (the tiny "Last mail sync" line,
   expanded-view only), `GraphView` / `GraphNodeCard` / `GraphNodeSheet`
-  (the v0 project graph — see below).
+  (the v0 project graph — see below), `BudjuNodeCard` / `BudjuDetailSheet`
+  (the featured Budju node's face + detail sheet).
 
 ## Control plane (v0 stub)
 
@@ -248,6 +252,47 @@ node editor.
   or freeform-positioning nodes, and IMAP. This is a map that gets you
   oriented in under two seconds, not a runtime — looping/agents come
   later, and the suit dials are still what actually leashes spend.
+
+### Budju node (portfolio glance)
+
+**Budju** (`budju.xyz/trade`) is the graph's **primary/featured node** —
+it renders first, larger, and visually highlighted (violet gradient
+border + a "Primary" badge), ahead of Skidmarks and AIG!itch. It's a
+different kind of node from the others: not a spend meter, and not
+mapped to a control-plane suit lane — it's a read-only glance at an
+external crypto/USDC portfolio tracker.
+
+- **Node face** (`components/BudjuNodeCard.tsx`) shows only: the pool
+  total (`$9,725` seed, plus "N assets + cash"), the crypto/USDC split
+  as a percentage pair + two-color bar (`86% crypto` / `14% USDC`), and
+  up to a few small signal chips (e.g. `UNI · NEAR BUY`,
+  `NEAR · COOLDOWN`).
+- Tapping it opens **`components/BudjuDetailSheet.tsx`**, a detail sheet
+  with the same three sections in full: a CSS conic-gradient "doughnut"
+  with the pool total centered, the crypto/USDC split with dollar
+  amounts, and a **Signals** list. Each signal card shows the asset,
+  tier, quantity, price, change %, a buy/sell band (with a marker
+  positioned between the buy and sell thresholds), and either an
+  "X% to buy" callout (near-buy/near-sell) or a muted `(cooldown)` label
+  with a one-line "recently triggered" note (cooldowns are shown, not
+  hidden — Stuart wants them as a quiet status, not full noise). The
+  sheet ends with a link out to `https://www.budju.xyz/trade`.
+- **Signal types**: `near-buy`, `near-sell`, `cooldown` — see
+  `BudjuSignalType` in `lib/types.ts`. Actionable signals (near-buy /
+  near-sell) sort ahead of cooldowns (`sortSignals` in `lib/budju.ts`),
+  but cooldowns still render.
+- **Seed data** lives in `data/budju.json`, typed as `BudjuData` in
+  `lib/types.ts` — `updatedAt: null` marks it as static seed data; a
+  future live refresh (polling Budju) can populate `updatedAt` and swap
+  in fresh `pool`/`split`/`signals` without changing any component.
+- **Out of scope**, same as the rest of v0: wallet connect, trades, the
+  full asset list, and any live websocket — this is a glance, not the
+  trade UI.
+- `orderedNodes` in `lib/graph.ts` sorts the `featured` node (Budju, via
+  `GraphNode.featured` in `data/graph.json`) first within the `project`
+  rank; `GraphView` special-cases `BUDJU_NODE_ID` (`lib/constants.ts`) to
+  render `BudjuNodeCard`/`BudjuDetailSheet` instead of the generic
+  `GraphNodeCard`/`GraphNodeSheet`.
 
 ## The four lanes
 
