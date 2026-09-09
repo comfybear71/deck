@@ -18,12 +18,19 @@ export function edgesFrom(edges: GraphEdge[], nodeId: string): GraphEdge[] {
 }
 
 /** Render order: projects first, the placeholder next, the hub last — the hub
- * reads as "everything funnels down into Deck" in a vertical mobile stack. */
+ * reads as "everything funnels down into Deck" in a vertical mobile stack.
+ * Within the project rank, `featured` nodes (Budju) sort first — that's how
+ * Budju stays the primary node ahead of Skidmarks / AIG!itch without a
+ * separate `kind`. */
 export function orderedNodes(data: GraphData): GraphNode[] {
   const rank: Record<GraphNode["kind"], number> = {
     project: 0,
     placeholder: 1,
     hub: 2,
   };
-  return [...data.nodes].sort((a, b) => rank[a.kind] - rank[b.kind]);
+  return [...data.nodes].sort((a, b) => {
+    const rankDiff = rank[a.kind] - rank[b.kind];
+    if (rankDiff !== 0) return rankDiff;
+    return Number(Boolean(b.featured)) - Number(Boolean(a.featured));
+  });
 }

@@ -3,6 +3,13 @@ import type { SuitMeta, Suit, DialMode } from "./types";
 /** Soft monthly leash goal, in USD. Ambient glow scales against this. */
 export const LEASH_GOAL_USD = 400;
 
+/**
+ * Graph node id for the Budju portfolio glance — the primary/featured node.
+ * GraphView special-cases this id to render BudjuNodeCard/BudjuDetailSheet
+ * instead of the generic GraphNodeCard/GraphNodeSheet.
+ */
+export const BUDJU_NODE_ID = "budju";
+
 export const SUIT_META: Record<Suit, SuitMeta> = {
   diamonds: {
     suit: "diamonds",

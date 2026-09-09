@@ -1,17 +1,25 @@
 {
   "nodes": [
     {
+      "id": "budju",
+      "label": "Budju",
+      "kind": "project",
+      "role": "Automated crypto/USDC portfolio tracker (budju.xyz/trade). This node is a read-only glance only — pool total, crypto/USDC split, and near-buy/near-sell/cooldown signals. No wallet connect, no trades, no full asset list, no live websocket here. Not mapped to a control-plane lane; it isn't a spend meter, it's a portfolio to watch.",
+      "suit": null,
+      "featured": true
+    },
+    {
       "id": "skidmarks",
       "label": "Skidmarks",
       "kind": "project",
-      "role": "Sibling project. Not wired into the control plane yet \u2014 mapped here to the Make lane as a v0 placeholder guess, not a confirmed integration.",
+      "role": "Sibling project. Not wired into the control plane yet — mapped here to the Make lane as a v0 placeholder guess, not a confirmed integration.",
       "suit": "hearts"
     },
     {
       "id": "aiglitch",
       "label": "AIG!itch / aiglitch-api",
       "kind": "project",
-      "role": "Sibling project / API. Mapped here to the Models lane as a v0 placeholder guess \u2014 swap this once it's actually calling check()/report() against the control-plane stub.",
+      "role": "Sibling project / API. Mapped here to the Models lane as a v0 placeholder guess — swap this once it's actually calling check()/report() against the control-plane stub.",
       "suit": "diamonds"
     },
     {
@@ -25,7 +33,7 @@
       "id": "tab",
       "label": "Deck / The Tab",
       "kind": "hub",
-      "role": "This app \u2014 the cost scoreboard and control-plane stub. Every project's spend is meant to surface here eventually.",
+      "role": "This app — the cost scoreboard and control-plane stub. Every project's spend is meant to surface here eventually.",
       "suit": null
     }
   ],
