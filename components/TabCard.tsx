@@ -15,6 +15,7 @@ import { BigBurn } from "./BigBurn";
 import { AlertsStrip } from "./AlertsStrip";
 import { SuitLane } from "./SuitLane";
 import { BottomSheet } from "./BottomSheet";
+import { ControlPlaneDemo } from "./ControlPlaneDemo";
 
 interface TabCardProps {
   meters: Meter[];
@@ -90,8 +91,11 @@ export function TabCard({ meters, onCollapse }: TabCardProps) {
         </div>
 
         <p className="mt-5 text-center text-[11px] text-white/30">
-          Tap a suit for its meters. Dials are display-only for now.
+          Tap a suit for its meters. Dials set each lane&rsquo;s control-plane
+          mode.
         </p>
+
+        <ControlPlaneDemo />
       </div>
 
       {openSuit && (

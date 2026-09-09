@@ -64,8 +64,9 @@ export function glowIntensity(burnUSD: number, leashGoalUSD: number): number {
 }
 
 export function dialAffectsBurn(mode: DialMode): boolean {
-  // Stub for v0: dials are UI-only and never mutate spend.
-  // Future control-plane hook, e.g.:
-  //   await setMode(suit, mode) -> pause/slow a lane's live integrations.
+  // A lane's dial now actually gates spend via lib/control-plane.ts
+  // (check/report/setMode) — see that module for the pause/slow/full
+  // semantics. This helper is a lightweight read of the same rule for
+  // display purposes (e.g. "is this lane currently live").
   return mode !== "pause";
 }
