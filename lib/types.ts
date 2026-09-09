@@ -39,3 +39,30 @@ export interface SuitMeta {
   /** Solid background color class, used for compact chip/dot indicators. */
   bg: string;
 }
+
+/**
+ * v0 project graph — see lib/graph.ts. `hub` is Deck/The Tab itself,
+ * `project` is a real sibling project, `placeholder` is the "+ project"
+ * stand-in for whatever comes next.
+ */
+export type GraphNodeKind = "project" | "hub" | "placeholder";
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  kind: GraphNodeKind;
+  role: string;
+  /** Optional link into a control-plane lane — null when not (yet) mapped. */
+  suit: Suit | null;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  label: string;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}

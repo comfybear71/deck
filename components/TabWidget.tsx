@@ -1,10 +1,14 @@
 "use client";
 
-import type { Meter } from "@/lib/types";
+import type { GraphData, Meter } from "@/lib/types";
 import type { LastSync } from "@/lib/overrides";
+import graphData from "@/data/graph.json";
 import { useTabView } from "@/hooks/useTabView";
 import { TabChip } from "./TabChip";
 import { TabCard } from "./TabCard";
+import { GraphView } from "./GraphView";
+
+const graph = graphData as GraphData;
 
 interface TabWidgetProps {
   meters: Meter[];
@@ -12,11 +16,12 @@ interface TabWidgetProps {
 }
 
 /**
- * Switches between the collapsed chip (default) and the full expanded
- * TabCard, persisting the choice via useTabView.
+ * Switches between the three Tab surfaces — the collapsed chip (default),
+ * the full expanded TabCard, and the v0 project graph — persisting the
+ * choice via useTabView.
  */
 export function TabWidget({ meters, lastMailSync }: TabWidgetProps) {
-  const { mode, expand, collapse } = useTabView();
+  const { mode, expand, collapse, openGraph } = useTabView();
 
   if (mode === "expanded") {
     return (
@@ -24,9 +29,14 @@ export function TabWidget({ meters, lastMailSync }: TabWidgetProps) {
         meters={meters}
         lastMailSync={lastMailSync}
         onCollapse={collapse}
+        onOpenGraph={openGraph}
       />
     );
   }
 
-  return <TabChip meters={meters} onExpand={expand} />;
+  if (mode === "graph") {
+    return <GraphView graph={graph} onBack={collapse} onOpenTab={expand} />;
+  }
+
+  return <TabChip meters={meters} onExpand={expand} onOpenGraph={openGraph} />;
 }

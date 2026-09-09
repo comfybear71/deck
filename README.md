@@ -34,15 +34,19 @@ multi-page nav.
   Calls straight into `lib/control-plane.ts`'s `setMode`, so the dial and
   the plane share one source of truth (`localStorage`, mirrored to the
   server stub). Dials actually gate things now — see below.
-- `hooks/useTabView.ts` — whether The Tab is shown as the compact chip or
-  the full expanded card, persisted to `localStorage`. Defaults to the chip.
-- `components/` — `TabWidget` (switches between chip/card), `TabChip` (the
-  default collapsed pill), `TabCard` (the full expanded screen), `BigBurn`
-  (big number + glow halo), `AlertsStrip`, `SuitLane` (one of the four
-  suits), `DialControl`, `BottomSheet` (tap a suit to see its individual
-  meters), `ControlPlaneDemo` (the "Simulate spend" panel, expanded-view
-  only), `MailSyncLine` (the tiny "Last mail sync" line, expanded-view
-  only).
+- `hooks/useTabView.ts` — which of the three surfaces The Tab is showing
+  (chip / expanded card / graph), persisted to `localStorage`. Defaults to
+  the chip.
+- `data/graph.json` / `lib/graph.ts` — the v0 project graph's seed data and
+  pure helpers. See "Graph (v0 map)" below.
+- `components/` — `TabWidget` (switches between chip/card/graph), `TabChip`
+  (the default collapsed pill), `TabCard` (the full expanded screen),
+  `BigBurn` (big number + glow halo), `AlertsStrip`, `SuitLane` (one of the
+  four suits), `DialControl`, `BottomSheet` (tap a suit to see its
+  individual meters), `ControlPlaneDemo` (the "Simulate spend" panel,
+  expanded-view only), `MailSyncLine` (the tiny "Last mail sync" line,
+  expanded-view only), `GraphView` / `GraphNodeCard` / `GraphNodeSheet`
+  (the v0 project graph — see below).
 
 ## Control plane (v0 stub)
 
@@ -211,6 +215,39 @@ the leash goal, same as the full card. Tap the chip to expand into the full
 `TabCard`; tap the circular chevron in its top-right corner (or press Esc)
 to collapse back to the chip. The choice is persisted to `localStorage`
 (`the-tab:view-mode`), defaulting to the chip on first load.
+
+## Graph (v0 map)
+
+Stuart wants ComfyUI-style graphs/nodes eventually, but mobile-first, not
+tiny desktop spaghetti. This is the **first glanceable layer** of that: a
+static map of how French Deck's sibling projects relate, not a real
+node editor.
+
+- Open it from the chip's small satellite button (the three-dot node icon
+  next to the main pill) or, from the expanded `TabCard`, the node icon in
+  the top-left corner. Either way it's a second surface — **the chip stays
+  the default view**; closing the graph (the back arrow, or Esc) returns
+  straight to the chip.
+- **Nodes** are big tappable cards (Skidmarks, AIG!itch / aiglitch-api,
+  Deck / The Tab itself, and a placeholder "+ project"), laid out as a
+  single vertical stack — deliberately not a 2D canvas, so there's no
+  pan/zoom/drag to fight with on a phone. **Edges** render as small labeled
+  connectors directly beneath the node they originate from (e.g. Skidmarks
+  → AIG!itch: *content*; both projects → Deck: *metering*).
+- Tap a node for a detail sheet: its name, role, and — if it's mapped to a
+  suit lane — that lane's **actual** dial (Full / Slow / Pause). It's the
+  same control-plane dial the Tab's suit lanes use, not a copy, so pausing
+  a lane from the graph pauses it everywhere. The Skidmarks → Make and
+  AIG!itch → Models mappings in `data/graph.json` are v0 guesses, not
+  confirmed integrations — swap them once those projects actually call
+  `check()`/`report()`.
+- Seed data lives in `data/graph.json` (nodes + edges, no backend). Tapping
+  the Deck/Tab node's "Open full Tab" button jumps to the expanded
+  `TabCard`.
+- **Out of scope for v0**: real ComfyUI, live agent execution, dragging
+  or freeform-positioning nodes, and IMAP. This is a map that gets you
+  oriented in under two seconds, not a runtime — looping/agents come
+  later, and the suit dials are still what actually leashes spend.
 
 ## The four lanes
 
