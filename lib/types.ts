@@ -36,4 +36,6 @@ export interface SuitMeta {
   label: string;
   color: string;
   glow: string;
+  /** Solid background color class, used for compact chip/dot indicators. */
+  bg: string;
 }

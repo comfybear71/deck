@@ -10,6 +10,7 @@ export const SUIT_META: Record<Suit, SuitMeta> = {
     label: "Models",
     color: "text-rose-400",
     glow: "shadow-rose-500/30",
+    bg: "bg-rose-400",
   },
   spades: {
     suit: "spades",
@@ -17,6 +18,7 @@ export const SUIT_META: Record<Suit, SuitMeta> = {
     label: "Infra",
     color: "text-slate-200",
     glow: "shadow-slate-400/20",
+    bg: "bg-slate-200",
   },
   hearts: {
     suit: "hearts",
@@ -24,6 +26,7 @@ export const SUIT_META: Record<Suit, SuitMeta> = {
     label: "Make",
     color: "text-rose-300",
     glow: "shadow-rose-400/20",
+    bg: "bg-rose-300",
   },
   clubs: {
     suit: "clubs",
@@ -31,6 +34,7 @@ export const SUIT_META: Record<Suit, SuitMeta> = {
     label: "Life",
     color: "text-emerald-300",
     glow: "shadow-emerald-400/20",
+    bg: "bg-emerald-300",
   },
 };
 
