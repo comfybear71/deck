@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Meter, Suit } from "@/lib/types";
+import type { LastSync } from "@/lib/overrides";
 import { SUIT_ORDER } from "@/lib/constants";
 import {
   laneHasHot,
@@ -16,13 +17,15 @@ import { AlertsStrip } from "./AlertsStrip";
 import { SuitLane } from "./SuitLane";
 import { BottomSheet } from "./BottomSheet";
 import { ControlPlaneDemo } from "./ControlPlaneDemo";
+import { MailSyncLine } from "./MailSyncLine";
 
 interface TabCardProps {
   meters: Meter[];
+  lastMailSync: LastSync;
   onCollapse: () => void;
 }
 
-export function TabCard({ meters, onCollapse }: TabCardProps) {
+export function TabCard({ meters, lastMailSync, onCollapse }: TabCardProps) {
   const [openSuit, setOpenSuit] = useState<Suit | null>(null);
   const { modes, setMode } = useDialModes();
 
@@ -94,6 +97,8 @@ export function TabCard({ meters, onCollapse }: TabCardProps) {
           Tap a suit for its meters. Dials set each lane&rsquo;s control-plane
           mode.
         </p>
+
+        <MailSyncLine lastMailSync={lastMailSync} />
 
         <ControlPlaneDemo />
       </div>
