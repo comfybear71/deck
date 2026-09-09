@@ -1,10 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { GraphData } from "@/lib/types";
+import type { BudjuData, GraphData } from "@/lib/types";
 import { edgesFrom, findNode, orderedNodes } from "@/lib/graph";
+import { BUDJU_NODE_ID } from "@/lib/constants";
+import budjuDataRaw from "@/data/budju.json";
 import { GraphNodeCard } from "./GraphNodeCard";
 import { GraphNodeSheet } from "./GraphNodeSheet";
+import { BudjuNodeCard } from "./BudjuNodeCard";
+import { BudjuDetailSheet } from "./BudjuDetailSheet";
+
+const budjuData = budjuDataRaw as BudjuData;
 
 interface GraphViewProps {
   graph: GraphData;
@@ -72,7 +78,14 @@ export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
 
             return (
               <div key={node.id} className="flex flex-col">
-                <GraphNodeCard node={node} onOpen={() => setOpenNodeId(node.id)} />
+                {node.id === BUDJU_NODE_ID ? (
+                  <BudjuNodeCard
+                    data={budjuData}
+                    onOpen={() => setOpenNodeId(node.id)}
+                  />
+                ) : (
+                  <GraphNodeCard node={node} onOpen={() => setOpenNodeId(node.id)} />
+                )}
 
                 {outgoing.length > 0 && (
                   <div className="ml-[1.375rem] flex flex-col gap-1 border-l border-dashed border-white/15 py-2 pl-4">
@@ -121,7 +134,11 @@ export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
         </p>
       </div>
 
-      {openNode && (
+      {openNode && openNode.id === BUDJU_NODE_ID && (
+        <BudjuDetailSheet data={budjuData} onClose={() => setOpenNodeId(null)} />
+      )}
+
+      {openNode && openNode.id !== BUDJU_NODE_ID && (
         <GraphNodeSheet
           node={openNode}
           graph={graph}
