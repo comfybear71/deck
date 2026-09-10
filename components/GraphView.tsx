@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { BudjuData, GraphData, PropfolioData } from "@/lib/types";
 import { edgesFrom, findNode, orderedNodes } from "@/lib/graph";
 import { BUDJU_NODE_ID, PROPFOLIO_NODE_ID } from "@/lib/constants";
@@ -15,7 +15,7 @@ import { PropfolioDetailSheet } from "./PropfolioDetailSheet";
 import { GraphBoard } from "./GraphBoard";
 import { useIsLargeScreen } from "@/hooks/useIsLargeScreen";
 
-const budjuData = budjuDataRaw as BudjuData;
+const budjuSeedData = budjuDataRaw as BudjuData;
 const propfolioData = propfolioDataRaw as PropfolioData;
 
 interface GraphViewProps {
@@ -36,9 +36,51 @@ interface GraphViewProps {
  */
 export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
   const [openNodeId, setOpenNodeId] = useState<string | null>(null);
+  const [budjuData, setBudjuData] = useState<BudjuData>(budjuSeedData);
+  const [budjuRefreshing, setBudjuRefreshing] = useState(false);
   const isLargeScreen = useIsLargeScreen();
   const nodes = orderedNodes(graph);
   const openNode = openNodeId ? findNode(graph.nodes, openNodeId) : undefined;
+
+  // Mount-time "page load" pull from Budju's own public API (no wallet —
+  // see the README's "Budju node" section) — swaps the seed snapshot for
+  // a fresh one as soon as it resolves. Uses the `.then()` + `ignore`-flag
+  // shape from React's own data-fetching-in-effects docs (rather than an
+  // intermediate async helper) so the state update reads as "a callback
+  // from an external Promise", not a synchronous effect-body call.
+  // Failure (Budju down, network hiccup) just keeps the seed on screen —
+  // it's a glance, not something worth an error state.
+  useEffect(() => {
+    let ignore = false;
+    fetch("/api/budju/live", { cache: "no-store" })
+      .then((res) => (res.ok ? (res.json() as Promise<BudjuData>) : null))
+      .then((data) => {
+        if (!ignore && data) setBudjuData(data);
+      })
+      .catch(() => {
+        // Network hiccup / Budju unreachable — keep the seed snapshot.
+      });
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  // Manual re-pull for BudjuDetailSheet's Refresh chip — a click handler,
+  // not an effect, so setting state directly here is the normal pattern.
+  const refreshBudju = useCallback(async (): Promise<boolean> => {
+    setBudjuRefreshing(true);
+    try {
+      const res = await fetch("/api/budju/live", { cache: "no-store" });
+      if (!res.ok) return false;
+      const data = (await res.json()) as BudjuData;
+      setBudjuData(data);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setBudjuRefreshing(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (openNodeId) return;
@@ -165,7 +207,12 @@ export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
       </div>
 
       {openNode && openNode.id === BUDJU_NODE_ID && (
-        <BudjuDetailSheet data={budjuData} onClose={() => setOpenNodeId(null)} />
+        <BudjuDetailSheet
+          data={budjuData}
+          onClose={() => setOpenNodeId(null)}
+          onRefresh={refreshBudju}
+          refreshing={budjuRefreshing}
+        />
       )}
 
       {openNode && openNode.id === PROPFOLIO_NODE_ID && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { BudjuData, BudjuSignal } from "@/lib/types";
 import {
   SIGNAL_META,
@@ -10,11 +10,21 @@ import {
   formatUSD,
   sortSignals,
 } from "@/lib/budju";
+import { ActionChips } from "./ActionChips";
 
 interface BudjuDetailSheetProps {
   data: BudjuData;
   onClose: () => void;
+  /** Triggers a fresh pull from `/api/budju/live` (see `GraphView`).
+   * Returns whether it succeeded so the sheet can show feedback either
+   * way — optional so this component still works standalone. */
+  onRefresh?: () => Promise<boolean>;
+  /** True while `GraphView`'s own mount-time refresh (or a prior manual
+   * one) is in flight — disables the chip so taps don't stack requests. */
+  refreshing?: boolean;
 }
+
+const CHIP_FEEDBACK_TIMEOUT_MS = 3000;
 
 /**
  * Budju's detail sheet — opened by tapping the primary node in the v0
@@ -23,7 +33,15 @@ interface BudjuDetailSheetProps {
  * link out to the real app. No wallet connect, no trades, no full asset
  * list, no live websocket — this is a glance, not the trade UI.
  */
-export function BudjuDetailSheet({ data, onClose }: BudjuDetailSheetProps) {
+export function BudjuDetailSheet({
+  data,
+  onClose,
+  onRefresh,
+  refreshing = false,
+}: BudjuDetailSheetProps) {
+  const [chipMessage, setChipMessage] = useState<string | null>(null);
+  const chipMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -31,6 +49,27 @@ export function BudjuDetailSheet({ data, onClose }: BudjuDetailSheetProps) {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
+
+  useEffect(() => {
+    return () => {
+      if (chipMessageTimer.current) clearTimeout(chipMessageTimer.current);
+    };
+  }, []);
+
+  const showChipMessage = (message: string) => {
+    if (chipMessageTimer.current) clearTimeout(chipMessageTimer.current);
+    setChipMessage(message);
+    chipMessageTimer.current = setTimeout(
+      () => setChipMessage(null),
+      CHIP_FEEDBACK_TIMEOUT_MS
+    );
+  };
+
+  const handleRefresh = async () => {
+    if (!onRefresh) return;
+    const ok = await onRefresh();
+    showChipMessage(ok ? "Refreshed from budju.xyz." : "Refresh failed — showing last known data.");
+  };
 
   const signals = sortSignals(data.signals);
 
@@ -140,6 +179,27 @@ export function BudjuDetailSheet({ data, onClose }: BudjuDetailSheetProps) {
             </div>
           )}
         </div>
+
+        {onRefresh && (
+          <div className="mt-4">
+            <ActionChips
+              items={[
+                {
+                  id: "refresh",
+                  label: "Refresh",
+                  pendingLabel: "Refreshing\u2026",
+                  pending: refreshing,
+                  onSelect: handleRefresh,
+                },
+              ]}
+            />
+            {chipMessage && (
+              <p className="mt-2 text-[11px] leading-relaxed text-white/50">
+                {chipMessage}
+              </p>
+            )}
+          </div>
+        )}
 
         <p className="mt-4 text-[11px] text-white/30">
           {data.updatedAt
