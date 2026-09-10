@@ -319,9 +319,10 @@ the graph: no login form, no property CRUD, no live probe of the real app
   and `error` — get the whole card a colored ring/glow and a small
   pulsing corner dot; `ok`/`unknown` render plain. Whenever `statusNote`
   is set (any status, not just `error`) it shows as a short line under
-  the counts, e.g. "Login OK; check onboarding/data" — so a partial/
-  unconfirmed state is visible without opening the sheet, not just a
-  binary up/down.
+  the counts, e.g. "Login OK — onboarding blocked: \"Couldn't read this
+  payslip\" (payslip OCR/read failure)" — so a specific, actionable
+  problem is visible without opening the sheet, not just a binary
+  up/down.
 - Tapping it opens **`components/PropfolioDetailSheet.tsx`**: the same
   status chip, the `statusNote` (if set) in a callout tinted to match the
   status, a "last checked" line, the client/property count rollup plus a
@@ -335,14 +336,16 @@ the graph: no login form, no property CRUD, no live probe of the real app
   — which is exactly the scenario this node exists to surface: an
   owner-reported sign-in bug, then a 403 report from an automated check
   (which a manual curl couldn't reproduce), then confirmation that Google
-  sign-in through onboarding actually works. The seed now reflects that
-  last, most-verified report as `degraded` rather than `ok` — auth is
-  confirmed, but whether real portfolio data survived onboarding (vs. an
-  empty/reset account) isn't, so `clientCount`/`propertyCount` are seeded
-  at `0` (a real "nothing here yet" reading, not the `null` TBD
-  placeholder) pending that confirmation. `lastCheckedAt` stays `null`
-  throughout — no single confirmed-timestamp probe backs any of these
-  reports yet.
+  sign-in works, then (current seed) confirmation that sign-in is fine
+  but **onboarding itself fails** on a payslip upload/OCR step ("Couldn't
+  read this payslip"), blocking any client/property data from ever
+  landing. That's a concrete, reproducible failure (not just an
+  unconfirmed state), so the seed is `error` again — not because login
+  broke, but because a specific onboarding step did.
+  `clientCount`/`propertyCount` stay at `0` (a real "nothing here" reading
+  now that the reason is known, not the `null` TBD placeholder).
+  `lastCheckedAt` stays `null` throughout — no single confirmed-timestamp
+  probe backs any of these reports yet.
 - **Data shape**: `PropfolioData` in `lib/types.ts` — `repoUrl`, `url`,
   `status` (`HealthStatus`: `"ok" | "degraded" | "error" | "unknown"`),
   `statusNote` (`string | null` — a one-liner for *any* status, not just

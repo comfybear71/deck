@@ -1,11 +1,11 @@
 {
   "repoUrl": "https://github.com/comfybear71/propfolio",
   "url": "https://propfolio.work",
-  "status": "degraded",
-  "statusNote": "Login OK; check onboarding/data",
+  "status": "error",
+  "statusNote": "Login OK — onboarding blocked: \"Couldn't read this payslip\" (payslip OCR/read failure)",
   "lastCheckedAt": null,
   "clientCount": 0,
   "propertyCount": 0,
-  "summary": "0 clients, 0 properties seeded — confirm onboarding data landed after sign-in.",
+  "summary": "0 clients, 0 properties — onboarding can't complete past the payslip upload step.",
   "properties": []
 }
