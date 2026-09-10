@@ -11,10 +11,10 @@ interface PropfolioDetailSheetProps {
 
 /**
  * Propfolio's detail sheet — opened by tapping the status node in the v0
- * graph (see PropfolioNodeCard). Status + error message, a client/property
+ * graph (see PropfolioNodeCard). Status + status note, a client/property
  * count rollup with a one-line summary, a stub Properties list, and two
  * outbound links (app / repo). No login form, no real property CRUD —
- * fixing the underlying bug happens from Deck / Cursor separately, not
+ * fixing anything found here happens from Deck / Cursor separately, not
  * from this sheet.
  */
 export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProps) {
@@ -27,7 +27,7 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
   }, [onClose]);
 
   const meta = HEALTH_META[data.status];
-  const isError = data.status === "error";
+  const { accent } = meta;
   const hasUrl = data.url.trim().length > 0;
 
   return (
@@ -74,32 +74,22 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
         </div>
 
         <div
-          className={[
-            "flex items-center gap-3 rounded-2xl border px-4 py-4",
-            isError ? "border-rose-500/40 bg-rose-500/[0.06]" : "border-white/5 bg-white/[0.03]",
-          ].join(" ")}
+          className={`flex items-center gap-3 rounded-2xl border px-4 py-4 ${accent.noteBoxClass}`}
         >
           <span
             aria-hidden
             className={`flex h-3 w-3 shrink-0 rounded-full ${meta.dotClass}`}
           />
           <span
-            className={`text-sm font-semibold uppercase tracking-wide ${
-              isError ? "text-rose-300" : "text-white/70"
-            }`}
+            className={`text-sm font-semibold uppercase tracking-wide ${accent.noteTextClass}`}
           >
             {meta.label}
           </span>
         </div>
 
-        {isError && data.errorMessage && (
-          <div className="mt-3 rounded-xl border border-rose-500/25 bg-rose-500/[0.05] px-3 py-2.5">
-            <p className="text-sm text-rose-200">{data.errorMessage}</p>
-            <p className="mt-1 text-[11px] text-rose-200/60">
-              Reports on this have disagreed before (browser vs. automated
-              checks) — treat this as the latest known status, not
-              confirmed live.
-            </p>
+        {data.statusNote && (
+          <div className={`mt-3 rounded-xl border px-3 py-2.5 ${accent.noteBoxClass}`}>
+            <p className={`text-sm ${accent.noteTextClass}`}>{data.statusNote}</p>
           </div>
         )}
 

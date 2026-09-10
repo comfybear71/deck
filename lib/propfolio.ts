@@ -8,35 +8,99 @@ import type { HealthStatus } from "./types";
  * anything downstream of these helpers.
  */
 
+interface HealthAccent {
+  /** Node card border color when this status warrants visual emphasis. */
+  ringClass: string;
+  /** Node card background tint. */
+  bgClass: string;
+  /** Node card box-shadow glow; empty string for statuses with no glow. */
+  glowClass: string;
+  /** Small corner dot marker glow; empty string means no dot marker. */
+  dotGlowClass: string;
+  /** Detail sheet status-note callout border + background. */
+  noteBoxClass: string;
+  /** Detail sheet status-note message text color. */
+  noteTextClass: string;
+  /** Detail sheet status-note secondary/sub-text color. */
+  noteSubTextClass: string;
+  /** Node face "P" avatar circle background + text color. */
+  avatarBgClass: string;
+  /** Node face inline status-note text color. */
+  inlineTextClass: string;
+}
+
 interface HealthMeta {
   /** Chip label, e.g. "ERROR". */
   label: string;
   /** Background + text classes for the status chip. */
   chipClass: string;
-  /** Solid dot color class. */
+  /** Solid dot color class, used inside the status chip. */
   dotClass: string;
-  /** Ring/border accent used to make the error state visible on the node face. */
-  ringClass: string;
+  /** True for statuses worth calling out visually (ring/glow/corner dot) on the node face — error and degraded, not ok/unknown. */
+  attention: boolean;
+  accent: HealthAccent;
 }
+
+const neutralAccent: HealthAccent = {
+  ringClass: "border-white/10",
+  bgClass: "bg-white/[0.04]",
+  glowClass: "",
+  dotGlowClass: "",
+  noteBoxClass: "border-white/5 bg-white/[0.03]",
+  noteTextClass: "text-white/70",
+  noteSubTextClass: "text-white/40",
+  avatarBgClass: "bg-white/10 text-white/60",
+  inlineTextClass: "text-white/50",
+};
 
 export const HEALTH_META: Record<HealthStatus, HealthMeta> = {
   ok: {
     label: "OK",
     chipClass: "bg-emerald-400/15 text-emerald-300",
     dotClass: "bg-emerald-400",
-    ringClass: "border-white/10",
+    attention: false,
+    accent: neutralAccent,
+  },
+  degraded: {
+    label: "DEGRADED",
+    chipClass: "bg-amber-400/15 text-amber-300",
+    dotClass: "bg-amber-400",
+    attention: true,
+    accent: {
+      ringClass: "border-amber-400/40",
+      bgClass: "bg-amber-400/[0.06]",
+      glowClass: "shadow-[0_0_30px_-10px_rgba(251,191,36,0.45)]",
+      dotGlowClass: "shadow-[0_0_8px_2px_rgba(251,191,36,0.6)]",
+      noteBoxClass: "border-amber-400/25 bg-amber-400/[0.05]",
+      noteTextClass: "text-amber-200",
+      noteSubTextClass: "text-amber-200/60",
+      avatarBgClass: "bg-amber-400/15 text-amber-300",
+      inlineTextClass: "text-amber-300/90",
+    },
   },
   error: {
     label: "ERROR",
     chipClass: "bg-rose-500/20 text-rose-300",
     dotClass: "bg-rose-500",
-    ringClass: "border-rose-500/50",
+    attention: true,
+    accent: {
+      ringClass: "border-rose-500/50",
+      bgClass: "bg-rose-500/[0.06]",
+      glowClass: "shadow-[0_0_30px_-10px_rgba(244,63,94,0.5)]",
+      dotGlowClass: "shadow-[0_0_8px_2px_rgba(244,63,94,0.7)]",
+      noteBoxClass: "border-rose-500/25 bg-rose-500/[0.05]",
+      noteTextClass: "text-rose-200",
+      noteSubTextClass: "text-rose-200/60",
+      avatarBgClass: "bg-rose-500/15 text-rose-300",
+      inlineTextClass: "text-rose-300/90",
+    },
   },
   unknown: {
     label: "UNKNOWN",
     chipClass: "bg-white/10 text-white/50",
     dotClass: "bg-white/30",
-    ringClass: "border-white/10",
+    attention: false,
+    accent: neutralAccent,
   },
 };
 

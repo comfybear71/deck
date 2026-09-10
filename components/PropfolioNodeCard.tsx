@@ -9,37 +9,40 @@ interface PropfolioNodeCardProps {
 }
 
 /**
- * Propfolio's node face — a health/error status glance, not a portfolio
+ * Propfolio's node face — a health-status glance, not a portfolio
  * dashboard. Shows only: the name, client + property counts (TBD dashes
- * until live data lands), a big status chip (ok/error/unknown), and — when
- * there's an error — a short one-line blurb plus a red ring around the
- * whole card, so Stuart sees the problem without opening the full app.
- * Tapping opens PropfolioDetailSheet.
+ * until live data lands), a big status chip (ok/degraded/error/unknown),
+ * and — whenever there's a `statusNote` — a short one-line note. Statuses
+ * flagged `attention` (degraded, error) get a colored ring around the
+ * whole card and a small pulsing corner dot, so Stuart sees there's
+ * something worth checking without opening the full app. Tapping opens
+ * PropfolioDetailSheet.
  */
 export function PropfolioNodeCard({ data, onOpen }: PropfolioNodeCardProps) {
   const meta = HEALTH_META[data.status];
-  const isError = data.status === "error";
+  const { accent } = meta;
 
   return (
     <button
       type="button"
       onClick={onOpen}
       aria-label={`Propfolio — health status ${meta.label}${
-        isError && data.errorMessage ? `. ${data.errorMessage}` : ""
+        data.statusNote ? `. ${data.statusNote}` : ""
       }. ${formatCount(data.clientCount)} clients, ${formatCount(
         data.propertyCount
       )} properties. Open details.`}
       className={[
         "group relative flex w-full min-h-16 items-center gap-3 rounded-2xl border px-4 py-4 text-left transition-colors active:scale-[0.99]",
-        isError
-          ? "border-rose-500/50 bg-rose-500/[0.06] shadow-[0_0_30px_-10px_rgba(244,63,94,0.5)] hover:bg-rose-500/[0.1]"
-          : "border-white/10 bg-white/[0.04] hover:bg-white/[0.07]",
+        accent.ringClass,
+        accent.bgClass,
+        accent.glowClass,
+        "hover:bg-white/[0.07]",
       ].join(" ")}
     >
-      {isError && (
+      {meta.attention && accent.dotGlowClass && (
         <span
           aria-hidden
-          className="absolute right-3 top-3 h-2 w-2 rounded-full bg-rose-500 shadow-[0_0_8px_2px_rgba(244,63,94,0.7)]"
+          className={`absolute right-3 top-3 h-2 w-2 rounded-full ${meta.dotClass} ${accent.dotGlowClass}`}
         />
       )}
 
@@ -47,7 +50,7 @@ export function PropfolioNodeCard({ data, onOpen }: PropfolioNodeCardProps) {
         aria-hidden
         className={[
           "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-lg font-semibold",
-          isError ? "bg-rose-500/15 text-rose-300" : "bg-white/10 text-white/60",
+          accent.avatarBgClass,
         ].join(" ")}
       >
         P
@@ -67,6 +70,7 @@ export function PropfolioNodeCard({ data, onOpen }: PropfolioNodeCardProps) {
             {meta.label}
           </span>
         </span>
+
         <span className="mt-1.5 flex items-center gap-3 text-[11px] tabular-nums text-white/50">
           <span>
             <span className="font-semibold text-white/80">
@@ -82,9 +86,9 @@ export function PropfolioNodeCard({ data, onOpen }: PropfolioNodeCardProps) {
           </span>
         </span>
 
-        {isError && data.errorMessage && (
-          <span className="mt-1 block truncate text-xs text-rose-300/90">
-            {data.errorMessage}
+        {data.statusNote && (
+          <span className={`mt-1 block truncate text-xs ${accent.inlineTextClass}`}>
+            {data.statusNote}
           </span>
         )}
       </span>

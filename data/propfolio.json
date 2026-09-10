@@ -1,11 +1,11 @@
 {
   "repoUrl": "https://github.com/comfybear71/propfolio",
   "url": "https://propfolio.work",
-  "status": "error",
-  "errorMessage": "Site 403 Forbidden — check Vercel Deployment Protection / firewall / domain.",
+  "status": "degraded",
+  "statusNote": "Login OK; check onboarding/data",
   "lastCheckedAt": null,
-  "clientCount": null,
-  "propertyCount": null,
-  "summary": "TBD — client/property counts unavailable until the login error clears.",
+  "clientCount": 0,
+  "propertyCount": 0,
+  "summary": "0 clients, 0 properties seeded — confirm onboarding data landed after sign-in.",
   "properties": []
 }

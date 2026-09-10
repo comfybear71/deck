@@ -126,16 +126,20 @@ export interface BudjuData {
 }
 
 /**
- * Propfolio health/error status node — seed data shaped so a later
- * health-check / ingest (e.g. a real probe behind
- * `/api/health/propfolio`) can flip `status` + `errorMessage`, and a later
- * live sync of Propfolio's own data can fill in `clientCount`,
- * `propertyCount`, `summary`, and `properties`, all without any UI
- * redesign. See data/propfolio.json + the README's "Propfolio node"
- * section. Deliberately NOT the full app: this is a status glance, not a
- * portfolio dashboard.
+ * Propfolio health status node — seed data shaped so a later health-check
+ * / ingest (e.g. a real probe behind `/api/health/propfolio`) can flip
+ * `status` + `statusNote`, and a later live sync of Propfolio's own data
+ * can fill in `clientCount`, `propertyCount`, `summary`, and `properties`,
+ * all without any UI redesign. See data/propfolio.json + the README's
+ * "Propfolio node" section. Deliberately NOT the full app: this is a
+ * status glance, not a portfolio dashboard.
+ *
+ * `degraded` sits between `ok` and `error` — reachable and functioning in
+ * some way (e.g. auth succeeds) but with an open question worth flagging
+ * (e.g. unconfirmed onboarding/data state), not a full outage or hard
+ * failure.
  */
-export type HealthStatus = "ok" | "error" | "unknown";
+export type HealthStatus = "ok" | "degraded" | "error" | "unknown";
 
 /**
  * One property stub row for the detail sheet's "Properties" list.
@@ -156,8 +160,8 @@ export interface PropfolioData {
   /** Live app URL; empty string is the "not known yet" placeholder. */
   url: string;
   status: HealthStatus;
-  /** Short one-liner shown when status is "error". Null when ok/unknown. */
-  errorMessage: string | null;
+  /** Short one-liner about the current status, for any status — null when there's nothing to say. */
+  statusNote: string | null;
   /** ISO timestamp of the last health check, or null for seed/static data. */
   lastCheckedAt: string | null;
   /** Number of clients; null is the TBD placeholder until live data lands. */
