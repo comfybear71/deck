@@ -329,8 +329,10 @@ the graph: no login form, no property CRUD, no live probe of the real app
   `error` — get the whole card a colored ring/glow and a small pulsing
   corner dot; `ok`/`unknown` render plain. Whenever `statusNote` is set
   (any status, not just `error`) it shows as a short line under the
-  counts, e.g. "Login OK — household onboarded" — so a specific note is
-  visible without opening the sheet, not just a binary up/down.
+  counts, e.g. "French household · Bagshaw Cres" — so a specific note is
+  visible without opening the sheet, not just a binary up/down. On the
+  healthy path this should read like calm product copy (who/where), not
+  health-check chrome — no "Login OK", "onboarded", or "seed" language.
 - Tapping it opens **`components/PropfolioDetailSheet.tsx`**: the same
   status chip, the `statusNote` (if set) in a callout tinted to match the
   status, the client/property count rollup plus a one-line `summary`, a
@@ -407,7 +409,7 @@ collapsed node face, so the card itself stays uncluttered.
     `"unknown"`.
   - **Copy status** — copies a one-line status/count rollup
     (`statusOneLiner` in `lib/propfolio.ts`, e.g. "Propfolio: OK · 2
-    clients · 2 properties — Login OK — household onboarded"). Only
+    clients · 2 properties — French household · Bagshaw Cres"). Only
     shown for `"degraded"` / `"error"` / `"unknown"`.
   - Every chip's result shows as a small feedback line under the row
     (e.g. "Refreshed — OK.", "Status copied to clipboard.", or a copy
