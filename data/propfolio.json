@@ -1,8 +1,8 @@
 {
   "repoUrl": "https://github.com/comfybear71/propfolio",
-  "url": "",
+  "url": "https://propfolio.work",
   "status": "error",
-  "errorMessage": "Login error — needs check",
+  "errorMessage": "Login issue (owner) — site reachable",
   "lastCheckedAt": null,
   "clientCount": null,
   "propertyCount": null,

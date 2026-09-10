@@ -93,9 +93,13 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
         </div>
 
         {isError && data.errorMessage && (
-          <p className="mt-3 rounded-xl border border-rose-500/25 bg-rose-500/[0.05] px-3 py-2.5 text-sm text-rose-200">
-            {data.errorMessage}
-          </p>
+          <div className="mt-3 rounded-xl border border-rose-500/25 bg-rose-500/[0.05] px-3 py-2.5">
+            <p className="text-sm text-rose-200">{data.errorMessage}</p>
+            <p className="mt-1 text-[11px] text-rose-200/60">
+              Site loads normally for real users — this is a sign-in issue,
+              not an outage.
+            </p>
+          </div>
         )}
 
         <p className="mt-3 text-[11px] text-white/30">
