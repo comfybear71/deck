@@ -42,6 +42,12 @@ multi-page nav.
 - `data/budju.json` / `lib/budju.ts` — Budju portfolio glance seed data and
   pure helpers (signal sort/format, buy/sell band position). See "Budju
   node (portfolio glance)" below.
+- `data/propfolio.json` / `lib/propfolio.ts` — Propfolio health-status
+  seed data and pure helpers (per-status chip/accent metadata,
+  count/timestamp formatting). See "Propfolio node (status glance)"
+  below.
+- `app/api/health/propfolio/` — a GET stub that returns
+  `data/propfolio.json` as-is; the seam for a future real health probe.
 - `components/` — `TabWidget` (switches between chip/card/graph), `TabChip`
   (the default collapsed pill), `TabCard` (the full expanded screen),
   `BigBurn` (big number + glow halo), `AlertsStrip`, `SuitLane` (one of the
@@ -50,7 +56,8 @@ multi-page nav.
   expanded-view only), `MailSyncLine` (the tiny "Last mail sync" line,
   expanded-view only), `GraphView` / `GraphNodeCard` / `GraphNodeSheet`
   (the v0 project graph — see below), `BudjuNodeCard` / `BudjuDetailSheet`
-  (the featured Budju node's face + detail sheet).
+  (the featured Budju node's face + detail sheet), `PropfolioNodeCard` /
+  `PropfolioDetailSheet` (the Propfolio status node's face + detail sheet).
 
 ## Control plane (v0 stub)
 
@@ -293,6 +300,78 @@ external crypto/USDC portfolio tracker.
   rank; `GraphView` special-cases `BUDJU_NODE_ID` (`lib/constants.ts`) to
   render `BudjuNodeCard`/`BudjuDetailSheet` instead of the generic
   `GraphNodeCard`/`GraphNodeSheet`.
+
+### Propfolio node (status glance)
+
+**Propfolio** (`propfolio.work`,
+[github.com/comfybear71/propfolio](https://github.com/comfybear71/propfolio))
+is an Australian property portfolio tracker — a private web app, not a
+Deck-owned lane. It sits right after Budju in the node stack. This node is
+a **health-status glance**, the first "show if there's an error" node in
+the graph: no login form, no property CRUD, no live probe of the real app
+(yet).
+
+- **Node face** (`components/PropfolioNodeCard.tsx`) shows only: the name,
+  a client-count / property-count pair (renders as an em dash, "—", for
+  the TBD-until-live-data placeholder), and a big status chip — green
+  `OK`, amber `DEGRADED`, red `ERROR`, or grey `UNKNOWN`. Statuses flagged
+  `attention` in `HEALTH_META` (`lib/propfolio.ts`) — currently `degraded`
+  and `error` — get the whole card a colored ring/glow and a small
+  pulsing corner dot; `ok`/`unknown` render plain. Whenever `statusNote`
+  is set (any status, not just `error`) it shows as a short line under
+  the counts, e.g. "Login OK — onboarding blocked: \"Couldn't read this
+  payslip\" (payslip OCR/read failure)" — so a specific, actionable
+  problem is visible without opening the sheet, not just a binary
+  up/down.
+- Tapping it opens **`components/PropfolioDetailSheet.tsx`**: the same
+  status chip, the `statusNote` (if set) in a callout tinted to match the
+  status, a "last checked" line, the client/property count rollup plus a
+  one-line `summary`, a **Properties** list (a stub — an empty array
+  renders as "no property data yet," not an error), a note that fixing
+  anything found here happens from Deck/Cursor separately (not from this
+  sheet), and two links: **Open app** (`data.url`, hidden behind a
+  "not set yet (TODO)" placeholder if `url` is ever empty) and
+  **Open repo**.
+- **Health status has moved around during this feature's own build-out**
+  — which is exactly the scenario this node exists to surface: an
+  owner-reported sign-in bug, then a 403 report from an automated check
+  (which a manual curl couldn't reproduce), then confirmation that Google
+  sign-in works, then (current seed) confirmation that sign-in is fine
+  but **onboarding itself fails** on a payslip upload/OCR step ("Couldn't
+  read this payslip"), blocking any client/property data from ever
+  landing. That's a concrete, reproducible failure (not just an
+  unconfirmed state), so the seed is `error` again — not because login
+  broke, but because a specific onboarding step did.
+  `clientCount`/`propertyCount` stay at `0` (a real "nothing here" reading
+  now that the reason is known, not the `null` TBD placeholder).
+  `lastCheckedAt` stays `null` throughout — no single confirmed-timestamp
+  probe backs any of these reports yet.
+- **Data shape**: `PropfolioData` in `lib/types.ts` — `repoUrl`, `url`,
+  `status` (`HealthStatus`: `"ok" | "degraded" | "error" | "unknown"`),
+  `statusNote` (`string | null` — a one-liner for *any* status, not just
+  `error`), `lastCheckedAt` (`string | null`, ISO — `null` marks static
+  seed data, same convention as Budju's `updatedAt`), `clientCount` /
+  `propertyCount` (`number | null` — `null` is the TBD placeholder until
+  real data lands; `0` is a real "confirmed empty" reading), `summary`
+  (one-liner rollup, e.g. "12 properties across 4 clients"), and
+  `properties` (`PropfolioProperty[]`, each
+  `{ id, address?, status?, clientName? }` — seeded as `[]`). All of it
+  lives in `data/propfolio.json` so a future health-check probe or a
+  Propfolio data sync can flip these fields without any component
+  changing.
+- **`app/api/health/propfolio`** is a GET stub that just returns
+  `data/propfolio.json`. It exists as the seam for a real live probe
+  (out of scope for this PR — no HTTP check against the real app runs
+  from Vercel yet); swapping the static read for a real fetch later
+  doesn't need to change the response shape.
+- Not mapped to a control-plane suit lane, and not `featured` — it sorts
+  right after Budju in `data/graph.json`'s node order (see `orderedNodes`
+  in `lib/graph.ts`). `GraphView` special-cases `PROPFOLIO_NODE_ID`
+  (`lib/constants.ts`) to render `PropfolioNodeCard`/`PropfolioDetailSheet`
+  instead of the generic `GraphNodeCard`/`GraphNodeSheet`.
+- **Out of scope**: actually resolving anything found on the Propfolio
+  side (that's a separate repo/PR), and a live HTTP probe from Vercel
+  against the real app.
 
 ## The four lanes
 

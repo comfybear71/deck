@@ -10,6 +10,13 @@ export const LEASH_GOAL_USD = 400;
  */
 export const BUDJU_NODE_ID = "budju";
 
+/**
+ * Graph node id for the Propfolio health/error status glance. GraphView
+ * special-cases this id to render PropfolioNodeCard/PropfolioDetailSheet
+ * instead of the generic GraphNodeCard/GraphNodeSheet.
+ */
+export const PROPFOLIO_NODE_ID = "propfolio";
+
 export const SUIT_META: Record<Suit, SuitMeta> = {
   diamonds: {
     suit: "diamonds",

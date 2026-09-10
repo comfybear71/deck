@@ -124,3 +124,52 @@ export interface BudjuData {
   split: BudjuSplit;
   signals: BudjuSignal[];
 }
+
+/**
+ * Propfolio health status node — seed data shaped so a later health-check
+ * / ingest (e.g. a real probe behind `/api/health/propfolio`) can flip
+ * `status` + `statusNote`, and a later live sync of Propfolio's own data
+ * can fill in `clientCount`, `propertyCount`, `summary`, and `properties`,
+ * all without any UI redesign. See data/propfolio.json + the README's
+ * "Propfolio node" section. Deliberately NOT the full app: this is a
+ * status glance, not a portfolio dashboard.
+ *
+ * `degraded` sits between `ok` and `error` — reachable and functioning in
+ * some way (e.g. auth succeeds) but with an open question worth flagging
+ * (e.g. unconfirmed onboarding/data state), not a full outage or hard
+ * failure.
+ */
+export type HealthStatus = "ok" | "degraded" | "error" | "unknown";
+
+/**
+ * One property stub row for the detail sheet's "Properties" list.
+ * Deliberately all-optional besides `id` — v0 seed data can be an empty
+ * array (nothing to show while the login error blocks live data), and a
+ * future live sync only needs to fill in whichever fields it actually has.
+ */
+export interface PropfolioProperty {
+  id: string;
+  address?: string;
+  status?: string;
+  clientName?: string;
+}
+
+export interface PropfolioData {
+  /** Repo link — always known. */
+  repoUrl: string;
+  /** Live app URL; empty string is the "not known yet" placeholder. */
+  url: string;
+  status: HealthStatus;
+  /** Short one-liner about the current status, for any status — null when there's nothing to say. */
+  statusNote: string | null;
+  /** ISO timestamp of the last health check, or null for seed/static data. */
+  lastCheckedAt: string | null;
+  /** Number of clients; null is the TBD placeholder until live data lands. */
+  clientCount: number | null;
+  /** Total properties tracked; null is the TBD placeholder until live data lands. */
+  propertyCount: number | null;
+  /** Short rollup one-liner, e.g. "12 properties across 4 clients". Empty string when there's nothing to summarize yet. */
+  summary: string;
+  /** Per-property stub rows — an empty array is a valid v0 state, not an error. */
+  properties: PropfolioProperty[];
+}
