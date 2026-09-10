@@ -54,6 +54,12 @@ export interface GraphNode {
   role: string;
   /** Optional link into a control-plane lane — null when not (yet) mapped. */
   suit: Suit | null;
+  /**
+   * Marks this node as the visually primary one within its `kind` — sorts
+   * first and renders larger/highlighted. See `orderedNodes` in lib/graph.ts.
+   * Optional; only one node should set this at a time in v0.
+   */
+  featured?: boolean;
 }
 
 export interface GraphEdge {
@@ -65,4 +71,56 @@ export interface GraphEdge {
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
+}
+
+/**
+ * Budju (budju.xyz/trade) portfolio glance — seed data shaped so a later
+ * live refresh (polling budju's API) can slot in without changing the
+ * shape consumers read. See data/budju.json + the README's "Budju node"
+ * section. Deliberately NOT the full trade UI: no wallet state, no full
+ * asset list, no order/trade actions.
+ */
+export type BudjuSignalType = "near-buy" | "near-sell" | "cooldown";
+
+export interface BudjuSignal {
+  id: string;
+  /** Ticker, e.g. "UNI". */
+  asset: string;
+  type: BudjuSignalType;
+  /** Budju's tier label, e.g. "T1" / "T2" — shown as-is, not interpreted. */
+  tier?: string;
+  /** Units held, if known. */
+  qty?: number;
+  /** Last known price. */
+  price: number;
+  /** 24h-style change, signed percentage points (e.g. -4.5, 7.9). */
+  changePct: number;
+  buyBelow: number;
+  sellAbove: number;
+  /** Current price used to position the buy/sell band marker. */
+  current: number;
+  /** Optional "X% to buy" callout for near-buy signals. */
+  toBuyPct?: number;
+}
+
+export interface BudjuSplit {
+  cryptoPct: number;
+  cryptoUSD: number;
+  usdcPct: number;
+  usdcUSD: number;
+}
+
+export interface BudjuPool {
+  totalUSD: number;
+  assetCount: number;
+  hasCash: boolean;
+}
+
+export interface BudjuData {
+  url: string;
+  /** ISO timestamp of the last live refresh, or null for seed/static data. */
+  updatedAt: string | null;
+  pool: BudjuPool;
+  split: BudjuSplit;
+  signals: BudjuSignal[];
 }

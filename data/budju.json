@@ -1,0 +1,42 @@
+{
+  "url": "https://www.budju.xyz/trade",
+  "updatedAt": null,
+  "pool": {
+    "totalUSD": 9725,
+    "assetCount": 26,
+    "hasCash": true
+  },
+  "split": {
+    "cryptoPct": 86,
+    "cryptoUSD": 8351,
+    "usdcPct": 14,
+    "usdcUSD": 1377
+  },
+  "signals": [
+    {
+      "id": "uni-near-buy",
+      "asset": "UNI",
+      "type": "near-buy",
+      "tier": "T1",
+      "qty": 72.52,
+      "price": 6.75,
+      "changePct": -4.5,
+      "buyBelow": 6.41,
+      "current": 6.44,
+      "sellAbove": 8.0,
+      "toBuyPct": 0.5
+    },
+    {
+      "id": "near-cooldown",
+      "asset": "NEAR",
+      "type": "cooldown",
+      "tier": "T2",
+      "qty": 195.82,
+      "price": 2.53,
+      "changePct": 7.9,
+      "buyBelow": 2.31,
+      "current": 2.5,
+      "sellAbove": 2.91
+    }
+  ]
+}
