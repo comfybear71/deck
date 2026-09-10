@@ -1,16 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { BudjuData, GraphData } from "@/lib/types";
+import type { BudjuData, GraphData, PropfolioData } from "@/lib/types";
 import { edgesFrom, findNode, orderedNodes } from "@/lib/graph";
-import { BUDJU_NODE_ID } from "@/lib/constants";
+import { BUDJU_NODE_ID, PROPFOLIO_NODE_ID } from "@/lib/constants";
 import budjuDataRaw from "@/data/budju.json";
+import propfolioDataRaw from "@/data/propfolio.json";
 import { GraphNodeCard } from "./GraphNodeCard";
 import { GraphNodeSheet } from "./GraphNodeSheet";
 import { BudjuNodeCard } from "./BudjuNodeCard";
 import { BudjuDetailSheet } from "./BudjuDetailSheet";
+import { PropfolioNodeCard } from "./PropfolioNodeCard";
+import { PropfolioDetailSheet } from "./PropfolioDetailSheet";
 
 const budjuData = budjuDataRaw as BudjuData;
+const propfolioData = propfolioDataRaw as PropfolioData;
 
 interface GraphViewProps {
   graph: GraphData;
@@ -83,6 +87,11 @@ export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
                     data={budjuData}
                     onOpen={() => setOpenNodeId(node.id)}
                   />
+                ) : node.id === PROPFOLIO_NODE_ID ? (
+                  <PropfolioNodeCard
+                    data={propfolioData}
+                    onOpen={() => setOpenNodeId(node.id)}
+                  />
                 ) : (
                   <GraphNodeCard node={node} onOpen={() => setOpenNodeId(node.id)} />
                 )}
@@ -138,17 +147,26 @@ export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
         <BudjuDetailSheet data={budjuData} onClose={() => setOpenNodeId(null)} />
       )}
 
-      {openNode && openNode.id !== BUDJU_NODE_ID && (
-        <GraphNodeSheet
-          node={openNode}
-          graph={graph}
+      {openNode && openNode.id === PROPFOLIO_NODE_ID && (
+        <PropfolioDetailSheet
+          data={propfolioData}
           onClose={() => setOpenNodeId(null)}
-          onOpenTab={() => {
-            setOpenNodeId(null);
-            onOpenTab();
-          }}
         />
       )}
+
+      {openNode &&
+        openNode.id !== BUDJU_NODE_ID &&
+        openNode.id !== PROPFOLIO_NODE_ID && (
+          <GraphNodeSheet
+            node={openNode}
+            graph={graph}
+            onClose={() => setOpenNodeId(null)}
+            onOpenTab={() => {
+              setOpenNodeId(null);
+              onOpenTab();
+            }}
+          />
+        )}
     </div>
   );
 }
