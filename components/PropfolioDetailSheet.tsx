@@ -1,23 +1,41 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PropfolioData, PropfolioProperty } from "@/lib/types";
-import { HEALTH_META, formatCheckedAt, formatCount } from "@/lib/propfolio";
+import {
+  HEALTH_META,
+  PAYSLIP_ONLY_SETUP_NOTE,
+  PROPFOLIO_APP_URL,
+  formatCheckedAt,
+  formatCount,
+  statusOneLiner,
+} from "@/lib/propfolio";
+import { copyToClipboard } from "@/lib/clipboard";
+import { ActionChips, type ActionChipItem } from "./ActionChips";
+import { AskGrokPanel } from "./AskGrokPanel";
 
 interface PropfolioDetailSheetProps {
   data: PropfolioData;
   onClose: () => void;
 }
 
+const CHIP_FEEDBACK_TIMEOUT_MS = 3000;
+
 /**
  * Propfolio's detail sheet — opened by tapping the status node in the v0
  * graph (see PropfolioNodeCard). Status + status note, a client/property
- * count rollup with a one-line summary, a stub Properties list, and two
- * outbound links (app / repo). No login form, no real property CRUD —
- * fixing anything found here happens from Deck / Cursor separately, not
- * from this sheet.
+ * count rollup with a one-line summary, a stub Properties list, action
+ * chips (open app, refresh health, payslip-only setup note, copy status),
+ * an Ask Grok composer, and two outbound links (app / repo). No login
+ * form, no real property CRUD — fixing anything found here happens from
+ * Deck / Cursor separately, not from this sheet.
  */
 export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProps) {
+  const [liveData, setLiveData] = useState(data);
+  const [refreshing, setRefreshing] = useState(false);
+  const [chipMessage, setChipMessage] = useState<string | null>(null);
+  const chipMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -26,9 +44,87 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const meta = HEALTH_META[data.status];
+  useEffect(() => {
+    return () => {
+      if (chipMessageTimer.current) clearTimeout(chipMessageTimer.current);
+    };
+  }, []);
+
+  const showChipMessage = (message: string) => {
+    if (chipMessageTimer.current) clearTimeout(chipMessageTimer.current);
+    setChipMessage(message);
+    chipMessageTimer.current = setTimeout(
+      () => setChipMessage(null),
+      CHIP_FEEDBACK_TIMEOUT_MS
+    );
+  };
+
+  const meta = HEALTH_META[liveData.status];
   const { accent } = meta;
-  const hasUrl = data.url.trim().length > 0;
+  const hasUrl = liveData.url.trim().length > 0;
+  const appUrl = hasUrl ? liveData.url : PROPFOLIO_APP_URL;
+
+  const handleOpenPropfolio = () => {
+    window.open(appUrl, "_blank", "noopener,noreferrer");
+    showChipMessage("Opened Propfolio in a new tab.");
+  };
+
+  const handleRefreshHealth = async () => {
+    setRefreshing(true);
+    try {
+      const res = await fetch("/api/health/propfolio", { cache: "no-store" });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const next = (await res.json()) as PropfolioData;
+      setLiveData(next);
+      showChipMessage(`Refreshed \u2014 ${HEALTH_META[next.status].label}.`);
+    } catch {
+      showChipMessage("Refresh failed \u2014 try again.");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handlePayslipSetup = async () => {
+    window.open(appUrl, "_blank", "noopener,noreferrer");
+    const copied = await copyToClipboard(PAYSLIP_ONLY_SETUP_NOTE);
+    showChipMessage(
+      copied
+        ? "Setup note copied + Propfolio opened."
+        : "Propfolio opened \u2014 copy failed, note shown below."
+    );
+  };
+
+  const handleCopyStatus = async () => {
+    const oneLiner = statusOneLiner(liveData);
+    const copied = await copyToClipboard(oneLiner);
+    showChipMessage(copied ? "Status copied to clipboard." : `Copy failed \u2014 ${oneLiner}`);
+  };
+
+  const actionChips: ActionChipItem[] = [
+    { id: "open", label: "Open Propfolio", onSelect: handleOpenPropfolio },
+    {
+      id: "refresh",
+      label: "Refresh health",
+      pendingLabel: "Refreshing\u2026",
+      pending: refreshing,
+      onSelect: handleRefreshHealth,
+    },
+    {
+      id: "payslip-setup",
+      label: "Payslip-only setup",
+      onSelect: handlePayslipSetup,
+    },
+    { id: "copy-status", label: "Copy status", onSelect: handleCopyStatus },
+  ];
+
+  const askGrokSnapshot = {
+    status: liveData.status,
+    statusNote: liveData.statusNote,
+    clientCount: liveData.clientCount,
+    propertyCount: liveData.propertyCount,
+    summary: liveData.summary,
+    lastCheckedAt: liveData.lastCheckedAt,
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
@@ -87,21 +183,31 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
           </span>
         </div>
 
-        {data.statusNote && (
+        {liveData.statusNote && (
           <div className={`mt-3 rounded-xl border px-3 py-2.5 ${accent.noteBoxClass}`}>
-            <p className={`text-sm ${accent.noteTextClass}`}>{data.statusNote}</p>
+            <p className={`text-sm ${accent.noteTextClass}`}>{liveData.statusNote}</p>
           </div>
         )}
 
         <p className="mt-3 text-[11px] text-white/30">
-          {formatCheckedAt(data.lastCheckedAt)}
+          {formatCheckedAt(liveData.lastCheckedAt)}
         </p>
+
+        {/* Action chips — expand/tap surface only, not shown on the collapsed node face. */}
+        <div className="mt-4">
+          <ActionChips items={actionChips} />
+          {chipMessage && (
+            <p className="mt-2 text-[11px] leading-relaxed text-white/50">
+              {chipMessage}
+            </p>
+          )}
+        </div>
 
         {/* Client/property rollup */}
         <div className="mt-4 grid grid-cols-2 gap-2.5">
           <div className="rounded-xl border border-white/5 bg-white/[0.03] p-3">
             <p className="text-lg font-bold tabular-nums text-white">
-              {formatCount(data.clientCount)}
+              {formatCount(liveData.clientCount)}
             </p>
             <p className="text-[11px] uppercase tracking-wide text-white/40">
               Clients
@@ -109,7 +215,7 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
           </div>
           <div className="rounded-xl border border-white/5 bg-white/[0.03] p-3">
             <p className="text-lg font-bold tabular-nums text-white">
-              {formatCount(data.propertyCount)}
+              {formatCount(liveData.propertyCount)}
             </p>
             <p className="text-[11px] uppercase tracking-wide text-white/40">
               Properties
@@ -117,9 +223,9 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
           </div>
         </div>
 
-        {data.summary && (
+        {liveData.summary && (
           <p className="mt-2.5 text-xs leading-relaxed text-white/50">
-            {data.summary}
+            {liveData.summary}
           </p>
         )}
 
@@ -128,14 +234,14 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
           <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-white/40">
             Properties
           </p>
-          {data.properties.length === 0 ? (
+          {liveData.properties.length === 0 ? (
             <p className="rounded-xl border border-dashed border-white/15 px-3 py-3 text-xs text-white/40">
               No property data yet — nothing to list until Propfolio&rsquo;s
               data syncs here.
             </p>
           ) : (
             <div className="flex flex-col gap-2">
-              {data.properties.map((property) => (
+              {liveData.properties.map((property) => (
                 <PropertyRow key={property.id} property={property} />
               ))}
             </div>
@@ -147,10 +253,17 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
           repo — this sheet is a status glance only.
         </p>
 
+        <AskGrokPanel
+          project="propfolio"
+          projectLabel="Propfolio"
+          placeholder="fix Bayview debt digits, merge payslip-only skip…"
+          statusSnapshot={askGrokSnapshot}
+        />
+
         <div className="mt-4 flex flex-col gap-2">
           {hasUrl ? (
             <a
-              href={data.url}
+              href={liveData.url}
               target="_blank"
               rel="noopener noreferrer"
               className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-white/10 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-white/20 active:bg-white/25"
@@ -165,7 +278,7 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
           )}
 
           <a
-            href={data.repoUrl}
+            href={liveData.repoUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-white/80 transition-colors hover:bg-white/[0.07] hover:text-white active:bg-white/[0.1]"
