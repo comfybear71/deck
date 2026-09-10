@@ -77,12 +77,23 @@ export function formatUSD(amount: number): string {
   }).format(amount);
 }
 
+/**
+ * A flat 4-decimal cap (fine for the seed's UNI/NEAR prices) rounds any
+ * sub-cent coin down to a meaningless "$0.00" — live signals can include
+ * coins like PEPE (~$0.000003) or LUNC (~$0.00005), so scale the allowed
+ * precision down as the price gets smaller instead.
+ */
 export function formatPrice(amount: number): string {
+  const abs = Math.abs(amount);
+  const maximumFractionDigits =
+    abs > 0 && abs < 0.01
+      ? Math.min(10, Math.max(4, -Math.floor(Math.log10(abs)) + 2))
+      : 4;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
-    maximumFractionDigits: 4,
+    maximumFractionDigits,
   }).format(amount);
 }
 

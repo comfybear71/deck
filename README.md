@@ -299,10 +299,9 @@ mapped to a control-plane suit lane — it's a read-only glance at an
 external crypto/USDC portfolio tracker.
 
 - **Node face** (`components/BudjuNodeCard.tsx`) shows only: the pool
-  total (`$9,725` seed, plus "N assets + cash"), the crypto/USDC split
-  as a percentage pair + two-color bar (`86% crypto` / `14% USDC`), and
-  up to a few small signal chips (e.g. `UNI · NEAR BUY`,
-  `NEAR · COOLDOWN`).
+  total, the crypto/USDC split as a percentage pair + two-color bar
+  (`90% crypto` / `10% USDC`), and up to a few small signal chips (e.g.
+  `UNI · NEAR BUY`, `NEAR · COOLDOWN`).
 - Tapping it opens **`components/BudjuDetailSheet.tsx`**, a detail sheet
   with the same three sections in full: a CSS conic-gradient "doughnut"
   with the pool total centered, the crypto/USDC split with dollar
@@ -311,16 +310,43 @@ external crypto/USDC portfolio tracker.
   positioned between the buy and sell thresholds), and either an
   "X% to buy" callout (near-buy/near-sell) or a muted `(cooldown)` label
   with a one-line "recently triggered" note (cooldowns are shown, not
-  hidden — Stuart wants them as a quiet status, not full noise). The
+  hidden — Stuart wants them as a quiet status, not full noise). Below
+  the signals, a **Refresh** chip re-pulls live data on demand, and the
   sheet ends with a link out to `https://www.budju.xyz/trade`.
 - **Signal types**: `near-buy`, `near-sell`, `cooldown` — see
   `BudjuSignalType` in `lib/types.ts`. Actionable signals (near-buy /
   near-sell) sort ahead of cooldowns (`sortSignals` in `lib/budju.ts`),
   but cooldowns still render.
+- **Live pull, no wallet** (`lib/budju-live.ts` + `GET /api/budju/live`):
+  `GraphView` fetches this route once on mount and swaps the seed
+  snapshot for a live one as soon as it resolves; `BudjuDetailSheet`'s
+  **Refresh** chip calls the same route on demand. The route calls two
+  endpoints Budju's own `/trade` page already calls **unauthenticated**
+  from the browser — `POST www.budju.xyz/api/proxy` (`/portfolio/` for
+  Swyftx balances, `/prices/` for CoinGecko USD prices, both proxied
+  server-side by Budju itself) and `GET www.budju.xyz/api/state` (tier
+  config, coin assignments, cooldowns, live buy/sell targets) — Budju's
+  own `tradeApi.ts` literally comments `fetchTraderState()` as "public"
+  and its dashboard hook as "Load data (all public — no wallet
+  needed)". So despite the initial hypothesis that live numbers would
+  need auth, they don't: this is a live pull, not an ingest bridge.
+  `buildBudjuData()` (pure, in `lib/budju-live.ts`) turns that into pool
+  total, crypto/USDC split, and a capped set of near-buy/near-sell/
+  cooldown signals (5 actionable + 3 cooldown slots, so a broad market
+  dip can't crowd cooldowns out of the list entirely) — same `BudjuData`
+  shape as the seed, no schema changes. Any failure (Budju down, a
+  network hiccup, `SWYFTX_API_KEY` misconfigured on Budju's own side) is
+  swallowed and the caller keeps showing the seed snapshot; the glance
+  never shows an error state for this.
 - **Seed data** lives in `data/budju.json`, typed as `BudjuData` in
-  `lib/types.ts` — `updatedAt: null` marks it as static seed data; a
-  future live refresh (polling Budju) can populate `updatedAt` and swap
-  in fresh `pool`/`split`/`signals` without changing any component.
+  `lib/types.ts` — refreshed to match Stuart's real numbers as of this
+  writing (pool ~$9,4xx, 90/10 split, 26 assets), and it's what renders
+  for the brief window before the live pull resolves, or if it fails.
+  `updatedAt: null` marks it as static seed data; once a live pull
+  succeeds, `updatedAt` gets a real timestamp and `BudjuDetailSheet`'s
+  footer swaps "Seed data — live refresh from Budju isn't wired up
+  yet." for "Last refreshed \<time\>." — same seam as before, just wired
+  up now instead of stubbed.
 - **Out of scope**, same as the rest of v0: wallet connect, trades, the
   full asset list, and any live websocket — this is a glance, not the
   trade UI.
@@ -329,6 +355,17 @@ external crypto/USDC portfolio tracker.
   rank; `GraphView` special-cases `BUDJU_NODE_ID` (`lib/constants.ts`) to
   render `BudjuNodeCard`/`BudjuDetailSheet` instead of the generic
   `GraphNodeCard`/`GraphNodeSheet`.
+- **Fragility worth flagging to Stuart**: this depends on two
+  undocumented, unauthenticated endpoints on `budju.xyz` staying shaped
+  the way they are today (verified live while building this — see the
+  PR). If Budju's own team changes `/api/state`'s shape, moves off
+  Swyftx, or starts requiring auth on `/api/proxy`, this live pull just
+  quietly stops updating and Deck falls back to whatever seed snapshot
+  is on disk — nothing breaks loudly, but nothing pushes updates either.
+  If that ever happens, `COINGECKO_IDS` in `lib/budju-live.ts` (copied
+  from Budju's own `ASSET_CONFIG`) is also a maintenance seam: a newly
+  traded coin without an entry there just prices at $0 and drops out of
+  the crypto total instead of erroring.
 
 ### Propfolio node (status glance)
 
