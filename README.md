@@ -241,34 +241,53 @@ to collapse back to the chip. The choice is persisted to `localStorage`
 
 Stuart wants ComfyUI-style graphs/nodes eventually, but mobile-first, not
 tiny desktop spaghetti. This is the **first glanceable layer** of that: a
-static map of how French Deck's sibling projects relate, not a real
-node editor.
+map of how French Deck's sibling projects relate, not a real node editor —
+still true on both surfaces below.
 
 - Open it from the chip's small satellite button (the three-dot node icon
   next to the main pill) or, from the expanded `TabCard`, the node icon in
   the top-left corner. Either way it's a second surface — **the chip stays
   the default view**; closing the graph (the back arrow, or Esc) returns
   straight to the chip.
-- **Nodes** are big tappable cards (Skidmarks, AIG!itch / aiglitch-api,
-  Deck / The Tab itself, and a placeholder "+ project"), laid out as a
-  single vertical stack — deliberately not a 2D canvas, so there's no
-  pan/zoom/drag to fight with on a phone. **Edges** render as small labeled
-  connectors directly beneath the node they originate from (e.g. Skidmarks
-  → AIG!itch: *content*; both projects → Deck: *metering*).
-- Tap a node for a detail sheet: its name, role, and — if it's mapped to a
-  suit lane — that lane's **actual** dial (Full / Slow / Pause). It's the
-  same control-plane dial the Tab's suit lanes use, not a copy, so pausing
-  a lane from the graph pauses it everywhere. The Skidmarks → Make and
-  AIG!itch → Models mappings in `data/graph.json` are v0 guesses, not
-  confirmed integrations — swap them once those projects actually call
-  `check()`/`report()`.
-- Seed data lives in `data/graph.json` (nodes + edges, no backend). Tapping
-  the Deck/Tab node's "Open full Tab" button jumps to the expanded
-  `TabCard`.
-- **Out of scope for v0**: real ComfyUI, live agent execution, dragging
-  or freeform-positioning nodes, and IMAP. This is a map that gets you
-  oriented in under two seconds, not a runtime — looping/agents come
-  later, and the suit dials are still what actually leashes spend.
+- **Nodes**: Budju (primary/featured), Propfolio, Skidmarks, AIG!itch /
+  aiglitch-api, Deck / The Tab itself (the hub), and a placeholder
+  "+ project". Tap any node for a detail sheet: its name, role, and — if
+  it's mapped to a suit lane — that lane's **actual** dial (Full / Slow /
+  Pause). It's the same control-plane dial the Tab's suit lanes use, not a
+  copy, so pausing a lane from the graph pauses it everywhere. The
+  Skidmarks → Make and AIG!itch → Models mappings in `data/graph.json` are
+  v0 guesses, not confirmed integrations — swap them once those projects
+  actually call `check()`/`report()`. Seed data lives in `data/graph.json`
+  (nodes + edges, no backend). Tapping the Deck/Tab node's "Open full Tab"
+  button jumps to the expanded `TabCard`.
+- **Below ~768px (phone): the stacked list.** Nodes render as a single
+  vertical stack of big tappable cards — no pan/zoom/drag to fight with on
+  a phone. Edges render as small labeled connectors directly beneath the
+  node they originate from (e.g. Skidmarks → AIG!itch: *content*; both
+  projects → Deck: *metering*). `Budju`/`Propfolio` currently have no
+  edges in `data/graph.json`, so neither renders a connector — they're
+  separate entities, not wired to anything.
+- **At ~768px+ (`GraphView` → `GraphBoard`, `hooks/useIsLargeScreen.ts`):
+  a freestyle, ComfyUI-flavored board.** Same nodes, same tap-to-open
+  detail sheets, but laid out on an absolute-position canvas instead of a
+  stack — drag any node to reposition it. Positions are percentages of the
+  canvas (survive iPad portrait/landscape rotation) persisted to
+  `localStorage` (`the-tab:graph-positions`, via `lib/graphLayout.ts` +
+  `hooks/useGraphBoardPositions.ts`) — a "Reset layout" button clears back
+  to the seeded spread in `DEFAULT_BOARD_POSITIONS`. Drag uses Pointer
+  Events with a small movement threshold (`components/GraphBoardNode.tsx`)
+  so a tap still opens the detail sheet instead of fighting the drag
+  handler — this is the part that needs real testing on iPad Safari, not
+  just a mouse in devtools' responsive mode. Edges still don't get wires
+  drawn between nodes here either — a node with outgoing edges (Skidmarks,
+  AIG!itch) just gets its existing edge labels rendered as a small
+  non-interactive chip row under the card, same information as the list
+  view's connectors, no line-drawing. Budju and Propfolio have no edges in
+  `data/graph.json`, so they render with no chips — unwired, as intended.
+- **Out of scope for v0**: real ComfyUI, live agent execution, wires you
+  can draw/rewire between nodes, pan/zoom, and IMAP. This is a map that
+  gets you oriented in under a few seconds, not a runtime — looping/agents
+  come later, and the suit dials are still what actually leashes spend.
 
 ### Budju node (portfolio glance)
 
