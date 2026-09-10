@@ -48,6 +48,14 @@ multi-page nav.
   below.
 - `app/api/health/propfolio/` — a GET stub that returns
   `data/propfolio.json` as-is; the seam for a future real health probe.
+- `data/deck-asks.json` / `lib/deck-ask.ts` / `lib/deck-ask-server.ts` /
+  `lib/deck-ask-client.ts` — the Ask-Grok bridge (shared types + prompt
+  builder, the server-side store, and the client-side POST helper). See
+  "Ask Grok (v0 stub)" below.
+- `app/api/deck/ask/` — the `POST`/`GET` route backing Ask Grok.
+- `lib/clipboard.ts` — shared "copy to clipboard, with a manual-selection
+  fallback" helper used by the action chips and Ask Grok's copy-prompt
+  button.
 - `components/` — `TabWidget` (switches between chip/card/graph), `TabChip`
   (the default collapsed pill), `TabCard` (the full expanded screen),
   `BigBurn` (big number + glow halo), `AlertsStrip`, `SuitLane` (one of the
@@ -57,7 +65,9 @@ multi-page nav.
   expanded-view only), `GraphView` / `GraphNodeCard` / `GraphNodeSheet`
   (the v0 project graph — see below), `BudjuNodeCard` / `BudjuDetailSheet`
   (the featured Budju node's face + detail sheet), `PropfolioNodeCard` /
-  `PropfolioDetailSheet` (the Propfolio status node's face + detail sheet).
+  `PropfolioDetailSheet` (the Propfolio status node's face + detail sheet),
+  `ActionChips` / `AskGrokPanel` (generic detail-sheet primitives — see
+  "Ask Grok (v0 stub)" below).
 
 ## Control plane (v0 stub)
 
@@ -372,6 +382,78 @@ the graph: no login form, no property CRUD, no live probe of the real app
 - **Out of scope**: actually resolving anything found on the Propfolio
   side (that's a separate repo/PR), and a live HTTP probe from Vercel
   against the real app.
+
+### Ask Grok + action chips (v0 stub)
+
+The Propfolio detail sheet also ships an **action chips row** and an
+**Ask Grok composer** — a way for Stuart to kick off Propfolio updates
+from Deck on his phone, without embedding a full Grok Bot iframe. Both
+live only in the detail sheet (tap the node to open it), not on the
+collapsed node face, so the card itself stays uncluttered.
+
+- **Action chips** (`components/ActionChips.tsx` — a generic, dumb pill-row
+  primitive with no fetch/clipboard logic of its own, so a future Budju
+  panel can reuse it with its own `items`). Propfolio wires up four:
+  - **Open Propfolio** — opens `https://propfolio.work` (`liveData.url`,
+    falling back to `PROPFOLIO_APP_URL` in `lib/propfolio.ts` if `url` is
+    ever the empty-string placeholder) in a new tab.
+  - **Refresh health** — re-hits the existing `GET /api/health/propfolio`
+    stub and swaps the sheet's local state to whatever it returns (still
+    just re-reading `data/propfolio.json` for now — see the "Propfolio
+    node" section above; this chip is the seam for a real probe, not a
+    real probe itself).
+  - **Payslip-only setup** — opens Propfolio and copies a short note
+    (`PAYSLIP_ONLY_SETUP_NOTE` in `lib/propfolio.ts`) about skipping the
+    payslip-OCR onboarding step and entering properties manually per
+    client instead, so Stuart can paste it wherever it's needed (a
+    Propfolio issue, a message to whoever's fixing it, or into the Ask
+    Grok box below).
+  - **Copy status** — copies a one-line status/count rollup
+    (`statusOneLiner` in `lib/propfolio.ts`, e.g. "Propfolio: ERROR · 0
+    clients · 0 properties — Login OK — onboarding blocked: ...").
+  - Every chip's result shows as a small feedback line under the row
+    (e.g. "Refreshed — OK.", "Status copied to clipboard.", or a copy
+    fallback that inlines the text itself when the clipboard write fails)
+    — no toast library, just local state in `PropfolioDetailSheet`.
+- **Ask Grok** (`components/AskGrokPanel.tsx` — also generic over
+  `project`/`projectLabel`/`statusSnapshot`, so it's reusable as-is).
+  A short text field (placeholder: "fix Bayview debt digits, merge
+  payslip-only skip…") + **Send** POSTs
+  `{ project: "propfolio", message, statusSnapshot, ts }` to
+  `POST /api/deck/ask`. `statusSnapshot` is the sheet's current
+  status/counts/note/checked-at, so whatever Grok reads later has the same
+  context Stuart saw when he sent the ask. On success, the panel shows a
+  **"Queued ✓"** confirmation and a **copyable prompt** built server-side
+  (`buildGrokPrompt` in `lib/deck-ask.ts`) — a ready-to-paste message for
+  **Grok Bot (QA Engineer)** bundling the ask and a status-snapshot
+  rollup. This deliberately does **not** call Grok directly and does
+  **not** use any `grokbot://` compose deep link (none is documented to
+  exist) — it's a queue + copy-prompt, matching the same "thin stub, real
+  shape" philosophy as the control-plane and Mail → Tab bridges.
+- **`POST /api/deck/ask`** validates `project`/`message` (both required;
+  `message` capped at `MAX_ASK_MESSAGE_LENGTH` = 500 chars in
+  `lib/deck-ask.ts`), stores the ask via `lib/deck-ask-server.ts`, and
+  returns `{ ok, ask, prompt }`. **`GET /api/deck/ask`** (optionally
+  `?project=` / `?limit=`) lists recent queued asks — a debug/inspection
+  endpoint, same pattern as `GET /api/control-plane/report` and
+  `GET /api/ingest/receipt`.
+- **Persistence**: `lib/deck-ask-server.ts` reads/writes
+  `data/deck-asks.json` on disk (capped at the last 200 asks), with an
+  in-memory fallback for read-only deploy filesystems — the exact same
+  pattern (and the exact same limitation: the file wins when writable, the
+  in-memory fallback is per-warm-instance and doesn't survive a cold start
+  otherwise) as `lib/overrides-server.ts`'s receipt log. No real durable
+  datastore in v0; simple JSON-on-disk is enough to prove the shape.
+- **No auth in v0** — same as `/api/control-plane/*`; `/api/deck/ask` is
+  same-origin JSON with no secrets, not yet meant to be hit from outside
+  this app.
+- **Out of scope for this PR** (documented so it's not mistaken for
+  finished): live client/property counts from `propfolio.work` (still
+  seed data — see the "Propfolio node" section above), Grok actually
+  reading/acting on a queued ask (nothing polls `data/deck-asks.json` yet;
+  that's the next seam), and reusing `ActionChips`/`AskGrokPanel` on the
+  Budju node (the components are generic enough to, but that wiring
+  hasn't been done here).
 
 ## The four lanes
 
