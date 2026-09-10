@@ -23,11 +23,19 @@ const CHIP_FEEDBACK_TIMEOUT_MS = 3000;
 /**
  * Propfolio's detail sheet — opened by tapping the status node in the v0
  * graph (see PropfolioNodeCard). Status + status note, a client/property
- * count rollup with a one-line summary, a stub Properties list, action
- * chips (open app, refresh health, copy status), an Ask Grok composer,
- * and two outbound links (app / repo). No login
- * form, no real property CRUD — fixing anything found here happens from
- * Deck / Cursor separately, not from this sheet.
+ * count rollup with a one-line summary, a stub Properties list, an Ask
+ * Grok composer, and two outbound links (app / repo). No login form, no
+ * real property CRUD — fixing anything found here happens from Deck /
+ * Cursor separately, not from this sheet.
+ *
+ * The diagnostic chrome — the "never checked, seed status only" line, the
+ * "Health status" framing, the **Refresh health** / **Copy status** chips,
+ * and the scaffolding footnote — only shows when there's something to
+ * diagnose (`status` is `degraded`/`error`/`unknown`). On the healthy
+ * (`ok`) path this collapses to a calm summary: status chip, note, counts,
+ * properties, **Open Propfolio**, and Ask Grok — nothing that reads like a
+ * QA tool. See Stuart's feedback: "if the app is working, we don't need
+ * to see stuff to test if it's working or not."
  */
 export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProps) {
   const [liveData, setLiveData] = useState(data);
@@ -62,6 +70,10 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
   const { accent } = meta;
   const hasUrl = liveData.url.trim().length > 0;
   const appUrl = hasUrl ? liveData.url : PROPFOLIO_APP_URL;
+  // Healthy path gets the calm summary; anything else keeps the
+  // diagnostic chrome (checked-at line, refresh/copy chips, scaffolding
+  // footnote) so there's enough to actually troubleshoot with.
+  const isHealthy = liveData.status === "ok";
 
   const handleOpenPropfolio = () => {
     window.open(appUrl, "_blank", "noopener,noreferrer");
@@ -89,16 +101,23 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
     showChipMessage(copied ? "Status copied to clipboard." : `Copy failed \u2014 ${oneLiner}`);
   };
 
+  // "Refresh health" / "Copy status" are diagnostic tools, not something
+  // a director needs when the status chip already reads OK — only surface
+  // them once there's actually a status worth checking or copying.
   const actionChips: ActionChipItem[] = [
     { id: "open", label: "Open Propfolio", onSelect: handleOpenPropfolio },
-    {
-      id: "refresh",
-      label: "Refresh health",
-      pendingLabel: "Refreshing\u2026",
-      pending: refreshing,
-      onSelect: handleRefreshHealth,
-    },
-    { id: "copy-status", label: "Copy status", onSelect: handleCopyStatus },
+    ...(isHealthy
+      ? []
+      : [
+          {
+            id: "refresh",
+            label: "Refresh health",
+            pendingLabel: "Refreshing\u2026",
+            pending: refreshing,
+            onSelect: handleRefreshHealth,
+          },
+          { id: "copy-status", label: "Copy status", onSelect: handleCopyStatus },
+        ]),
   ];
 
   const askGrokSnapshot = {
@@ -132,9 +151,11 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-white">Propfolio</h2>
-            <p className="text-[11px] uppercase tracking-wide text-white/40">
-              Health status
-            </p>
+            {!isHealthy && (
+              <p className="text-[11px] uppercase tracking-wide text-white/40">
+                Health status
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -173,9 +194,11 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
           </div>
         )}
 
-        <p className="mt-3 text-[11px] text-white/30">
-          {formatCheckedAt(liveData.lastCheckedAt)}
-        </p>
+        {!isHealthy && (
+          <p className="mt-3 text-[11px] text-white/30">
+            {formatCheckedAt(liveData.lastCheckedAt)}
+          </p>
+        )}
 
         {/* Action chips — expand/tap surface only, not shown on the collapsed node face. */}
         <div className="mt-4">
@@ -232,10 +255,12 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
           )}
         </div>
 
-        <p className="mt-4 text-[11px] leading-relaxed text-white/40">
-          Fixing this happens from Deck / Cursor later, in the Propfolio
-          repo — this sheet is a status glance only.
-        </p>
+        {!isHealthy && (
+          <p className="mt-4 text-[11px] leading-relaxed text-white/40">
+            Fixing this happens from Deck / Cursor later, in the Propfolio
+            repo — this sheet is a status glance only.
+          </p>
+        )}
 
         <AskGrokPanel
           project="propfolio"

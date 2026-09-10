@@ -333,13 +333,20 @@ the graph: no login form, no property CRUD, no live probe of the real app
   visible without opening the sheet, not just a binary up/down.
 - Tapping it opens **`components/PropfolioDetailSheet.tsx`**: the same
   status chip, the `statusNote` (if set) in a callout tinted to match the
-  status, a "last checked" line, the client/property count rollup plus a
-  one-line `summary`, a **Properties** list (a stub — an empty array
-  renders as "no property data yet," not an error), a note that fixing
-  anything found here happens from Deck/Cursor separately (not from this
-  sheet), and two links: **Open app** (`data.url`, hidden behind a
-  "not set yet (TODO)" placeholder if `url` is ever empty) and
-  **Open repo**.
+  status, the client/property count rollup plus a one-line `summary`, a
+  **Properties** list (a stub — an empty array renders as "no property
+  data yet," not an error), and two links: **Open app** (`data.url`,
+  hidden behind a "not set yet (TODO)" placeholder if `url` is ever empty)
+  and **Open repo**.
+- **Healthy vs. non-healthy chrome**: when `status` is `"ok"`, the sheet
+  shows a calm summary only — status chip, note, counts, properties,
+  **Open Propfolio**, and Ask Grok. The "Health status" label, the
+  "never checked — seed status only" line, the **Refresh health** /
+  **Copy status** chips (see "Ask Grok + action chips" below), and the
+  "fixing this happens from Deck/Cursor separately" footnote only render
+  when `status` is `"degraded"`, `"error"`, or `"unknown"` — Stuart's
+  call: a working app shouldn't show the tools for checking whether it's
+  working (`isHealthy` in `PropfolioDetailSheet.tsx`).
 - **Health status has moved around during this feature's own build-out**
   — which is exactly the scenario this node exists to surface: an
   owner-reported sign-in bug, a 403 report from an automated check, then
@@ -386,18 +393,22 @@ collapsed node face, so the card itself stays uncluttered.
 
 - **Action chips** (`components/ActionChips.tsx` — a generic, dumb pill-row
   primitive with no fetch/clipboard logic of its own, so a future Budju
-  panel can reuse it with its own `items`). Propfolio wires up three:
+  panel can reuse it with its own `items`). Propfolio wires up three, but
+  only **Open Propfolio** shows when `status` is `"ok"` — the other two
+  are diagnostic tools, hidden until there's actually something to check:
   - **Open Propfolio** — opens `https://propfolio.work` (`liveData.url`,
     falling back to `PROPFOLIO_APP_URL` in `lib/propfolio.ts` if `url` is
-    ever the empty-string placeholder) in a new tab.
+    ever the empty-string placeholder) in a new tab. Always shown.
   - **Refresh health** — re-hits the existing `GET /api/health/propfolio`
     stub and swaps the sheet's local state to whatever it returns (still
     just re-reading `data/propfolio.json` for now — see the "Propfolio
     node" section above; this chip is the seam for a real probe, not a
-    real probe itself).
+    real probe itself). Only shown for `"degraded"` / `"error"` /
+    `"unknown"`.
   - **Copy status** — copies a one-line status/count rollup
     (`statusOneLiner` in `lib/propfolio.ts`, e.g. "Propfolio: OK · 2
-    clients · 2 properties — Login OK — household onboarded").
+    clients · 2 properties — Login OK — household onboarded"). Only
+    shown for `"degraded"` / `"error"` / `"unknown"`.
   - Every chip's result shows as a small feedback line under the row
     (e.g. "Refreshed — OK.", "Status copied to clipboard.", or a copy
     fallback that inlines the text itself when the clipboard write fails)
