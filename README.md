@@ -315,26 +315,30 @@ real app (yet).
   the TBD-until-live-data placeholder), and a big status chip — green
   `OK`, red `ERROR`, or grey `UNKNOWN`. When the status is `error` the
   whole card gets a red ring/glow and a small pulsing red dot, plus the
-  short error blurb (e.g. "Login issue (owner) — site reachable"),
-  so the problem is visible without opening the sheet.
+  short error blurb (e.g. "Site 403 Forbidden — check Vercel Deployment
+  Protection / firewall / domain."), so the problem is visible without
+  opening the sheet.
 - Tapping it opens **`components/PropfolioDetailSheet.tsx`**: the same
-  status chip, the error message (with a note that the site loads
-  normally for real users and this is a sign-in issue, not an outage —
-  see below), a "last checked" line, the client/property count rollup
-  plus a one-line `summary`, a **Properties** list (a stub — an empty
-  array renders as "no property data yet," not an error), a note that
-  fixing the bug happens from Deck/Cursor separately (not from this
-  sheet), and two links: **Open app** (`data.url`, hidden behind a
-  "not set yet (TODO)" placeholder if `url` is ever empty) and
-  **Open repo**.
-- **Health status seed**: `propfolio.work` loads normally for real users
-  (Google sign-in, email/password, "Sign in with Email" all render) —
-  the only confirmed issue is an **owner-reported sign-in bug**, not a
-  site outage. (Any 403s seen from automated/datacenter clients are
-  Vercel's bot mitigation kicking in on non-browser traffic — unrelated
-  to the real login bug, and not what this node's `error` status means.)
-  `status: "error"` is set because there's a real, owner-confirmed sign-in
-  bug to track; the `errorMessage` deliberately avoids implying an outage.
+  status chip, the error message (with a note that reports on this have
+  disagreed before — see below), a "last checked" line, the
+  client/property count rollup plus a one-line `summary`, a
+  **Properties** list (a stub — an empty array renders as "no property
+  data yet," not an error), a note that fixing the bug happens from
+  Deck/Cursor separately (not from this sheet), and two links: **Open
+  app** (`data.url`, hidden behind a "not set yet (TODO)" placeholder if
+  `url` is ever empty) and **Open repo**.
+- **Health status seed has been flapping** — this node is exactly why:
+  a real-user screenshot showed `propfolio.work`'s sign-in page (Google,
+  email/password) loading fine, while a separate automated check reported
+  a flat `403 Forbidden` with no login form reached at all. Both were
+  reported by Stuart / Stuart's tooling; this repo has no way to
+  adjudicate between "real bug," "Vercel Deployment Protection / firewall
+  misconfig," and "bot-mitigation false positive on a non-browser
+  client" without a real probe. The seed currently reflects the
+  **latest** report (403), and the detail sheet says as much — it does
+  not claim the site is definitively down or definitively fine for real
+  users. `lastCheckedAt` stays `null` (no confirmed-timestamp probe has
+  run yet) rather than being backfilled with a guessed time.
 - **Data shape**: `PropfolioData` in `lib/types.ts` — `repoUrl`, `url`,
   `status` (`HealthStatus`: `"ok" | "error" | "unknown"`), `errorMessage`
   (`string | null`), `lastCheckedAt` (`string | null`, ISO — `null` marks
