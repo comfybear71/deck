@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import type { PropfolioData, PropfolioProperty } from "@/lib/types";
 import {
   HEALTH_META,
-  PAYSLIP_ONLY_SETUP_NOTE,
   PROPFOLIO_APP_URL,
   formatCheckedAt,
   formatCount,
@@ -25,8 +24,8 @@ const CHIP_FEEDBACK_TIMEOUT_MS = 3000;
  * Propfolio's detail sheet — opened by tapping the status node in the v0
  * graph (see PropfolioNodeCard). Status + status note, a client/property
  * count rollup with a one-line summary, a stub Properties list, action
- * chips (open app, refresh health, payslip-only setup note, copy status),
- * an Ask Grok composer, and two outbound links (app / repo). No login
+ * chips (open app, refresh health, copy status), an Ask Grok composer,
+ * and two outbound links (app / repo). No login
  * form, no real property CRUD — fixing anything found here happens from
  * Deck / Cursor separately, not from this sheet.
  */
@@ -84,16 +83,6 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
     }
   };
 
-  const handlePayslipSetup = async () => {
-    window.open(appUrl, "_blank", "noopener,noreferrer");
-    const copied = await copyToClipboard(PAYSLIP_ONLY_SETUP_NOTE);
-    showChipMessage(
-      copied
-        ? "Setup note copied + Propfolio opened."
-        : "Propfolio opened \u2014 copy failed, note shown below."
-    );
-  };
-
   const handleCopyStatus = async () => {
     const oneLiner = statusOneLiner(liveData);
     const copied = await copyToClipboard(oneLiner);
@@ -108,11 +97,6 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
       pendingLabel: "Refreshing\u2026",
       pending: refreshing,
       onSelect: handleRefreshHealth,
-    },
-    {
-      id: "payslip-setup",
-      label: "Payslip-only setup",
-      onSelect: handlePayslipSetup,
     },
     { id: "copy-status", label: "Copy status", onSelect: handleCopyStatus },
   ];
@@ -256,7 +240,7 @@ export function PropfolioDetailSheet({ data, onClose }: PropfolioDetailSheetProp
         <AskGrokPanel
           project="propfolio"
           projectLabel="Propfolio"
-          placeholder="fix Bayview debt digits, merge payslip-only skip…"
+          placeholder="add rent roll for 60 Bagshaw, check loan reminder dates…"
           statusSnapshot={askGrokSnapshot}
         />
 

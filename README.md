@@ -325,14 +325,12 @@ the graph: no login form, no property CRUD, no live probe of the real app
   a client-count / property-count pair (renders as an em dash, "—", for
   the TBD-until-live-data placeholder), and a big status chip — green
   `OK`, amber `DEGRADED`, red `ERROR`, or grey `UNKNOWN`. Statuses flagged
-  `attention` in `HEALTH_META` (`lib/propfolio.ts`) — currently `degraded`
-  and `error` — get the whole card a colored ring/glow and a small
-  pulsing corner dot; `ok`/`unknown` render plain. Whenever `statusNote`
-  is set (any status, not just `error`) it shows as a short line under
-  the counts, e.g. "Login OK — onboarding blocked: \"Couldn't read this
-  payslip\" (payslip OCR/read failure)" — so a specific, actionable
-  problem is visible without opening the sheet, not just a binary
-  up/down.
+  `attention` in `HEALTH_META` (`lib/propfolio.ts`) — `degraded` and
+  `error` — get the whole card a colored ring/glow and a small pulsing
+  corner dot; `ok`/`unknown` render plain. Whenever `statusNote` is set
+  (any status, not just `error`) it shows as a short line under the
+  counts, e.g. "Login OK — household onboarded" — so a specific note is
+  visible without opening the sheet, not just a binary up/down.
 - Tapping it opens **`components/PropfolioDetailSheet.tsx`**: the same
   status chip, the `statusNote` (if set) in a callout tinted to match the
   status, a "last checked" line, the client/property count rollup plus a
@@ -344,18 +342,13 @@ the graph: no login form, no property CRUD, no live probe of the real app
   **Open repo**.
 - **Health status has moved around during this feature's own build-out**
   — which is exactly the scenario this node exists to surface: an
-  owner-reported sign-in bug, then a 403 report from an automated check
-  (which a manual curl couldn't reproduce), then confirmation that Google
-  sign-in works, then (current seed) confirmation that sign-in is fine
-  but **onboarding itself fails** on a payslip upload/OCR step ("Couldn't
-  read this payslip"), blocking any client/property data from ever
-  landing. That's a concrete, reproducible failure (not just an
-  unconfirmed state), so the seed is `error` again — not because login
-  broke, but because a specific onboarding step did.
-  `clientCount`/`propertyCount` stay at `0` (a real "nothing here" reading
-  now that the reason is known, not the `null` TBD placeholder).
-  `lastCheckedAt` stays `null` throughout — no single confirmed-timestamp
-  probe backs any of these reports yet.
+  owner-reported sign-in bug, a 403 report from an automated check, then
+  confirmation that Google sign-in works, then a payslip-OCR onboarding
+  blocker, and now (current seed) confirmation that household onboarding
+  is complete — `status: "ok"`, `clientCount`/`propertyCount` at `2` for
+  Stuart's household (2 properties on Bagshaw Crescent, Gray NT).
+  `lastCheckedAt` stays `null` — this is still seed data updated by hand,
+  not a single confirmed-timestamp live probe.
 - **Data shape**: `PropfolioData` in `lib/types.ts` — `repoUrl`, `url`,
   `status` (`HealthStatus`: `"ok" | "degraded" | "error" | "unknown"`),
   `statusNote` (`string | null` — a one-liner for *any* status, not just
@@ -393,7 +386,7 @@ collapsed node face, so the card itself stays uncluttered.
 
 - **Action chips** (`components/ActionChips.tsx` — a generic, dumb pill-row
   primitive with no fetch/clipboard logic of its own, so a future Budju
-  panel can reuse it with its own `items`). Propfolio wires up four:
+  panel can reuse it with its own `items`). Propfolio wires up three:
   - **Open Propfolio** — opens `https://propfolio.work` (`liveData.url`,
     falling back to `PROPFOLIO_APP_URL` in `lib/propfolio.ts` if `url` is
     ever the empty-string placeholder) in a new tab.
@@ -402,23 +395,17 @@ collapsed node face, so the card itself stays uncluttered.
     just re-reading `data/propfolio.json` for now — see the "Propfolio
     node" section above; this chip is the seam for a real probe, not a
     real probe itself).
-  - **Payslip-only setup** — opens Propfolio and copies a short note
-    (`PAYSLIP_ONLY_SETUP_NOTE` in `lib/propfolio.ts`) about skipping the
-    payslip-OCR onboarding step and entering properties manually per
-    client instead, so Stuart can paste it wherever it's needed (a
-    Propfolio issue, a message to whoever's fixing it, or into the Ask
-    Grok box below).
   - **Copy status** — copies a one-line status/count rollup
-    (`statusOneLiner` in `lib/propfolio.ts`, e.g. "Propfolio: ERROR · 0
-    clients · 0 properties — Login OK — onboarding blocked: ...").
+    (`statusOneLiner` in `lib/propfolio.ts`, e.g. "Propfolio: OK · 2
+    clients · 2 properties — Login OK — household onboarded").
   - Every chip's result shows as a small feedback line under the row
     (e.g. "Refreshed — OK.", "Status copied to clipboard.", or a copy
     fallback that inlines the text itself when the clipboard write fails)
     — no toast library, just local state in `PropfolioDetailSheet`.
 - **Ask Grok** (`components/AskGrokPanel.tsx` — also generic over
   `project`/`projectLabel`/`statusSnapshot`, so it's reusable as-is).
-  A short text field (placeholder: "fix Bayview debt digits, merge
-  payslip-only skip…") + **Send** POSTs
+  A short text field (placeholder: "add rent roll for 60 Bagshaw, check
+  loan reminder dates…") + **Send** POSTs
   `{ project: "propfolio", message, statusSnapshot, ts }` to
   `POST /api/deck/ask`. `statusSnapshot` is the sheet's current
   status/counts/note/checked-at, so whatever Grok reads later has the same

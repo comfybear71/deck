@@ -116,22 +116,11 @@ export function formatCount(count: number | null): string {
 
 /**
  * Fallback for `PropfolioData.url` when it's ever the empty-string "not
- * known yet" placeholder — the "Open Propfolio" / "Payslip-only setup"
- * action chips still need somewhere to point. `data/propfolio.json`
- * already sets `url` to this same address; this only covers the seam.
+ * known yet" placeholder — the "Open Propfolio" action chip still needs
+ * somewhere to point. `data/propfolio.json` already sets `url` to this
+ * same address; this only covers the seam.
  */
 export const PROPFOLIO_APP_URL = "https://propfolio.work";
-
-/**
- * A short, copyable note about the payslip-OCR onboarding blocker and the
- * workaround Stuart can pass along (to Propfolio's own repo/dev, or to
- * Grok Bot) — properties can be entered manually per client once sign-in
- * is confirmed, without waiting on the payslip-read step to be fixed. Used
- * by the "Payslip-only setup" action chip; not project-specific enough to
- * live in a component.
- */
-export const PAYSLIP_ONLY_SETUP_NOTE =
-  'Propfolio payslip-only setup: skip the payslip OCR upload during onboarding \u2014 properties can be entered manually per client once Google sign-in is confirmed working. Revisit the OCR step once the "Couldn\u2019t read this payslip" read failure is fixed.';
 
 /**
  * One-line status summary for the "Copy status" action chip \u2014 status

@@ -143,9 +143,9 @@ export type HealthStatus = "ok" | "degraded" | "error" | "unknown";
 
 /**
  * One property stub row for the detail sheet's "Properties" list.
- * Deliberately all-optional besides `id` — v0 seed data can be an empty
- * array (nothing to show while the login error blocks live data), and a
- * future live sync only needs to fill in whichever fields it actually has.
+ * Deliberately all-optional besides `id` — an empty array is a valid v0
+ * state (nothing synced yet), and a future live sync only needs to fill
+ * in whichever fields it actually has.
  */
 export interface PropfolioProperty {
   id: string;
