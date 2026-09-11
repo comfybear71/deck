@@ -1,7 +1,7 @@
 "use client";
 
 import type { GraphNode } from "@/lib/types";
-import { SUIT_META } from "@/lib/constants";
+import { GRAPH_NODE_ACCENTS, SUIT_META } from "@/lib/constants";
 
 interface GraphNodeCardProps {
   node: GraphNode;
@@ -21,6 +21,7 @@ const KIND_LABEL: Record<GraphNode["kind"], string> = {
  */
 export function GraphNodeCard({ node, onOpen }: GraphNodeCardProps) {
   const meta = node.suit ? SUIT_META[node.suit] : null;
+  const accent = node.accentId ? GRAPH_NODE_ACCENTS[node.accentId] : null;
   const isHub = node.kind === "hub";
   const isPlaceholder = node.kind === "placeholder";
 
@@ -35,7 +36,9 @@ export function GraphNodeCard({ node, onOpen }: GraphNodeCardProps) {
           ? "border-white/15 bg-gradient-to-br from-sky-500/10 via-white/[0.04] to-transparent shadow-[0_0_40px_-12px_rgba(96,165,250,0.35)] hover:bg-white/[0.07]"
           : isPlaceholder
             ? "border-dashed border-white/15 bg-white/[0.02] hover:bg-white/[0.04]"
-            : "border-white/10 bg-white/[0.04] hover:bg-white/[0.07]",
+            : accent
+              ? `${accent.ringClass} ${accent.bgClass} ${accent.glowClass} hover:brightness-110`
+              : "border-white/10 bg-white/[0.04] hover:bg-white/[0.07]",
       ].join(" ")}
     >
       <span
@@ -46,9 +49,11 @@ export function GraphNodeCard({ node, onOpen }: GraphNodeCardProps) {
             ? "bg-sky-400/15 text-sky-200"
             : isPlaceholder
               ? "border border-dashed border-white/20 text-white/40"
-              : meta
-                ? `bg-white/10 ${meta.color}`
-                : "bg-white/10 text-white/60",
+              : accent
+                ? accent.avatarBgClass
+                : meta
+                  ? `bg-white/10 ${meta.color}`
+                  : "bg-white/10 text-white/60",
         ].join(" ")}
       >
         {isPlaceholder ? "+" : meta ? meta.glyph : node.label.slice(0, 1)}
@@ -65,7 +70,9 @@ export function GraphNodeCard({ node, onOpen }: GraphNodeCardProps) {
         </span>
         <span className="mt-0.5 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-white/40">
           {node.subtitle ? (
-            <span>{node.subtitle}</span>
+            <span className={accent ? accent.textClass : undefined}>
+              {node.subtitle}
+            </span>
           ) : (
             <>
               {KIND_LABEL[node.kind]}

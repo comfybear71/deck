@@ -108,6 +108,13 @@ export interface GraphNode {
    * Propfolio's sheet uses.
    */
   askGrok?: boolean;
+  /**
+   * Optional key into `GRAPH_NODE_ACCENTS` (lib/constants.ts) — gives a
+   * node its own Budju-style distinctive border/glow/avatar treatment
+   * instead of the generic card look, for a sibling project that deserves
+   * its own visual identity.
+   */
+  accentId?: string;
 }
 
 export interface GraphEdge {

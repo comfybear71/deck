@@ -41,16 +41,27 @@ interface HealthMeta {
   accent: HealthAccent;
 }
 
-const neutralAccent: HealthAccent = {
-  ringClass: "border-white/10",
-  bgClass: "bg-white/[0.04]",
-  glowClass: "",
+/**
+ * Propfolio's own visual identity — a distinctive emerald/teal
+ * "property/wealth" border + glow, Budju-style, so the node reads as
+ * Propfolio at a glance instead of a generic project card. Ties to the
+ * existing OK-green chip color (`bg-emerald-400/15 text-emerald-300`
+ * below) without looking like an error/alert badge. Used for the
+ * non-attention statuses (`ok`, `unknown`); `degraded`/`error` keep their
+ * own amber/rose accents below since an actual problem should stand out
+ * more than identity branding.
+ */
+const identityAccent: HealthAccent = {
+  ringClass: "border-emerald-400/30",
+  bgClass:
+    "bg-gradient-to-br from-emerald-500/[0.12] via-teal-500/[0.05] to-transparent",
+  glowClass: "shadow-[0_0_34px_-14px_rgba(52,211,153,0.45)]",
   dotGlowClass: "",
-  noteBoxClass: "border-white/5 bg-white/[0.03]",
-  noteTextClass: "text-white/70",
-  noteSubTextClass: "text-white/40",
-  avatarBgClass: "bg-white/10 text-white/60",
-  inlineTextClass: "text-white/50",
+  noteBoxClass: "border-emerald-400/20 bg-emerald-400/[0.05]",
+  noteTextClass: "text-emerald-200",
+  noteSubTextClass: "text-emerald-200/60",
+  avatarBgClass: "bg-emerald-400/15 text-emerald-300",
+  inlineTextClass: "text-emerald-300/90",
 };
 
 export const HEALTH_META: Record<HealthStatus, HealthMeta> = {
@@ -59,7 +70,7 @@ export const HEALTH_META: Record<HealthStatus, HealthMeta> = {
     chipClass: "bg-emerald-400/15 text-emerald-300",
     dotClass: "bg-emerald-400",
     attention: false,
-    accent: neutralAccent,
+    accent: identityAccent,
   },
   degraded: {
     label: "DEGRADED",
@@ -100,7 +111,7 @@ export const HEALTH_META: Record<HealthStatus, HealthMeta> = {
     chipClass: "bg-white/10 text-white/50",
     dotClass: "bg-white/30",
     attention: false,
-    accent: neutralAccent,
+    accent: identityAccent,
   },
 };
 

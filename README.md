@@ -366,6 +366,16 @@ still true on both surfaces below. It's also Deck's main/only surface now
   view's connectors, no line-drawing. Budju, Propfolio, and Same Game
   Multi have no edges in `data/graph.json`, so they render with no chips —
   unwired, as intended.
+- **Node identity accents**: Budju, Propfolio, and Same Game Multi each
+  get their own distinctive border/glow treatment instead of the generic
+  `GraphNodeCard` look, so they read as individual entities rather than
+  interchangeable project cards — violet/sky for Budju (hard-coded in
+  `BudjuNodeCard`), emerald/teal for Propfolio (`identityAccent` in
+  `lib/propfolio.ts`, tied to the OK-green chip color without reading as
+  an error badge), and amber/gold for Same Game Multi
+  (`GRAPH_NODE_ACCENTS.sgm` in `lib/constants.ts`, applied via
+  `GraphNode.accentId`). Skidmarks / AIG!itch / Deck-The-Tab keep the
+  generic look. See the "Same Game Multi node" section below.
 - **Out of scope for v0**: real ComfyUI, live agent execution, wires you
   can draw/rewire between nodes, pan/zoom, and IMAP. This is a map that
   gets you oriented in under a few seconds, not a runtime — looping/agents
@@ -465,7 +475,14 @@ the graph: no login form, no property CRUD, no live probe of the real app
   `OK`, amber `DEGRADED`, red `ERROR`, or grey `UNKNOWN`. Statuses flagged
   `attention` in `HEALTH_META` (`lib/propfolio.ts`) — `degraded` and
   `error` — get the whole card a colored ring/glow and a small pulsing
-  corner dot; `ok`/`unknown` render plain. Whenever `statusNote` is set
+  corner dot. Independent of that alerting, `ok`/`unknown` now render with
+  their own **identity accent** — an emerald/teal border + soft glow
+  (`identityAccent` in `lib/propfolio.ts`), Budju-style, so Propfolio
+  reads as its own entity rather than a generic project card even when
+  there's nothing to flag. It deliberately ties to the existing OK-green
+  chip color instead of introducing a new hue, and steps aside for the
+  amber/rose `degraded`/`error` accents when there's an actual problem to
+  call out. Whenever `statusNote` is set
   (any status, not just `error`) it shows as a short line under the
   counts, e.g. "French household · Bagshaw Cres" — so a specific note is
   visible without opening the sheet, not just a binary up/down. On the
@@ -534,16 +551,18 @@ Propfolio, it doesn't get its own `SGMNodeCard`/`SGMDetailSheet` pair —
 it's light enough that a few small, generic additions to
 `GraphNodeCard`/`GraphNodeSheet` cover it:
 
-- **`GraphNode` gained three optional fields** (`lib/types.ts`):
+- **`GraphNode` gained four optional fields** (`lib/types.ts`):
   `subtitle` (a badge line overriding the generic `KIND_LABEL`, e.g.
   `"Project · Betting"`), `url` (only ever rendered as an "Open" link
-  when a node actually has a real one — never fabricated), and `askGrok`
-  (opt-in generic `AskGrokPanel`). All three are `undefined` for every
+  when a node actually has a real one — never fabricated), `askGrok`
+  (opt-in generic `AskGrokPanel`), and `accentId` (a key into
+  `GRAPH_NODE_ACCENTS` for the identity border/glow — see the "Node
+  identity accents" note above). All four are `undefined` for every
   existing node except SGM, so Skidmarks / AIG!itch / Deck-The-Tab render
   exactly as before.
 - **Node face**: same `GraphNodeCard` every non-special node uses, just
-  with `subtitle: "Project · Betting"` instead of the generic
-  `KIND_LABEL` line.
+  with `subtitle: "Project · Betting"` and the amber/gold
+  `GRAPH_NODE_ACCENTS.sgm` treatment instead of the generic look.
 - **Detail sheet**: same `GraphNodeSheet` every non-special node uses —
   title, the `role` blurb ("Same Game Multi — deck node; automation
   later…"), and (new, opt-in) an **Ask Grok** panel

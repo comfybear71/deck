@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import type { GraphData, GraphNode } from "@/lib/types";
-import { SUIT_META } from "@/lib/constants";
+import { GRAPH_NODE_ACCENTS, SUIT_META } from "@/lib/constants";
 import { useDialModes } from "@/hooks/useDialModes";
 import { DialControl } from "./DialControl";
 import { AskGrokPanel } from "./AskGrokPanel";
@@ -22,6 +22,7 @@ const KIND_LABEL: Record<GraphNode["kind"], string> = {
 export function GraphNodeSheet({ node, graph, onClose }: GraphNodeSheetProps) {
   const { modes, setMode } = useDialModes();
   const meta = node.suit ? SUIT_META[node.suit] : null;
+  const accent = node.accentId ? GRAPH_NODE_ACCENTS[node.accentId] : null;
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -56,14 +57,27 @@ export function GraphNodeSheet({ node, graph, onClose }: GraphNodeSheetProps) {
       >
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {meta && (
+            {meta ? (
               <span aria-hidden className={`text-xl ${meta.color}`}>
                 {meta.glyph}
               </span>
+            ) : (
+              accent && (
+                <span
+                  aria-hidden
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${accent.avatarBgClass}`}
+                >
+                  {node.label.slice(0, 1)}
+                </span>
+              )
             )}
             <div>
               <h2 className="text-base font-semibold text-white">{node.label}</h2>
-              <p className="text-[11px] uppercase tracking-wide text-white/40">
+              <p
+                className={`text-[11px] uppercase tracking-wide ${
+                  node.subtitle && accent ? accent.textClass : "text-white/40"
+                }`}
+              >
                 {node.subtitle ?? KIND_LABEL[node.kind]}
               </p>
             </div>
