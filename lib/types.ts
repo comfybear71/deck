@@ -15,11 +15,33 @@ export interface MeterAlert {
   message: string;
 }
 
+/**
+ * One real, dated charge for a meter — seed "invoice reality" data, not a
+ * live feed. `daysAgo` (not an absolute date) is intentional: seed data
+ * would otherwise age out of every window a week after it's written.
+ * Storing an offset from "now" instead means a seeded charge always lands
+ * where it was authored to (e.g. "Vercel's overage charge, 9 days back"),
+ * no matter when Stuart actually opens the deep dive. See
+ * `lib/spend-window.ts`'s "documented windowing rule" for how this and
+ * ingested mail receipts (which DO carry absolute dates) combine into one
+ * per-meter charge history.
+ */
+export interface ChargeRecord {
+  /** Whole days before "now" this charge landed. 0 = today. */
+  daysAgo: number;
+  amount: number;
+  currency: Currency;
+  /** Short label for the deep dive's per-vendor charge list, e.g. "Overage". */
+  note?: string;
+}
+
 export interface Meter {
   id: string;
   name: string;
   suit: Suit;
-  /** null when the amount is not yet known (e.g. a pending plan). */
+  /** null when the amount is not yet known (e.g. a pending plan). Doubles
+   * as the fallback monthly run-rate used to prorate a window when no
+   * `history` charge falls inside it — see `lib/spend-window.ts`. */
   amount: number | null;
   currency: Currency;
   cadence: Cadence;
@@ -28,6 +50,13 @@ export interface Meter {
   status?: MeterStatus;
   notes?: string;
   alert?: MeterAlert;
+  /**
+   * Real, dated seed charges for this meter (most-recent-first isn't
+   * required — callers sort). When at least one falls inside the selected
+   * window, it wins over the prorated `amount` estimate entirely — see the
+   * documented rule in `lib/spend-window.ts`.
+   */
+  history?: ChargeRecord[];
 }
 
 export interface SuitMeta {
