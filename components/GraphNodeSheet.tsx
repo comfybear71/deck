@@ -5,6 +5,7 @@ import type { GraphData, GraphNode } from "@/lib/types";
 import { SUIT_META } from "@/lib/constants";
 import { useDialModes } from "@/hooks/useDialModes";
 import { DialControl } from "./DialControl";
+import { AskGrokPanel } from "./AskGrokPanel";
 
 interface GraphNodeSheetProps {
   node: GraphNode;
@@ -63,7 +64,7 @@ export function GraphNodeSheet({ node, graph, onClose }: GraphNodeSheetProps) {
             <div>
               <h2 className="text-base font-semibold text-white">{node.label}</h2>
               <p className="text-[11px] uppercase tracking-wide text-white/40">
-                {KIND_LABEL[node.kind]}
+                {node.subtitle ?? KIND_LABEL[node.kind]}
               </p>
             </div>
           </div>
@@ -127,6 +128,34 @@ export function GraphNodeSheet({ node, graph, onClose }: GraphNodeSheetProps) {
             Not mapped to a lane — nothing to pause here yet.
           </p>
         ) : null}
+
+        {node.url && (
+          <a
+            href={node.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-5 flex w-full items-center justify-center gap-1.5 rounded-xl bg-white/10 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-white/20 active:bg-white/25"
+          >
+            Open
+            <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
+              <path
+                d="M7.5 4h8.5v8.5M16 4L4 16"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </a>
+        )}
+
+        {node.askGrok && (
+          <AskGrokPanel
+            project={node.id}
+            projectLabel={node.label}
+            placeholder={`ask about ${node.label}…`}
+          />
+        )}
       </div>
     </div>
   );

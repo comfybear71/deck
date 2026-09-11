@@ -73,9 +73,11 @@ total.
   compact bar chart of burn over the selected window), `VendorTable` (the
   per-lane, per-vendor compact table with tap-to-expand rows and the suit
   dials), `DialControl`, `GraphNodeCard` / `GraphNodeSheet` (the generic
-  graph nodes), `BudjuNodeCard` / `BudjuDetailSheet` (the featured Budju
-  node's face + detail sheet), `PropfolioNodeCard` / `PropfolioDetailSheet`
-  (the Propfolio status node's face + detail sheet), `ActionChips` /
+  graph nodes — Same Game Multi has no dedicated card/sheet pair, it's a
+  light stub covered by these — see "Same Game Multi node" below),
+  `BudjuNodeCard` / `BudjuDetailSheet` (the featured Budju node's face +
+  detail sheet), `PropfolioNodeCard` / `PropfolioDetailSheet` (the
+  Propfolio status node's face + detail sheet), `ActionChips` /
   `AskGrokPanel` (generic detail-sheet primitives — see "Ask Grok (v0
   stub)" below).
 
@@ -326,23 +328,26 @@ map of how French Deck's sibling projects relate, not a real node editor —
 still true on both surfaces below. It's also Deck's main/only surface now
 (see "Running costs" above) — not a second page you navigate to.
 
-- **Nodes**: Budju (primary/featured), Propfolio, Skidmarks, AIG!itch /
-  aiglitch-api, and a placeholder "+ project". Tap any node for a detail
-  sheet: its name, role, and — if it's mapped to a suit lane — that lane's
-  **actual** dial (Full / Slow / Pause). It's the same control-plane dial
-  the vendor table's lane groups use, not a copy, so pausing a lane from
-  the graph pauses it everywhere. The Skidmarks → Make and AIG!itch →
-  Models mappings in `data/graph.json` are v0 guesses, not confirmed
-  integrations — swap them once those projects actually call
+- **Nodes**: Budju (primary/featured), Propfolio, Same Game Multi,
+  Skidmarks, AIG!itch / aiglitch-api, and a placeholder "+ project". Tap
+  any node for a detail sheet: its name, role, and — if it's mapped to a
+  suit lane — that lane's **actual** dial (Full / Slow / Pause). It's the
+  same control-plane dial the vendor table's lane groups use, not a copy,
+  so pausing a lane from the graph pauses it everywhere. The Skidmarks →
+  Make and AIG!itch → Models mappings in `data/graph.json` are v0 guesses,
+  not confirmed integrations — swap them once those projects actually call
   `check()`/`report()`. Seed data lives in `data/graph.json` (nodes +
-  edges, no backend).
+  edges, no backend). Deck / The Tab itself is documented in
+  `data/graph.json` as a metering target but is no longer rendered as its
+  own tappable card here — see "Running costs (header + deep dive)" above
+  for that surface.
 - **Below ~768px (phone): the stacked list.** Nodes render as a single
   vertical stack of big tappable cards — no pan/zoom/drag to fight with on
   a phone. Edges render as small labeled connectors directly beneath the
   node they originate from (e.g. Skidmarks → AIG!itch: *content*; both
-  projects → Deck: *metering*). `Budju`/`Propfolio` currently have no
-  edges in `data/graph.json`, so neither renders a connector — they're
-  separate entities, not wired to anything.
+  projects → Deck: *metering*). `Budju`/`Propfolio`/`Same Game Multi`
+  currently have no edges in `data/graph.json`, so none of them renders a
+  connector — they're separate entities, not wired to anything.
 - **At ~768px+ (`GraphView` → `GraphBoard`, `hooks/useIsLargeScreen.ts`):
   a freestyle, ComfyUI-flavored board.** Same nodes, same tap-to-open
   detail sheets, but laid out on an absolute-position canvas instead of a
@@ -358,8 +363,9 @@ still true on both surfaces below. It's also Deck's main/only surface now
   drawn between nodes here either — a node with outgoing edges (Skidmarks,
   AIG!itch) just gets its existing edge labels rendered as a small
   non-interactive chip row under the card, same information as the list
-  view's connectors, no line-drawing. Budju and Propfolio have no edges in
-  `data/graph.json`, so they render with no chips — unwired, as intended.
+  view's connectors, no line-drawing. Budju, Propfolio, and Same Game
+  Multi have no edges in `data/graph.json`, so they render with no chips —
+  unwired, as intended.
 - **Out of scope for v0**: real ComfyUI, live agent execution, wires you
   can draw/rewire between nodes, pan/zoom, and IMAP. This is a map that
   gets you oriented in under a few seconds, not a runtime — looping/agents
@@ -517,6 +523,42 @@ the graph: no login form, no property CRUD, no live probe of the real app
   side (that's a separate repo/PR), and a live HTTP probe from Vercel
   against the real app.
 
+### Same Game Multi node (placeholder stub)
+
+**Same Game Multi** ("SGM") is an Aussie sports-betting SGM
+product/project placeholder for Stuart — no live app, no repo, no real
+URL yet. Like Budju and Propfolio, it's a **separate entity**: no edges
+in `data/graph.json`, so it's not wired to Skidmarks, AIG!itch, or The
+Tab, and it's not mapped to a control-plane suit lane. Unlike Budju and
+Propfolio, it doesn't get its own `SGMNodeCard`/`SGMDetailSheet` pair —
+it's light enough that a few small, generic additions to
+`GraphNodeCard`/`GraphNodeSheet` cover it:
+
+- **`GraphNode` gained three optional fields** (`lib/types.ts`):
+  `subtitle` (a badge line overriding the generic `KIND_LABEL`, e.g.
+  `"Project · Betting"`), `url` (only ever rendered as an "Open" link
+  when a node actually has a real one — never fabricated), and `askGrok`
+  (opt-in generic `AskGrokPanel`). All three are `undefined` for every
+  existing node except SGM, so Skidmarks / AIG!itch / Deck-The-Tab render
+  exactly as before.
+- **Node face**: same `GraphNodeCard` every non-special node uses, just
+  with `subtitle: "Project · Betting"` instead of the generic
+  `KIND_LABEL` line.
+- **Detail sheet**: same `GraphNodeSheet` every non-special node uses —
+  title, the `role` blurb ("Same Game Multi — deck node; automation
+  later…"), and (new, opt-in) an **Ask Grok** panel
+  (`project: "sgm"`) since that pattern is already generic/shared. No
+  "Open" link renders, since `data/graph.json`'s `sgm` node has no `url`
+  set — nothing invented.
+- **Seed data** is just the one node object in `data/graph.json` — no
+  `data/sgm.json`, no API route, no live odds feed of any kind. If/when
+  there's a real SGM app or repo, add `url` (and a `repoUrl`-style link if
+  needed) and it'll pick up the "Open" link automatically; a real
+  automation surface is a separate, later PR.
+- Board default position lives in `DEFAULT_BOARD_POSITIONS`
+  (`lib/graphLayout.ts`), next to Skidmarks in the second row — see the
+  "GraphBoard default layout" note there before changing the grid.
+
 ### Ask Grok + action chips (v0 stub)
 
 The Propfolio detail sheet also ships an **action chips row** and an
@@ -585,7 +627,9 @@ collapsed node face, so the card itself stays uncluttered.
   reading/acting on a queued ask (nothing polls `data/deck-asks.json` yet;
   that's the next seam), and reusing `ActionChips`/`AskGrokPanel` on the
   Budju node (the components are generic enough to, but that wiring
-  hasn't been done here).
+  hasn't been done here). `AskGrokPanel` is now also reused, opt-in, from
+  the generic `GraphNodeSheet` for the Same Game Multi node (see "Same
+  Game Multi node" above) — Budju itself still doesn't have one.
 
 ## The four lanes
 

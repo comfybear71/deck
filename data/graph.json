@@ -16,6 +16,15 @@
       "suit": null
     },
     {
+      "id": "sgm",
+      "label": "Same Game Multi",
+      "kind": "project",
+      "role": "Same Game Multi \u2014 deck node; automation later. An Aussie sports betting SGM (Same Game Multi) product/project placeholder for Stuart. A separate entity, like Budju/Propfolio: no wires to Skidmarks, AIG!itch, or The Tab here, and no live odds API wired up \u2014 this is a placeholder node, not a betting product yet.",
+      "suit": null,
+      "subtitle": "Project \u00b7 Betting",
+      "askGrok": true
+    },
+    {
       "id": "skidmarks",
       "label": "Skidmarks",
       "kind": "project",

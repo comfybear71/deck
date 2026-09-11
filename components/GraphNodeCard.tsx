@@ -28,7 +28,7 @@ export function GraphNodeCard({ node, onOpen }: GraphNodeCardProps) {
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`${node.label} — ${KIND_LABEL[node.kind]}. Open details.`}
+      aria-label={`${node.label} — ${node.subtitle ?? KIND_LABEL[node.kind]}. Open details.`}
       className={[
         "group flex w-full min-h-16 items-center gap-3 rounded-2xl border px-4 py-4 text-left transition-colors active:scale-[0.99]",
         isHub
@@ -64,11 +64,17 @@ export function GraphNodeCard({ node, onOpen }: GraphNodeCardProps) {
           {node.label}
         </span>
         <span className="mt-0.5 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-white/40">
-          {KIND_LABEL[node.kind]}
-          {meta && (
+          {node.subtitle ? (
+            <span>{node.subtitle}</span>
+          ) : (
             <>
-              <span aria-hidden>·</span>
-              <span className={meta.color}>{meta.label} lane</span>
+              {KIND_LABEL[node.kind]}
+              {meta && (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className={meta.color}>{meta.label} lane</span>
+                </>
+              )}
             </>
           )}
         </span>

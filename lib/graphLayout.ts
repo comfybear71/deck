@@ -34,21 +34,22 @@ const STORAGE_KEY = "the-tab:graph-positions";
  * without overlap at the *narrow* end of the "larger than a phone" range
  * (~768px-wide iPad portrait, ~660px of usable canvas once you subtract
  * the board's own padding — not just a spacious iPad-landscape canvas).
- * Budju/Propfolio sit in the top row (visually independent, no wires);
- * Skidmarks/AIG!itch and the placeholder/hub round out the two columns
- * below them. Column x's (3%, 50%) are chosen so two 280px-wide cards
- * never overlap even at ~660px of canvas width — see the "GraphBoard
- * default layout" note in the README's "Graph (v0 map)" section before
- * changing these. Any node id not listed here (a future new node) falls
- * back to a small top-left offset in `getNodePosition`.
+ * Budju/Propfolio/SGM (all visually independent, no wires) sit in the
+ * first two rows; Skidmarks/AIG!itch and the placeholder/hub round out
+ * the two columns below them. Column x's (3%, 50%) are chosen so two
+ * 280px-wide cards never overlap even at ~660px of canvas width — see the
+ * "GraphBoard default layout" note in the README's "Graph (v0 map)"
+ * section before changing these. Any node id not listed here (a future
+ * new node) falls back to a small top-left offset in `getNodePosition`.
  */
 export const DEFAULT_BOARD_POSITIONS: Readonly<BoardPositions> = Object.freeze({
   budju: { x: 3, y: 4 },
   propfolio: { x: 50, y: 4 },
-  skidmarks: { x: 3, y: 44 },
-  aiglitch: { x: 50, y: 44 },
-  "new-project": { x: 3, y: 78 },
-  tab: { x: 50, y: 78 },
+  sgm: { x: 3, y: 40 },
+  skidmarks: { x: 50, y: 40 },
+  aiglitch: { x: 3, y: 64 },
+  "new-project": { x: 50, y: 64 },
+  tab: { x: 3, y: 84 },
 });
 
 export function clamp(n: number, min: number, max: number): number {
