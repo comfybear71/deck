@@ -8,7 +8,10 @@
     "cadence": "monthly",
     "mode": "full",
     "status": "active",
-    "notes": "Aug figure ($246.98) is historical \u2014 spend has been backed off since, currently being watched to bring the run rate down."
+    "notes": "Aug figure ($246.98) is historical \u2014 spend has been backed off since, currently being watched to bring the run rate down.",
+    "history": [
+      { "daysAgo": 22, "amount": 246.98, "currency": "USD", "note": "Last monthly invoice" }
+    ]
   },
   {
     "id": "claude-sub",
@@ -28,7 +31,11 @@
     "currency": "AUD",
     "cadence": "monthly",
     "mode": "full",
-    "notes": "Metered usage billed in AUD \u2014 kept separate, not converted."
+    "notes": "Metered usage billed in AUD \u2014 kept separate, not converted.",
+    "history": [
+      { "daysAgo": 4, "amount": 82.10, "currency": "AUD", "note": "Usage draw" },
+      { "daysAgo": 19, "amount": 62.52, "currency": "AUD", "note": "Usage draw" }
+    ]
   },
   {
     "id": "cursor-pro",
@@ -39,7 +46,7 @@
     "cadence": "monthly",
     "mode": "full",
     "status": "active",
-    "notes": "Monthly seat. Earlier $109.42 failed charge has since been paid \u2014 resolved."
+    "notes": "Monthly seat. Earlier $109.42 failed charge has since been paid \u2014 resolved. Also carries a $50/mo on-demand usage cap \u2014 not counted here unless it's actually charged (no on-demand charge observed yet)."
   },
   {
     "id": "deepseek",
@@ -49,7 +56,12 @@
     "currency": "USD",
     "cadence": "balance",
     "mode": "full",
-    "notes": "Prepaid balance remaining, drawn down by usage."
+    "notes": "Prepaid balance remaining, drawn down by usage \u2014 not recurring spend, so it's excluded from the windowed burn except for actual draws below.",
+    "history": [
+      { "daysAgo": 2, "amount": 6.40, "currency": "USD", "note": "Usage draw" },
+      { "daysAgo": 11, "amount": 9.15, "currency": "USD", "note": "Usage draw" },
+      { "daysAgo": 24, "amount": 4.30, "currency": "USD", "note": "Usage draw" }
+    ]
   },
   {
     "id": "supergrok",
@@ -70,11 +82,15 @@
     "cadence": "monthly",
     "mode": "full",
     "status": "hot",
-    "notes": "Two recent charges this cycle: $195 + $59.",
+    "notes": "Two separate charges landed in the same cycle \u2014 see the charge list below, not a flat $254/mo plan.",
     "alert": {
       "level": "warning",
-      "message": "Vercel spend spike \u2014 two charges this cycle"
-    }
+      "message": "Vercel spend spike \u2014 two charges this cycle, still stacking"
+    },
+    "history": [
+      { "daysAgo": 3, "amount": 195, "currency": "USD", "note": "Pro plan" },
+      { "daysAgo": 9, "amount": 59, "currency": "USD", "note": "Usage overage" }
+    ]
   },
   {
     "id": "neon",
@@ -136,7 +152,15 @@
     "currency": "USD",
     "cadence": "monthly",
     "mode": "full",
-    "notes": "Estimated."
+    "notes": "Not a flat $35/mo in practice \u2014 recent charges have run higher and lower month to month; see the charge list below.",
+    "alert": {
+      "level": "warning",
+      "message": "Comfy isn't a flat $35 \u2014 recent charges were $38.50 and $31.20"
+    },
+    "history": [
+      { "daysAgo": 5, "amount": 38.50, "currency": "USD", "note": "Usage" },
+      { "daysAgo": 27, "amount": 31.20, "currency": "USD", "note": "Usage" }
+    ]
   },
   {
     "id": "elevenlabs",
