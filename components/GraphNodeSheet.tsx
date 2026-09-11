@@ -10,7 +10,6 @@ interface GraphNodeSheetProps {
   node: GraphNode;
   graph: GraphData;
   onClose: () => void;
-  onOpenTab: () => void;
 }
 
 const KIND_LABEL: Record<GraphNode["kind"], string> = {
@@ -19,12 +18,7 @@ const KIND_LABEL: Record<GraphNode["kind"], string> = {
   placeholder: "Coming later",
 };
 
-export function GraphNodeSheet({
-  node,
-  graph,
-  onClose,
-  onOpenTab,
-}: GraphNodeSheetProps) {
+export function GraphNodeSheet({ node, graph, onClose }: GraphNodeSheetProps) {
   const { modes, setMode } = useDialModes();
   const meta = node.suit ? SUIT_META[node.suit] : null;
 
@@ -133,16 +127,6 @@ export function GraphNodeSheet({
             Not mapped to a lane — nothing to pause here yet.
           </p>
         ) : null}
-
-        {node.kind === "hub" && (
-          <button
-            type="button"
-            onClick={onOpenTab}
-            className="mt-5 w-full rounded-xl bg-white/10 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-white/20 active:bg-white/25"
-          >
-            Open full Tab
-          </button>
-        )}
       </div>
     </div>
   );

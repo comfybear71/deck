@@ -40,7 +40,7 @@
       "id": "tab",
       "label": "Deck / The Tab",
       "kind": "hub",
-      "role": "This app — the cost scoreboard and control-plane stub. Every project's spend is meant to surface here eventually.",
+      "role": "This app — the cost scoreboard and control-plane stub. Every project's spend is meant to surface here eventually. No longer rendered as its own tappable card in the graph (that was a duplicate path to the same running-cost info) — the cost header pinned to the top of Deck is the one surface for this now. Kept in this file so the metering edges below still have a documented target to point at.",
       "suit": null
     }
   ],

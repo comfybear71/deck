@@ -1,11 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import type { BudjuData, GraphData, PropfolioData } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { BudjuData, GraphData, Meter, PropfolioData } from "@/lib/types";
+import type { LastSync, IngestReceipt } from "@/lib/overrides";
 import { edgesFrom, findNode, orderedNodes } from "@/lib/graph";
 import { BUDJU_NODE_ID, PROPFOLIO_NODE_ID } from "@/lib/constants";
 import budjuDataRaw from "@/data/budju.json";
 import propfolioDataRaw from "@/data/propfolio.json";
+import { useIsLargeScreen } from "@/hooks/useIsLargeScreen";
+import { useDialModes } from "@/hooks/useDialModes";
+import { useSpendWindow } from "@/hooks/useSpendWindow";
 import { GraphNodeCard } from "./GraphNodeCard";
 import { GraphNodeSheet } from "./GraphNodeSheet";
 import { BudjuNodeCard } from "./BudjuNodeCard";
@@ -13,33 +17,52 @@ import { BudjuDetailSheet } from "./BudjuDetailSheet";
 import { PropfolioNodeCard } from "./PropfolioNodeCard";
 import { PropfolioDetailSheet } from "./PropfolioDetailSheet";
 import { GraphBoard } from "./GraphBoard";
-import { useIsLargeScreen } from "@/hooks/useIsLargeScreen";
+import { CostHeader } from "./CostHeader";
+import { CostDetailSheet } from "./CostDetailSheet";
 
 const budjuSeedData = budjuDataRaw as BudjuData;
 const propfolioData = propfolioDataRaw as PropfolioData;
 
 interface GraphViewProps {
   graph: GraphData;
-  onBack: () => void;
-  onOpenTab: () => void;
+  meters: Meter[];
+  receipts: IngestReceipt[];
+  lastMailSync: LastSync;
+  /** ISO timestamp, resolved once server-side (see app/page.tsx) so every
+   * windowed figure — SSR and hydrated client alike — agrees on "now"
+   * instead of each render calling `new Date()` fresh. */
+  referenceDate: string;
 }
 
 /**
- * v0 project graph — a mobile-first, glanceable map of French Deck's
- * sibling projects and how they relate. On a phone it's a single vertical
- * stack of big tappable cards with labeled connectors between them, which
- * needs no pan/zoom/drag gestures. At >=768px ("larger than a phone" —
- * see `useIsLargeScreen`) it switches to `GraphBoard`, a freestyle
- * ComfyUI-flavored canvas where the same nodes are draggable and their
- * positions persist — still not a real node editor: no wires to rewire,
- * no runtime. See the README's "Graph (v0 map)" section.
+ * Deck's one continuous home surface: the running-cost header up top,
+ * then the mobile-first stacked map of French Deck's sibling projects
+ * below it (>=768px switches to the freeform `GraphBoard`). There is no
+ * separate "chip" or "expanded Tab" page anymore — tapping the header
+ * opens `CostDetailSheet` as an overlay on this same page, the same
+ * pattern Budju/Propfolio's own detail sheets already use. See the
+ * README's "Running costs (header + deep dive)" section.
  */
-export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
+export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate }: GraphViewProps) {
   const [openNodeId, setOpenNodeId] = useState<string | null>(null);
+  const [costSheetOpen, setCostSheetOpen] = useState(false);
   const [budjuData, setBudjuData] = useState<BudjuData>(budjuSeedData);
   const [budjuRefreshing, setBudjuRefreshing] = useState(false);
   const isLargeScreen = useIsLargeScreen();
-  const nodes = orderedNodes(graph);
+  const { modes, setMode } = useDialModes();
+  const { windowDays, setWindowDays } = useSpendWindow();
+  const now = useMemo(() => new Date(referenceDate), [referenceDate]);
+
+  // Hub-kind nodes (just "Deck / The Tab") aren't rendered as a separate
+  // tappable card anymore — the cost header above covers that function on
+  // this same surface. Edges that target a hub node still resolve their
+  // label via `findNode` against the *full* `graph.nodes`, so a connector
+  // chip like "→ Deck / The Tab · metering" still reads correctly; it's
+  // only the standalone card that's gone.
+  const nodes = useMemo(
+    () => orderedNodes(graph).filter((n) => n.kind !== "hub"),
+    [graph]
+  );
   const openNode = openNodeId ? findNode(graph.nodes, openNodeId) : undefined;
 
   // Mount-time "page load" pull from Budju's own public API (no wallet —
@@ -83,13 +106,13 @@ export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
   }, []);
 
   useEffect(() => {
-    if (openNodeId) return;
+    if (openNodeId || !costSheetOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onBack();
+      if (e.key === "Escape") setCostSheetOpen(false);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [openNodeId, onBack]);
+  }, [openNodeId, costSheetOpen]);
 
   return (
     <div className="flex min-h-dvh w-full items-start justify-center bg-black px-0 py-0 sm:items-center sm:px-6 sm:py-10">
@@ -99,33 +122,16 @@ export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
           isLargeScreen ? "max-w-6xl" : "max-w-md",
         ].join(" ")}
       >
-        <div className="mb-1 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={onBack}
-            aria-label="Back to Tab chip"
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/80 ring-1 ring-white/20 transition-colors hover:bg-white/20 hover:text-white"
-          >
-            <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
-              <path
-                d="M12 5l-5 5 5 5"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-          <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-white/40">
-            Deck Graph · v0
-          </span>
-          <span className="h-9 w-9" aria-hidden />
-        </div>
+        <CostHeader
+          meters={meters}
+          receipts={receipts}
+          windowDays={windowDays}
+          now={now}
+          onOpen={() => setCostSheetOpen(true)}
+        />
 
-        <p className="mb-5 text-center text-xs text-white/40">
-          {isLargeScreen
-            ? "A glanceable map of how the projects connect."
-            : "A glanceable map of how the projects connect. Tap a node for details."}
+        <p className="mb-5 text-center text-[11px] uppercase tracking-[0.18em] text-white/30">
+          Deck
         </p>
 
         {isLargeScreen ? (
@@ -206,6 +212,20 @@ export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
         </p>
       </div>
 
+      {costSheetOpen && (
+        <CostDetailSheet
+          meters={meters}
+          receipts={receipts}
+          lastMailSync={lastMailSync}
+          now={now}
+          windowDays={windowDays}
+          onWindowChange={setWindowDays}
+          modes={modes}
+          onModeChange={setMode}
+          onClose={() => setCostSheetOpen(false)}
+        />
+      )}
+
       {openNode && openNode.id === BUDJU_NODE_ID && (
         <BudjuDetailSheet
           data={budjuData}
@@ -229,10 +249,6 @@ export function GraphView({ graph, onBack, onOpenTab }: GraphViewProps) {
             node={openNode}
             graph={graph}
             onClose={() => setOpenNodeId(null)}
-            onOpenTab={() => {
-              setOpenNodeId(null);
-              onOpenTab();
-            }}
           />
         )}
     </div>

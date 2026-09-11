@@ -13,7 +13,7 @@ import {
 
 /**
  * React binding for the GraphBoard position store (`lib/graphLayout.ts`) —
- * same `useSyncExternalStore` shape as `useDialModes`/`useTabView`, so SSR
+ * same `useSyncExternalStore` shape as `useDialModes`/`useSpendWindow`, so SSR
  * always sees `DEFAULT_BOARD_POSITIONS` and the client re-renders with
  * whatever's in `localStorage` right after hydration.
  */
