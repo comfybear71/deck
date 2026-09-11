@@ -1,8 +1,11 @@
 # The Tab — French Deck
 
-A glanceable, single-card cost scoreboard. The goal is to understand monthly
-burn in under two seconds — not a finance admin panel, no sidebar, no
-multi-page nav.
+A glanceable cost scoreboard pinned to the top of Deck — the same map of
+French Deck's sibling projects (Budju, Propfolio, Skidmarks, AIG!itch).
+The goal is to understand recent burn in under two seconds, then tap
+straight into a real deep dive when something looks off — not a finance
+admin panel, no sidebar, no separate page to navigate to for the running
+total.
 
 ## Stack
 
@@ -15,12 +18,21 @@ multi-page nav.
 ## What's here
 
 - `data/meters.json` — seed cost meters (id, name, suit, amount, currency,
-  cadence, mode, notes, optional alert).
+  cadence, mode, notes, optional alert, optional `history` of dated real
+  charges). See "Running costs (header + deep dive)" below.
 - `data/overrides.json` — local store the mail ingest bridge writes to;
-  amount overrides merged on top of the seed meters. See "Mail -> Tab"
-  below.
-- `lib/` — types + pure helpers (lane/burn sums, money formatting, glow
-  intensity vs. the leash goal).
+  amount overrides merged on top of the seed meters, and matched receipts
+  feed the windowed burn too. See "Mail -> Tab" below.
+- `lib/meters.ts` — pure helpers (lane/burn sums, money formatting, glow
+  intensity vs. the leash goal). `totalBurnUSD`/`totalBurnAUD` here are the
+  old *unwindowed* sums — still used by nothing in the UI anymore, but kept
+  since `lib/spend-window.ts` builds on `isCountable` from this module.
+- `lib/spend-window.ts` — **the windowed burn engine.** Turns each meter's
+  flat `amount` + optional `history` (plus ingested mail receipts) into an
+  honest "last 7 or 30 days" figure, with a fully documented rule at the
+  top of the file. See "Running costs (header + deep dive)" below.
+- `hooks/useSpendWindow.ts` — which window (7 or 30 days) the cost deep
+  dive is showing, persisted to `localStorage`. Defaults to 30 days.
 - `lib/control-plane.ts` / `lib/control-plane-server.ts` — the v0
   control-plane stub. See "Control plane (v0 stub)" below.
 - `lib/overrides.ts` / `lib/overrides-server.ts` — the Mail -> Tab ingest
@@ -34,11 +46,8 @@ multi-page nav.
   Calls straight into `lib/control-plane.ts`'s `setMode`, so the dial and
   the plane share one source of truth (`localStorage`, mirrored to the
   server stub). Dials actually gate things now — see below.
-- `hooks/useTabView.ts` — which of the three surfaces The Tab is showing
-  (chip / expanded card / graph), persisted to `localStorage`. Defaults to
-  the chip.
 - `data/graph.json` / `lib/graph.ts` — the v0 project graph's seed data and
-  pure helpers. See "Graph (v0 map)" below.
+  pure helpers. See "Graph (Deck's home surface)" below.
 - `data/budju.json` / `lib/budju.ts` — Budju portfolio glance seed data and
   pure helpers (signal sort/format, buy/sell band position). See "Budju
   node (portfolio glance)" below.
@@ -56,18 +65,19 @@ multi-page nav.
 - `lib/clipboard.ts` — shared "copy to clipboard, with a manual-selection
   fallback" helper used by the action chips and Ask Grok's copy-prompt
   button.
-- `components/` — `TabWidget` (switches between chip/card/graph), `TabChip`
-  (the default collapsed pill), `TabCard` (the full expanded screen),
-  `BigBurn` (big number + glow halo), `AlertsStrip`, `SuitLane` (one of the
-  four suits), `DialControl`, `BottomSheet` (tap a suit to see its
-  individual meters), `ControlPlaneDemo` (the "Simulate spend" panel,
-  expanded-view only), `MailSyncLine` (the tiny "Last mail sync" line,
-  expanded-view only), `GraphView` / `GraphNodeCard` / `GraphNodeSheet`
-  (the v0 project graph — see below), `BudjuNodeCard` / `BudjuDetailSheet`
-  (the featured Budju node's face + detail sheet), `PropfolioNodeCard` /
-  `PropfolioDetailSheet` (the Propfolio status node's face + detail sheet),
-  `ActionChips` / `AskGrokPanel` (generic detail-sheet primitives — see
-  "Ask Grok (v0 stub)" below).
+- `components/` — `GraphView` (Deck's one continuous home surface —
+  header + node map, see below), `CostHeader` (the running-cost header
+  pinned to the top of `GraphView`), `CostDetailSheet` (the deep-dive sheet
+  the header opens: window toggle, `BigBurn`, `AlertsStrip`, `BurnGraph`,
+  `VendorTable`, `MailSyncLine`, `ControlPlaneDemo`), `BurnGraph` (the
+  compact bar chart of burn over the selected window), `VendorTable` (the
+  per-lane, per-vendor compact table with tap-to-expand rows and the suit
+  dials), `DialControl`, `GraphNodeCard` / `GraphNodeSheet` (the generic
+  graph nodes), `BudjuNodeCard` / `BudjuDetailSheet` (the featured Budju
+  node's face + detail sheet), `PropfolioNodeCard` / `PropfolioDetailSheet`
+  (the Propfolio status node's face + detail sheet), `ActionChips` /
+  `AskGrokPanel` (generic detail-sheet primitives — see "Ask Grok (v0
+  stub)" below).
 
 ## Control plane (v0 stub)
 
@@ -93,7 +103,7 @@ project (Skidmarks, or `aiglitch-api`) an obvious shape to call into.
   best-effort mirrors it to `/api/control-plane/mode`. The suit dials call
   this directly, so the UI and the plane can't drift apart.
 - **`ControlPlaneDemo`** — an expandable "Control-plane demo" section at the
-  bottom of the expanded `TabCard` (not shown in chip mode). Each suit has a
+  bottom of the cost deep-dive sheet (`CostDetailSheet`). Each suit has a
   "Simulate spend" button that runs the real `check` \u2192 `report` round
   trip and shows **allowed** / **throttled** / **denied**, so the leash is
   felt on a phone without plugging in a real spend source yet.
@@ -172,11 +182,13 @@ the UI already reads from.
   limitation as the control-plane stub above, and the reason live IMAP
   itself isn't wired up here yet either.
 
-- **UI**: in the expanded `TabCard` only (not the chip), a single small
+- **UI**: in the cost deep-dive sheet only (not the header), a single small
   gray line — `MailSyncLine` — reads `{ at, count }` from the overrides
   metadata and shows something like `Last mail sync: Sep 8, 4:12 PM · 3
   receipts`. No admin panel, no per-receipt list in the UI; that's
-  intentionally out of scope.
+  intentionally out of scope. A matched receipt also becomes a real charge
+  for that meter's windowed burn the moment it lands — see "Running costs
+  (header + deep dive)" above.
 
 ### Trying it from a phone-adjacent tool
 
@@ -227,39 +239,103 @@ job (a Vercel Cron job's environment variables, a small always-on box, a
 GitHub Actions secret, etc.), not in `.env*` here (those are gitignored
 already, but the job itself likely won't even live in this repo).
 
-## Chip mode
+## Running costs (header + deep dive)
 
-The Tab loads as a small floating chip by default — a glanceable pill
-showing the estimated burn, four tiny suit dots (lit up if that lane has
-spend, pulsing if hot), and an ambient glow that scales with spend against
-the leash goal, same as the full card. Tap the chip to expand into the full
-`TabCard`; tap the circular chevron in its top-right corner (or press Esc)
-to collapse back to the chip. The choice is persisted to `localStorage`
-(`the-tab:view-mode`), defaulting to the chip on first load.
+Stuart's ask: the running-cost meter should be a **header pinned to the
+top of the main Deck surface** — not a separate page/node you navigate
+away to, and not a lifetime-since-day-one number with no sense of "recent."
+This replaces the old chip/expanded-card/graph three-way mode switch with
+**one continuous surface**: `GraphView` renders `CostHeader` at the top,
+then the project node map below it, in the same scroll. Tapping the header
+opens `CostDetailSheet` — a bottom sheet overlay, the same pattern
+`BudjuDetailSheet`/`PropfolioDetailSheet` already use, not a different page.
 
-## Graph (v0 map)
+- **The window**: 7 or 30 days, ending today — never "since the beginning."
+  Defaults to 30 days (`DEFAULT_WINDOW_DAYS` in `lib/spend-window.ts`);
+  toggled in `CostDetailSheet`, persisted to `localStorage`
+  (`the-tab:spend-window` via `hooks/useSpendWindow.ts`). Both the header
+  and the sheet always show which window is active ("Last 30 days") — see
+  `windowLabel()`.
+- **The documented recompute rule** (`lib/spend-window.ts`'s module doc has
+  the full version): for each meter, (1) if a real, dated charge — seed
+  `history` or an ingested mail receipt matched to that meter — falls in
+  the window, use the sum of exactly those charges ("actual"); (2) else,
+  if the meter is a recurring `monthly` subscription, prorate its `amount`
+  across the window (`amount / 30 * windowDays`, labelled "Est." in the
+  UI); (3) else (a `balance`/`one-time`/`unknown`-cadence meter with no
+  observed charge, e.g. DeepSeek's prepaid balance sitting untouched) it
+  contributes $0 — a balance is not recurring spend, so it's never
+  prorated. This is why the total changed from a flat, unwindowed
+  "$930.32 forever" to a real "$934.89 over the last 30 days" /
+  "$377.88 over the last 7 days": DeepSeek's full prepaid balance no
+  longer counts as if it were spent, Comfy's two real charges ($38.50 +
+  $31.20) replace the flat $35 guess, and Vercel's two real charges ($195,
+  $59) only count for the days they actually land in.
+- **Seed "invoice reality"**: some meters in `data/meters.json` now carry
+  a `history` array of dated real charges (`{ daysAgo, amount, currency,
+  note }` — relative-to-now offsets, not absolute dates, so seed data
+  doesn't age out of every window a week after it's written). Vercel (two
+  charges demonstrating the "still stacking" alert), Comfy (two charges
+  demonstrating it isn't a flat $35), xAI (last month's real invoice,
+  outside a 7-day window — the 7d view honestly falls back to a prorated
+  estimate for it), Claude Usage (AUD), and DeepSeek (small usage draws
+  against the prepaid balance) all have one. Everything else is a plain
+  recurring subscription with no known per-charge variability, so it just
+  prorates. **Mail-ingested receipts feed the same rule** — a receipt
+  POSTed to `/api/ingest/receipt` with a `meterId` becomes a real charge
+  for that meter's window computation the moment it lands, same as a seed
+  `history` entry; the ingest path itself (routes, auth, merge) is
+  unchanged, see "Mail -> Tab" below.
+- **`CostHeader`** (`components/CostHeader.tsx`) — the header itself:
+  window-scoped total, AUD subline, suit dots, alert badge. Tapping it
+  opens the deep dive.
+- **`CostDetailSheet`** (`components/CostDetailSheet.tsx`) — the deep dive:
+  the 7d/30d toggle, `BigBurn` (now window-aware — the $400 leash goal is
+  prorated to the same window so "over/under goal" still means something
+  at 7 days), `AlertsStrip`, `BurnGraph`, `VendorTable`,
+  `MailSyncLine`, and `ControlPlaneDemo` — everything that used to live in
+  the old standalone `TabCard` screen now lives in this sheet instead.
+- **`BurnGraph`** (`components/BurnGraph.tsx`) — a compact bar chart of the
+  window's spend, bucketed daily for a 7-day window (7 bars) or weekly for
+  a 30-day window (~5 bars) via `buildBurnSeries` — deliberately not one
+  bar per day for 30 days; "compact," not endless.
+- **`VendorTable`** (`components/VendorTable.tsx`) — one compact row per
+  vendor (not one row per invoice line), grouped by suit lane with that
+  lane's real dial (Full/Slow/Pause, same control-plane dial as
+  everywhere else) in the group header. Each row shows the window amount
+  and an "Actual"/"Est." badge; **tapping a row expands it in place** to
+  show the meter's notes/alert and its real charge list (with dates), or
+  an explanation when there's no charge in this window (prorated estimate,
+  or "prepaid balance, no draw recorded"). This is the "click to see
+  spend" + "compact table, not endless rows" Stuart asked for.
+- **Removed the duplicate "Running Costs" graph node.** The old `GraphView`
+  had a `"tab"` hub node ("Deck / The Tab") that, when tapped, opened the
+  exact same running-cost view the chip already opened — a second,
+  separate path to the same information. Since the header above now
+  covers that job inline on the same surface, `GraphView` filters
+  `kind: "hub"` nodes out of what it renders (`orderedNodes(graph).filter
+  ((n) => n.kind !== "hub")`); the node stays in `data/graph.json` purely
+  so the two `"metering"` edges from Skidmarks/AIG!itch still resolve a
+  label to point at, but it's not a tappable card anymore.
+
+## Graph (Deck's home surface)
 
 Stuart wants ComfyUI-style graphs/nodes eventually, but mobile-first, not
 tiny desktop spaghetti. This is the **first glanceable layer** of that: a
 map of how French Deck's sibling projects relate, not a real node editor —
-still true on both surfaces below.
+still true on both surfaces below. It's also Deck's main/only surface now
+(see "Running costs" above) — not a second page you navigate to.
 
-- Open it from the chip's small satellite button (the three-dot node icon
-  next to the main pill) or, from the expanded `TabCard`, the node icon in
-  the top-left corner. Either way it's a second surface — **the chip stays
-  the default view**; closing the graph (the back arrow, or Esc) returns
-  straight to the chip.
 - **Nodes**: Budju (primary/featured), Propfolio, Skidmarks, AIG!itch /
-  aiglitch-api, Deck / The Tab itself (the hub), and a placeholder
-  "+ project". Tap any node for a detail sheet: its name, role, and — if
-  it's mapped to a suit lane — that lane's **actual** dial (Full / Slow /
-  Pause). It's the same control-plane dial the Tab's suit lanes use, not a
-  copy, so pausing a lane from the graph pauses it everywhere. The
-  Skidmarks → Make and AIG!itch → Models mappings in `data/graph.json` are
-  v0 guesses, not confirmed integrations — swap them once those projects
-  actually call `check()`/`report()`. Seed data lives in `data/graph.json`
-  (nodes + edges, no backend). Tapping the Deck/Tab node's "Open full Tab"
-  button jumps to the expanded `TabCard`.
+  aiglitch-api, and a placeholder "+ project". Tap any node for a detail
+  sheet: its name, role, and — if it's mapped to a suit lane — that lane's
+  **actual** dial (Full / Slow / Pause). It's the same control-plane dial
+  the vendor table's lane groups use, not a copy, so pausing a lane from
+  the graph pauses it everywhere. The Skidmarks → Make and AIG!itch →
+  Models mappings in `data/graph.json` are v0 guesses, not confirmed
+  integrations — swap them once those projects actually call
+  `check()`/`report()`. Seed data lives in `data/graph.json` (nodes +
+  edges, no backend).
 - **Below ~768px (phone): the stacked list.** Nodes render as a single
   vertical stack of big tappable cards — no pan/zoom/drag to fight with on
   a phone. Edges render as small labeled connectors directly beneath the
@@ -519,12 +595,15 @@ collapsed node face, so the card itself stays uncluttered.
 - ♥ **Make** — Comfy, ElevenLabs, Suno, Siray, Odds API
 - ♣ **Life** — iCloud+, X Premium, Meta/Facebook (est.)
 
-The big number sums every USD-denominated, active meter. Claude's AUD usage
-meter is shown as a separate subline and is never silently converted.
-Closed (DigitalOcean) and TBD (MongoDB) meters are listed in their lane's
-sheet but excluded from totals. The soft monthly leash goal is **$400 USD**
-(`LEASH_GOAL_USD` in `lib/constants.ts`) — the ambient glow behind the big
-number scales with spend against that goal.
+The header/deep-dive's big number sums every USD-denominated, countable
+meter's **windowed** amount (see "Running costs (header + deep dive)"
+above) — not a flat sum of every `amount`. Claude's AUD usage meter is
+shown as a separate subline and is never silently converted. Closed
+(DigitalOcean) and TBD (MongoDB) meters are listed in the vendor table but
+excluded from totals. The soft leash goal is **$400 USD/month**
+(`LEASH_GOAL_USD` in `lib/constants.ts`), prorated to whichever window is
+selected (`$400/30*7 ≈ $93.33` for a 7-day window) — the ambient glow
+behind the big number scales with spend against that prorated goal.
 
 ## Local dev
 
