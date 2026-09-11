@@ -37,7 +37,7 @@ function getSnapshot(): boolean {
  * default stacked list markup so hydration never has to reconcile a
  * server-rendered board against a phone-rendered client (or vice versa);
  * useSyncExternalStore re-renders with the real snapshot right after
- * mount, same trick as useTabView. */
+ * mount, same trick as useSpendWindow. */
 function getServerSnapshot(): boolean {
   return false;
 }

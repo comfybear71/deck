@@ -32,8 +32,9 @@ function randomSimulatedAmount(): number {
 }
 
 /**
- * Expandable "feel the leash" panel — only rendered inside the expanded
- * TabCard. Per suit, "Simulate spend" calls check(lane) then, if allowed,
+ * Expandable "feel the leash" panel — only rendered inside the cost
+ * deep-dive sheet (`CostDetailSheet`). Per suit, "Simulate spend" calls
+ * check(lane) then, if allowed,
  * report(lane, amount). This is exactly the check\u2192report round trip a
  * real caller (Skidmarks / aiglitch-api) will make once wired up; see the
  * README's "Control plane (v0 stub)" section.

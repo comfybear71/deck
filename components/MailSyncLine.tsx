@@ -19,7 +19,7 @@ function formatSyncLabel(lastMailSync: LastSync): string {
 }
 
 /**
- * Tiny "Last mail sync" line, expanded TabCard only — not a full admin
+ * Tiny "Last mail sync" line, cost deep-dive sheet only — not a full admin
  * panel, just enough to see the Mail -> Tab ingest bridge is alive.
  * `toLocaleString`'s output can legitimately differ between the server
  * render and the viewer's browser timezone for the same timestamp;
