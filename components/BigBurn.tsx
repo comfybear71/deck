@@ -1,14 +1,17 @@
 import { formatMoney, glowIntensity } from "@/lib/meters";
-import { LEASH_GOAL_USD } from "@/lib/constants";
 
 interface BigBurnProps {
   burnUSD: number;
   burnAUD: number;
+  /** e.g. "Last 30 days" — see `lib/spend-window.ts`'s `windowLabel`. */
+  windowLabel: string;
+  /** The soft leash goal, prorated to the same window as `burnUSD`. */
+  goalUSD: number;
 }
 
-export function BigBurn({ burnUSD, burnAUD }: BigBurnProps) {
-  const intensity = glowIntensity(burnUSD, LEASH_GOAL_USD);
-  const overGoal = burnUSD > LEASH_GOAL_USD;
+export function BigBurn({ burnUSD, burnAUD, windowLabel, goalUSD }: BigBurnProps) {
+  const intensity = glowIntensity(burnUSD, goalUSD);
+  const overGoal = burnUSD > goalUSD;
 
   return (
     <div className="relative flex flex-col items-center py-6 text-center">
@@ -27,14 +30,14 @@ export function BigBurn({ burnUSD, burnAUD }: BigBurnProps) {
       />
 
       <p className="text-xs font-medium uppercase tracking-[0.2em] text-white/40">
-        Estimated monthly burn
+        {windowLabel} burn
       </p>
       <p className="mt-2 text-5xl font-semibold tracking-tight text-white sm:text-6xl">
         {formatMoney(burnUSD, "USD")}
       </p>
       <p className="mt-1 text-xs text-white/40">
-        {overGoal ? "over" : "under"} the {formatMoney(LEASH_GOAL_USD, "USD")} leash
-        goal
+        {overGoal ? "over" : "under"} the {formatMoney(goalUSD, "USD")} leash goal
+        for this window
       </p>
       {burnAUD > 0 && (
         <p className="mt-3 text-xs text-white/35">
