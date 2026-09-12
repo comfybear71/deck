@@ -633,9 +633,11 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
      capped at 640px, re-encoded as a JPEG data URL — keeps a phone photo
      from blowing past `localStorage`'s quota) and
      `setSkidmarksBandCoverImage` stores it on the band; the tile then
-     renders that real photo (`coverImage`) instead of the mock gradient
-     — and a trash "remove band" glyph (top-left) that deletes the band
-     outright via `removeSkidmarksBand`. Deleting one of the two
+     renders that real photo (`coverImage`) instead of the mock gradient,
+     with the name/tagline sitting in a **thin bottom scrim only** so the
+     middle of the picked photo stays visible — and a trash "remove band"
+     glyph (top-left) that deletes the band outright via
+     `removeSkidmarksBand`. Deleting one of the two
      hand-seeded bands records its id in `removedSeedBandIds` so it stays
      gone on the next load instead of being re-minted from `SEED_BANDS`;
      deleting the active band resets the session (`bandId`/`mp3`) back to
