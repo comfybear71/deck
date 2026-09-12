@@ -12,15 +12,16 @@
  * vocal formants concentrate, via a real FFT run on the actual samples.
  * Frames that are loud enough, vocal-band-dominant, *and* not a
  * sustained near-pure tone (see `FLUTE_PEAKINESS_THRESHOLD` — a lead
- * flute lives in the same 300–3400Hz band as sung formants, so ratio
- * alone can't tell them apart) are flagged "vocal"; everything else
- * (silence, a bassline, a sustained pad, a cymbal wash, a flute break)
- * is "instrumental". An attack/release **hysteresis** pass (see
- * `applyHysteresis` below — fast to call a frame "vocal", much slower
- * to call it back "instrumental") turns per-frame flags into a handful
- * of contiguous real-time segments without flickering back to
- * "instrumental" mid-phrase just because a syllable, a beat, or a brief
- * flute interlude got in the way.
+ * instrument like a flute would live in the same 300–3400Hz band as
+ * sung formants, so ratio alone can't tell them apart; this is a
+ * defensive general safeguard, not a claim that any particular track
+ * actually has one) are flagged "vocal"; everything else (silence, a
+ * bassline, a sustained pad, a cymbal wash) is "instrumental". An
+ * attack/release **hysteresis** pass (see `applyHysteresis` below —
+ * fast to call a frame "vocal", a bit slower to call it back
+ * "instrumental") turns per-frame flags into a handful of contiguous
+ * real-time segments without flickering back to "instrumental" every
+ * time a single syllable or beat dips below the vocal-band threshold.
  *
  * **What this is not**: it is not speech-to-text, it does not know any
  * words, and it cannot tell verse from bridge from chorus — those are
@@ -84,56 +85,65 @@ const SILENCE_FLOOR_RATIO = 0.06;
  * to the rest, before we call it sung rather than instrumental. Tuned
  * by ear, not derived from a dataset — see the module doc comment.
  *
- * Lowered from an earlier 0.42 after a live run (Jack Ash - "Talking To
- * Concrete") showed sustained, clearly-sung verses sitting at ~1:04 of
- * mid-band dominance getting called "instrumental": in a fuller mix,
- * other instruments (guitars, keys) also live in the 300–3400Hz vocal
- * band, so requiring vocals to be a full 42% majority of *all* spectral
- * energy under-calls real singing once it's not the only thing in that
- * band. 0.36 still requires the vocal band to be the single largest of
- * the three bands most of the time, just not by as wide a margin. */
-const VOCAL_RATIO_THRESHOLD = 0.36;
+ * Left at its original 0.42. An earlier revision of this file lowered
+ * this to 0.36 on the theory that a dense mix under-calls sustained
+ * singing, using a live run on "Talking To Concrete" as justification
+ * — but that justification assumed singing stayed continuous well past
+ * 0:32, which was actually the reporter's own extrapolation, not
+ * something Stuart had confirmed. Reverted rather than keep an
+ * unverified change stacked on a retracted assumption; if Stuart
+ * confirms sustained vocals are genuinely being under-called, revisit
+ * this number against that real confirmation instead. */
+const VOCAL_RATIO_THRESHOLD = 0.42;
 
 /** Above this, a frame's vocal-band energy is concentrated enough in a
  * single FFT bin that we treat it as a sustained near-pure tone (a
- * flute is the motivating case: same 300–3400Hz band as sung vocal
- * formants, so `VOCAL_RATIO_THRESHOLD` alone can't tell them apart) and
- * refuse to call it "vocal" even if `vocalRatio` clears the threshold
- * above.
+ * lead flute or similar melodic instrument is the motivating case:
+ * same 300–3400Hz band as sung vocal formants, so `VOCAL_RATIO_THRESHOLD`
+ * alone can't tell them apart) and refuse to call it "vocal" even if
+ * `vocalRatio` clears the threshold above.
  *
- * **Honesty caveat, not a solved problem**: this is a real, physically-
- * motivated signal (voiced formants spread energy across several
- * resonance peaks at once; a flute's is dominated by its fundamental),
- * verified against synthetic pure-tone-vs-multi-formant signals in
- * `lib/audioAnalysis.test.ts`, but it is still a heuristic tuned by ear
- * with no ground-truth flute recording to check it against. A flute
- * playing a fast, breathy, or heavily-vibrato'd line could still read
- * as "vocal" here (lower peakiness than a clean sustained tone); a
- * clean, steady, low-vibrato sung note could in principle read as
+ * **Honesty caveat, not a solved problem, and not yet confirmed
+ * relevant to any specific track**: an earlier revision of this file
+ * added this specifically because a report described flute interludes
+ * in "Talking To Concrete" — but that description was the reporter's
+ * own unconfirmed extrapolation, not something Stuart had verified, so
+ * this is being kept only as a generically-reasonable defensive
+ * safeguard (voiced formants spread energy across several resonance
+ * peaks at once; a pure melodic tone's is dominated by its
+ * fundamental — verified against synthetic pure-tone-vs-multi-formant
+ * signals in `lib/audioAnalysis.test.ts`), not as a fix for a
+ * confirmed flute-mislabeling problem. It is still a heuristic tuned
+ * by ear with no ground-truth recording to check it against: a fast,
+ * breathy, or heavily-vibrato'd melodic line could still read as
+ * "vocal" here (lower peakiness than a clean sustained tone); a clean,
+ * steady, low-vibrato sung note could in principle read as
  * "instrumental" (higher peakiness than a typical formant-rich vowel).
- * If Stuart's real track still mislabels flute after this change,
- * that's the number to revisit first, alongside actually listening
- * through the false calls it makes. */
+ * Don't tune this further without an actual confirmed case to check it
+ * against. */
 const FLUTE_PEAKINESS_THRESHOLD = 0.5;
 
 /** Hysteresis hold times for `applyHysteresis` — modeled on an audio
- * envelope follower's attack/release, and the direct fix for the
- * reported bug (real singing getting flipped to "Instrumental" after a
- * short dip below `VOCAL_RATIO_THRESHOLD` — Stuart's ground-truth
- * example is a verse-length vocal section on "Talking To Concrete" with
- * "many little 2–3 second flute interludes woven in" that must not end
- * the vocal segment):
+ * envelope follower's attack/release. Both numbers are deliberately
+ * conservative right now, tied only to *confirmed* facts about
+ * "Talking To Concrete" rather than the fuller extrapolated timeline an
+ * earlier revision of this file assumed (Stuart confirmed the vocal
+ * onset lands specifically at 0:31–0:32, but has not yet confirmed
+ * whether — or how long — singing continues past 0:32; don't
+ * reintroduce a "must stay vocal through X" assumption here without
+ * that confirmation):
  * - Switching *into* "vocal" only needs this many seconds of clearly
- *   vocal-flagged frames — quick to catch a real vocal entrance.
+ *   vocal-flagged frames — short on purpose, so the detected onset
+ *   lands tightly inside the confirmed 0:31–0:32 window instead of
+ *   drifting noticeably late.
  * - Switching *out of* "vocal" back to "instrumental" needs this many
- *   *consecutive* seconds of clearly non-vocal frames — comfortably
- *   longer than a 2–3s flute dip (with margin, since "2–3 seconds" is
- *   Stuart's estimate, not a hard measurement) but much shorter than an
- *   actual instrumental break (Stuart's flute break on the same track
- *   is a full 13 seconds), so a real break still ends the segment
- *   promptly. */
-const ENTER_VOCAL_HOLD_SEC = 0.6;
-const EXIT_VOCAL_HOLD_SEC = 5.0;
+ *   *consecutive* seconds of clearly non-vocal frames. The live run's
+ *   own screenshot showed a 2-second "0:30–0:32 Vocal" blip immediately
+ *   flipping to "Instrumental" right after — this just needs to
+ *   comfortably outlast a blip that short without presuming anything
+ *   longer than that is real. */
+const ENTER_VOCAL_HOLD_SEC = 0.3;
+const EXIT_VOCAL_HOLD_SEC = 2.5;
 
 /** Segments shorter than this get folded into a neighbor after
  * hysteresis — keeps the final list readable (a handful of verse-scale
