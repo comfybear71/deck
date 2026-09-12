@@ -115,7 +115,11 @@ export function SkidmarksPlatesAndCamera({
                 aria-label={`${plate.label} plate \u2014 ${timeRange}, ${durationSec}s, ${skidmarksModelBadge(segment.model)}${lipSync ? ", lip-sync" : ""}`}
                 className={[
                   "flex w-24 shrink-0 flex-col overflow-hidden rounded-xl text-left transition-transform active:scale-[0.97]",
-                  active ? "ring-2 ring-rose-400 ring-offset-1 ring-offset-zinc-950" : "ring-1 ring-white/10",
+                  // `ring-inset`, not `ring-offset` — see `SkidmarksBandPicker`'s
+                  // `BandTile` for why: an offset ring draws outside the box and
+                  // a scrolling ancestor's overflow can clip it clean off; inset
+                  // never can.
+                  active ? "ring-2 ring-inset ring-rose-400" : "ring-1 ring-inset ring-white/10",
                 ].join(" ")}
               >
                 <span
