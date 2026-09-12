@@ -95,7 +95,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/90 backdrop-blur-md"
       />
 
       <div

@@ -697,6 +697,13 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
      speech-to-text-style pass, timing as just the file's own length).
      No lyrics panel, no paste-lyrics box, no manual vocal-start pin —
      this is the entire surface for that.
+  - The sheet's backdrop is a darker/more opaque scrim
+     (`bg-black/90 backdrop-blur-md`, vs. the generic `GraphNodeSheet`'s
+     `bg-black/70`) — this sheet opens tall and near the top of the
+     screen on mobile, so the graph board underneath sits closer to the
+     sheet's rounded top corners; the stronger scrim keeps a graph
+     button/card from reading as if it were floating chrome belonging to
+     the sheet itself.
   - A short, always-visible disclaimer line closes the sheet: bands,
     looks, and the checklist are mocked for this build; no real Comfy
     MCP / Seedance / LTX / ElevenLabs call happens from here, and plates +
