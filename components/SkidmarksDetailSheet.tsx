@@ -1,10 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useDialModes } from "@/hooks/useDialModes";
 import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
 import { buildMockLook, EMPTY_SKIDMARKS_CHECKLIST } from "@/lib/skidmarks";
-import { DialControl } from "./DialControl";
 import { SkidmarksLandingTiles } from "./SkidmarksLandingTiles";
 import { SkidmarksBandPicker } from "./SkidmarksBandPicker";
 import { SkidmarksMembersModule } from "./SkidmarksMembersModule";
@@ -28,7 +26,6 @@ interface SkidmarksDetailSheetProps {
  * looks, the checklist's staged timers) in this build.
  */
 export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
-  const { modes, setMode } = useDialModes();
   const {
     bands,
     session,
@@ -89,8 +86,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
       <div
         className={[
-          "relative z-10 flex max-h-[88vh] w-full flex-col overflow-hidden rounded-t-3xl border border-white/10 bg-zinc-950 shadow-2xl",
-          "sm:max-w-md sm:rounded-3xl",
+          "relative z-10 flex h-[92vh] w-full flex-col overflow-hidden rounded-t-3xl border border-white/10 bg-zinc-950 shadow-2xl",
+          "sm:h-auto sm:max-h-[85vh] sm:max-w-md sm:rounded-3xl",
           "animate-[sheet-in_0.22s_ease-out]",
         ].join(" ")}
         role="dialog"
@@ -111,7 +108,6 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <DialControl value={modes.hearts} onChange={(mode) => setMode("hearts", mode)} size="sm" />
             <button
               type="button"
               onClick={onClose}
