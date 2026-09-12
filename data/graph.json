@@ -29,7 +29,7 @@
       "id": "skidmarks",
       "label": "Skidmarks",
       "kind": "project",
-      "role": "Vibe-director front end for a convoluted backend (Comfy MCP, Seedance, LTX, ElevenLabs, etc. — all hidden behind abstract stage copy, not surfaced here). New project: type a vibe brief, get staged replies back — brief locked, cast suggestions, an empty plate board, then the Cast / Plates / Multi-angle / Voice / Animate / Stitch stages. Every reply in this build is scripted from the brief text alone, client-side — no real Comfy/Seedance/LTX/ElevenLabs calls, no full render, and this isn't skidmarks.aiglitch.app's Crash Lab. Mapped here to the Make lane as a v0 placeholder guess, not a confirmed control-plane integration.",
+      "role": "Vibe-director front end for a convoluted backend (Comfy MCP, Seedance, LTX, ElevenLabs, etc. — all hidden behind abstract stage copy, not surfaced here). Locked Music-video flow, built through the MP3 step only: pick \"Music video\" off the landing's three project-type tiles, choose or create a band (album-cover tiles, never member faces), cast up to 3 members and generate a mock \"look\" per member, then attach an existing MP3 and watch a staged Lyrics/Timing/Ready checklist tick green. Every band, look, and checklist tick in this build is mocked/seeded client-side — no real Comfy/Seedance/LTX/ElevenLabs calls, no full render, and this isn't skidmarks.aiglitch.app's Crash Lab. Plates and everything after MP3 are explicitly out of scope for now. Mapped here to the Make lane as a v0 placeholder guess, not a confirmed control-plane integration.",
       "suit": "hearts"
     },
     {

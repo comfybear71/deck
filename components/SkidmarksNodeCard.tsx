@@ -1,33 +1,30 @@
 "use client";
 
-import type { SkidmarksProject } from "@/lib/skidmarks";
-import { SKIDMARKS_STAGE_LABEL } from "@/lib/skidmarks";
+import type { SkidmarksState } from "@/lib/skidmarks";
+import { skidmarksGlance } from "@/lib/skidmarks";
 
 interface SkidmarksNodeCardProps {
-  /** The active project's thread, if one has ever been started on this browser. */
-  project: SkidmarksProject | undefined;
+  /** Current studio state, if the Music-video flow has ever been touched on this browser. */
+  state: SkidmarksState;
   onOpen: () => void;
 }
 
 /**
  * Skidmarks' node face — a "vibe director" glance, not a dump of what's
- * running behind it. Shows: the node name, a warm rose/pink identity
- * treatment (tied to the ♥ Make lane, but distinct from the generic
- * `GraphNodeCard` hearts styling — see the README's "Skidmarks node"
- * section), and either "no project yet" or the current project's brief
- * (truncated) plus a small "Directing · &lt;stage&gt;" chip. Tapping opens
- * `SkidmarksDetailSheet` for the actual director chat.
+ * running behind it. Shows the node name, a warm rose/pink identity
+ * treatment (tied to the ♥ Make lane), and a terse one-line status via
+ * `skidmarksGlance` (idle / choosing a band / directing a named band /
+ * ready once the MP3 checklist clears). Tapping opens
+ * `SkidmarksDetailSheet` for the actual locked Music-video flow.
  */
-export function SkidmarksNodeCard({ project, onOpen }: SkidmarksNodeCardProps) {
+export function SkidmarksNodeCard({ state, onOpen }: SkidmarksNodeCardProps) {
+  const glance = skidmarksGlance(state);
+
   return (
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`Skidmarks — vibe director. ${
-        project
-          ? `Directing: ${project.brief}. Stage ${SKIDMARKS_STAGE_LABEL[project.stage]}.`
-          : "No project yet."
-      } Open details.`}
+      aria-label={`Skidmarks — vibe director. ${glance.label}. Open details.`}
       className="group relative flex w-full min-h-16 items-center gap-3 rounded-2xl border border-rose-400/25 bg-gradient-to-br from-rose-500/[0.14] via-pink-500/[0.05] to-transparent px-4 py-4 text-left shadow-[0_0_40px_-14px_rgba(251,113,133,0.55)] transition-colors active:scale-[0.99] hover:from-rose-500/[0.18] hover:via-pink-500/[0.08]"
     >
       <span
@@ -47,18 +44,20 @@ export function SkidmarksNodeCard({ project, onOpen }: SkidmarksNodeCardProps) {
           <span className="text-rose-300">Vibe director</span>
         </span>
 
-        {project ? (
-          <span className="mt-1.5 flex flex-col items-start gap-1">
-            <span className="block max-w-full truncate text-xs text-white/60">
-              {project.brief}
-            </span>
-            <span className="inline-flex w-fit items-center gap-1 rounded-full border border-rose-400/30 bg-rose-400/10 px-2 py-0.5 text-[10px] font-medium text-rose-200">
-              Directing {"\u00b7"} {SKIDMARKS_STAGE_LABEL[project.stage]}
-            </span>
-          </span>
-        ) : (
+        {glance.status === "idle" ? (
           <span className="mt-1.5 block text-xs text-white/40">
             No project yet — tap to start directing.
+          </span>
+        ) : (
+          <span
+            className={[
+              "mt-1.5 inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+              glance.status === "ready"
+                ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+                : "border-rose-400/30 bg-rose-400/10 text-rose-200",
+            ].join(" ")}
+          >
+            {glance.label}
           </span>
         )}
       </span>
