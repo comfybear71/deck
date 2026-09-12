@@ -4,18 +4,21 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { BudjuData, GraphData, Meter, PropfolioData } from "@/lib/types";
 import type { LastSync, IngestReceipt } from "@/lib/overrides";
 import { edgesFrom, findNode, orderedNodes } from "@/lib/graph";
-import { BUDJU_NODE_ID, PROPFOLIO_NODE_ID } from "@/lib/constants";
+import { BUDJU_NODE_ID, PROPFOLIO_NODE_ID, SKIDMARKS_NODE_ID } from "@/lib/constants";
 import budjuDataRaw from "@/data/budju.json";
 import propfolioDataRaw from "@/data/propfolio.json";
 import { useIsLargeScreen } from "@/hooks/useIsLargeScreen";
 import { useDialModes } from "@/hooks/useDialModes";
 import { useSpendWindow } from "@/hooks/useSpendWindow";
+import { useSkidmarksProjects } from "@/hooks/useSkidmarksProjects";
 import { GraphNodeCard } from "./GraphNodeCard";
 import { GraphNodeSheet } from "./GraphNodeSheet";
 import { BudjuNodeCard } from "./BudjuNodeCard";
 import { BudjuDetailSheet } from "./BudjuDetailSheet";
 import { PropfolioNodeCard } from "./PropfolioNodeCard";
 import { PropfolioDetailSheet } from "./PropfolioDetailSheet";
+import { SkidmarksNodeCard } from "./SkidmarksNodeCard";
+import { SkidmarksDetailSheet } from "./SkidmarksDetailSheet";
 import { GraphBoard } from "./GraphBoard";
 import { CostHeader } from "./CostHeader";
 import { CostDetailSheet } from "./CostDetailSheet";
@@ -51,6 +54,11 @@ export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate
   const isLargeScreen = useIsLargeScreen();
   const { modes, setMode } = useDialModes();
   const { windowDays, setWindowDays } = useSpendWindow();
+  const { projects: skidmarksProjects, activeProjectId: skidmarksActiveProjectId } =
+    useSkidmarksProjects();
+  const skidmarksActiveProject = skidmarksProjects.find(
+    (p) => p.id === skidmarksActiveProjectId
+  );
   const now = useMemo(() => new Date(referenceDate), [referenceDate]);
 
   // Hub-kind nodes (just "Deck / The Tab") aren't rendered as a separate
@@ -140,6 +148,7 @@ export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate
             nodes={nodes}
             budjuData={budjuData}
             propfolioData={propfolioData}
+            skidmarksActiveProject={skidmarksActiveProject}
             onOpenNode={setOpenNodeId}
           />
         ) : (
@@ -158,6 +167,11 @@ export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate
                   ) : node.id === PROPFOLIO_NODE_ID ? (
                     <PropfolioNodeCard
                       data={propfolioData}
+                      onOpen={() => setOpenNodeId(node.id)}
+                    />
+                  ) : node.id === SKIDMARKS_NODE_ID ? (
+                    <SkidmarksNodeCard
+                      project={skidmarksActiveProject}
                       onOpen={() => setOpenNodeId(node.id)}
                     />
                   ) : (
@@ -242,9 +256,14 @@ export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate
         />
       )}
 
+      {openNode && openNode.id === SKIDMARKS_NODE_ID && (
+        <SkidmarksDetailSheet onClose={() => setOpenNodeId(null)} />
+      )}
+
       {openNode &&
         openNode.id !== BUDJU_NODE_ID &&
-        openNode.id !== PROPFOLIO_NODE_ID && (
+        openNode.id !== PROPFOLIO_NODE_ID &&
+        openNode.id !== SKIDMARKS_NODE_ID && (
           <GraphNodeSheet
             node={openNode}
             graph={graph}

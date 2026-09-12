@@ -17,6 +17,13 @@ export const BUDJU_NODE_ID = "budju";
  */
 export const PROPFOLIO_NODE_ID = "propfolio";
 
+/**
+ * Graph node id for the Skidmarks vibe-director front end. GraphView
+ * special-cases this id to render SkidmarksNodeCard/SkidmarksDetailSheet
+ * instead of the generic GraphNodeCard/GraphNodeSheet.
+ */
+export const SKIDMARKS_NODE_ID = "skidmarks";
+
 export const SUIT_META: Record<Suit, SuitMeta> = {
   diamonds: {
     suit: "diamonds",

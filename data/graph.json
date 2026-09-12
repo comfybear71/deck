@@ -29,7 +29,7 @@
       "id": "skidmarks",
       "label": "Skidmarks",
       "kind": "project",
-      "role": "Sibling project. Not wired into the control plane yet — mapped here to the Make lane as a v0 placeholder guess, not a confirmed integration.",
+      "role": "Vibe-director front end for a convoluted backend (Comfy MCP, Seedance, LTX, ElevenLabs, etc. — all hidden behind abstract stage copy, not surfaced here). New project: type a vibe brief, get staged replies back — brief locked, cast suggestions, an empty plate board, then the Cast / Plates / Multi-angle / Voice / Animate / Stitch stages. Every reply in this build is scripted from the brief text alone, client-side — no real Comfy/Seedance/LTX/ElevenLabs calls, no full render, and this isn't skidmarks.aiglitch.app's Crash Lab. Mapped here to the Make lane as a v0 placeholder guess, not a confirmed control-plane integration.",
       "suit": "hearts"
     },
     {
