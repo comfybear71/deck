@@ -89,6 +89,32 @@ export interface GraphNode {
    * Optional; only one node should set this at a time in v0.
    */
   featured?: boolean;
+  /**
+   * Optional short badge line shown on the node card and in the detail
+   * sheet's header, e.g. "Project \u00b7 Betting" — overrides the generic
+   * `KIND_LABEL` (+ suit lane) line when set. See `GraphNodeCard` /
+   * `GraphNodeSheet`.
+   */
+  subtitle?: string;
+  /**
+   * Optional real, live outbound URL — only ever rendered as an "Open"
+   * link in the detail sheet when actually set. Never fabricate one for a
+   * node that doesn't have a real app/site yet.
+   */
+  url?: string;
+  /**
+   * Opt-in generic "Ask Grok" composer (`components/AskGrokPanel.tsx`) in
+   * this node's detail sheet — the same shared, project-agnostic panel
+   * Propfolio's sheet uses.
+   */
+  askGrok?: boolean;
+  /**
+   * Optional key into `GRAPH_NODE_ACCENTS` (lib/constants.ts) — gives a
+   * node its own Budju-style distinctive border/glow/avatar treatment
+   * instead of the generic card look, for a sibling project that deserves
+   * its own visual identity.
+   */
+  accentId?: string;
 }
 
 export interface GraphEdge {
