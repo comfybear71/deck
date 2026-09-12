@@ -25,9 +25,10 @@ interface SkidmarksDetailSheetProps {
  * appends underneath the previous one — there is no separate screen to
  * navigate to. See the README's "Skidmarks node (vibe director)" section
  * for exactly what's real (file pick, real audio duration/playback, real
- * word-level transcription when `OPENAI_API_KEY` is configured — see
- * `lib/transcription.ts` — and the energy-heuristic vocal/instrumental
- * analysis that runs alongside it either way — see
+ * word-level transcription when `ELEVENLABS_API_KEY` (or `OPENAI_API_KEY`
+ * as a fallback) is configured — see `lib/transcription.ts` — and the
+ * energy-heuristic vocal/instrumental analysis that runs alongside it
+ * either way — see
  * `lib/audioAnalysis.ts`) vs. mocked/seed (bands, looks, and the seed
  * cadence the clip timeline falls back to if neither real signal
  * produces anything usable) in this build.
@@ -211,6 +212,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 analysisError={session.mp3.analysisError}
                 transcriptionStatus={session.mp3.transcriptionStatus}
                 transcriptionError={session.mp3.transcriptionError}
+                transcriptionProvider={session.mp3.transcriptionProvider}
                 onSetSegmentModel={setSegmentModel}
                 onSetSegmentPlate={setSegmentPlate}
                 onSetSegmentCameraAngle={setSegmentCameraAngle}

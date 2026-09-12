@@ -117,16 +117,20 @@ export function useSkidmarksStudio() {
    * Attach a picked MP3 `File` and kick off both real signals against it
    * in the background, in parallel: `analyzeVocalActivity` (the energy
    * heuristic, no key needed) and `transcribeAudio` (real word-level
-   * STT, needs `OPENAI_API_KEY` set server-side). The store gets the
+   * STT, needs `ELEVENLABS_API_KEY` — or `OPENAI_API_KEY` as a server-side
+   * fallback, see `app/api/skidmarks/transcribe/route.ts` — set
+   * server-side). The store gets the
    * seed-fallback attachment immediately (so the card/checklist render
    * right away), then each signal writes back independently as it
    * settles — `applySkidmarksAnalysisResult`/`markSkidmarksAnalysisFailed`
    * for the heuristic, `applySkidmarksTranscriptionResult`/
    * `markSkidmarksTranscriptionUnconfigured`/
-   * `markSkidmarksTranscriptionFailed` for transcription. Transcription
-   * always wins over the heuristic once it lands (see
-   * `lib/skidmarks.ts`'s `applySkidmarksAnalysisResult`), so it doesn't
-   * matter which of the two `.then()`s below actually runs first.
+   * `markSkidmarksTranscriptionFailed` for transcription. A *useful*
+   * transcription result always wins over the heuristic once it lands
+   * (see `lib/skidmarks.ts`'s `applySkidmarksTranscriptionResult` —
+   * "useful" meaning it clears `hasUsefulVocalCoverage`, not just "a
+   * provider returned words"), so it doesn't matter which of the two
+   * `.then()`s below actually runs first.
    */
   const attachMp3 = useCallback((file: File) => {
     const token = (analysisTokenRef.current += 1);
@@ -147,7 +151,11 @@ export function useSkidmarksStudio() {
     transcribeAudio(file).then((outcome) => {
       if (analysisTokenRef.current !== token) return; // superseded — drop it
       if (outcome.ok) {
-        applySkidmarksTranscriptionResult(outcome.result.words, outcome.result.durationSec);
+        applySkidmarksTranscriptionResult(
+          outcome.result.words,
+          outcome.result.durationSec,
+          outcome.result.provider
+        );
       } else if (outcome.unconfigured) {
         markSkidmarksTranscriptionUnconfigured(outcome.message);
       } else {

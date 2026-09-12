@@ -23,19 +23,30 @@
  * attached (`hooks/useSkidmarksStudio.ts`'s `attachMp3`), in this
  * priority order:
  * 1. **Real word-level transcription** (`lib/transcription.ts`,
- *    `transcribeAudio` + `segmentsFromWords`) — an actual OpenAI Whisper
- *    speech-to-text call (server route:
- *    `app/api/skidmarks/transcribe/route.ts`, keyed via the
- *    `OPENAI_API_KEY` environment variable) that returns real per-word
- *    start/end times; `applySkidmarksTranscriptionResult` below merges
- *    consecutive words into vocal runs (gaps = instrumental) — this is
- *    what lets a segment boundary land at an actual measured vocal
- *    onset (Stuart's ask, after the energy heuristic glued "Talking To
- *    Concrete"'s intro + flute into one giant Vocal call) instead of a
- *    mid-band-energy guess. **Never claimed live without a key** — if
- *    `OPENAI_API_KEY` isn't set server-side, or the request fails, this
- *    is honestly skipped (`transcriptionStatus`), not silently retried
- *    as something else.
+ *    `transcribeAudio` + `segmentsFromWords`) — a real speech-to-text
+ *    call (server route: `app/api/skidmarks/transcribe/route.ts`,
+ *    **ElevenLabs Scribe** primary via `ELEVENLABS_API_KEY`, OpenAI
+ *    Whisper as an optional fallback via `OPENAI_API_KEY`) that returns
+ *    real per-word start/end times; `applySkidmarksTranscriptionResult`
+ *    below merges consecutive words into vocal runs (gaps =
+ *    instrumental) — this is what lets a segment boundary land at an
+ *    actual measured vocal onset (Stuart's original ask, after the
+ *    energy heuristic glued "Talking To Concrete"'s intro + flute into
+ *    one giant Vocal call) instead of a mid-band-energy guess. **Never
+ *    claimed live without a key** — if neither provider key is set
+ *    server-side, or every configured provider's request fails, this is
+ *    honestly skipped (`transcriptionStatus`), not silently retried as
+ *    something else. **Also never claimed useful just because words
+ *    came back** — a live run against this exact track once returned
+ *    real, non-empty words from Whisper that still merged into a single
+ *    Instrumental segment covering the whole song (too sparse across the
+ *    sung sections for `segmentsFromWords`'s gap merge to find any
+ *    vocal run worth keeping), so `applySkidmarksTranscriptionResult`
+ *    additionally checks `hasUsefulVocalCoverage`
+ *    (`lib/transcription.ts`) before trusting a landed result as
+ *    `segmentsSource: "transcription"` — see `transcriptionStatus ===
+ *    "sparse"` below for the honest "it ran, but not enough of it
+ *    mapped to singing" outcome that check can produce.
  * 2. **The energy heuristic** (`analyzeVocalActivity`,
  *    `lib/audioAnalysis.ts`) — a real FFT-based vocal-band-energy
  *    heuristic over the actual decoded audio, entirely client-side, no
@@ -47,15 +58,19 @@
  *
  * `applySkidmarksAnalysisResult`/`applySkidmarksTranscriptionResult`
  * turn whichever source resolves into the segments `SkidmarksClipTimeline`
- * renders, with transcription always outranking the heuristic once it
- * lands (see `segmentsSource`) — a later heuristic result can't
- * downgrade an already-real transcription. The Lyrics/Timing/Ready
+ * renders, with a *useful* transcription result always outranking the
+ * heuristic once it lands (see `segmentsSource`) — a later heuristic
+ * result can't downgrade an already-real transcription, and a sparse
+ * transcription result (real words, near-zero singing coverage — see
+ * `applySkidmarksTranscriptionResult`) can't downgrade an
+ * already-showing heuristic/seed result either. The Lyrics/Timing/Ready
  * chips (`skidmarksChecklistState` below) are derived straight from
  * that real state, not staged timers, and **Lyrics only turns green for
- * real transcription** — the energy heuristic alone (no key, or a
- * failed request) keeps it amber/`stub`, since it's a real signal but
- * not actual transcribed lyrics timing. If both sources fail (or
- * transcription's unconfigured and the heuristic errors too),
+ * real, useful transcription** — the energy heuristic alone (no key, a
+ * failed request, or a transcription result too sparse to trust) keeps
+ * it amber/`stub`, since it's a real signal but not actual transcribed
+ * lyrics timing. If both sources fail (or transcription's unconfigured/
+ * sparse and the heuristic errors too),
  * `markSkidmarksAnalysisFailed`/`markSkidmarksTranscriptionFailed` keep
  * the seed cadence (`buildDemoSegments`) as an **honestly-labeled
  * fallback** — see `segmentsSource` — rather than silently pretending
@@ -87,7 +102,13 @@
  */
 
 import type { VocalAnalysisResult } from "./audioAnalysis";
-import { segmentsFromWords, type SkidmarksTranscribedWord } from "./transcription";
+import {
+  hasUsefulVocalCoverage,
+  segmentsFromWords,
+  vocalCoverageSec,
+  type SkidmarksTranscribedWord,
+  type SkidmarksTranscriptionProvider,
+} from "./transcription";
 
 const STORAGE_KEY = "the-tab:skidmarks-studio";
 
@@ -193,17 +214,22 @@ export type SkidmarksChipState = "pending" | "analyzing" | "done" | "stub";
  * session state — no staged timers. `timing` is real once the browser's
  * probed duration resolves.
  *
- * `lyrics` means **real transcription** now, not just "some vocal
- * signal resolved" — it only turns green once real word-level
- * transcription actually lands (`segmentsSource === "transcription"`).
- * While transcription is still in flight (`transcriptionStatus ===
- * "checking"`) or the energy heuristic is still running, it shows
- * `analyzing` — there's real work in progress, even if what eventually
- * lands is only the heuristic. Once both have settled and transcription
- * didn't produce real word timing (no key configured, or the request
- * failed), it's `stub` — **never green** — because the energy heuristic
- * alone answers "is this bit sung", not "what are the actual lyrics/
- * word timing", and this chip is about the latter.
+ * `lyrics` means **real, useful transcription** now, not just "some
+ * vocal signal resolved" and not just "a provider responded" — it only
+ * turns green once real word-level transcription actually lands *and*
+ * covers enough of the track to trust (`segmentsSource ===
+ * "transcription"`, which `applySkidmarksTranscriptionResult` only sets
+ * after `hasUsefulVocalCoverage` passes). While transcription is still
+ * in flight (`transcriptionStatus === "checking"`) or the energy
+ * heuristic is still running, it shows `analyzing` — there's real work
+ * in progress, even if what eventually lands is only the heuristic.
+ * Once both have settled and transcription didn't produce a usable
+ * vocal map (no key configured, the request failed, or a provider
+ * responded but `transcriptionStatus === "sparse"` — real words, too
+ * little real singing coverage), it's `stub` — **never green** —
+ * because the energy heuristic alone answers "is this bit sung", not
+ * "what are the actual lyrics/word timing", and this chip is about the
+ * latter.
  *
  * `ready` only turns fully green once both `timing` and `lyrics` are
  * real, and shows `stub` (not green) if the clip list is only usable via
@@ -429,15 +455,17 @@ export function buildDemoSegments(totalSec: number): SkidmarksClipSegment[] {
  * order (a lower-ranked source can never overwrite a higher one once
  * it's landed — see `applySkidmarksAnalysisResult`):
  * - `transcription` — real output of `transcribeAudio` +
- *   `segmentsFromWords` (`lib/transcription.ts`): actual OpenAI Whisper
- *   word timestamps merged into vocal/instrumental runs, via
- *   `applySkidmarksTranscriptionResult`. The only source real enough to
- *   turn the Lyrics chip green.
+ *   `segmentsFromWords` (`lib/transcription.ts`): actual word timestamps
+ *   (ElevenLabs Scribe, or OpenAI Whisper as a fallback — see
+ *   `app/api/skidmarks/transcribe/route.ts`) merged into vocal/
+ *   instrumental runs, via `applySkidmarksTranscriptionResult` — but
+ *   only once that merged map clears `hasUsefulVocalCoverage`. The only
+ *   source real enough to turn the Lyrics chip green.
  * - `analysis` — real output of `analyzeVocalActivity`
  *   (`lib/audioAnalysis.ts`'s energy heuristic), mapped through
  *   `applySkidmarksAnalysisResult`. Real signal, but not transcribed
- *   lyrics timing — shown while transcription is unavailable or after
- *   it fails.
+ *   lyrics timing — shown while transcription is unavailable, still
+ *   sparse, or after it fails.
  * - `seed-fallback` — `buildDemoSegments`' deterministic cadence, shown
  *   while both real sources are still resolving or after both failed.
  *   Always paired with an honest caption in `SkidmarksClipTimeline` —
@@ -453,15 +481,34 @@ export type SkidmarksSegmentsSource = "transcription" | "analysis" | "seed-fallb
  * - `checking` — the request to `app/api/skidmarks/transcribe` is in
  *   flight (or, after a page reload with no file to resume, about to be
  *   normalized to `failed`).
- * - `unconfigured` — the server has no `OPENAI_API_KEY` set. A distinct,
- *   expected outcome, not an error — never surfaced as a failure.
- * - `done` — it finished; if it produced usable word timing,
- *   `segmentsSource === "transcription"`.
+ * - `unconfigured` — the server has neither `ELEVENLABS_API_KEY` nor
+ *   `OPENAI_API_KEY` set. A distinct, expected outcome, not an error —
+ *   never surfaced as a failure.
+ * - `done` — it finished *and* produced a usable word timing map
+ *   (`hasUsefulVocalCoverage` cleared its bar) — `segmentsSource ===
+ *   "transcription"`.
+ * - `sparse` — it finished, a provider returned a real, non-empty word
+ *   list, but the resulting vocal/instrumental map came out with
+ *   near-zero real singing coverage for this track
+ *   (`hasUsefulVocalCoverage` in `lib/transcription.ts` said no) — not
+ *   trusted enough to show or to turn the Lyrics chip green.
+ *   `transcriptionError` explains why in plain language. This is the
+ *   honest outcome for the exact live bug this status was added for:
+ *   Whisper returning real words for "Talking To Concrete" that still
+ *   merged into a single Instrumental segment covering the whole track
+ *   — a `"done"` status back then couldn't distinguish "produced a real
+ *   map" from "technically responded", which is exactly how that got
+ *   shown as green Lyrics.
  * - `failed` — the request itself errored (network, bad audio, upstream
- *   API error) after a key *was* configured; `transcriptionError` (if
- *   present) says why.
+ *   API error, every configured provider failed) after a key *was*
+ *   configured; `transcriptionError` (if present) says why.
  */
-export type SkidmarksTranscriptionStatus = "checking" | "unconfigured" | "done" | "failed";
+export type SkidmarksTranscriptionStatus =
+  | "checking"
+  | "unconfigured"
+  | "done"
+  | "sparse"
+  | "failed";
 
 /**
  * Real analysis lifecycle for the attached file:
@@ -490,15 +537,26 @@ export interface SkidmarksMp3Attachment {
    * verbatim in the timeline's honesty caption, not swallowed. */
   analysisError?: string;
   /** Real per-word start/end times from `transcribeAudio`
-   * (`lib/transcription.ts`), once transcription succeeds — kept even
-   * though the UI only shows merged segments for now, so a later lyric-
+   * (`lib/transcription.ts`), once a provider responds — kept even for
+   * a `"sparse"` result (real words did land, just not enough of them
+   * mapped to singing to trust the derived map) so a later lyric-
    * emphasis pass (per-word highlight during playback) can use them
-   * without re-transcribing. `undefined` until/unless transcription
-   * actually succeeds. */
+   * without re-transcribing. `undefined` until/unless some provider
+   * actually responds. */
   words?: SkidmarksTranscribedWord[];
   transcriptionStatus: SkidmarksTranscriptionStatus;
+  /** Which backend produced `words`/`segments` (when `segmentsSource
+   * === "transcription"`) or the sparse result (when `transcriptionStatus
+   * === "sparse"`) — `"elevenlabs"` (this build's primary path) or
+   * `"openai"` (the fallback). `undefined` while unresolved, unconfigured,
+   * or after an outright request failure with no successful provider.
+   * Surfaced in the timeline's caption so it names the real backend
+   * instead of hardcoding one. */
+  transcriptionProvider?: SkidmarksTranscriptionProvider;
   /** Human-readable reason a *configured* transcription request failed
-   * (network/upstream error) — not set for the honest `"unconfigured"`
+   * (network/upstream error), or — for `transcriptionStatus === "sparse"`
+   * — a plain-language explanation of how little vocal coverage the
+   * merged map actually had. Not set for the honest `"unconfigured"`
    * case, which isn't a failure. Surfaced verbatim in the timeline's
    * honesty caption. */
   transcriptionError?: string;
@@ -718,6 +776,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
   const hasTranscriptionStatus =
     !!storedMp3 &&
     (storedMp3.transcriptionStatus === "done" ||
+      storedMp3.transcriptionStatus === "sparse" ||
       storedMp3.transcriptionStatus === "unconfigured" ||
       storedMp3.transcriptionStatus === "failed" ||
       storedMp3.transcriptionStatus === "checking");
@@ -731,6 +790,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
     : hasTranscriptionStatus
       ? storedMp3?.transcriptionError
       : undefined;
+  const transcriptionProvider = hasTranscriptionStatus ? storedMp3?.transcriptionProvider : undefined;
 
   const mp3: SkidmarksMp3Attachment | null = storedMp3
     ? {
@@ -741,6 +801,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
         analysisError,
         transcriptionStatus,
         transcriptionError,
+        transcriptionProvider,
       }
     : null;
 
@@ -1114,27 +1175,80 @@ export function markSkidmarksAnalysisFailed(reason: string): void {
  * Applies a finished real transcription: turns `transcribeAudio`'s
  * per-word start/end times (`lib/transcription.ts`) into vocal/
  * instrumental time ranges via `segmentsFromWords` (word gaps over
- * ~2s become instrumental breaks), then the same `SkidmarksClipSegment`
- * tagging `applySkidmarksAnalysisResult` uses. Marks
- * `segmentsSource: "transcription"` and `transcriptionStatus: "done"` —
- * the only path that turns the Lyrics chip genuinely green — and stores
- * the raw `words` list too (unused by the UI today beyond driving these
- * segments, but kept so a later per-word lyric-emphasis pass doesn't
- * need to re-transcribe). Always wins over whatever's currently showing
- * — transcription outranks both the energy heuristic and the seed
- * cadence, regardless of which resolved first (both start in parallel
- * from attach; transcription's network round-trip means it can land
- * either before or after the heuristic).
+ * ~2s become instrumental breaks), then checks
+ * `hasUsefulVocalCoverage` on that real merged map before trusting it.
+ *
+ * **This coverage check is the actual fix for the reported bug**, not
+ * just the ElevenLabs-primary provider pivot: a live run against Jack
+ * Ash's "Talking To Concrete" (~4:16, real singing from ~0:32) came back
+ * green Lyrics + a single Instrumental 0:00–4:16 segment. The provider
+ * that produced that (Whisper, on this *sung* track) returned real,
+ * non-empty `words` — this function used to treat "transcription
+ * returned words" as "transcription produced a useful map" and set
+ * `segmentsSource: "transcription"`/`transcriptionStatus: "done"`
+ * unconditionally on any non-empty word list, which is exactly how that
+ * got shown as genuinely green. Now it doesn't: `words` and the merged
+ * `segments` are only trusted (`segmentsSource: "transcription"`,
+ * `transcriptionStatus: "done"` — the only path that turns the Lyrics
+ * chip genuinely green) once `hasUsefulVocalCoverage` confirms the real
+ * merged map actually covers enough of the track to be worth showing.
+ *
+ * If it doesn't clear that bar, this still records the attempt
+ * honestly as `transcriptionStatus: "sparse"` (a distinct outcome from
+ * both `"done"` and `"failed"` — the request itself succeeded, a
+ * provider really did respond, it just didn't yield a usable map for
+ * *this* track) with a plain-language `transcriptionError` explaining
+ * the actual coverage numbers, and — like a failed heuristic keeping
+ * an already-real transcription result — leaves `segments`/
+ * `segmentsSource` untouched rather than downgrading whatever's already
+ * showing (a real heuristic result, or the seed fallback) to something
+ * worse. The raw `words` list is still kept either way (unused by the
+ * UI today beyond driving segments, but kept so a later per-word
+ * lyric-emphasis pass doesn't need to re-transcribe), and so is
+ * `provider` (which backend actually answered), so the caption can be
+ * accurate either way.
+ *
+ * A *useful* transcription result always wins over whatever's currently
+ * showing — outranking both the energy heuristic and the seed cadence,
+ * regardless of which resolved first (both start in parallel from
+ * attach; transcription's network round-trip means it can land either
+ * before or after the heuristic).
  */
 export function applySkidmarksTranscriptionResult(
   words: SkidmarksTranscribedWord[],
-  reportedDurationSec: number | null
+  reportedDurationSec: number | null,
+  provider?: SkidmarksTranscriptionProvider
 ): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
   if (!mp3) return;
   const totalSec = mp3.durationSec ?? reportedDurationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC;
-  const segments = buildSegmentsFromVocalRanges(segmentsFromWords(words, totalSec));
+  const wordSegments = segmentsFromWords(words, totalSec);
+
+  if (!hasUsefulVocalCoverage(wordSegments, totalSec)) {
+    const coveredSec = vocalCoverageSec(wordSegments);
+    persist({
+      ...current,
+      session: {
+        ...current.session,
+        mp3: {
+          ...mp3,
+          durationSec: mp3.durationSec ?? reportedDurationSec,
+          words,
+          transcriptionStatus: "sparse",
+          transcriptionProvider: provider,
+          transcriptionError:
+            `Transcription returned ${words.length} word${words.length === 1 ? "" : "s"}, ` +
+            `but only ${coveredSec.toFixed(1)}s of that mapped to singing across a ` +
+            `${totalSec.toFixed(0)}s track \u2014 not enough to trust as a real vocal map. ` +
+            "Showing the energy heuristic instead.",
+        },
+      },
+    });
+    return;
+  }
+
+  const segments = buildSegmentsFromVocalRanges(wordSegments);
   persist({
     ...current,
     session: {
@@ -1146,6 +1260,7 @@ export function applySkidmarksTranscriptionResult(
         segments,
         segmentsSource: "transcription",
         transcriptionStatus: "done",
+        transcriptionProvider: provider,
         transcriptionError: undefined,
       },
     },
@@ -1153,13 +1268,13 @@ export function applySkidmarksTranscriptionResult(
 }
 
 /**
- * Marks transcription as unconfigured — the server has no
- * `OPENAI_API_KEY` set. Deliberately **not** treated as a failure (no
- * amber "error" styling implied beyond what the energy-heuristic/seed
- * fallback already honestly shows) since nothing actually went wrong;
- * transcription just isn't wired up in this environment. `reason` is
- * the server's own explanation, shown verbatim in the timeline's
- * caption.
+ * Marks transcription as unconfigured — the server has neither
+ * `ELEVENLABS_API_KEY` nor `OPENAI_API_KEY` set. Deliberately **not**
+ * treated as a failure (no amber "error" styling implied beyond what
+ * the energy-heuristic/seed fallback already honestly shows) since
+ * nothing actually went wrong; transcription just isn't wired up in
+ * this environment. `reason` is the server's own explanation, shown
+ * verbatim in the timeline's caption.
  */
 export function markSkidmarksTranscriptionUnconfigured(reason: string): void {
   const current = getSkidmarksSnapshot();

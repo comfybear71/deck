@@ -711,28 +711,86 @@ now (see "Explicitly out of scope" below).
      he wanted **speech-to-text with word start times, like phone
      dictation**, instead of another mid-band-energy guess. The moment a
      file's attached, the client POSTs it (as `multipart/form-data`) to
-     `/api/skidmarks/transcribe`, which forwards it server-side to
-     OpenAI's audio transcription API (`whisper-1`,
-     `response_format: "verbose_json"`,
-     `timestamp_granularities: ["word"]`) using the **`OPENAI_API_KEY`**
-     environment variable (see "Wiring up transcription" below for
-     exactly how to set it and what it costs) and returns real per-word
-     `start`/`end` timestamps. `segmentsFromWords` then merges consecutive
+     `/api/skidmarks/transcribe`, which forwards it server-side to a
+     real STT provider — **ElevenLabs Scribe** (`scribe_v2`) first, via
+     Stuart's already-configured **`ELEVENLABS_API_KEY`** (or
+     `ELEVEN_LABS_API_KEY`, checked as a fallback name), with **OpenAI
+     Whisper** (`whisper-1`) as an automatic fallback provider via
+     **`OPENAI_API_KEY`** if no ElevenLabs key is found under either name
+     or its request itself fails (see "Wiring up transcription" below
+     for exactly which names are checked and what each provider costs)
+     — and returns real per-word `start`/`end` timestamps, tagged with
+     which provider actually
+     answered (`provider`). `segmentsFromWords` then merges consecutive
      words into vocal runs (a gap over ~2s between words becomes an
      instrumental segment — see that function's doc comment), which is
      what lets a segment boundary land at an actual measured vocal onset
      instead of an energy-threshold guess. **This is wired, not a stub**
-     — but it's also **never claimed live without a key**: if
-     `OPENAI_API_KEY` isn't set server-side, the route honestly returns
+     — but it's also **never claimed live without a key**: if neither
+     key is set server-side, the route honestly returns
      `501`/`missing_api_key` rather than pretending to have attempted
      anything, and the UI falls back to step 7 below without implying a
      failure. A genuine request failure (network error, bad audio, an
      actual upstream API error, or a request that doesn't get a response
-     within 90s) is reported honestly too, distinct from "unconfigured".
+     in time) is reported honestly too, distinct from "unconfigured".
      Word timings are kept on the attachment (`words`, alongside the
      merged `segments`) even though the UI only renders segments for
      now, so a later per-word lyric-emphasis pass (highlighting the
      current word during playback) can use them without re-transcribing.
+
+     **Second live bug report, after the 413 fix above shipped**:
+     Stuart re-attached "Talking To Concrete" (~4:16, real singing from
+     ~0:32) once transcription actually reached the server, and got
+     green **Lyrics** + a clip list with **one segment: Instrumental
+     0:00–4:16** — confusing and wrong, not a crash, which made it worse:
+     the UI *claimed* real transcribed timing while showing the least
+     useful possible answer. Root cause: the STT provider at the time
+     (Whisper, a speech-first model) returned real, non-empty `words`
+     for the whole song, but too sparse and scattered across the *sung*
+     sections for `segmentsFromWords`'s gap-based merge to find any
+     vocal run worth keeping — and the code that turned a landed
+     transcription result into `segmentsSource: "transcription"` /
+     `transcriptionStatus: "done"` (the only path that turns Lyrics
+     green) trusted "transcription returned *some* words" as
+     "transcription produced a *useful* map", with no check in between.
+     The fix has two independent parts, both load-bearing on their own:
+     1. **Provider pivot** — ElevenLabs Scribe (above) is now the
+        primary path instead of Whisper; ElevenLabs markets Scribe
+        explicitly for transcribing song lyrics, unlike Whisper, which
+        is speech-oriented. This alone makes the specific failure less
+        likely for a track like this one.
+     2. **A real, provider-independent usefulness check** —
+        `hasUsefulVocalCoverage` (`lib/transcription.ts`) looks at the
+        *actual* merged vocal/instrumental map `segmentsFromWords`
+        produced and requires real singing coverage of at least
+        `min(8s, totalDurationSec * 50%)` before
+        `applySkidmarksTranscriptionResult` (`lib/skidmarks.ts`) trusts
+        it as `segmentsSource: "transcription"`. If a provider responds
+        with real, non-empty words that still don't clear that bar, the
+        attachment records the honest `transcriptionStatus: "sparse"`
+        outcome instead — a provider really did answer, it just didn't
+        yield a usable map for *this* track — and **keeps showing
+        whatever was already real** (the energy heuristic once it
+        lands, or the seed fallback until then) rather than the useless
+        transcription result. Because this check runs on the real
+        output regardless of which provider produced it, it's the
+        actual backstop against this bug recurring even if a future
+        provider swap or upstream model change reintroduces sparse
+        output on some other track.
+
+     **What a Concrete-like song should look like after this fix**: the
+     Lyrics chip only turns green once a provider's word timing maps to
+     a real, substantial vocal onset/coverage (ideally landing right
+     around the confirmed ~0:32 onset, with sung sections tracked
+     through the track's flute/instrumental breaks); if a provider ever
+     under-hears the singing again, the honest outcome is `"sparse"` —
+     Lyrics stays amber, the timeline caption says so in plain language
+     (naming which provider ran), and the real energy heuristic (or the
+     seed fallback while that's still resolving) fills the clip list
+     instead of a fake-confident wrong answer. Green Lyrics + a single
+     Instrumental segment covering a whole sung song should no longer be
+     reachable through this path.
+
      **Full-length songs are shrunk client-side before upload**
      (`lib/audioCompression.ts`, `compressAudioForTranscription`) — this
      is the fix for a real production bug report: Stuart re-attached
@@ -805,11 +863,12 @@ now (see "Explicitly out of scope" below).
      see that constant's doc comment) wrong sometimes; that's why the UI
      calls it "real(ish)", not "real". **This heuristic is never removed
      by transcription landing** — it keeps running and stays the fallback
-     signal whenever `OPENAI_API_KEY` isn't configured or a transcription
-     request fails, per Stuart's explicit ask to keep it as a real
-     fallback rather than a maybe-it-works stub. Real transcription (step
-     6) always outranks it once transcription lands, though — see
-     `segmentsSource` below.
+     signal whenever no transcription key is configured, a transcription
+     request fails, or a provider responds but its result is too sparse
+     to trust (`transcriptionStatus === "sparse"` — see step 6 above),
+     per Stuart's explicit ask to keep it as a real fallback rather than
+     a maybe-it-works stub. Real, *useful* transcription (step 6) always
+     outranks it once it lands, though — see `segmentsSource` below.
   8. **Checklist chips** (`SkidmarksChecklistChips`) — three always-
      present, equal-width chips under the MP3 card: **Lyrics · Timing ·
      Ready**, each showing one of four *real* states
@@ -819,13 +878,17 @@ now (see "Explicitly out of scope" below).
      `analyzeVocalActivity` is actually running), green **done** (that
      real signal resolved), or amber **stub** (never rendered green).
      `Timing` flips real the moment the browser's own duration probe
-     resolves. **`Lyrics` now specifically means real transcription** —
-     it only turns green once word-level transcription actually lands
-     (`segmentsSource === "transcription"`); a *successful* energy
-     heuristic alone (no key configured, or the transcription request
-     failed) keeps it amber, since that heuristic answers "is this bit
-     sung", not "what are the actual lyrics/word timing" — this chip is
-     about the latter, and never claims more than it has. `Ready` is
+     resolves. **`Lyrics` now specifically means real, *useful*
+     transcription** — it only turns green once word-level
+     transcription actually lands *and* maps to enough real singing to
+     trust (`segmentsSource === "transcription"`, gated on
+     `hasUsefulVocalCoverage`); a *successful* energy heuristic alone (no
+     key configured, the transcription request failed, or a provider
+     responded but the result was too sparse to trust —
+     `transcriptionStatus === "sparse"`) keeps it amber, since that
+     heuristic answers "is this bit sung", not "what are the actual
+     lyrics/word timing" — this chip is about the latter, and never
+     claims more than it has. `Ready` is
      green only once both `Timing` and `Lyrics` are real, amber if the
      clip list is only usable via the heuristic or seed fallback. No
      lyrics panel, no paste-lyrics box, no manual vocal-start pin — this
@@ -838,17 +901,24 @@ now (see "Explicitly out of scope" below).
      transcription… analyzing the attached MP3 for vocal vs. instrumental
      sections via the energy heuristic — showing the seed demo cadence
      below until that finishes"* while both are still resolving; *"Real
-     transcription: word-level timestamps from OpenAI Whisper, merged
-     into vocal/instrumental runs…"* once transcription succeeds; *"No
-     OPENAI_API_KEY configured, so real word-level transcription is
-     unavailable — showing real(ish) analysis instead: vocal vs.
-     instrumental sections detected from the MP3's own audio…"* if only
-     the heuristic came through; or a "both failed" variant naming both
-     reasons if neither did. **Segments prefer real transcription**
-     (`segmentsSource: "transcription"`) whenever it lands; short of
-     that, the real energy heuristic (`segmentsSource: "analysis"`); short
-     of that, the seed cadence (`buildDemoSegments` in `lib/skidmarks.ts`
-     — 7 segments: intro instrumental → verse → instrumental break →
+     transcription: word-level timestamps from ElevenLabs Scribe, merged
+     into vocal/instrumental runs…"* (or "OpenAI Whisper", naming
+     whichever provider actually answered) once *useful* transcription
+     succeeds; *"No ELEVENLABS_API_KEY (or OPENAI_API_KEY) configured,
+     so real word-level transcription is unavailable — showing real(ish)
+     analysis instead: vocal vs. instrumental sections detected from the
+     MP3's own audio…"* if only the heuristic came through; *"ElevenLabs
+     Scribe ran but found too little usable vocal timing for this
+     track…"* (the honest `"sparse"` outcome — a provider really
+     responded, its words just didn't map to enough real singing to
+     trust for this track — see the "Second live bug report" note under
+     step 6 above) with the same real(ish)-analysis fallback line; or a
+     "both failed" variant naming both reasons if neither transcription
+     nor the heuristic came through. **Segments prefer real, *useful*
+     transcription** (`segmentsSource: "transcription"`) whenever it
+     lands; short of that, the real energy heuristic (`segmentsSource:
+     "analysis"`); short of that, the seed cadence (`buildDemoSegments`
+     in `lib/skidmarks.ts` — 7 segments: intro instrumental → verse → instrumental break →
      verse → bridge → lead → verse, labeled **Verse**/**Bridge**/
      **Lead**/**Instrumental**) as an honestly-captioned fallback — see
      `timelineCaption` in `SkidmarksClipTimeline.tsx` for the exact
@@ -907,19 +977,41 @@ now (see "Explicitly out of scope" below).
     `GraphNodeSheet` shows for any suit-mapped node (Skidmarks is mapped
     to ♥ Make): pausing it here pauses it everywhere, including the cost
     deep-dive's vendor table.
-- **Wiring up transcription**: set the **`OPENAI_API_KEY`** environment
-  variable (a standard OpenAI API key, `sk-...`) — server-side only,
-  never exposed to the client — and word-level transcription (step 6
-  above) goes live on the next deploy/restart; leave it unset and the
-  build runs exactly as before this PR (energy heuristic + seed
-  fallback), just with an honest "unconfigured" caption instead of a
-  silent gap. **Cost**: OpenAI bills Whisper transcription by audio
-  duration (a few cents per hour of audio at current published rates,
-  effectively pennies for a typical 3–5 minute song) — check
+- **Wiring up transcription**: **no new key to add.** Stuart confirmed
+  he already has an ElevenLabs API key set on **Vercel Production**
+  (he uses it there for voice generation in other productions), so this
+  PR doesn't ask him to create or paste one anywhere. `app/api/skidmarks/
+  transcribe/route.ts`'s `resolveElevenLabsApiKey` looks for it under
+  **`ELEVENLABS_API_KEY`** first (the standard name ElevenLabs' own
+  SDKs/docs use), then **`ELEVEN_LABS_API_KEY`** (a plausible
+  manual-naming variant) — nothing in this repo or its sibling
+  "Skidmarks"/"AIG!itch" project docs revealed an actual different
+  existing name to reuse instead, so those two are the closest honest
+  guess, not a discovered fact. **If his real Vercel var is named
+  something else entirely**, the fix is a one-line alias (add a second
+  Vercel env var under one of the two names above, set to the same
+  value as his existing key) rather than a code change or a new key.
+  Once found under either name, word-level transcription (step 6 above)
+  goes live via ElevenLabs Scribe on the next deploy/restart.
+  `OPENAI_API_KEY` (a standard OpenAI key, `sk-...`) is optional and
+  only used as a fallback if no ElevenLabs key is found under either
+  name, or if an ElevenLabs request itself fails — it's safe to leave
+  unset, or to keep it set from before this PR, either way. Leave
+  **both** unset (or unfindable under a checked name) and the build
+  runs exactly as before real transcription existed (energy heuristic +
+  seed fallback), just with an honest "unconfigured" caption instead of
+  a silent gap — that caption/error message names exactly which env var
+  names were checked, so a naming mismatch is easy to spot and fix.
+  **Cost**: both vendors bill by audio duration (a few cents per hour of
+  audio at current published rates for either, effectively pennies for
+  a typical 3–5 minute song) — check
+  [ElevenLabs' current pricing](https://elevenlabs.io/pricing) and
   [OpenAI's current pricing](https://openai.com/api/pricing/) before
   relying on this at any volume, since rates can change. This build
-  makes exactly one transcription call per MP3 attach (no retries, no
-  polling) — re-attaching the same file re-transcribes it.
+  makes at most two transcription calls per MP3 attach (ElevenLabs, then
+  a Whisper retry only if ElevenLabs itself failed — never both just to
+  compare results; no polling) — re-attaching the same file
+  re-transcribes it.
 - **Data shape** (`lib/skidmarks.ts`): `SkidmarksBand` (`id`, `name`,
   `tagline`, `coverSeed`, `editIcon`, `members: SkidmarksMember[]`);
   `SkidmarksMember` (`id`, `name`, optional `role`, `emoji`,
@@ -929,10 +1021,17 @@ now (see "Explicitly out of scope" below).
   `segmentsSource: "transcription" | "analysis" | "seed-fallback"`,
   `analysisStatus: "analyzing" | "done" | "failed"`, optional
   `analysisError`, `transcriptionStatus: "checking" | "unconfigured" |
-  "done" | "failed"`, optional `transcriptionError`, optional
-  `words: { word, startSec, endSec }[]` — real per-word timestamps once
-  transcription succeeds, kept for a later lyric-emphasis pass even
-  though only the merged `segments` render today);
+  "done" | "sparse" | "failed"` (`"sparse"` — added in the same PR as
+  this section — is the honest outcome when a provider responds with
+  real, non-empty words that don't clear `hasUsefulVocalCoverage`'s bar
+  for this track: not a failure, but not trusted as
+  `segmentsSource: "transcription"` or shown as green Lyrics either),
+  optional `transcriptionError` (also used for the `"sparse"` case's
+  plain-language coverage explanation), optional `transcriptionProvider:
+  "elevenlabs" | "openai"` (which backend actually answered, once one
+  does), optional `words: { word, startSec, endSec }[]` — real per-word
+  timestamps once some provider responds (kept even for a `"sparse"`
+  result), even though only the merged `segments` render today);
   `SkidmarksClipSegment` (`id`, `startSec`, `endSec`, `label`, `model`,
   `plateId`, `cameraAngle`); and `SkidmarksState` (`bands`,
   `session: { projectKind, bandId, mp3 }`, `removedSeedBandIds` —
@@ -972,17 +1071,19 @@ now (see "Explicitly out of scope" below).
   (`readImageFileAsDataUrl`), deleting a band or member
   (`removeSkidmarksBand`/`removeSkidmarksMember`), the attached MP3 file
   and its real duration/playback, real word-level transcription when
-  `OPENAI_API_KEY` is configured and the request succeeds
-  (`transcribeAudio`/`segmentsFromWords` in `lib/transcription.ts`, via
-  `app/api/skidmarks/transcribe/route.ts`), and the clip timeline's
-  energy-heuristic vocal/instrumental segments whenever transcription
-  isn't available (`analyzeVocalActivity` in `lib/audioAnalysis.ts` — a
-  real FFT-based heuristic against the real file, see step 7 above for
-  its honest ceiling). Mock — generated "looks" (`buildMockLook`, a
-  color swatch stand-in), and the clip timeline's seed cadence
-  (`buildDemoSegments`) whenever it's showing (a deterministic
-  verse/bridge/lead/instrumental scaffold — while both real signals are
-  still resolving, or as the honestly-labeled fallback if both failed).
+  `ELEVENLABS_API_KEY` (or `OPENAI_API_KEY` as a fallback) is configured,
+  the request succeeds, *and* the result maps to enough real singing to
+  trust (`hasUsefulVocalCoverage`) (`transcribeAudio`/`segmentsFromWords`
+  in `lib/transcription.ts`, via `app/api/skidmarks/transcribe/route.ts`),
+  and the clip timeline's energy-heuristic vocal/instrumental segments
+  whenever transcription isn't available or landed too sparse to trust
+  (`analyzeVocalActivity` in `lib/audioAnalysis.ts` — a real FFT-based
+  heuristic against the real file, see step 7 above for its honest
+  ceiling). Mock — generated "looks" (`buildMockLook`, a color swatch
+  stand-in), and the clip timeline's seed cadence (`buildDemoSegments`)
+  whenever it's showing (a deterministic verse/bridge/lead/instrumental
+  scaffold — while both real signals are still resolving, or as the
+  honestly-labeled fallback if both failed/were too sparse to trust).
   See the module doc comment atop `lib/skidmarks.ts` for the same
   breakdown in code.
 - **Follow-up: real persistence (Neon)**. Stuart wants Skidmarks' data
@@ -1003,8 +1104,10 @@ now (see "Explicitly out of scope" below).
   duplicating state).
 - **Explicitly out of scope for this build**: voice, animate, and stitch
   (the flow stops dead after the clip timeline's plate/camera/model
-  tags); any real Comfy MCP, Seedance, LTX, or ElevenLabs call; any real
-  image/video generation, or real trained/validated singing detection
+  tags); any real Comfy MCP, Seedance, or LTX call (the only real
+  ElevenLabs call this build makes is Scribe speech-to-text — see step 6
+  above; ElevenLabs voice/generation features are still unwired); any
+  real image/video generation, or real trained/validated singing detection
   (the energy heuristic is a real signal, not a trained model — see step
   7 above; the seed cadence is still a pure fallback whenever neither
   real signal produces anything usable); a UI for per-word lyric
@@ -1017,7 +1120,10 @@ now (see "Explicitly out of scope" below).
   editing a band's name or a member's name/role after creation. Real
   word-level **speech-to-text is now wired** (see step 6 above) — it's
   no longer on this out-of-scope list, though it's honestly inert
-  without `OPENAI_API_KEY` configured.
+  without either `ELEVENLABS_API_KEY` or `OPENAI_API_KEY` configured,
+  and honestly falls back to the energy heuristic/seed cadence
+  (`transcriptionStatus === "sparse"`) on a track where the configured
+  provider's real output doesn't map to enough singing to trust.
 
 ### Ask Grok + action chips (v0 stub)
 
@@ -1129,14 +1235,32 @@ npm run dev
   those routes are unauthenticated (fine for local dev, not recommended
   once a real mail job is pointed at a public deploy). Set it as a Vercel
   environment variable, never commit it.
-- `OPENAI_API_KEY` (optional) — an OpenAI API key that enables Skidmarks'
-  real word-level MP3 transcription (`app/api/skidmarks/transcribe/route.ts`,
-  see the "Skidmarks node" section's "Wiring up transcription" note for
-  what it costs). **Already set on Vercel Production** for this app —
-  nothing further to configure there; a redeploy after this PR merges
-  will pick it up automatically. Leaving it unset (e.g. in local dev)
-  just means that route honestly returns "unconfigured" and the UI falls
-  back to the client-side energy heuristic instead — the app still
-  works, just without real transcription.
+- `ELEVENLABS_API_KEY` (optional, but the **primary** transcription
+  provider as of this PR) — enables Skidmarks' real word-level MP3
+  transcription via **ElevenLabs Scribe** (`app/api/skidmarks/
+  transcribe/route.ts`, see the "Skidmarks node" section's "Wiring up
+  transcription" note for what it costs and why this replaced Whisper
+  as the primary path). **Already set on Vercel Production per
+  Stuart** — he uses this same ElevenLabs account/key for voice
+  generation elsewhere, so this PR does **not** ask him to add a new
+  key. The route checks for it under this name first, then under
+  `ELEVEN_LABS_API_KEY` as a fallback name (see
+  `resolveElevenLabsApiKey` in that route) — this repo has no other
+  ElevenLabs integration to confirm which exact name his existing
+  Production var uses, so if it turns out to be neither, the fix is a
+  one-line alias env var under one of those two names, not a new key
+  or a code change. Leaving it unset/unfindable just means that
+  provider is skipped and the route falls through to `OPENAI_API_KEY`
+  (below) if that's configured, or to the honest "unconfigured" outcome
+  (energy heuristic fallback) if neither key is found.
+- `OPENAI_API_KEY` (optional) — an OpenAI API key that now serves as
+  Skidmarks' transcription **fallback** (used only if no ElevenLabs key
+  is found under either name above, or if an ElevenLabs request itself
+  fails). **Already set on Vercel Production** for this app from a
+  previous PR — nothing further to configure there for this key
+  specifically. Leaving both keys unset/unfindable means the transcribe route
+  honestly returns "unconfigured" and the UI falls back to the
+  client-side energy heuristic instead — the app still works, just
+  without real transcription.
 - No other environment variables are required — the rest is static seed
   data plus whatever's been ingested into `data/overrides.json`.

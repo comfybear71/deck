@@ -5,10 +5,39 @@
  * Concrete" intro + flute into one giant Vocal segment. **This is genuine
  * transcription, not another heuristic**: it POSTs the attached MP3
  * `File` to `app/api/skidmarks/transcribe/route.ts`, which forwards it to
- * OpenAI's Whisper transcription API (`whisper-1`, `verbose_json` +
- * `timestamp_granularities: ["word"]`) using the server-side
- * `OPENAI_API_KEY` environment variable and returns real per-word
- * start/end times.
+ * a real speech-to-text API using a server-side API key and returns real
+ * per-word start/end times.
+ *
+ * **Provider pivot**: the server route now calls **ElevenLabs Scribe**
+ * (`scribe_v2`, keyed via `ELEVENLABS_API_KEY`) first — ElevenLabs
+ * markets Scribe explicitly for transcribing song lyrics, unlike
+ * Whisper, which is speech-oriented. That distinction is exactly what a
+ * *later* live bug report on this same "Talking To Concrete" track
+ * traced back to: Whisper returned real, non-empty `words` for the
+ * whole song, but so sparse/scattered across the *sung* sections that
+ * `segmentsFromWords`'s gap-based merge couldn't find any vocal run
+ * worth keeping — the timeline came back green Lyrics + a single
+ * **Instrumental 0:00–4:16** segment. OpenAI Whisper (`OPENAI_API_KEY`)
+ * remains wired as an optional fallback the server route reaches for if
+ * `ELEVENLABS_API_KEY` isn't configured, or if the ElevenLabs request
+ * itself fails (network/upstream/timeout/empty-transcript) — see that
+ * route's doc comment for the exact fallback conditions. This module is
+ * otherwise provider-agnostic: it just POSTs to `/api/skidmarks/
+ * transcribe` and reads back `{ words, durationSec, provider }`: which
+ * provider actually answered, so `SkidmarksClipTimeline`'s caption can
+ * name it honestly instead of hardcoding one.
+ *
+ * **This provider swap alone doesn't fully fix the bug** — a "the STT
+ * vendor markets song support" claim isn't a guarantee, and any
+ * provider can in principle return a real, non-empty word list that
+ * still maps to near-zero usable singing for a given track. The other,
+ * load-bearing half of the fix is `hasUsefulVocalCoverage` below: a
+ * real check, independent of which provider answered, on whether the
+ * resulting vocal/instrumental map actually covers enough of the track
+ * to trust — see `lib/skidmarks.ts`'s `applySkidmarksTranscriptionResult`
+ * for where that gates `segmentsSource`/the Lyrics chip, instead of
+ * "transcription returned *any* words" alone being treated as "produced
+ * a *useful* map" (the literal bug: it wasn't).
  *
  * **Honesty contract**: `transcribeAudio` never pretends to have
  * transcribed anything it didn't. If the server has no key configured it
@@ -21,27 +50,30 @@
  * real reason string, surfaced verbatim by `SkidmarksClipTimeline`'s
  * caption.
  *
- * **Priority order once results land** (`lib/skidmarks.ts`): real
- * transcription > the energy heuristic > the seed cadence. Both real
- * signals run in parallel from the moment a file's attached (see
+ * **Priority order once results land** (`lib/skidmarks.ts`): real,
+ * *useful* transcription > the energy heuristic > the seed cadence. Both
+ * real signals run in parallel from the moment a file's attached (see
  * `useSkidmarksStudio.attachMp3`) since transcription needs a network
  * round-trip and the energy heuristic doesn't; whichever finishes first
  * shows immediately, and a later-arriving transcription result still
- * wins over an already-displayed heuristic one. The energy heuristic
- * never gets turned off by this — it's the answer whenever a key isn't
- * configured or the request fails, per the product ask to keep it as a
- * real fallback, not a maybe-it-works stub.
+ * wins over an already-displayed heuristic one — provided it clears
+ * `hasUsefulVocalCoverage`; a sparse one never downgrades an
+ * already-showing heuristic/seed result. The energy heuristic never
+ * gets turned off by this — it's the answer whenever no key is
+ * configured, the request fails, or transcription lands but doesn't
+ * clear that usefulness bar, per the product ask to keep it as a real
+ * fallback, not a maybe-it-works stub.
  *
  * **A real full-length song 413'd here** (Stuart re-attached "Talking To
  * Concrete" at ~4:16 and got a bare `HTTP 413`, even though the tiny
  * test tone he'd tried earlier worked fine) — that's Vercel's own
  * platform-level 4.5MB request body cap rejecting the multipart upload
- * before `app/api/skidmarks/transcribe/route.ts` ever runs, not an
- * `OPENAI_API_KEY` problem (see `lib/audioCompression.ts`'s doc comment
- * for the confirmed root cause, with sources). `transcribeAudio` now
- * runs `compressAudioForTranscription` first on anything close to that
- * limit, so a normal song-length MP3 gets downmixed/resampled/re-encoded
- * small enough to clear it before it's ever POSTed.
+ * before `app/api/skidmarks/transcribe/route.ts` ever runs, not an API
+ * key problem (see `lib/audioCompression.ts`'s doc comment for the
+ * confirmed root cause, with sources). `transcribeAudio` now runs
+ * `compressAudioForTranscription` first on anything close to that limit,
+ * so a normal song-length MP3 gets downmixed/resampled/re-encoded small
+ * enough to clear it before it's ever POSTed.
  */
 
 import { mergeTinySegments, type VocalAnalysisSegment } from "./audioAnalysis";
@@ -53,12 +85,24 @@ export interface SkidmarksTranscribedWord {
   endSec: number;
 }
 
+/** Which backend actually answered a given transcription request — see
+ * `app/api/skidmarks/transcribe/route.ts`'s doc comment for the
+ * ElevenLabs-first, Whisper-fallback order. Surfaced so
+ * `SkidmarksClipTimeline`'s caption can name the real provider instead
+ * of hardcoding one. */
+export type SkidmarksTranscriptionProvider = "elevenlabs" | "openai";
+
 export interface TranscriptionSuccess {
   words: SkidmarksTranscribedWord[];
-  /** Whisper's own reported duration, if the response included one —
-   * only used as a last-resort fallback; `lib/skidmarks.ts` prefers the
-   * browser's own probed `durationSec` when it's already known. */
+  /** The provider's own reported duration, if the response included one
+   * — only used as a last-resort fallback; `lib/skidmarks.ts` prefers
+   * the browser's own probed `durationSec` when it's already known. */
   durationSec: number | null;
+  /** Which backend produced `words` — `undefined` only if an older/
+   * unexpected server response omitted it; callers should treat that
+   * the same as `"elevenlabs"` (this build's primary path) rather than
+   * failing to render a caption. */
+  provider?: SkidmarksTranscriptionProvider;
 }
 
 export type TranscriptionOutcome =
@@ -76,6 +120,11 @@ interface TranscribeRouteErrorBody {
 interface TranscribeRouteSuccessBody {
   words?: unknown;
   durationSec?: unknown;
+  provider?: unknown;
+}
+
+function isTranscriptionProvider(value: unknown): value is SkidmarksTranscriptionProvider {
+  return value === "elevenlabs" || value === "openai";
 }
 
 function isPlausibleWord(value: unknown): value is SkidmarksTranscribedWord {
@@ -175,6 +224,7 @@ export async function transcribeAudio(file: File): Promise<TranscriptionOutcome>
     result: {
       words,
       durationSec: typeof okBody.durationSec === "number" ? okBody.durationSec : null,
+      provider: isTranscriptionProvider(okBody.provider) ? okBody.provider : undefined,
     },
   };
 }
@@ -250,4 +300,60 @@ export function segmentsFromWords(
   }
 
   return mergeTinySegments(raw);
+}
+
+/** Total real time `segments` calls "vocal" — the raw ingredient
+ * `hasUsefulVocalCoverage` below judges against a threshold. Exported on
+ * its own since `lib/skidmarks.ts` also wants the raw number (not just
+ * the pass/fail) for its honest "sparse" caption text. */
+export function vocalCoverageSec(segments: VocalAnalysisSegment[]): number {
+  return segments
+    .filter((s) => s.vocal)
+    .reduce((sum, s) => sum + Math.max(0, s.endSec - s.startSec), 0);
+}
+
+/** How much real vocal coverage a track needs before its word-timing-
+ * derived map is trusted enough to show as `segmentsSource:
+ * "transcription"` and turn the Lyrics chip green — see
+ * `lib/skidmarks.ts`'s `applySkidmarksTranscriptionResult`.
+ *
+ * **This is the actual fix for the reported bug**, not the provider
+ * swap alone: a live run against Jack Ash's "Talking To Concrete"
+ * (~4:16, real singing from ~0:32) came back green Lyrics + a single
+ * **Instrumental 0:00–4:16** segment. The STT backend that produced that
+ * (Whisper, a speech-first model, on a *sung* track) returned real,
+ * non-empty `words` — the old code never checked whether those words
+ * actually mapped to any usable singing, it just trusted "transcription
+ * returned words" as "transcription produced a useful map". Switching
+ * the primary backend to a provider marketed for song lyrics
+ * (`app/api/skidmarks/transcribe/route.ts`'s ElevenLabs Scribe pivot)
+ * makes this specific failure less likely, but it's still just one
+ * provider's word list — any STT vendor can in principle return a real
+ * transcript for a track that still maps to near-zero singing once
+ * merged (a heavily instrumental track, a language/accent it mishears,
+ * an unusually quiet mix). This check is the load-bearing, provider-
+ * independent backstop: it looks at the *actual* merged vocal/
+ * instrumental map (`segmentsFromWords`'s real output) rather than
+ * trusting whichever provider's marketing claims to be a better fit.
+ *
+ * A capped **fraction of the track**, not a flat floor — `totalDurationSec
+ * * requiredCoverageRatio` — so a short clip isn't held to a full song's
+ * bar, but never more than `minRequiredSec` even on a very long track
+ * (there's no reason a real vocal run needs to individually outgrow
+ * that just because the song is long). Both defaults are "tuned by ear,
+ * revisit if reported wrong" numbers, same spirit as
+ * `lib/audioAnalysis.ts`'s heuristic constants, not dataset-derived:
+ * `minRequiredSec` sits just above `MIN_SEGMENT_SEC` (5s) so a single
+ * `mergeTinySegments`-surviving vocal run — which is itself already
+ * >=5s on anything but a very short clip — clears it; `requiredCoverageRatio`
+ * exists mainly so a short clip (a 10s stinger, not a song) isn't held
+ * to the same absolute floor as a full-length track. */
+export function hasUsefulVocalCoverage(
+  segments: VocalAnalysisSegment[],
+  totalDurationSec: number,
+  minRequiredSec: number = 8,
+  requiredCoverageRatio: number = 0.5
+): boolean {
+  const requiredSec = Math.min(minRequiredSec, Math.max(0, totalDurationSec) * requiredCoverageRatio);
+  return vocalCoverageSec(segments) >= requiredSec;
 }

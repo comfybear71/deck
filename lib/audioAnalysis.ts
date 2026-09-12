@@ -38,12 +38,16 @@
  * runs in the browser against the file Stuart already picked. This is
  * now the **fallback** path, not the only one: `lib/transcription.ts` +
  * `app/api/skidmarks/transcribe/route.ts` add a real word-level
- * speech-to-text pass (OpenAI Whisper, keyed via `OPENAI_API_KEY`) that
- * `useSkidmarksStudio` prefers whenever it succeeds — see that module's
- * doc comment for the honest "transcription > this heuristic >
- * seed cadence" priority order. This heuristic still runs unconditionally
- * (in parallel, no key needed) so there's always a real-ish signal when
- * transcription is unavailable (no key configured) or fails.
+ * speech-to-text pass (ElevenLabs Scribe, keyed via
+ * `ELEVENLABS_API_KEY`, with OpenAI Whisper as an optional fallback via
+ * `OPENAI_API_KEY`) that `useSkidmarksStudio` prefers whenever it
+ * succeeds *and* the result actually covers enough real singing to
+ * trust (`hasUsefulVocalCoverage` in `lib/transcription.ts`) — see that
+ * module's doc comment for the honest "useful transcription > this
+ * heuristic > seed cadence" priority order. This heuristic still runs
+ * unconditionally (in parallel, no key needed) so there's always a
+ * real-ish signal when transcription is unavailable (no key
+ * configured), fails, or lands too sparse to trust for a given track.
  */
 
 export interface VocalAnalysisSegment {

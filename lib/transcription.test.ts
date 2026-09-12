@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { segmentsFromWords, type SkidmarksTranscribedWord } from "./transcription";
+import {
+  hasUsefulVocalCoverage,
+  segmentsFromWords,
+  vocalCoverageSec,
+  type SkidmarksTranscribedWord,
+} from "./transcription";
 
 /**
  * `segmentsFromWords` is the pure, network-free half of
  * `lib/transcription.ts` — turning a flat word-timestamp list into
  * vocal/instrumental runs. `transcribeAudio` itself (the actual fetch to
  * `/api/skidmarks/transcribe`) isn't exercised here; that needs a real
- * server + `OPENAI_API_KEY` to mean anything, and is exactly the "we
- * don't have Stuart's real key/track in this repo" caveat called out in
- * the PR description.
+ * server + `ELEVENLABS_API_KEY`/`OPENAI_API_KEY` to mean anything, and is
+ * exactly the "we don't have Stuart's real key/track in this repo"
+ * caveat called out in the PR description.
  *
  * Most fixtures below use wide word spans (well over the 5s
  * `MIN_SEGMENT_SEC` shared with `lib/audioAnalysis.ts`'s
@@ -16,6 +21,15 @@ import { segmentsFromWords, type SkidmarksTranscribedWord } from "./transcriptio
  * splitting — isn't incidentally erased by that separate "fold away
  * anything too short to trust" pass. The one test that deliberately
  * exercises that interaction says so explicitly.
+ *
+ * `hasUsefulVocalCoverage`/`vocalCoverageSec` below are the direct fix
+ * for the live bug report this PR is about: a real STT provider
+ * (Whisper, before the ElevenLabs pivot) returned real, non-empty
+ * `words` for a *sung* track that still merged into a single
+ * Instrumental segment covering the whole song. The fixtures reproduce
+ * that shape directly — many short, widely-scattered words, each on its
+ * own island past `WORD_GAP_INSTRUMENTAL_SEC` — rather than asserting
+ * against any particular STT provider's real output.
  */
 
 function word(w: string, startSec: number, endSec: number): SkidmarksTranscribedWord {
@@ -125,5 +139,82 @@ describe("segmentsFromWords", () => {
     const words = [word("quick", 1, 1.3)];
     const segments = segmentsFromWords(words, 30);
     expect(segments).toEqual([{ startSec: 0, endSec: 30, vocal: false }]);
+  });
+});
+
+describe("vocalCoverageSec", () => {
+  it("sums only the vocal segments' durations", () => {
+    const segments = [
+      { startSec: 0, endSec: 10, vocal: false },
+      { startSec: 10, endSec: 25, vocal: true },
+      { startSec: 25, endSec: 40, vocal: false },
+      { startSec: 40, endSec: 48, vocal: true },
+    ];
+    expect(vocalCoverageSec(segments)).toBe(15 + 8);
+  });
+
+  it("is zero for an all-instrumental timeline", () => {
+    expect(vocalCoverageSec([{ startSec: 0, endSec: 256, vocal: false }])).toBe(0);
+  });
+});
+
+describe("hasUsefulVocalCoverage", () => {
+  it("rejects the literal reported bug: a real, non-empty word list that merges into one all-Instrumental segment", () => {
+    // Reproduces the live report against Jack Ash's "Talking To
+    // Concrete" (~4:16 = 256s, real singing from ~0:32): an STT provider
+    // returning real words that are each scattered more than the 2s
+    // default gap threshold apart, so every one lands on its own
+    // instrumental-bounded island and `mergeTinySegments` folds every
+    // one of those slivers away — the exact shape that produced green
+    // Lyrics + a single Instrumental 0:00–4:16 segment.
+    const scattered: SkidmarksTranscribedWord[] = [];
+    for (let t = 32; t < 256; t += 4) {
+      scattered.push(word(`w${t}`, t, t + 0.3));
+    }
+    const segments = segmentsFromWords(scattered, 256);
+
+    // The merge really did collapse this to one Instrumental segment —
+    // confirms the fixture reproduces the bug shape, not just that the
+    // coverage check independently rejects it.
+    expect(segments).toEqual([{ startSec: 0, endSec: 256, vocal: false }]);
+    expect(hasUsefulVocalCoverage(segments, 256)).toBe(false);
+  });
+
+  it("accepts a real, substantial vocal run typical of a sung verse", () => {
+    // Mirrors the confirmed ground truth: a real ~80s mostly-vocal verse
+    // starting at 0:32 on a 256s track.
+    const words = [word("verse", 32, 112)];
+    const segments = segmentsFromWords(words, 256);
+    expect(hasUsefulVocalCoverage(segments, 256)).toBe(true);
+  });
+
+  it("rejects an empty word list (zero vocal coverage)", () => {
+    const segments = segmentsFromWords([], 256);
+    expect(hasUsefulVocalCoverage(segments, 256)).toBe(false);
+  });
+
+  it("rejects a single isolated word blip too short to trust", () => {
+    const segments = segmentsFromWords([word("quick", 1, 1.3)], 256);
+    expect(hasUsefulVocalCoverage(segments, 256)).toBe(false);
+  });
+
+  it("scales the required coverage down for a short clip instead of demanding a full song's worth", () => {
+    // A 10s clip with a real 6s sung phrase shouldn't need the same
+    // absolute vocal-seconds floor a 4+ minute song does.
+    const words = [word("phrase", 2, 8)];
+    const segments = segmentsFromWords(words, 10);
+    expect(hasUsefulVocalCoverage(segments, 10)).toBe(true);
+  });
+
+  it("respects custom threshold parameters", () => {
+    const segments = [
+      { startSec: 0, endSec: 50, vocal: false },
+      { startSec: 50, endSec: 56, vocal: true },
+      { startSec: 56, endSec: 256, vocal: false },
+    ];
+    // 6s of coverage clears a 5s floor...
+    expect(hasUsefulVocalCoverage(segments, 256, 5)).toBe(true);
+    // ...but not a stricter 10s floor.
+    expect(hasUsefulVocalCoverage(segments, 256, 10)).toBe(false);
   });
 });
