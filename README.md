@@ -713,12 +713,14 @@ now (see "Explicitly out of scope" below).
      file's attached, the client POSTs it (as `multipart/form-data`) to
      `/api/skidmarks/transcribe`, which forwards it server-side to a
      real STT provider — **ElevenLabs Scribe** (`scribe_v2`) first, via
-     the **`ELEVENLABS_API_KEY`** environment variable, with **OpenAI
-     Whisper** (`whisper-1`) as an automatic fallback via
-     **`OPENAI_API_KEY`** if ElevenLabs isn't configured or its request
-     itself fails (see "Wiring up transcription" below for exactly how
-     to set either key and what each costs) — and returns real per-word
-     `start`/`end` timestamps, tagged with which provider actually
+     Stuart's already-configured **`ELEVENLABS_API_KEY`** (or
+     `ELEVEN_LABS_API_KEY`, checked as a fallback name), with **OpenAI
+     Whisper** (`whisper-1`) as an automatic fallback provider via
+     **`OPENAI_API_KEY`** if no ElevenLabs key is found under either name
+     or its request itself fails (see "Wiring up transcription" below
+     for exactly which names are checked and what each provider costs)
+     — and returns real per-word `start`/`end` timestamps, tagged with
+     which provider actually
      answered (`provider`). `segmentsFromWords` then merges consecutive
      words into vocal runs (a gap over ~2s between words becomes an
      instrumental segment — see that function's doc comment), which is
@@ -975,19 +977,31 @@ now (see "Explicitly out of scope" below).
     `GraphNodeSheet` shows for any suit-mapped node (Skidmarks is mapped
     to ♥ Make): pausing it here pauses it everywhere, including the cost
     deep-dive's vendor table.
-- **Wiring up transcription**: set the **`ELEVENLABS_API_KEY`**
-  environment variable (Stuart's own ElevenLabs API key) in **Vercel
-  Production** (Project Settings → Environment Variables) — server-side
-  only, never exposed to the client, and never pasted into chat, a PR
-  description, or committed anywhere in this repo — and word-level
-  transcription (step 6 above) goes live via ElevenLabs Scribe on the
-  next deploy/restart. `OPENAI_API_KEY` (a standard OpenAI key,
-  `sk-...`) is optional and only used as a fallback if
-  `ELEVENLABS_API_KEY` isn't set, or if an ElevenLabs request itself
-  fails — it's safe to leave unset, or to keep it set from before this
-  PR, either way. Leave **both** unset and the build runs exactly as
-  before real transcription existed (energy heuristic + seed fallback),
-  just with an honest "unconfigured" caption instead of a silent gap.
+- **Wiring up transcription**: **no new key to add.** Stuart confirmed
+  he already has an ElevenLabs API key set on **Vercel Production**
+  (he uses it there for voice generation in other productions), so this
+  PR doesn't ask him to create or paste one anywhere. `app/api/skidmarks/
+  transcribe/route.ts`'s `resolveElevenLabsApiKey` looks for it under
+  **`ELEVENLABS_API_KEY`** first (the standard name ElevenLabs' own
+  SDKs/docs use), then **`ELEVEN_LABS_API_KEY`** (a plausible
+  manual-naming variant) — nothing in this repo or its sibling
+  "Skidmarks"/"AIG!itch" project docs revealed an actual different
+  existing name to reuse instead, so those two are the closest honest
+  guess, not a discovered fact. **If his real Vercel var is named
+  something else entirely**, the fix is a one-line alias (add a second
+  Vercel env var under one of the two names above, set to the same
+  value as his existing key) rather than a code change or a new key.
+  Once found under either name, word-level transcription (step 6 above)
+  goes live via ElevenLabs Scribe on the next deploy/restart.
+  `OPENAI_API_KEY` (a standard OpenAI key, `sk-...`) is optional and
+  only used as a fallback if no ElevenLabs key is found under either
+  name, or if an ElevenLabs request itself fails — it's safe to leave
+  unset, or to keep it set from before this PR, either way. Leave
+  **both** unset (or unfindable under a checked name) and the build
+  runs exactly as before real transcription existed (energy heuristic +
+  seed fallback), just with an honest "unconfigured" caption instead of
+  a silent gap — that caption/error message names exactly which env var
+  names were checked, so a naming mismatch is easy to spot and fix.
   **Cost**: both vendors bill by audio duration (a few cents per hour of
   audio at current published rates for either, effectively pennies for
   a typical 3–5 minute song) — check
@@ -1222,24 +1236,29 @@ npm run dev
   once a real mail job is pointed at a public deploy). Set it as a Vercel
   environment variable, never commit it.
 - `ELEVENLABS_API_KEY` (optional, but the **primary** transcription
-  provider as of this PR) — Stuart's own ElevenLabs API key, enabling
-  Skidmarks' real word-level MP3 transcription via **ElevenLabs Scribe**
-  (`app/api/skidmarks/transcribe/route.ts`, see the "Skidmarks node"
-  section's "Wiring up transcription" note for what it costs and why
-  this replaced Whisper as the primary path). **Not set yet — Stuart
-  needs to add it in the Vercel dashboard** (Project Settings →
-  Environment Variables → Production), the same way `OPENAI_API_KEY`
-  below was set previously; this PR intentionally doesn't (and can't)
-  set it for him. Leaving it unset just means that provider is skipped
-  and the route falls through to `OPENAI_API_KEY` (below) if that's
-  configured, or to the honest "unconfigured" outcome (energy heuristic
-  fallback) if neither key is set.
+  provider as of this PR) — enables Skidmarks' real word-level MP3
+  transcription via **ElevenLabs Scribe** (`app/api/skidmarks/
+  transcribe/route.ts`, see the "Skidmarks node" section's "Wiring up
+  transcription" note for what it costs and why this replaced Whisper
+  as the primary path). **Already set on Vercel Production per
+  Stuart** — he uses this same ElevenLabs account/key for voice
+  generation elsewhere, so this PR does **not** ask him to add a new
+  key. The route checks for it under this name first, then under
+  `ELEVEN_LABS_API_KEY` as a fallback name (see
+  `resolveElevenLabsApiKey` in that route) — this repo has no other
+  ElevenLabs integration to confirm which exact name his existing
+  Production var uses, so if it turns out to be neither, the fix is a
+  one-line alias env var under one of those two names, not a new key
+  or a code change. Leaving it unset/unfindable just means that
+  provider is skipped and the route falls through to `OPENAI_API_KEY`
+  (below) if that's configured, or to the honest "unconfigured" outcome
+  (energy heuristic fallback) if neither key is found.
 - `OPENAI_API_KEY` (optional) — an OpenAI API key that now serves as
-  Skidmarks' transcription **fallback** (used only if
-  `ELEVENLABS_API_KEY` isn't set, or if an ElevenLabs request itself
+  Skidmarks' transcription **fallback** (used only if no ElevenLabs key
+  is found under either name above, or if an ElevenLabs request itself
   fails). **Already set on Vercel Production** for this app from a
   previous PR — nothing further to configure there for this key
-  specifically. Leaving both keys unset means the transcribe route
+  specifically. Leaving both keys unset/unfindable means the transcribe route
   honestly returns "unconfigured" and the UI falls back to the
   client-side energy heuristic instead — the app still works, just
   without real transcription.

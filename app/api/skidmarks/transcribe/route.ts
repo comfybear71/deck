@@ -6,8 +6,7 @@ import { NextResponse } from "next/server";
  * for the full client-side contract).
  *
  * **Provider pivot (this build)**: this route now calls **ElevenLabs
- * Scribe** (`scribe_v2`, `POST https://api.elevenlabs.io/v1/speech-to-text`,
- * keyed via the server-side `ELEVENLABS_API_KEY` environment variable)
+ * Scribe** (`scribe_v2`, `POST https://api.elevenlabs.io/v1/speech-to-text`)
  * as the *primary* transcription backend, not OpenAI Whisper. Root
  * cause of the switch: a real live run against Jack Ash's "TALKING TO
  * CONCRETE.mp3" (~4:16, real singing starting ~0:32) came back from
@@ -24,8 +23,25 @@ import { NextResponse } from "next/server";
  * provider's word list actually mapped to enough singing to trust,
  * independent of which backend answered.
  *
+ * **Key wiring**: Stuart confirmed he already has an ElevenLabs API key
+ * set on Vercel Production (he uses it there for voice generation in
+ * other productions) — this build does **not** ask him to create or add
+ * a new one. `resolveElevenLabsApiKey` below checks, in order,
+ * `ELEVENLABS_API_KEY` (the standard name the official ElevenLabs SDKs/
+ * docs use, and the one this repo's own docs assume he set) and
+ * `ELEVEN_LABS_API_KEY` (a plausible manual-naming variant with the
+ * extra underscore) — nothing in this repo or its sibling "Skidmarks"/
+ * "AIG!itch" project docs revealed an actual different existing name to
+ * reuse instead, so this is the closest honest guess, not a discovered
+ * fact. If his real Vercel var is named something else entirely, this
+ * route still degrades honestly to the `missing_api_key` outcome below
+ * rather than silently guessing further — see that response's message,
+ * which lists exactly which names it checked, so fixing it (an alias
+ * env var in Vercel pointing at the same value, or updating the name
+ * list below) is a one-line change, not a mystery.
+ *
  * **OpenAI Whisper stays wired as an optional fallback**, not removed:
- * if `ELEVENLABS_API_KEY` isn't set, or an ElevenLabs *request* itself
+ * if no ElevenLabs key is found, or an ElevenLabs *request* itself
  * fails (network error, timeout, upstream error, or a genuinely empty
  * transcript — not a sparse-coverage outcome, which is a client-side
  * judgment `lib/skidmarks.ts` makes off this route's real word list) and
@@ -35,10 +51,10 @@ import { NextResponse } from "next/server";
  * honestly (`SkidmarksClipTimeline`'s caption) instead of hardcoding
  * "ElevenLabs" or "OpenAI" regardless of which one ran.
  *
- * **Never claims to be live without a key.** If neither
- * `ELEVENLABS_API_KEY` nor `OPENAI_API_KEY` is set, this returns `501`
- * with `code: "missing_api_key"` — a distinct, expected shape
- * `lib/transcription.ts` reads as "transcription isn't configured
+ * **Never claims to be live without a key.** If no ElevenLabs key under
+ * any checked name is found *and* `OPENAI_API_KEY` also isn't set, this
+ * returns `501` with `code: "missing_api_key"` — a distinct, expected
+ * shape `lib/transcription.ts` reads as "transcription isn't configured
  * here" rather than "the request failed", so the client can fall back
  * to `lib/audioAnalysis.ts`'s energy heuristic honestly instead of
  * implying a real attempt errored out.
@@ -58,8 +74,29 @@ export const runtime = "nodejs";
 // limit still applies.
 export const maxDuration = 120;
 
-const ELEVENLABS_API_KEY_ENV = "ELEVENLABS_API_KEY";
+/** Candidate env var names for Stuart's existing ElevenLabs API key, in
+ * priority order — see the module doc comment's "Key wiring" note for
+ * why there are two and why we didn't just invent more: `ELEVENLABS_API_KEY`
+ * is the standard name ElevenLabs' own SDKs/docs use (and what this repo's
+ * README tells him to expect); `ELEVEN_LABS_API_KEY` is the one plausible
+ * manual-naming variant worth checking for free. Not an open-ended guess
+ * list — if neither is set, `resolveElevenLabsApiKey` says so honestly
+ * (naming both) rather than silently trying more names. */
+const ELEVENLABS_API_KEY_ENV_CANDIDATES = ["ELEVENLABS_API_KEY", "ELEVEN_LABS_API_KEY"] as const;
 const OPENAI_API_KEY_ENV = "OPENAI_API_KEY";
+
+/** Looks up Stuart's already-configured ElevenLabs key under whichever
+ * of `ELEVENLABS_API_KEY_ENV_CANDIDATES` is actually set, and reports
+ * which name matched — so a caller that finds nothing can name exactly
+ * what it checked (see the `missing_api_key` response below) instead of
+ * a bare "not configured". Returns `null`, never throws, if none match. */
+function resolveElevenLabsApiKey(): { key: string; envVarName: string } | null {
+  for (const envVarName of ELEVENLABS_API_KEY_ENV_CANDIDATES) {
+    const key = process.env[envVarName];
+    if (key) return { key, envVarName };
+  }
+  return null;
+}
 
 const ELEVENLABS_TRANSCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text";
 /** State-of-the-art ElevenLabs STT model as of this build — see
@@ -277,16 +314,19 @@ async function transcribeWithOpenAi(audio: File, apiKey: string): Promise<Provid
 }
 
 export async function POST(request: Request) {
-  const elevenLabsKey = process.env[ELEVENLABS_API_KEY_ENV];
+  const elevenLabs = resolveElevenLabsApiKey();
   const openAiKey = process.env[OPENAI_API_KEY_ENV];
 
-  if (!elevenLabsKey && !openAiKey) {
+  if (!elevenLabs && !openAiKey) {
     return NextResponse.json(
       {
         error:
-          `Neither ${ELEVENLABS_API_KEY_ENV} nor ${OPENAI_API_KEY_ENV} is set on the ` +
-          "server \u2014 word-level transcription is unavailable here. Falling back " +
-          "to the client-side energy heuristic.",
+          `None of ${ELEVENLABS_API_KEY_ENV_CANDIDATES.join(", ")} or ${OPENAI_API_KEY_ENV} ` +
+          "is set on the server \u2014 word-level transcription is unavailable here. " +
+          "Falling back to the client-side energy heuristic. (Stuart's ElevenLabs key " +
+          "is expected to already be on Vercel Production under one of those first " +
+          "names \u2014 if it's there under a different name, add a one-line alias env " +
+          "var rather than a new key.)",
         code: "missing_api_key",
       },
       { status: 501 }
@@ -334,10 +374,10 @@ export async function POST(request: Request) {
   // the fact using the actual word list either provider returns).
   const attempts: { provider: TranscriptionProvider; result: ProviderResult }[] = [];
 
-  if (elevenLabsKey) {
+  if (elevenLabs) {
     attempts.push({
       provider: "elevenlabs",
-      result: await transcribeWithElevenLabs(audio, elevenLabsKey),
+      result: await transcribeWithElevenLabs(audio, elevenLabs.key),
     });
   }
 
