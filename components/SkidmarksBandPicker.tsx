@@ -9,6 +9,7 @@ interface SkidmarksBandPickerProps {
   onSelectBand: (bandId: string) => void;
   onCreateBand: () => void;
   onSetCoverImage: (bandId: string, dataUrl: string) => void;
+  onRemoveBand: (bandId: string) => void;
 }
 
 /** Native file picker's accept list — jpg/png/webp only, matches what a
@@ -41,6 +42,20 @@ function EditGlyph({ icon }: { icon: "pencil" | "camera" }) {
   );
 }
 
+function TrashGlyph() {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3 w-3">
+      <path
+        d="M5 5.5h10M8.25 5.5v-1a1 1 0 0 1 1-1h1.5a1 1 0 0 1 1 1v1M6.25 5.5l.5 9a1 1 0 0 0 1 .95h4.5a1 1 0 0 0 1-.95l.5-9"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function NewBandTile({ onClick }: { onClick: () => void }) {
   return (
     <button
@@ -62,11 +77,13 @@ function BandTile({
   active,
   onSelect,
   onSetCoverImage,
+  onRemove,
 }: {
   band: SkidmarksBand;
   active: boolean;
   onSelect: () => void;
   onSetCoverImage: (dataUrl: string) => void;
+  onRemove: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [picking, setPicking] = useState(false);
@@ -94,34 +111,48 @@ function BandTile({
         aria-pressed={active}
         aria-label={`Choose band ${band.name}`}
         className={[
-          "relative flex h-28 w-28 flex-col items-center justify-center gap-1 overflow-hidden rounded-2xl px-2.5 text-center transition-transform active:scale-[0.98]",
+          "relative flex h-28 w-28 shrink-0 overflow-hidden rounded-2xl transition-transform active:scale-[0.98]",
           band.coverImage ? "bg-zinc-900" : `bg-gradient-to-br ${coverGradientClass(band.coverSeed)}`,
           active
             ? "ring-2 ring-rose-400 ring-offset-2 ring-offset-zinc-950"
             : "ring-1 ring-white/10 hover:ring-white/25",
         ].join(" ")}
       >
-        {band.coverImage && (
-          // eslint-disable-next-line @next/next/no-img-element -- data-URL cover, next/image can't optimize it
-          <img
-            src={band.coverImage}
-            alt=""
-            aria-hidden
-            className="absolute inset-0 h-full w-full object-cover"
-          />
+        {band.coverImage ? (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element -- data-URL cover, next/image can't optimize it */}
+            <img
+              src={band.coverImage}
+              alt=""
+              aria-hidden
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+            {/* A thin bottom-only scrim — just enough to keep the name/
+                tagline legible without washing out the middle of the
+                picked cover photo. */}
+            <span
+              aria-hidden
+              className="absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/85 via-black/45 to-transparent"
+            />
+            <span className="absolute inset-x-0 bottom-0 flex flex-col gap-0.5 px-2.5 py-2 text-center">
+              <span className="line-clamp-1 text-sm font-bold uppercase tracking-wide text-white drop-shadow">
+                {band.name}
+              </span>
+              <span className="line-clamp-1 text-[10px] leading-tight text-white/80">
+                {band.tagline}
+              </span>
+            </span>
+          </>
+        ) : (
+          <span className="flex h-full w-full flex-col items-center justify-center gap-1 px-2.5 text-center">
+            <span className="line-clamp-2 text-sm font-bold uppercase tracking-wide text-white drop-shadow">
+              {band.name}
+            </span>
+            <span className="line-clamp-2 text-[10px] leading-tight text-white/70">
+              {band.tagline}
+            </span>
+          </span>
         )}
-        {band.coverImage && (
-          <span
-            aria-hidden
-            className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-transparent"
-          />
-        )}
-        <span className="relative line-clamp-2 text-sm font-bold uppercase tracking-wide text-white drop-shadow">
-          {band.name}
-        </span>
-        <span className="relative line-clamp-2 text-[10px] leading-tight text-white/70">
-          {band.tagline}
-        </span>
       </button>
       <button
         type="button"
@@ -136,6 +167,15 @@ function BandTile({
         ) : (
           <EditGlyph icon={band.editIcon} />
         )}
+      </button>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove band ${band.name}`}
+        title="Remove band"
+        className="absolute left-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-white/70 backdrop-blur-sm transition-colors hover:bg-red-500/60 hover:text-white"
+      >
+        <TrashGlyph />
       </button>
       <input
         ref={fileInputRef}
@@ -153,12 +193,16 @@ function BandTile({
 /**
  * "Choose a band" — a horizontal scroll of square album-cover tiles: New
  * (+) first, then every known band, cover art only (never member faces,
- * per the locked mockup's product rule). Each existing band tile has a
- * small pencil/camera "edit cover" glyph in its corner; tapping it opens
- * a real native file picker (jpg/png/webp) and, once a file's chosen,
- * downscales + stores it as a data URL (`readImageFileAsDataUrl`) that
- * the tile then renders instead of the mock gradient — a real picked
- * photo, not a generated stand-in.
+ * per the locked mockup's product rule). Each existing band tile (never
+ * the "New" tile, which isn't a band yet) has two small corner glyphs: a
+ * pencil/camera "edit cover" glyph (top-right) that opens a real native
+ * file picker (jpg/png/webp) and, once a file's chosen, downscales +
+ * stores it as a data URL (`readImageFileAsDataUrl`) that the tile then
+ * renders instead of the mock gradient — a real picked photo, not a
+ * generated stand-in — and a trash "remove band" glyph (top-left) that
+ * deletes the band outright via `onRemoveBand`. When a cover photo is
+ * set, the name/tagline sit in a thin bottom scrim only, so the picked
+ * photo's middle stays visible instead of getting washed out.
  */
 export function SkidmarksBandPicker({
   bands,
@@ -166,6 +210,7 @@ export function SkidmarksBandPicker({
   onSelectBand,
   onCreateBand,
   onSetCoverImage,
+  onRemoveBand,
 }: SkidmarksBandPickerProps) {
   return (
     <div className="flex items-center gap-3 overflow-x-auto pb-1 pl-0.5 pr-1 [scrollbar-width:thin]">
@@ -177,6 +222,7 @@ export function SkidmarksBandPicker({
           active={band.id === activeBandId}
           onSelect={() => onSelectBand(band.id)}
           onSetCoverImage={(dataUrl) => onSetCoverImage(band.id, dataUrl)}
+          onRemove={() => onRemoveBand(band.id)}
         />
       ))}
     </div>

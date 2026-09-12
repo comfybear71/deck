@@ -32,6 +32,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     selectProjectKind,
     selectBand,
     createBand,
+    removeBand,
     addMember,
     removeMember,
     renameMember,
@@ -83,13 +84,18 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     renameMember(activeBand.id, openMember.id, name);
   };
 
+  const handleRemoveBand = (bandId: string) => {
+    if (bandId === activeBand?.id) setOpenMemberId(null);
+    removeBand(bandId);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       <button
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/90 backdrop-blur-md"
       />
 
       <div
@@ -152,6 +158,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   onSelectBand={selectBand}
                   onCreateBand={createBand}
                   onSetCoverImage={setBandCoverImage}
+                  onRemoveBand={handleRemoveBand}
                 />
               </div>
             )}
@@ -187,13 +194,6 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 />
               </div>
             )}
-
-            <p className="text-center text-[11px] leading-relaxed text-white/25">
-              Front end only {"\u2014"} bands, looks, and the checklist above are
-              mocked for this build. No real Comfy MCP / Seedance / LTX /
-              ElevenLabs render happens from here, and plates + everything after
-              MP3 come later.
-            </p>
           </div>
         </div>
       </div>

@@ -167,7 +167,11 @@ export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate
                     />
                   ) : node.id === SKIDMARKS_NODE_ID ? (
                     <SkidmarksNodeCard
-                      state={{ bands: skidmarksState.bands, session: skidmarksState.session }}
+                      state={{
+                        bands: skidmarksState.bands,
+                        session: skidmarksState.session,
+                        removedSeedBandIds: skidmarksState.removedSeedBandIds,
+                      }}
                       onOpen={() => setOpenNodeId(node.id)}
                     />
                   ) : (

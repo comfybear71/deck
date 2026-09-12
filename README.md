@@ -625,18 +625,26 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
      faces, per the locked mockup's product rule) — "New" (+) first, then
      every known band. Two are hand-seeded (`SEED_BANDS`): **Jack Ash**
      ("Dirt roads & bad decisions") and **Solar Rebel** ("Ignite the
-     static"). Each existing band's tile has a small pencil/camera corner
-     glyph; tapping it opens a **real native file picker**
-     (`accept=".jpg,.jpeg,.png,.webp"` — jpg/png/webp only). Once a file's
-     picked, `readImageFileAsDataUrl` downscales it (longest edge capped
-     at 640px, re-encoded as a JPEG data URL — keeps a phone photo from
-     blowing past `localStorage`'s quota) and `setSkidmarksBandCoverImage`
-     stores it on the band; the tile then renders that real photo
-     (`coverImage`) instead of the mock gradient. A band with no picked
-     cover still falls back to the CSS gradient stand-in
-     (`coverGradientClass`, keyed off `coverSeed`) — there's no server
-     upload here, the data URL just lives in this browser's
-     `localStorage`.
+     static"). Each existing band's tile (never the "New" tile) has two
+     small corner glyphs: a pencil/camera "edit cover" glyph (top-right)
+     that opens a **real native file picker**
+     (`accept=".jpg,.jpeg,.png,.webp"` — jpg/png/webp only) — once a
+     file's picked, `readImageFileAsDataUrl` downscales it (longest edge
+     capped at 640px, re-encoded as a JPEG data URL — keeps a phone photo
+     from blowing past `localStorage`'s quota) and
+     `setSkidmarksBandCoverImage` stores it on the band; the tile then
+     renders that real photo (`coverImage`) instead of the mock gradient,
+     with the name/tagline sitting in a **thin bottom scrim only** so the
+     middle of the picked photo stays visible — and a trash "remove band"
+     glyph (top-left) that deletes the band outright via
+     `removeSkidmarksBand`. Deleting one of the two
+     hand-seeded bands records its id in `removedSeedBandIds` so it stays
+     gone on the next load instead of being re-minted from `SEED_BANDS`;
+     deleting the active band resets the session (`bandId`/`mp3`) back to
+     before a band was chosen. A band with no picked cover still falls
+     back to the CSS gradient stand-in (`coverGradientClass`, keyed off
+     `coverSeed`) — there's no server upload here, the data URL just
+     lives in this browser's `localStorage`.
   3. **Members module** — selecting a band (or tapping "New", which mints
      the locked mockup's exact example band via `buildNewMockBand`: *Grok
      Bot & the destroyers*, with Rock Grok — role "Solo", one look already
@@ -689,10 +697,13 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
      speech-to-text-style pass, timing as just the file's own length).
      No lyrics panel, no paste-lyrics box, no manual vocal-start pin —
      this is the entire surface for that.
-  - A short, always-visible disclaimer line closes the sheet: bands,
-    looks, and the checklist are mocked for this build; no real Comfy
-    MCP / Seedance / LTX / ElevenLabs call happens from here, and plates +
-    everything after MP3 come later.
+  - The sheet's backdrop is a darker/more opaque scrim
+     (`bg-black/90 backdrop-blur-md`, vs. the generic `GraphNodeSheet`'s
+     `bg-black/70`) — this sheet opens tall and near the top of the
+     screen on mobile, so the graph board underneath sits closer to the
+     sheet's rounded top corners; the stronger scrim keeps a graph
+     button/card from reading as if it were floating chrome belonging to
+     the sheet itself.
   - **Make lane dial** — the same small dial mirror the generic
     `GraphNodeSheet` shows for any suit-mapped node (Skidmarks is mapped
     to ♥ Make): pausing it here pauses it everywhere, including the cost
@@ -704,16 +715,37 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
   `photoreal`, `createdAt`); `SkidmarksMp3Attachment` (`fileName`,
   `durationSec`, `attachedAt`, `checklist: Record<SkidmarksChecklistKey,
   boolean>`); and `SkidmarksState` (`bands`, `session:
-  { projectKind, bandId, mp3 }`).
+  { projectKind, bandId, mp3 }`, `removedSeedBandIds` — hand-seeded band
+  ids Stuart has deleted, so `normalizeState` doesn't resurrect them).
 - **Persistence**: `localStorage` (key `the-tab:skidmarks-studio`),
   mirroring the same in-memory-cache-plus-`useSyncExternalStore` shape as
   `lib/control-plane.ts` / `lib/graphLayout.ts` (see
   `hooks/useSkidmarksStudio.ts`, which also owns the checklist's staged
   `setTimeout`s, cleared on unmount). Bands (seed + any "New" ones created
-  this browser, capped at `BAND_HISTORY_LIMIT`) and wizard progress
-  persist; the attached audio file itself does not (see above). A fresh
-  browser (or private mode) always starts from the empty state; nothing
-  here is shared across devices.
+  this browser, capped at `BAND_HISTORY_LIMIT`), band/member deletions
+  (`removedSeedBandIds`), and wizard progress persist; the attached audio
+  file itself does not (see above). A fresh browser (or private mode)
+  always starts from the empty state; nothing here is shared across
+  devices. **This is a placeholder store**, not the intended long-term
+  one — see "Follow-up: real persistence" below.
+- **Mock vs. real, at a glance**: real — band/member identity (hand-seeded
+  or user-created, no invented names), a picked cover/avatar photo
+  (`readImageFileAsDataUrl`), deleting a band or member
+  (`removeSkidmarksBand`/`removeSkidmarksMember`), the attached MP3 file
+  and its real duration/playback. Mock — generated "looks"
+  (`buildMockLook`, a color swatch stand-in) and the MP3 checklist's three
+  ticks (staged timers, not real lyrics/timing analysis). See the module
+  doc comment atop `lib/skidmarks.ts` for the same breakdown in code.
+- **Follow-up: real persistence (Neon)**. Stuart wants Skidmarks' data
+  (bands, members, looks, session) moved off `localStorage` onto real
+  Neon Postgres persistence, so it survives across devices/browsers
+  instead of being trapped in one browser's storage — matching how the
+  rest of the app is meant to grow into "AIG!itch" backing services.
+  That migration is a separate, larger change (a schema, a data-access
+  layer swapping out `lib/skidmarks.ts`'s `localStorage` read/write, and
+  likely an API route) and is **explicitly out of scope for this PR**,
+  which stays focused on the delete-band / cover-text / disclaimer /
+  backdrop fixes above.
 - `GraphView` special-cases `SKIDMARKS_NODE_ID` (`lib/constants.ts`) to
   render `SkidmarksNodeCard`/`SkidmarksDetailSheet` instead of the generic
   `GraphNodeCard`/`GraphNodeSheet`, same pattern as Budju/Propfolio; the

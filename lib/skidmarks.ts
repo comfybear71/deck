@@ -9,18 +9,33 @@
  * all on **one continuous scroll**, not a chat thread and not separate
  * screens. Nothing here calls a real backend: no Comfy MCP, no
  * Seedance/LTX/ElevenLabs, no `skidmarks.aiglitch.app` Crash Lab, no
- * actual AI image generation for "looks". Every band, member, generated
- * look, and checklist tick is either hand-seeded or built by a pure,
- * deterministic mock helper below — good enough to demo the flow, honest
- * about not being real.
+ * actual AI image generation for "looks".
+ *
+ * **Mock vs. real, precisely**: band/member *identity* is real —
+ * bands and members are hand-seeded or user-created with no invented
+ * name/role, a picked cover/avatar photo (`coverImage`/`avatarImage`) is
+ * a real photo Stuart chose (via `readImageFileAsDataUrl`), and deleting
+ * a band or member (`removeSkidmarksBand`/`removeSkidmarksMember`) is a
+ * real, persisted removal. What's still mock: generated "looks"
+ * (`buildMockLook` — a color swatch, not an image model call) and the
+ * MP3 checklist's three ticks (staged `setTimeout`s in
+ * `hooks/useSkidmarksStudio.ts`, not a real lyrics/timing analysis).
  *
  * Persistence mirrors `lib/control-plane.ts` / `lib/graphLayout.ts`: an
  * in-memory cache is the synchronous source of truth the UI reads via
  * `useSyncExternalStore` (`hooks/useSkidmarksStudio.ts`), mirrored to
  * `localStorage` (key: `the-tab:skidmarks-studio`) so progress through
- * the wizard survives a refresh. Explicitly out of scope for this build:
- * plates, multi-angle coverage, voice, animate, stitch — the flow stops
- * dead after the MP3 checklist.
+ * the wizard survives a refresh. **This is a placeholder store, not the
+ * intended long-term one** — `localStorage` is per-browser (nothing here
+ * is shared across devices) and has a small quota; Stuart wants Skidmarks
+ * data (bands/members/looks/session) moved to real Neon Postgres
+ * persistence so it survives across devices/browsers. That migration is
+ * explicitly out of scope for this PR (see the README's Skidmarks
+ * section, "Follow-up" note) — this file's `localStorage`
+ * read/write/`useSyncExternalStore` shape is what a Neon-backed version
+ * would replace. Also explicitly out of scope for this build: plates,
+ * multi-angle coverage, voice, animate, stitch — the flow stops dead
+ * after the MP3 checklist.
  */
 
 const STORAGE_KEY = "the-tab:skidmarks-studio";
@@ -154,6 +169,11 @@ export interface SkidmarksState {
   /** Seed bands + any "New" bands created this session, most-recent-first among the "New" ones. */
   bands: SkidmarksBand[];
   session: SkidmarksSession;
+  /** Ids of hand-seeded `SEED_BANDS` entries Stuart has deleted — tracked
+   * separately from `bands` (which only ever holds *live* bands) so a
+   * seed band stays gone after a delete instead of being re-minted from
+   * `SEED_BANDS` on the next `normalizeState` pass. */
+  removedSeedBandIds: string[];
 }
 
 function isBrowser(): boolean {
@@ -196,6 +216,7 @@ function emptyState(): SkidmarksState {
   return {
     bands: SEED_BANDS,
     session: { projectKind: null, bandId: null, mp3: null },
+    removedSeedBandIds: [],
   };
 }
 
@@ -280,20 +301,32 @@ export function createMp3Attachment(
 
 function normalizeState(parsed: unknown): SkidmarksState {
   const p = (parsed ?? {}) as Partial<SkidmarksState>;
+  const removedSeedBandIds = Array.isArray(p.removedSeedBandIds)
+    ? p.removedSeedBandIds.filter((id): id is string => typeof id === "string")
+    : [];
+  const removedSeedSet = new Set(removedSeedBandIds);
   const seedIds = new Set(SEED_BANDS.map((b) => b.id));
   const storedBands = Array.isArray(p.bands) ? (p.bands as SkidmarksBand[]) : [];
   const extraBands = storedBands.filter((b) => b && !seedIds.has(b.id));
-  const bands = [...SEED_BANDS.map((seed) => storedBands.find((b) => b?.id === seed.id) ?? seed), ...extraBands];
+  const bands = [
+    ...SEED_BANDS.filter((seed) => !removedSeedSet.has(seed.id)).map(
+      (seed) => storedBands.find((b) => b?.id === seed.id) ?? seed
+    ),
+    ...extraBands,
+  ];
   const session: Partial<SkidmarksSession> = p.session ?? {};
+  const bandId = typeof session.bandId === "string" ? session.bandId : null;
+  const stillHasBand = bandId !== null && bands.some((b) => b.id === bandId);
   return {
     bands,
+    removedSeedBandIds,
     session: {
       projectKind:
         typeof session.projectKind === "string"
           ? (session.projectKind as SkidmarksProjectKind)
           : null,
-      bandId: typeof session.bandId === "string" ? session.bandId : null,
-      mp3: (session.mp3 as SkidmarksMp3Attachment | null | undefined) ?? null,
+      bandId: stillHasBand ? bandId : null,
+      mp3: stillHasBand ? (session.mp3 as SkidmarksMp3Attachment | null | undefined) ?? null : null,
     },
   };
 }
@@ -387,10 +420,36 @@ export function createSkidmarksBand(): SkidmarksBand {
     seed.length + BAND_HISTORY_LIMIT
   );
   persist({
+    ...current,
     bands,
     session: { ...current.session, bandId: band.id, mp3: null },
   });
   return band;
+}
+
+/** Removes a band outright — the trash glyph on each existing band tile
+ * (never shown on the "New" tile, which doesn't correspond to a band
+ * yet). If the deleted band was hand-seeded (`SEED_BANDS`), its id is
+ * recorded in `removedSeedBandIds` so `normalizeState` doesn't re-mint
+ * it from the hardcoded seed list on the next load — a deleted seed band
+ * stays deleted. If the deleted band was the active session band, the
+ * session's `bandId`/`mp3` reset to `null` (same "downstream resets"
+ * behavior as switching bands via `selectSkidmarksBand`). */
+export function removeSkidmarksBand(bandId: string): void {
+  const current = getSkidmarksSnapshot();
+  const bands = current.bands.filter((b) => b.id !== bandId);
+  const isSeed = SEED_BANDS.some((b) => b.id === bandId);
+  const removedSeedBandIds = isSeed
+    ? Array.from(new Set([...current.removedSeedBandIds, bandId]))
+    : current.removedSeedBandIds;
+  const wasActive = current.session.bandId === bandId;
+  persist({
+    bands,
+    removedSeedBandIds,
+    session: wasActive
+      ? { ...current.session, bandId: null, mp3: null }
+      : current.session,
+  });
 }
 
 /** Appends a blank member to a band (capped at `MAX_MEMBERS_PER_BAND`) — the "+ Add member" pill. */
