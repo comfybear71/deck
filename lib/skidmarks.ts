@@ -9,18 +9,33 @@
  * all on **one continuous scroll**, not a chat thread and not separate
  * screens. Nothing here calls a real backend: no Comfy MCP, no
  * Seedance/LTX/ElevenLabs, no `skidmarks.aiglitch.app` Crash Lab, no
- * actual AI image generation for "looks". Every band, member, generated
- * look, and checklist tick is either hand-seeded or built by a pure,
- * deterministic mock helper below — good enough to demo the flow, honest
- * about not being real.
+ * actual AI image generation for "looks".
+ *
+ * **Mock vs. real, precisely**: band/member *identity* is real —
+ * bands and members are hand-seeded or user-created with no invented
+ * name/role, a picked cover/avatar photo (`coverImage`/`avatarImage`) is
+ * a real photo Stuart chose (via `readImageFileAsDataUrl`), and deleting
+ * a band or member (`removeSkidmarksBand`/`removeSkidmarksMember`) is a
+ * real, persisted removal. What's still mock: generated "looks"
+ * (`buildMockLook` — a color swatch, not an image model call) and the
+ * MP3 checklist's three ticks (staged `setTimeout`s in
+ * `hooks/useSkidmarksStudio.ts`, not a real lyrics/timing analysis).
  *
  * Persistence mirrors `lib/control-plane.ts` / `lib/graphLayout.ts`: an
  * in-memory cache is the synchronous source of truth the UI reads via
  * `useSyncExternalStore` (`hooks/useSkidmarksStudio.ts`), mirrored to
  * `localStorage` (key: `the-tab:skidmarks-studio`) so progress through
- * the wizard survives a refresh. Explicitly out of scope for this build:
- * plates, multi-angle coverage, voice, animate, stitch — the flow stops
- * dead after the MP3 checklist.
+ * the wizard survives a refresh. **This is a placeholder store, not the
+ * intended long-term one** — `localStorage` is per-browser (nothing here
+ * is shared across devices) and has a small quota; Stuart wants Skidmarks
+ * data (bands/members/looks/session) moved to real Neon Postgres
+ * persistence so it survives across devices/browsers. That migration is
+ * explicitly out of scope for this PR (see the README's Skidmarks
+ * section, "Follow-up" note) — this file's `localStorage`
+ * read/write/`useSyncExternalStore` shape is what a Neon-backed version
+ * would replace. Also explicitly out of scope for this build: plates,
+ * multi-angle coverage, voice, animate, stitch — the flow stops dead
+ * after the MP3 checklist.
  */
 
 const STORAGE_KEY = "the-tab:skidmarks-studio";

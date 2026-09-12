@@ -722,10 +722,30 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
   `lib/control-plane.ts` / `lib/graphLayout.ts` (see
   `hooks/useSkidmarksStudio.ts`, which also owns the checklist's staged
   `setTimeout`s, cleared on unmount). Bands (seed + any "New" ones created
-  this browser, capped at `BAND_HISTORY_LIMIT`) and wizard progress
-  persist; the attached audio file itself does not (see above). A fresh
-  browser (or private mode) always starts from the empty state; nothing
-  here is shared across devices.
+  this browser, capped at `BAND_HISTORY_LIMIT`), band/member deletions
+  (`removedSeedBandIds`), and wizard progress persist; the attached audio
+  file itself does not (see above). A fresh browser (or private mode)
+  always starts from the empty state; nothing here is shared across
+  devices. **This is a placeholder store**, not the intended long-term
+  one — see "Follow-up: real persistence" below.
+- **Mock vs. real, at a glance**: real — band/member identity (hand-seeded
+  or user-created, no invented names), a picked cover/avatar photo
+  (`readImageFileAsDataUrl`), deleting a band or member
+  (`removeSkidmarksBand`/`removeSkidmarksMember`), the attached MP3 file
+  and its real duration/playback. Mock — generated "looks"
+  (`buildMockLook`, a color swatch stand-in) and the MP3 checklist's three
+  ticks (staged timers, not real lyrics/timing analysis). See the module
+  doc comment atop `lib/skidmarks.ts` for the same breakdown in code.
+- **Follow-up: real persistence (Neon)**. Stuart wants Skidmarks' data
+  (bands, members, looks, session) moved off `localStorage` onto real
+  Neon Postgres persistence, so it survives across devices/browsers
+  instead of being trapped in one browser's storage — matching how the
+  rest of the app is meant to grow into "AIG!itch" backing services.
+  That migration is a separate, larger change (a schema, a data-access
+  layer swapping out `lib/skidmarks.ts`'s `localStorage` read/write, and
+  likely an API route) and is **explicitly out of scope for this PR**,
+  which stays focused on the delete-band / cover-text / disclaimer /
+  backdrop fixes above.
 - `GraphView` special-cases `SKIDMARKS_NODE_ID` (`lib/constants.ts`) to
   render `SkidmarksNodeCard`/`SkidmarksDetailSheet` instead of the generic
   `GraphNodeCard`/`GraphNodeSheet`, same pattern as Budju/Propfolio; the
