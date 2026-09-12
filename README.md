@@ -689,8 +689,12 @@ now (see "Explicitly out of scope" below).
      picked: a real `<audio>` element (via `URL.createObjectURL`, session-
      only — a `File` can't round-trip through `localStorage`, so a page
      reload loses playback, though the filename/duration/analysis-result
-     metadata persists) drives a real play/pause and a real probed
-     duration; the waveform itself is still decorative (`waveformBars`,
+     metadata persists) drives a real play/pause, a real probed
+     duration, and a real `elapsed / duration` readout (e.g. "1:23 / 4:16")
+     that counts up live off the `<audio>` element's own `timeupdate`
+     event and holds steady when paused mid-track, so Stuart can see
+     where playback actually is instead of just the track's total length;
+     the waveform itself is still decorative (`waveformBars`,
      deterministic off the filename, not derived from the real audio).
      Attaching also hands the raw `File` to `useSkidmarksStudio`, which
      kicks off the real analysis pass described next.

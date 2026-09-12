@@ -93,11 +93,15 @@ function Waveform({ fileName, progress }: { fileName: string; progress: number }
  * waveform (still just a filename-seeded stand-in, not derived from the
  * real audio), a real play/pause over the actual picked file (via an
  * `<audio>` element + object URL — not persisted across reload, since a
- * `File` can't round-trip through `localStorage`), the filename, and the
- * real probed duration once the browser resolves it. `onAttach` hands
- * the raw `File` up to `useSkidmarksStudio`, which is what actually
- * kicks off real vocal/instrumental analysis against it — see
- * `lib/audioAnalysis.ts`.
+ * `File` can't round-trip through `localStorage`), the filename, and a
+ * real `elapsed / duration` readout (`currentTimeSec`, driven by the
+ * `<audio>` element's own `timeupdate` event via `handleTimeUpdate`) so
+ * Stuart can see where playback actually is, not just the track's total
+ * length — the elapsed half counts up live while playing and holds its
+ * last value when paused mid-track, only resetting on attach/remove/end.
+ * `onAttach` hands the raw `File` up to `useSkidmarksStudio`, which is
+ * what actually kicks off real vocal/instrumental analysis against it —
+ * see `lib/audioAnalysis.ts`.
  */
 export function SkidmarksMp3Card({
   mp3,
@@ -110,6 +114,7 @@ export function SkidmarksMp3Card({
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [currentTimeSec, setCurrentTimeSec] = useState(0);
 
   useEffect(() => {
     return () => {
@@ -127,6 +132,7 @@ export function SkidmarksMp3Card({
     setAudioUrl(url);
     setIsPlaying(false);
     setProgress(0);
+    setCurrentTimeSec(0);
     onAttach(file);
   };
 
@@ -139,7 +145,9 @@ export function SkidmarksMp3Card({
 
   const handleTimeUpdate = () => {
     const audio = audioRef.current;
-    if (!audio || !audio.duration) return;
+    if (!audio) return;
+    setCurrentTimeSec(audio.currentTime);
+    if (!audio.duration) return;
     setProgress(audio.currentTime / audio.duration);
   };
 
@@ -158,6 +166,8 @@ export function SkidmarksMp3Card({
   const handleRemove = () => {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioUrl(null);
+    setProgress(0);
+    setCurrentTimeSec(0);
     onRemove();
   };
 
@@ -206,7 +216,14 @@ export function SkidmarksMp3Card({
 
         <Waveform fileName={mp3.fileName} progress={progress} />
 
-        <span className="shrink-0 text-xs font-medium tabular-nums text-white/60">
+        <span
+          aria-label={`${formatDuration(currentTimeSec)} elapsed of ${formatDuration(mp3.durationSec)}`}
+          className="shrink-0 text-xs font-medium tabular-nums text-white/60"
+        >
+          <span className={isPlaying || currentTimeSec > 0 ? "text-rose-200" : undefined}>
+            {formatDuration(currentTimeSec)}
+          </span>
+          <span className="text-white/30"> / </span>
           {formatDuration(mp3.durationSec)}
         </span>
 
@@ -240,6 +257,7 @@ export function SkidmarksMp3Card({
           onEnded={() => {
             setIsPlaying(false);
             setProgress(0);
+            setCurrentTimeSec(0);
           }}
           className="hidden"
         />
