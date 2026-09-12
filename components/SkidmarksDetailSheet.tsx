@@ -35,7 +35,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     addMember,
     removeMember,
     renameMember,
-    editCover,
+    setBandCoverImage,
+    setMemberAvatarImage,
     addLook,
     attachMp3,
     removeMp3,
@@ -150,7 +151,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   activeBandId={session.bandId}
                   onSelectBand={selectBand}
                   onCreateBand={createBand}
-                  onEditCover={editCover}
+                  onSetCoverImage={setBandCoverImage}
                 />
               </div>
             )}
@@ -162,6 +163,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   onOpenMember={setOpenMemberId}
                   onAddMember={() => addMember(activeBand.id)}
                   onRemoveMember={(memberId) => removeMember(activeBand.id, memberId)}
+                  onSetMemberAvatarImage={(memberId, dataUrl) =>
+                    setMemberAvatarImage(activeBand.id, memberId, dataUrl)
+                  }
                 />
               </div>
             )}

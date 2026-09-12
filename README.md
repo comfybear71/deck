@@ -625,27 +625,39 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
      faces, per the locked mockup's product rule) — "New" (+) first, then
      every known band. Two are hand-seeded (`SEED_BANDS`): **Jack Ash**
      ("Dirt roads & bad decisions") and **Solar Rebel** ("Ignite the
-     static"). Each existing band's tile has a small pencil/camera
-     corner glyph; tapping it calls `cycleSkidmarksBandCover`, which mints
-     a new deterministic gradient stand-in — there's no real image
-     upload/generation behind it. Cover art itself is always a CSS
-     gradient (`coverGradientClass`, keyed off a `coverSeed`), not a real
-     photo or render.
+     static"). Each existing band's tile has a small pencil/camera corner
+     glyph; tapping it opens a **real native file picker**
+     (`accept=".jpg,.jpeg,.png,.webp"` — jpg/png/webp only). Once a file's
+     picked, `readImageFileAsDataUrl` downscales it (longest edge capped
+     at 640px, re-encoded as a JPEG data URL — keeps a phone photo from
+     blowing past `localStorage`'s quota) and `setSkidmarksBandCoverImage`
+     stores it on the band; the tile then renders that real photo
+     (`coverImage`) instead of the mock gradient. A band with no picked
+     cover still falls back to the CSS gradient stand-in
+     (`coverGradientClass`, keyed off `coverSeed`) — there's no server
+     upload here, the data URL just lives in this browser's
+     `localStorage`.
   3. **Members module** — selecting a band (or tapping "New", which mints
      the locked mockup's exact example band via `buildNewMockBand`: *Grok
      Bot & the destroyers*, with Rock Grok — role "Solo", one look already
      generated — and Stew Balls, no look yet) appends
      `SkidmarksMembersModule`: one shared pink-bordered box with the band
-     name once at top, then a row per member (left: avatar — a look
-     thumbnail if one's been generated, else a dashed placeholder ring;
-     right: name + optional role, plus a trash/× **remove** control that
-     deletes that member from the band outright). Tapping a member's row
-     opens the generate/rename popup. A **"+ Add member"** pill sits
-     *outside* the box, under-right — never inside it — and appends a
-     completely **blank** member (`buildBlankMember`: no name, no role, no
-     emoji — nothing invented) up to `MAX_MEMBERS_PER_BAND` (3); a blank
-     row shows dimmed "New member" placeholder text until it's named or
-     given a first look.
+     name once at top, then a row per member (left: avatar — a real
+     picked photo if one's set, else a look thumbnail if one's been
+     generated, else a dashed placeholder ring; right: name + optional
+     role, plus a trash/× **remove** control that deletes that member
+     from the band outright). Tapping a member's row opens the
+     generate/rename popup. The avatar itself has a tiny camera badge in
+     its corner — same real file picker + `readImageFileAsDataUrl`
+     downscale as the band cover, via `setSkidmarksMemberAvatarImage` —
+     so a real photo can be attached directly, without going through the
+     generate popup at all; a picked `avatarImage` always wins over a
+     generated look. A **"+ Add member"** pill sits *outside* the box,
+     under-right — never inside it — and appends a completely **blank**
+     member (`buildBlankMember`: no name, no role, no emoji, no photo —
+     nothing invented) up to `MAX_MEMBERS_PER_BAND` (3); a blank row
+     shows dimmed "New member" placeholder text until it's named, given
+     a real photo, or given a first generated look.
   4. **Generate popup** (`SkidmarksGeneratePopup`) — a simple centered
      modal, no side chrome: that member's generated "looks" so far scroll
      horizontally across the top (three empty dashed slots before the

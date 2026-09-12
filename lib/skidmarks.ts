@@ -72,6 +72,10 @@ export interface SkidmarksMember {
   role?: string;
   /** Placeholder avatar glyph until a look is generated. */
   emoji: string;
+  /** A real photo Stuart picked for this member (data URL, resized client-side —
+   * see `readImageFileAsDataUrl`). Takes priority over both `emoji` and any
+   * generated look in the avatar — it's his actual picture, not a mock. */
+  avatarImage?: string;
   looks: SkidmarksLook[];
 }
 
@@ -79,8 +83,13 @@ export interface SkidmarksBand {
   id: string;
   name: string;
   tagline: string;
-  /** Drives a deterministic album-cover gradient — see `coverGradientClass`. */
+  /** Drives a deterministic album-cover gradient — see `coverGradientClass`.
+   * Only used while `coverImage` is unset. */
   coverSeed: number;
+  /** A real cover image Stuart picked for this band (data URL, resized
+   * client-side — see `readImageFileAsDataUrl`). Takes priority over the
+   * mock gradient in the band tile once set. */
+  coverImage?: string;
   /** Which little "edit cover" glyph this band's tile shows — cosmetic variety, matches the mockup. */
   editIcon: "pencil" | "camera";
   members: SkidmarksMember[];
@@ -451,14 +460,35 @@ export function addSkidmarksLook(
   persist({ ...current, bands });
 }
 
-/** The band tile's little pencil/camera "edit cover" glyph — this build
- * has no real image upload, so it just mints a new deterministic cover
- * gradient (see `coverGradientClass`) as a stand-in for "changed the art". */
-export function cycleSkidmarksBandCover(bandId: string): void {
+/** The band tile's pencil/camera "edit cover" glyph — sets a real cover
+ * image Stuart picked from his device (already resized to a data URL by
+ * `readImageFileAsDataUrl`), replacing the mock gradient on that tile. */
+export function setSkidmarksBandCoverImage(bandId: string, dataUrl: string): void {
   const current = getSkidmarksSnapshot();
   const bands = current.bands.map((b) =>
-    b.id === bandId ? { ...b, coverSeed: b.coverSeed + 1 } : b
+    b.id === bandId ? { ...b, coverImage: dataUrl } : b
   );
+  persist({ ...current, bands });
+}
+
+/** Sets a member's real avatar photo (already resized to a data URL by
+ * `readImageFileAsDataUrl`) — picked directly, not generated. Takes
+ * priority over any generated look in `MemberAvatar`. */
+export function setSkidmarksMemberAvatarImage(
+  bandId: string,
+  memberId: string,
+  dataUrl: string
+): void {
+  const current = getSkidmarksSnapshot();
+  const bands = current.bands.map((b) => {
+    if (b.id !== bandId) return b;
+    return {
+      ...b,
+      members: b.members.map((m) =>
+        m.id === memberId ? { ...m, avatarImage: dataUrl } : m
+      ),
+    };
+  });
   persist({ ...current, bands });
 }
 
@@ -526,6 +556,56 @@ const COVER_GRADIENTS = [
 export function coverGradientClass(coverSeed: number): string {
   const idx = Math.abs(Math.floor(coverSeed)) % COVER_GRADIENTS.length;
   return COVER_GRADIENTS[idx];
+}
+
+/** Longest edge a picked cover/avatar image gets downscaled to before
+ * being stored — real photos straight off a phone can be several MB;
+ * this keeps `localStorage` (a few MB quota, shared with everything
+ * else this app persists) from filling up after a handful of picks. */
+const MAX_PICKED_IMAGE_DIMENSION = 640;
+const PICKED_IMAGE_QUALITY = 0.85;
+
+/**
+ * Reads a picked image file (jpg/png/webp), downscales it to fit within
+ * `MAX_PICKED_IMAGE_DIMENSION` on its longest edge, and re-encodes it as
+ * a JPEG data URL — a data URL (unlike a blob URL) round-trips through
+ * `localStorage` just fine, so a real picked cover/avatar survives a
+ * page reload. Used by both the band cover picker and the member avatar
+ * picker. Rejects if the browser can't decode the file (not an image,
+ * or a format it doesn't support).
+ */
+export function readImageFileAsDataUrl(
+  file: File,
+  maxDimension: number = MAX_PICKED_IMAGE_DIMENSION,
+  quality: number = PICKED_IMAGE_QUALITY
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the picked file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Could not decode the picked image."));
+      img.onload = () => {
+        const scale = Math.min(1, maxDimension / Math.max(img.naturalWidth, img.naturalHeight));
+        const width = Math.max(1, Math.round(img.naturalWidth * scale));
+        const height = Math.max(1, Math.round(img.naturalHeight * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          // No canvas 2D context available — fall back to the untouched
+          // original data URL rather than failing the pick outright.
+          resolve(reader.result as string);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 /** Deterministic look-swatch gradient, keyed off a look's `seed` — same
