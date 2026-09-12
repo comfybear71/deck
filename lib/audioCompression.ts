@@ -28,26 +28,83 @@
  * the function" (out of scope here — no Blob store is provisioned for
  * this project, and adding one is new infra, not a fix to this feature)
  * or "reduce the payload before it's sent". This module does the latter:
- * it downmixes to mono, resamples to 16kHz (the rate Whisper itself
- * internally resamples every input to anyway — see OpenAI's own
- * downsampling guidance — so this isn't throwing away resolution Whisper
- * would have used), and re-encodes to a low, duration-adaptive MP3
- * bitrate, entirely in the browser via `@breezystack/lamejs` (a pure-JS,
- * dependency-free LAME encoder — no server-side ffmpeg/binary needed,
- * so this works unmodified on Vercel's serverless Node.js runtime same as
- * anywhere else). `lib/transcription.ts` runs this before every upload
- * that isn't already comfortably small.
+ * it downmixes to mono, resamples down, and re-encodes to a
+ * duration-adaptive MP3 bitrate, entirely in the browser via
+ * `@breezystack/lamejs` (a pure-JS, dependency-free LAME encoder — no
+ * server-side ffmpeg/binary needed, so this works unmodified on Vercel's
+ * serverless Node.js runtime same as anywhere else). `lib/transcription.ts`
+ * runs this before every upload that isn't already comfortably small.
  *
- * **Honesty note**: this trades audio fidelity for upload size on large
- * files. Whisper is a speech model trained to be robust to compression
- * and low sample rates for *speech*; a busy multi-instrument mix at a
- * very low bitrate is a harder case than a clean voice memo (see OpenAI's
- * own caveat that heavy downsampling suits speech better than music).
- * That's a real, disclosed trade-off, not a silent one — this is exactly
- * why the bitrate tiers below start as high as the size budget allows
- * and only drop further for longer files, and why `chooseCompressionPlan`
- * is a small, independently testable function rather than a buried
- * magic number.
+ * **Third live bug report, directly implicating this module**: after the
+ * 413 fix above shipped and ElevenLabs Scribe (song-lyrics-oriented)
+ * replaced Whisper as the primary transcription provider,
+ * `applySkidmarksTranscriptionResult`'s `hasUsefulVocalCoverage` check
+ * still rejected "Talking To Concrete" (~4:16 = 257s, real singing from
+ * ~0:32 through most of the track) — real singing that Stuart's own test
+ * against ElevenLabs' *hosted* transcription tool (fed the **original,
+ * uncompressed** file) came back as dense sung lyrics with `[singing]`
+ * tags for. Through Deck's own upload path, ElevenLabs Scribe returned
+ * only **28 words scattered across the whole 257s track** (up from 20
+ * words on the pre-pivot Whisper attempt against the *same* compressed
+ * upload) — roughly one recognized word every ~9 seconds, nowhere near
+ * a real sung lyric's word rate (a `words.length` this low for ~210s of
+ * confirmed singing means the STT model itself failed to recognize the
+ * overwhelming majority of the sung audio, not that a downstream merge
+ * step discarded good timing — `lib/transcription.test.ts`'s
+ * `hasUsefulVocalCoverage` suite confirms 28 words spread that thin
+ * *correctly* collapses to ~0s of vocal coverage no matter how the merge
+ * policy is tuned, since real word islands that sparse are each shorter
+ * than `MIN_SEGMENT_SEC` on their own).
+ *
+ * The one uncontrolled variable between Stuart's two tests (dense
+ * `[singing]`-tagged results on ElevenLabs' own hosted tool vs. 28
+ * scattered words through this app) is exactly what this module does to
+ * the audio before either STT provider ever sees it. **This is the
+ * strongest evidenced explanation for the sparse-word symptom, verified
+ * against the real `@breezystack/lamejs` encoder (not just asserted) —
+ * but not proven against the real ElevenLabs API**, since this repo/
+ * environment has no live `ELEVENLABS_API_KEY` to re-run the failing
+ * request against: before this fix, a real ~4:16/257s song was *always*
+ * downmixed to mono, resampled to a fixed 16kHz (an 8kHz frequency
+ * ceiling — everything above that, including a meaningful slice of sung
+ * vocal/flute harmonic content, was discarded), and capped at a **flat
+ * 64kbps ceiling regardless of how much of the 4MiB upload budget was
+ * actually free** — for this exact track's length, 64kbps used only
+ * ~2MB of the ~4MiB budget (see `lib/audioCompression.test.ts`), leaving
+ * roughly half the available payload size on the table unused while
+ * still handing both STT providers a heavily downsampled, low-bitrate
+ * mono signal to pick sung lyrics out of a full-band mix (drums, bass,
+ * flute) with. That 16kHz/64kbps pairing was inherited from *Whisper's*
+ * own "resamples to 16kHz internally anyway" guidance (see OpenAI's
+ * downsampling docs) — a speech-only rationale that was never
+ * re-examined when ElevenLabs Scribe (marketed specifically for singing,
+ * not just speech) became the primary provider in the same PR that
+ * introduced the coverage check that caught this. **The fix**: use the
+ * upload-budget headroom that was already going unused — raise the
+ * bitrate ceiling (`MP3_BITRATE_TIERS_KBPS`, now up to 128kbps — this
+ * exact track now lands at the new top tier, verified via the real
+ * encoder in `lib/audioCompression.test.ts`) and the sample rate
+ * (`COMPRESSION_SAMPLE_RATE_HZ`, now 22.05kHz — an ~11kHz frequency
+ * ceiling instead of 8kHz) up to whatever the same 4.5MB Vercel cap
+ * still comfortably allows for a given track length, rather than a fixed
+ * pair of numbers sized for Whisper's speech-only assumptions. This
+ * roughly doubles both dimensions of fidelity for a typical song-length
+ * upload at zero cost to the 413 fix's actual guarantee (still
+ * comfortably under Vercel's cap either way).
+ *
+ * **Honesty note, still true after this fix**: this still trades some
+ * audio fidelity for upload size on large files — a busy multi-instrument
+ * mix is a harder STT target than a clean voice memo at any bitrate, and
+ * the byte budget still forces real compromises on long tracks. That's a
+ * real, disclosed trade-off, not a silent one — this is exactly why the
+ * bitrate tiers below start as high as the size budget allows and only
+ * drop further for longer files, and why `chooseCompressionPlan` is a
+ * small, independently testable function rather than a buried magic
+ * number. This module's fix addresses the strongest evidenced cause of
+ * the sparse-transcript symptom; it is **not verified to fully resolve
+ * it** against the real ElevenLabs API on the real track, since no key
+ * is available in this environment to confirm that end to end — see this
+ * PR's description for exactly what is and isn't verified.
  */
 
 /** Vercel's own documented hard limit on a Function's request body — see
@@ -68,20 +125,33 @@ export const DIRECT_UPLOAD_SAFE_BYTES = 4 * 1024 * 1024; // 4MiB
  * and LAME's actual output. */
 export const UPLOAD_BUDGET_BYTES = 4 * 1024 * 1024; // 4MiB
 
-/** Whisper resamples every input to 16kHz internally (see OpenAI's own
- * "downsampling to reduce file size" guidance) — sending audio already
- * at that rate isn't a quality compromise Whisper wouldn't have made
- * itself, just skips re-sending resolution it would discard anyway. It's
- * also a valid MPEG-2 Layer III sample rate, so every bitrate tier below
- * encodes cleanly at it. */
-export const COMPRESSION_SAMPLE_RATE_HZ = 16000;
+/** Sample rate every compressed upload is resampled to. **Not** Whisper's
+ * internal 16kHz anymore (see this module's doc comment for why that
+ * number was the wrong one to inherit once ElevenLabs Scribe — a
+ * provider marketed for *singing*, not just speech — became the primary
+ * transcription path): 22.05kHz roughly doubles the frequency ceiling
+ * (~11kHz vs. 8kHz Nyquist) a heavily-compressed song gets to keep,
+ * while still being a valid MPEG-2 Layer III sample rate paired with
+ * every bitrate tier below (verified against the real `lamejs` encoder,
+ * not just assumed — see `lib/audioCompression.test.ts` and this
+ * module's own manual verification script). */
+export const COMPRESSION_SAMPLE_RATE_HZ = 22050;
 
 /** Mono MP3 bitrates to try, highest quality first, all valid at
- * `COMPRESSION_SAMPLE_RATE_HZ` for MPEG-2 Layer III. Picked, not
+ * `COMPRESSION_SAMPLE_RATE_HZ` for MPEG-2 Layer III (MPEG-2's LSF table
+ * supports CBR up to 160kbps at 22.05kHz/16kHz — nothing here is bumping
+ * against a real encoder ceiling, see this module's doc comment).
+ * Extended from a flat 64kbps ceiling to 128kbps at the top: for a real
+ * ~4:16/257s song (this fix's motivating track), the old 64kbps ceiling
+ * used only about half the ~4MiB upload budget
+ * (`estimateMp3Bytes(257, 64)` ≈ 2.06MB) — real headroom that was going
+ * unused while still handing the STT provider a fairly aggressively
+ * compressed signal. 128kbps roughly doubles that track's encoded
+ * fidelity for about the same real 4MiB-ish output size. Picked, not
  * exhaustive — enough steps to comfortably cover "a few minutes" up to
  * "a very long track" without so many tiers that a borderline file
  * flip-flops between near-identical sizes. */
-export const MP3_BITRATE_TIERS_KBPS = [64, 48, 32, 24, 16, 8] as const;
+export const MP3_BITRATE_TIERS_KBPS = [128, 96, 64, 48, 32, 24, 16, 8] as const;
 
 /** Real per-second byte rate at a given CBR bitrate — LAME's constant
  * bitrate framing paces strictly by bitrate, not by input loudness or

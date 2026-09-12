@@ -16,7 +16,10 @@ import {
   type SkidmarksSegmentsSource,
   type SkidmarksTranscriptionStatus,
 } from "@/lib/skidmarks";
-import type { SkidmarksTranscriptionProvider } from "@/lib/transcription";
+import {
+  transcriptionProviderLabel,
+  type SkidmarksTranscriptionProvider,
+} from "@/lib/transcription";
 import { SkidmarksPlatesAndCamera } from "./SkidmarksPlatesAndCamera";
 
 interface SkidmarksClipTimelineProps {
@@ -140,13 +143,6 @@ function SegmentRow({
       )}
     </div>
   );
-}
-
-/** Human-readable name for whichever backend actually answered — falls
- * back to naming this build's primary provider (ElevenLabs Scribe) if
- * an older/unexpected response omitted it, rather than showing nothing. */
-function transcriptionProviderLabel(provider: SkidmarksTranscriptionProvider | undefined): string {
-  return provider === "openai" ? "OpenAI Whisper" : "ElevenLabs Scribe";
 }
 
 /** Honesty caption shown above the rows — varies with real state

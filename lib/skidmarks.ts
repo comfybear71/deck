@@ -105,6 +105,7 @@ import type { VocalAnalysisResult } from "./audioAnalysis";
 import {
   hasUsefulVocalCoverage,
   segmentsFromWords,
+  transcriptionProviderLabel,
   vocalCoverageSec,
   type SkidmarksTranscribedWord,
   type SkidmarksTranscriptionProvider,
@@ -1237,11 +1238,18 @@ export function applySkidmarksTranscriptionResult(
           words,
           transcriptionStatus: "sparse",
           transcriptionProvider: provider,
+          // Names the actual provider that answered (see
+          // `transcriptionProviderLabel`) \u2014 a live sparse-coverage
+          // report against this exact message shape ("Transcription
+          // returned 28 words...") showed up with no provider named at
+          // all, leaving Stuart unable to tell whether ElevenLabs or
+          // Whisper produced the sparse result from the UI alone. See
+          // hypothesis 5 in this fix's PR description.
           transcriptionError:
-            `Transcription returned ${words.length} word${words.length === 1 ? "" : "s"}, ` +
-            `but only ${coveredSec.toFixed(1)}s of that mapped to singing across a ` +
-            `${totalSec.toFixed(0)}s track \u2014 not enough to trust as a real vocal map. ` +
-            "Showing the energy heuristic instead.",
+            `${transcriptionProviderLabel(provider)} returned ${words.length} ` +
+            `word${words.length === 1 ? "" : "s"}, but only ${coveredSec.toFixed(1)}s of that ` +
+            `mapped to singing across a ${totalSec.toFixed(0)}s track \u2014 not enough to ` +
+            "trust as a real vocal map. Showing the energy heuristic instead.",
         },
       },
     });
