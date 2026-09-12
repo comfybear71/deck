@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   chooseCompressionPlan,
   compressAudioForTranscription,
+  COMPRESSION_SAMPLE_RATE_HZ,
   describeTooLongToCompress,
   estimateMp3Bytes,
   formatDurationForMessage,
@@ -39,15 +40,33 @@ describe("chooseCompressionPlan", () => {
   it("picks the highest-quality tier that fits a real ~4:16 song under the upload budget", () => {
     const plan = chooseCompressionPlan(256);
     expect(plan).not.toBeNull();
-    expect(plan!.bitrateKbps).toBe(64);
+    // Was 64kbps before the compression-quality fix (see
+    // lib/audioCompression.ts's module doc comment for the live
+    // "28 words / 0.0s coverage" bug this addresses) — that ceiling
+    // used only ~2.06MB of the ~4MiB budget for this exact track
+    // length, leaving real headroom unused. 128kbps roughly doubles
+    // encoded fidelity for about the same real output size.
+    expect(plan!.bitrateKbps).toBe(128);
     expect(plan!.estimatedBytes).toBeLessThanOrEqual(UPLOAD_BUDGET_BYTES);
   });
 
+  it("regression: the old 64kbps ceiling left real upload-budget headroom unused on this exact track", () => {
+    // This is the concrete evidence behind the compression-quality fix,
+    // not just a "should be better" claim: at the previous top tier,
+    // "Talking To Concrete" (~4:16 = 256s) only used about half of the
+    // available 4MiB upload budget.
+    const oldCeilingEstimate = estimateMp3Bytes(256, 64);
+    expect(oldCeilingEstimate).toBeLessThan(UPLOAD_BUDGET_BYTES * 0.6);
+
+    const plan = chooseCompressionPlan(256);
+    expect(plan!.bitrateKbps).toBeGreaterThan(64);
+  });
+
   it("drops to a lower bitrate for a longer track that the top tier wouldn't fit", () => {
-    // 64kbps * 1000s = 8,000,000 bytes -- over a 4MiB budget, must fall through.
-    const plan = chooseCompressionPlan(1000);
+    // 128kbps * 300s = 4,800,000 bytes -- over a 4MiB budget, must fall through.
+    const plan = chooseCompressionPlan(300);
     expect(plan).not.toBeNull();
-    expect(plan!.bitrateKbps).toBeLessThan(64);
+    expect(plan!.bitrateKbps).toBeLessThan(128);
     expect(plan!.estimatedBytes).toBeLessThanOrEqual(UPLOAD_BUDGET_BYTES);
   });
 
@@ -115,5 +134,16 @@ describe("sanity: the numbers this module's messaging relies on", () => {
     const plan = chooseCompressionPlan(sixMinutes);
     expect(plan).not.toBeNull();
     expect(plan!.estimatedBytes).toBeLessThan(VERCEL_BODY_LIMIT_BYTES);
+  });
+
+  it("raised the sample rate above Whisper's speech-only 16kHz default, now that ElevenLabs Scribe (singing-oriented) is primary", () => {
+    // Not a magic-number check for its own sake — see
+    // lib/audioCompression.ts's module doc comment for why the old
+    // fixed 16kHz/64kbps pairing (inherited from Whisper's own internal
+    // resample rate) was never re-examined once ElevenLabs Scribe became
+    // the primary transcription provider, and how that's the strongest
+    // evidenced explanation for the live "28 words / 0.0s vocal
+    // coverage" bug report.
+    expect(COMPRESSION_SAMPLE_RATE_HZ).toBeGreaterThan(16000);
   });
 });
