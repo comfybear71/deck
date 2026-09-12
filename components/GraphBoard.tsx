@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudjuData, GraphData, GraphNode, PropfolioData } from "@/lib/types";
-import type { SkidmarksProject } from "@/lib/skidmarks";
+import type { SkidmarksState } from "@/lib/skidmarks";
 import { edgesFrom, findNode } from "@/lib/graph";
 import { BUDJU_NODE_ID, PROPFOLIO_NODE_ID, SKIDMARKS_NODE_ID } from "@/lib/constants";
 import { useGraphBoardPositions } from "@/hooks/useGraphBoardPositions";
@@ -23,7 +23,7 @@ interface GraphBoardProps {
   nodes: GraphNode[];
   budjuData: BudjuData;
   propfolioData: PropfolioData;
-  skidmarksActiveProject: SkidmarksProject | undefined;
+  skidmarksState: SkidmarksState;
   onOpenNode: (id: string) => void;
 }
 
@@ -46,7 +46,7 @@ export function GraphBoard({
   nodes,
   budjuData,
   propfolioData,
-  skidmarksActiveProject,
+  skidmarksState,
   onOpenNode,
 }: GraphBoardProps) {
   const { positions, moveNode, dropNode, reset } = useGraphBoardPositions();
@@ -130,7 +130,7 @@ export function GraphBoard({
                 />
               ) : node.id === SKIDMARKS_NODE_ID ? (
                 <SkidmarksNodeCard
-                  project={skidmarksActiveProject}
+                  state={skidmarksState}
                   onOpen={() => onOpenNode(node.id)}
                 />
               ) : (

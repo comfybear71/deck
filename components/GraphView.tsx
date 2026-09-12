@@ -10,7 +10,7 @@ import propfolioDataRaw from "@/data/propfolio.json";
 import { useIsLargeScreen } from "@/hooks/useIsLargeScreen";
 import { useDialModes } from "@/hooks/useDialModes";
 import { useSpendWindow } from "@/hooks/useSpendWindow";
-import { useSkidmarksProjects } from "@/hooks/useSkidmarksProjects";
+import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
 import { GraphNodeCard } from "./GraphNodeCard";
 import { GraphNodeSheet } from "./GraphNodeSheet";
 import { BudjuNodeCard } from "./BudjuNodeCard";
@@ -54,11 +54,7 @@ export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate
   const isLargeScreen = useIsLargeScreen();
   const { modes, setMode } = useDialModes();
   const { windowDays, setWindowDays } = useSpendWindow();
-  const { projects: skidmarksProjects, activeProjectId: skidmarksActiveProjectId } =
-    useSkidmarksProjects();
-  const skidmarksActiveProject = skidmarksProjects.find(
-    (p) => p.id === skidmarksActiveProjectId
-  );
+  const skidmarksState = useSkidmarksStudio();
   const now = useMemo(() => new Date(referenceDate), [referenceDate]);
 
   // Hub-kind nodes (just "Deck / The Tab") aren't rendered as a separate
@@ -148,7 +144,7 @@ export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate
             nodes={nodes}
             budjuData={budjuData}
             propfolioData={propfolioData}
-            skidmarksActiveProject={skidmarksActiveProject}
+            skidmarksState={skidmarksState}
             onOpenNode={setOpenNodeId}
           />
         ) : (
@@ -171,7 +167,7 @@ export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate
                     />
                   ) : node.id === SKIDMARKS_NODE_ID ? (
                     <SkidmarksNodeCard
-                      project={skidmarksActiveProject}
+                      state={{ bands: skidmarksState.bands, session: skidmarksState.session }}
                       onOpen={() => setOpenNodeId(node.id)}
                     />
                   ) : (

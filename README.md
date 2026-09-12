@@ -61,10 +61,11 @@ total.
   `lib/deck-ask-client.ts` — the Ask-Grok bridge (shared types + prompt
   builder, the server-side store, and the client-side POST helper). See
   "Ask Grok (v0 stub)" below.
-- `lib/skidmarks.ts` / `hooks/useSkidmarksProjects.ts` — the Skidmarks
-  vibe-director project/chat model and its `localStorage` store (pure
-  brief → project builder, `useSyncExternalStore` React binding). See
-  "Skidmarks node (vibe director)" below.
+- `lib/skidmarks.ts` / `hooks/useSkidmarksStudio.ts` — the Skidmarks
+  Music-video studio model (bands/members/looks/MP3/checklist) and its
+  `localStorage` store (pure mock builders, `useSyncExternalStore` React
+  binding, staged checklist timers). See "Skidmarks node (vibe director)"
+  below.
 - `app/api/deck/ask/` — the `POST`/`GET` route backing Ask Grok.
 - `lib/clipboard.ts` — shared "copy to clipboard, with a manual-selection
   fallback" helper used by the action chips and Ask Grok's copy-prompt
@@ -82,9 +83,12 @@ total.
   `BudjuNodeCard` / `BudjuDetailSheet` (the featured Budju node's face +
   detail sheet), `PropfolioNodeCard` / `PropfolioDetailSheet` (the
   Propfolio status node's face + detail sheet), `SkidmarksNodeCard` /
-  `SkidmarksDetailSheet` / `SkidmarksStageChips` (the Skidmarks
-  vibe-director node's face, director-chat detail sheet, and stage-chip
-  row — see "Skidmarks node (vibe director)" below), `ActionChips` /
+  `SkidmarksDetailSheet` (plus `SkidmarksLandingTiles` /
+  `SkidmarksBandPicker` / `SkidmarksMembersModule` / `SkidmarksGeneratePopup`
+  / `SkidmarksMp3Card` / `SkidmarksChecklistChips`) — the Skidmarks
+  vibe-director node's face and its locked, one-scroll Music-video flow
+  through the MP3 step — see "Skidmarks node (vibe director)" below),
+  `ActionChips` /
   `AskGrokPanel` (generic detail-sheet primitives — see "Ask Grok (v0
   stub)" below).
 
@@ -590,101 +594,123 @@ it's light enough that a few small, generic additions to
 **Skidmarks** is a sibling project that eventually does real music-video
 direction (Comfy MCP, Seedance, LTX, ElevenLabs, and friends, plus its own
 `skidmarks.aiglitch.app` Crash Lab). This node is deliberately **not**
-that — it's a **front hand for that convoluted backend**: Stuart types one
-vibe brief, and the node replies with staged, abstract director copy
-(brief locked → cast suggestions → an empty plate board → the stage
-chips), never a dump of Comfy/ffmpeg-flavored internals. First build only
-— see "Explicitly out of scope" below for exactly what isn't wired up
-yet.
+that — it's a **front hand for that convoluted backend**. This build
+replaces the earlier free-text "type a vibe brief, get a scripted
+director-chat thread" version with Stuart's **locked Music-video flow**:
+a concrete, appended-step wizard (pick a project type → choose a band →
+cast its members → attach an MP3) rendered as **one continuous scroll**,
+never a chat thread and never a separate screen. It's locked through the
+MP3 step only — plates, multi-angle coverage, voice, animate, and stitch
+are explicitly out of scope for now (see "Explicitly out of scope" below).
 
-- **Node face** (`components/SkidmarksNodeCard.tsx`) — a warm rose/pink
-  identity treatment (border, gradient wash, glow, ♥ avatar; distinct from
-  Budju's violet and Propfolio's emerald/teal, but still reading as the ♥
-  Make lane it's mapped to) instead of the generic `GraphNodeCard`. Shows
-  "No project yet — tap to start directing" until a project exists, then
-  the active project's brief (truncated) plus a small "Directing ·
-  \<stage\>" chip.
-- Tapping it opens **`components/SkidmarksDetailSheet.tsx`** — a scrolling
-  director-chat thread (message bubbles, not a form) plus a composer
-  pinned to the bottom of the sheet:
-  - **Empty state**: no project yet — just the composer and a one-line
-    explanation of what typing a brief does.
-  - **New project**: typing a vibe brief (e.g. "desert band music video,
-    Hole Jo on sax, dune buggy driving shots at dusk") and tapping **Start
-    directing** calls `createSkidmarksProject` (`lib/skidmarks.ts`), which
-    builds a whole project — cast stubs, empty plate slots, and a
-    five-message thread — from the brief text alone, then makes it the
-    active project. The just-created project's messages reveal one at a
-    time (a short delay per message, `SkidmarksDetailSheet`'s
-    `revealNext`) so the thread reads as the director actually replying,
-    not a wall of text dumped at once; reopening an *existing* project (a
-    fresh sheet mount, or picking one from "Earlier projects") shows its
-    whole thread immediately instead of replaying the reveal.
-  - **The scripted thread** (`buildProjectFromBrief` in `lib/skidmarks.ts`)
-    is, in order: the brief itself (as the user's own chat bubble); a
-    "Brief locked — ⟨brief⟩. Starting casting." line; a **cast-cards**
-    message with a small grid of placeholder cast holds (`Frontperson`
-    always, plus whichever instrument/role keywords the brief mentions —
-    `sax` → "Sax lead", `guitar` → "Guitar", `vocal`/`sing` → "Vocals",
-    etc., a fixed keyword table in `castRolesFromBrief`, not real NLP); a
-    **plate-board** message with four empty, dashed timeline slots ("Wide
-    establishing", "Performance close-up", "Location B-roll",
-    "Transition / cutaway" — always the same four, always empty, nothing
-    shot); and a final **stage-chips** message showing the
-    `SkidmarksStageChips` row (`Cast · Plates · Multi-angle · Voice ·
-    Animate · Stitch`) with `plates` highlighted as the current stage —
-    cast suggestions are already out, so the "next" step reads as filling
-    the (still-empty) plate board. All of it is templated from the brief
-    text alone; the same brief always produces the same stub project.
-  - **Earlier projects**: once more than one project exists in this
-    browser's history, a small pill row above the composer lets Stuart
-    reopen an older brief's thread (`setActiveSkidmarksProject`) without
-    losing the current one — projects aren't deleted, just capped to the
-    8 most recent (`PROJECT_HISTORY_LIMIT` in `lib/skidmarks.ts`).
-  - **Ask Grok** (reused, unchanged, from `components/AskGrokPanel.tsx`)
-    — an opt-in handoff chip that packages the active project's brief,
-    stage, and cast/plate counts as its `statusSnapshot`, so a queued ask
-    carries the same context Stuart saw when he sent it. Only shows once
-    a project exists.
+- **Node face** (`components/SkidmarksNodeCard.tsx`) — the same warm
+  rose/pink identity treatment as before (border, gradient wash, glow, ♥
+  avatar) instead of the generic `GraphNodeCard`. Shows "No project yet —
+  tap to start directing" until the flow's been touched, then a terse
+  one-line glance from `skidmarksGlance` (`lib/skidmarks.ts`): "Choosing a
+  band…", "Directing · \<band name\>", or "\<band name\> · ready" once
+  every MP3 checklist item has ticked.
+- Tapping it opens **`components/SkidmarksDetailSheet.tsx`**, which
+  appends each step's section directly underneath the previous one in one
+  scrollable sheet:
+  1. **Landing** — `SkidmarksLandingTiles`: a "Start a project" row of
+     three compact tiles, **Music video · Skidmarks · Sunnybank**
+     (`SKIDMARKS_PROJECT_KINDS` in `lib/skidmarks.ts`). Only **Music
+     video** is wired (`enabled: true`); the other two render for visual
+     completeness per the locked mockup but are inert (disabled, dimmed,
+     `title="Coming soon"`) — this build doesn't implement either of
+     those flows.
+  2. **Choose a band** — tapping Music video appends `SkidmarksBandPicker`:
+     a horizontal scroll of square **album-cover** tiles (never member
+     faces, per the locked mockup's product rule) — "New" (+) first, then
+     every known band. Two are hand-seeded (`SEED_BANDS`): **Jack Ash**
+     ("Dirt roads & bad decisions") and **Solar Rebel** ("Ignite the
+     static"). Each existing band's tile has a small pencil/camera
+     corner glyph; tapping it calls `cycleSkidmarksBandCover`, which mints
+     a new deterministic gradient stand-in — there's no real image
+     upload/generation behind it. Cover art itself is always a CSS
+     gradient (`coverGradientClass`, keyed off a `coverSeed`), not a real
+     photo or render.
+  3. **Members module** — selecting a band (or tapping "New", which mints
+     the locked mockup's exact example band via `buildNewMockBand`: *Grok
+     Bot & the destroyers*, with Rock Grok — role "Solo", one look already
+     generated — and Stew Balls, no look yet) appends
+     `SkidmarksMembersModule`: one shared pink-bordered box with the band
+     name once at top, then a row per member (left: avatar — a look
+     thumbnail if one's been generated, else a plain emoji glyph; right:
+     name + optional role). Tapping a member's row opens the generate
+     popup. A **"+ Add member"** pill sits *outside* the box, under-right
+     — never inside it — and cycles a small pool of mock rockstar names
+     (`ADD_MEMBER_POOL`) up to `MAX_MEMBERS_PER_BAND` (3).
+  4. **Generate popup** (`SkidmarksGeneratePopup`) — a simple centered
+     modal, no side chrome: that member's generated "looks" so far scroll
+     horizontally across the top (three empty dashed slots before the
+     first generate, real look swatches after), then a prompt textarea, a
+     **Photoreal 60–100%** slider (default 80%), and Generate/Cancel.
+     Generate has a short (700ms) fake "rendering" delay before
+     `buildMockLook` mints a deterministic color-swatch stand-in
+     (`lookGradientClass`, keyed off a random seed) — there is no real
+     image model call here.
+  5. **MP3 audio** — appended right alongside the members module (same
+     width/left-right alignment as its bordered box): `SkidmarksMp3Card`.
+     Before anything's attached, a dashed "Attach MP3" box with a real
+     native file picker (`accept=".mp3,audio/mpeg"` — **no music is ever
+     created here**, only an existing file attached). Once a file's
+     picked: a real `<audio>` element (via `URL.createObjectURL`, session-
+     only — a `File` can't round-trip through `localStorage`, so a page
+     reload loses playback, though the filename/duration/checklist
+     metadata persists) drives a real play/pause and a real probed
+     duration; the waveform itself is decorative (`waveformBars`,
+     deterministic off the filename — no real audio analysis).
+  6. **Checklist chips** (`SkidmarksChecklistChips`) — three always-
+     present, equal-width chips under the MP3 card: **Lyrics · Timing ·
+     Ready**. All start grey/pending; attaching a file kicks off staged
+     timers (`SKIDMARKS_CHECKLIST_DELAY_MS` in `lib/skidmarks.ts` —
+     Timing fastest, then Lyrics, then Ready once both are in) that flip
+     each to green, simulating a background "sniff" (lyrics reading as a
+     speech-to-text-style pass, timing as just the file's own length).
+     No lyrics panel, no paste-lyrics box, no manual vocal-start pin —
+     this is the entire surface for that.
+  - A short, always-visible disclaimer line closes the sheet: bands,
+    looks, and the checklist are mocked for this build; no real Comfy
+    MCP / Seedance / LTX / ElevenLabs call happens from here, and plates +
+    everything after MP3 come later.
   - **Make lane dial** — the same small dial mirror the generic
     `GraphNodeSheet` shows for any suit-mapped node (Skidmarks is mapped
-    to ♥ Make, same as before this feature): pausing it here pauses it
-    everywhere, including the cost deep-dive's vendor table.
-  - A short, always-visible disclaimer line closes the sheet: this is the
-    front end only, no Comfy MCP / Seedance / LTX / ElevenLabs calls
-    happen from here, and it doesn't touch `skidmarks.aiglitch.app`'s
-    Crash Lab — every reply above is scripted from the brief text, not a
-    real render.
-- **Data shape** (`lib/skidmarks.ts`): `SkidmarksProject` (`id`, `brief`,
-  `createdAt`, `stage`, `cast: SkidmarksCastStub[]`,
-  `plates: SkidmarksPlateSlot[]`, `messages: SkidmarksMessage[]`) and
-  `SkidmarksState` (`projects` most-recent-first, `activeProjectId`).
-  `SkidmarksMessage.kind` (`"text" | "cast-cards" | "plate-board" |
-  "stage-chips"`) drives which extra payload is attached, and
-  `SkidmarksDetailSheet` switches on it to render the right bubble/card/
-  chip-row shape.
-- **Persistence**: `localStorage` (key `the-tab:skidmarks-projects`),
+    to ♥ Make): pausing it here pauses it everywhere, including the cost
+    deep-dive's vendor table.
+- **Data shape** (`lib/skidmarks.ts`): `SkidmarksBand` (`id`, `name`,
+  `tagline`, `coverSeed`, `editIcon`, `members: SkidmarksMember[]`);
+  `SkidmarksMember` (`id`, `name`, optional `role`, `emoji`,
+  `looks: SkidmarksLook[]`); `SkidmarksLook` (`id`, `seed`, `prompt`,
+  `photoreal`, `createdAt`); `SkidmarksMp3Attachment` (`fileName`,
+  `durationSec`, `attachedAt`, `checklist: Record<SkidmarksChecklistKey,
+  boolean>`); and `SkidmarksState` (`bands`, `session:
+  { projectKind, bandId, mp3 }`).
+- **Persistence**: `localStorage` (key `the-tab:skidmarks-studio`),
   mirroring the same in-memory-cache-plus-`useSyncExternalStore` shape as
   `lib/control-plane.ts` / `lib/graphLayout.ts` (see
-  `hooks/useSkidmarksProjects.ts`). This is per-browser, invented-on-the-
-  spot content typed by Stuart, not hand-authored seed data, so
-  `localStorage` fits better here than a new `data/skidmarks.json` file —
-  there's nothing to seed ahead of time, unlike Budju/Propfolio's glances.
-  A fresh browser (or private mode) always starts from the empty state;
-  nothing here is shared across devices.
+  `hooks/useSkidmarksStudio.ts`, which also owns the checklist's staged
+  `setTimeout`s, cleared on unmount). Bands (seed + any "New" ones created
+  this browser, capped at `BAND_HISTORY_LIMIT`) and wizard progress
+  persist; the attached audio file itself does not (see above). A fresh
+  browser (or private mode) always starts from the empty state; nothing
+  here is shared across devices.
 - `GraphView` special-cases `SKIDMARKS_NODE_ID` (`lib/constants.ts`) to
   render `SkidmarksNodeCard`/`SkidmarksDetailSheet` instead of the generic
   `GraphNodeCard`/`GraphNodeSheet`, same pattern as Budju/Propfolio; the
-  GraphBoard (≥768px) path gets the same swap, reading the active
-  project off the same `useSkidmarksProjects` store `GraphView` reads (one
-  hook call, passed down as a prop, not a second independent subscription
+  GraphBoard (≥768px) path gets the same swap, reading the studio state
+  off the same `useSkidmarksStudio` store `GraphView` reads (one hook
+  call, passed down as a prop, not a second independent subscription
   duplicating state).
-- **Explicitly out of scope for this build**: any real Comfy MCP,
-  Seedance, LTX, or ElevenLabs call; an actual rendered music video; and
+- **Explicitly out of scope for this build**: plates, multi-angle
+  coverage, voice, animate, and stitch (the flow stops dead after the MP3
+  checklist); any real Comfy MCP, Seedance, LTX, or ElevenLabs call; any
+  real image generation for a "look" or real speech-to-text for lyrics;
+  creating/editing music (MP3 attach is existing-file-only); and
   replacing `skidmarks.aiglitch.app`'s own Crash Lab. Also out of scope:
-  editing/deleting a project's brief after the fact, re-running a stage,
-  and any real casting/plate/voice/animation data — every card and slot
-  on screen is a stub, and the copy says so.
+  the "Skidmarks" and "Sunnybank" landing tiles (rendered, inert), and
+  editing a band's name or a member's name/role after creation.
 
 ### Ask Grok + action chips (v0 stub)
 
