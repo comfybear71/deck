@@ -127,6 +127,23 @@ function isTranscriptionProvider(value: unknown): value is SkidmarksTranscriptio
   return value === "elevenlabs" || value === "openai";
 }
 
+/** Human-readable name for whichever backend actually answered — falls
+ * back to naming this build's primary provider (ElevenLabs Scribe) if
+ * `provider` is `undefined` (an older/unexpected response, or a result
+ * that never resolved a provider at all), rather than showing nothing.
+ * Shared by `lib/skidmarks.ts` (the `"sparse"` outcome's
+ * `transcriptionError` text — see that module's `applySkidmarksTranscriptionResult`
+ * doc comment for why naming the provider there specifically matters:
+ * a live sparse-coverage report's caption named no provider at all,
+ * only "Showing the energy heuristic instead", leaving Stuart unable to
+ * tell ElevenLabs from Whisper from the UI alone) and
+ * `SkidmarksClipTimeline` (the top-line "Real transcription…" caption). */
+export function transcriptionProviderLabel(
+  provider: SkidmarksTranscriptionProvider | undefined
+): string {
+  return provider === "openai" ? "OpenAI Whisper" : "ElevenLabs Scribe";
+}
+
 function isPlausibleWord(value: unknown): value is SkidmarksTranscribedWord {
   if (!value || typeof value !== "object") return false;
   const w = value as Record<string, unknown>;

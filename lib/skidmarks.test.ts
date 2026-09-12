@@ -71,6 +71,11 @@ describe("applySkidmarksTranscriptionResult", () => {
     expect(mp3?.words).toHaveLength(scattered.length);
     expect(mp3?.transcriptionError).toBeTruthy();
     expect(mp3?.transcriptionProvider).toBe("openai");
+    // Names the actual provider that ran \u2014 the live bug report's
+    // caption ("Transcription returned 28 words...") named no provider
+    // at all, so Stuart couldn't tell ElevenLabs from Whisper from the
+    // UI. See lib/transcription.ts's `transcriptionProviderLabel`.
+    expect(mp3?.transcriptionError).toContain("OpenAI Whisper");
 
     // Never fake-green: Lyrics reads "analyzing", not "done", while the
     // heuristic is still in flight (`analysisStatus === "analyzing"`) —
@@ -106,6 +111,7 @@ describe("applySkidmarksTranscriptionResult", () => {
     // Still showing the real heuristic output, untouched.
     expect(mp3?.segmentsSource).toBe("analysis");
     expect(mp3?.transcriptionStatus).toBe("sparse");
+    expect(mp3?.transcriptionError).toContain("ElevenLabs Scribe");
   });
 
   it("trusts and promotes a real transcription result with substantial vocal coverage", () => {
