@@ -72,6 +72,10 @@ export interface SkidmarksMember {
   role?: string;
   /** Placeholder avatar glyph until a look is generated. */
   emoji: string;
+  /** A real photo Stuart picked for this member (data URL, resized client-side —
+   * see `readImageFileAsDataUrl`). Takes priority over both `emoji` and any
+   * generated look in the avatar — it's his actual picture, not a mock. */
+  avatarImage?: string;
   looks: SkidmarksLook[];
 }
 
@@ -79,8 +83,13 @@ export interface SkidmarksBand {
   id: string;
   name: string;
   tagline: string;
-  /** Drives a deterministic album-cover gradient — see `coverGradientClass`. */
+  /** Drives a deterministic album-cover gradient — see `coverGradientClass`.
+   * Only used while `coverImage` is unset. */
   coverSeed: number;
+  /** A real cover image Stuart picked for this band (data URL, resized
+   * client-side — see `readImageFileAsDataUrl`). Takes priority over the
+   * mock gradient in the band tile once set. */
+  coverImage?: string;
   /** Which little "edit cover" glyph this band's tile shows — cosmetic variety, matches the mockup. */
   editIcon: "pencil" | "camera";
   members: SkidmarksMember[];
@@ -232,22 +241,15 @@ export function buildNewMockBand(): SkidmarksBand {
   };
 }
 
-/** Small pool of silly rockstar-ish add-on members — cycled through as
- * Stuart taps "+ Add member", capped at `MAX_MEMBERS_PER_BAND`. */
-const ADD_MEMBER_POOL: { name: string; role?: string; emoji: string }[] = [
-  { name: "Digi Fret", role: "Guitar", emoji: "\u{1F3B8}" },
-  { name: "Ampy Sue", role: "Bass", emoji: "\u{1F3B5}" },
-  { name: "Clatter Jax", role: "Drums", emoji: "\u{1F941}" },
-  { name: "Vox Nova", role: "Vocals", emoji: "\u{1F3A4}" },
-];
-
-export function buildMockMember(existingCount: number): SkidmarksMember {
-  const pick = ADD_MEMBER_POOL[existingCount % ADD_MEMBER_POOL.length];
+/** A freshly cast member — no name, role, or emoji until the user fills
+ * them in (via the generate popup's name field) or generates a look.
+ * "+ Add member" always mints one of these; nothing here invents a
+ * persona (name, role, or icon) on the user's behalf. */
+export function buildBlankMember(): SkidmarksMember {
   return {
     id: generateId("member"),
-    name: pick.name,
-    role: pick.role,
-    emoji: pick.emoji,
+    name: "",
+    emoji: "",
     looks: [],
   };
 }
@@ -391,15 +393,49 @@ export function createSkidmarksBand(): SkidmarksBand {
   return band;
 }
 
-/** Appends a mock member to a band (capped at `MAX_MEMBERS_PER_BAND`) — the "+ Add member" pill. */
+/** Appends a blank member to a band (capped at `MAX_MEMBERS_PER_BAND`) — the "+ Add member" pill. */
 export function addSkidmarksMember(bandId: string): void {
   const current = getSkidmarksSnapshot();
   const band = current.bands.find((b) => b.id === bandId);
   if (!band || band.members.length >= MAX_MEMBERS_PER_BAND) return;
-  const member = buildMockMember(band.members.length);
+  const member = buildBlankMember();
   const bands = current.bands.map((b) =>
     b.id === bandId ? { ...b, members: [...b.members, member] } : b
   );
+  persist({ ...current, bands });
+}
+
+/** Removes a member from a band — the per-row trash/× control. No cap
+ * bookkeeping needed here; freeing a slot just lets "+ Add member"
+ * reappear once the band drops back under `MAX_MEMBERS_PER_BAND`. */
+export function removeSkidmarksMember(bandId: string, memberId: string): void {
+  const current = getSkidmarksSnapshot();
+  const bands = current.bands.map((b) =>
+    b.id === bandId
+      ? { ...b, members: b.members.filter((m) => m.id !== memberId) }
+      : b
+  );
+  persist({ ...current, bands });
+}
+
+/** Sets a member's display name — how a blank "+ Add member" row gets
+ * filled in, via the generate popup's name field. */
+export function renameSkidmarksMember(
+  bandId: string,
+  memberId: string,
+  name: string
+): void {
+  const current = getSkidmarksSnapshot();
+  const trimmed = name.trim();
+  const bands = current.bands.map((b) => {
+    if (b.id !== bandId) return b;
+    return {
+      ...b,
+      members: b.members.map((m) =>
+        m.id === memberId ? { ...m, name: trimmed } : m
+      ),
+    };
+  });
   persist({ ...current, bands });
 }
 
@@ -424,14 +460,35 @@ export function addSkidmarksLook(
   persist({ ...current, bands });
 }
 
-/** The band tile's little pencil/camera "edit cover" glyph — this build
- * has no real image upload, so it just mints a new deterministic cover
- * gradient (see `coverGradientClass`) as a stand-in for "changed the art". */
-export function cycleSkidmarksBandCover(bandId: string): void {
+/** The band tile's pencil/camera "edit cover" glyph — sets a real cover
+ * image Stuart picked from his device (already resized to a data URL by
+ * `readImageFileAsDataUrl`), replacing the mock gradient on that tile. */
+export function setSkidmarksBandCoverImage(bandId: string, dataUrl: string): void {
   const current = getSkidmarksSnapshot();
   const bands = current.bands.map((b) =>
-    b.id === bandId ? { ...b, coverSeed: b.coverSeed + 1 } : b
+    b.id === bandId ? { ...b, coverImage: dataUrl } : b
   );
+  persist({ ...current, bands });
+}
+
+/** Sets a member's real avatar photo (already resized to a data URL by
+ * `readImageFileAsDataUrl`) — picked directly, not generated. Takes
+ * priority over any generated look in `MemberAvatar`. */
+export function setSkidmarksMemberAvatarImage(
+  bandId: string,
+  memberId: string,
+  dataUrl: string
+): void {
+  const current = getSkidmarksSnapshot();
+  const bands = current.bands.map((b) => {
+    if (b.id !== bandId) return b;
+    return {
+      ...b,
+      members: b.members.map((m) =>
+        m.id === memberId ? { ...m, avatarImage: dataUrl } : m
+      ),
+    };
+  });
   persist({ ...current, bands });
 }
 
@@ -499,6 +556,56 @@ const COVER_GRADIENTS = [
 export function coverGradientClass(coverSeed: number): string {
   const idx = Math.abs(Math.floor(coverSeed)) % COVER_GRADIENTS.length;
   return COVER_GRADIENTS[idx];
+}
+
+/** Longest edge a picked cover/avatar image gets downscaled to before
+ * being stored — real photos straight off a phone can be several MB;
+ * this keeps `localStorage` (a few MB quota, shared with everything
+ * else this app persists) from filling up after a handful of picks. */
+const MAX_PICKED_IMAGE_DIMENSION = 640;
+const PICKED_IMAGE_QUALITY = 0.85;
+
+/**
+ * Reads a picked image file (jpg/png/webp), downscales it to fit within
+ * `MAX_PICKED_IMAGE_DIMENSION` on its longest edge, and re-encodes it as
+ * a JPEG data URL — a data URL (unlike a blob URL) round-trips through
+ * `localStorage` just fine, so a real picked cover/avatar survives a
+ * page reload. Used by both the band cover picker and the member avatar
+ * picker. Rejects if the browser can't decode the file (not an image,
+ * or a format it doesn't support).
+ */
+export function readImageFileAsDataUrl(
+  file: File,
+  maxDimension: number = MAX_PICKED_IMAGE_DIMENSION,
+  quality: number = PICKED_IMAGE_QUALITY
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the picked file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Could not decode the picked image."));
+      img.onload = () => {
+        const scale = Math.min(1, maxDimension / Math.max(img.naturalWidth, img.naturalHeight));
+        const width = Math.max(1, Math.round(img.naturalWidth * scale));
+        const height = Math.max(1, Math.round(img.naturalHeight * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          // No canvas 2D context available — fall back to the untouched
+          // original data URL rather than failing the pick outright.
+          resolve(reader.result as string);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 /** Deterministic look-swatch gradient, keyed off a look's `seed` — same

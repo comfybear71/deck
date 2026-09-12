@@ -33,7 +33,10 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     selectBand,
     createBand,
     addMember,
-    editCover,
+    removeMember,
+    renameMember,
+    setBandCoverImage,
+    setMemberAvatarImage,
     addLook,
     attachMp3,
     removeMp3,
@@ -73,6 +76,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const handleGenerate = (prompt: string, photoreal: number) => {
     if (!activeBand || !openMember) return;
     addLook(activeBand.id, openMember.id, buildMockLook(prompt, photoreal));
+  };
+
+  const handleRenameMember = (name: string) => {
+    if (!activeBand || !openMember) return;
+    renameMember(activeBand.id, openMember.id, name);
   };
 
   return (
@@ -143,7 +151,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   activeBandId={session.bandId}
                   onSelectBand={selectBand}
                   onCreateBand={createBand}
-                  onEditCover={editCover}
+                  onSetCoverImage={setBandCoverImage}
                 />
               </div>
             )}
@@ -154,6 +162,10 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   band={activeBand}
                   onOpenMember={setOpenMemberId}
                   onAddMember={() => addMember(activeBand.id)}
+                  onRemoveMember={(memberId) => removeMember(activeBand.id, memberId)}
+                  onSetMemberAvatarImage={(memberId, dataUrl) =>
+                    setMemberAvatarImage(activeBand.id, memberId, dataUrl)
+                  }
                 />
               </div>
             )}
@@ -190,6 +202,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
         <SkidmarksGeneratePopup
           member={openMember}
           onGenerate={handleGenerate}
+          onRename={handleRenameMember}
           onClose={() => setOpenMemberId(null)}
         />
       )}

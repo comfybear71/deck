@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { lookGradientClass, type SkidmarksLook, type SkidmarksMember } from "@/lib/skidmarks";
 
 interface SkidmarksGeneratePopupProps {
   member: SkidmarksMember;
   onGenerate: (prompt: string, photoreal: number) => void;
+  onRename: (name: string) => void;
   onClose: () => void;
 }
 
@@ -52,30 +53,46 @@ function EmptySlot() {
 /**
  * Generate-artist popup — a simple centered modal, no side chrome. Looks
  * generated so far for *this one member* scroll horizontally across the
- * top (empty dashed slots before the first generate); below that, just a
- * prompt field, a Photoreal 60–100% slider, and Generate/Cancel. Nothing
- * here calls a real image model — `buildMockLook` (via `onGenerate`)
- * mints a deterministic color-swatch stand-in.
+ * top (empty dashed slots before the first generate); below that, a name
+ * field (this is how a blank "+ Add member" row gets a real name — see
+ * `onRename`/`renameSkidmarksMember`), a prompt field, a Photoreal
+ * 60–100% slider, and Generate/Cancel. Nothing here calls a real image
+ * model — `buildMockLook` (via `onGenerate`) mints a deterministic
+ * color-swatch stand-in. The name commits on blur, Cancel/X/Escape, and
+ * right before Generate — so typing a name then generating (without ever
+ * blurring the field) still saves it.
  */
 export function SkidmarksGeneratePopup({
   member,
   onGenerate,
+  onRename,
   onClose,
 }: SkidmarksGeneratePopupProps) {
+  const [name, setName] = useState(member.name);
   const [prompt, setPrompt] = useState("");
   const [photoreal, setPhotoreal] = useState(DEFAULT_PHOTOREAL);
   const [generating, setGenerating] = useState(false);
 
+  const commitName = useCallback(() => {
+    if (name.trim() !== member.name) onRename(name);
+  }, [name, member.name, onRename]);
+
+  const handleClose = useCallback(() => {
+    commitName();
+    onClose();
+  }, [commitName, onClose]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") handleClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [handleClose]);
 
   const handleGenerate = () => {
     if (generating) return;
+    commitName();
     setGenerating(true);
     setTimeout(() => {
       onGenerate(prompt, photoreal);
@@ -85,28 +102,29 @@ export function SkidmarksGeneratePopup({
   };
 
   const hasLooks = member.looks.length > 0;
+  const displayName = member.name.trim() || "New member";
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <button
         type="button"
         aria-label="Close"
-        onClick={onClose}
+        onClick={handleClose}
         className="absolute inset-0 bg-black/75 backdrop-blur-sm"
       />
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={`Generate a look for ${member.name}`}
+        aria-label={`Generate a look for ${displayName}`}
         className="relative z-10 w-full max-w-sm rounded-3xl border border-rose-400/25 bg-zinc-950 p-4 shadow-2xl animate-[sheet-in_0.18s_ease-out]"
       >
         <div className="mb-3 flex items-center justify-between gap-2">
           <h3 className="truncate text-sm font-semibold text-white">
-            Generate {"\u00b7"} {member.name}
+            Generate {"\u00b7"} {displayName}
           </h3>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             aria-label="Close"
             className="shrink-0 rounded-full p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
           >
@@ -130,6 +148,21 @@ export function SkidmarksGeneratePopup({
         </div>
 
         <label className="mt-4 block text-[11px] font-medium uppercase tracking-wide text-white/40">
+          Name
+        </label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={commitName}
+          placeholder="Name this member"
+          maxLength={40}
+          autoFocus={!member.name.trim()}
+          aria-label="Member name"
+          className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
+        />
+
+        <label className="mt-3.5 block text-[11px] font-medium uppercase tracking-wide text-white/40">
           Prompt
         </label>
         <textarea
@@ -138,7 +171,7 @@ export function SkidmarksGeneratePopup({
           placeholder="e.g. chrome headphones, stage lights, leather jacket"
           rows={2}
           maxLength={240}
-          autoFocus
+          autoFocus={Boolean(member.name.trim())}
           aria-label="Look prompt"
           className="mt-1.5 w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
         />
@@ -163,7 +196,7 @@ export function SkidmarksGeneratePopup({
         <div className="mt-4 flex items-center gap-2.5">
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="flex-1 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-sm font-medium text-white/70 transition-colors hover:bg-white/[0.07] hover:text-white"
           >
             Cancel

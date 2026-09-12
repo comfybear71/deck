@@ -7,11 +7,14 @@ import {
   attachSkidmarksMp3,
   clearSkidmarksMp3,
   createSkidmarksBand,
-  cycleSkidmarksBandCover,
   getSkidmarksSnapshot,
   markSkidmarksChecklistDone,
+  removeSkidmarksMember,
+  renameSkidmarksMember,
   selectSkidmarksBand,
   selectSkidmarksProjectKind,
+  setSkidmarksBandCoverImage,
+  setSkidmarksMemberAvatarImage,
   setSkidmarksMp3Duration,
   SKIDMARKS_CHECKLIST_DELAY_MS,
   SKIDMARKS_CHECKLIST_ORDER,
@@ -63,7 +66,24 @@ export function useSkidmarksStudio() {
   const selectBand = useCallback((bandId: string) => selectSkidmarksBand(bandId), []);
   const createBand = useCallback(() => createSkidmarksBand(), []);
   const addMember = useCallback((bandId: string) => addSkidmarksMember(bandId), []);
-  const editCover = useCallback((bandId: string) => cycleSkidmarksBandCover(bandId), []);
+  const removeMember = useCallback(
+    (bandId: string, memberId: string) => removeSkidmarksMember(bandId, memberId),
+    []
+  );
+  const renameMember = useCallback(
+    (bandId: string, memberId: string, name: string) =>
+      renameSkidmarksMember(bandId, memberId, name),
+    []
+  );
+  const setBandCoverImage = useCallback(
+    (bandId: string, dataUrl: string) => setSkidmarksBandCoverImage(bandId, dataUrl),
+    []
+  );
+  const setMemberAvatarImage = useCallback(
+    (bandId: string, memberId: string, dataUrl: string) =>
+      setSkidmarksMemberAvatarImage(bandId, memberId, dataUrl),
+    []
+  );
   const addLook = useCallback(
     (bandId: string, memberId: string, look: SkidmarksLook) =>
       addSkidmarksLook(bandId, memberId, look),
@@ -104,7 +124,10 @@ export function useSkidmarksStudio() {
     selectBand,
     createBand,
     addMember,
-    editCover,
+    removeMember,
+    renameMember,
+    setBandCoverImage,
+    setMemberAvatarImage,
     addLook,
     attachMp3,
     removeMp3,
