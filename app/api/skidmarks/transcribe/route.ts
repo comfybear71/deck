@@ -145,6 +145,46 @@ import { NextResponse } from "next/server";
  * `lib/audioAnalysis.ts`'s energy heuristic honestly instead of implying
  * a real attempt errored out.
  *
+ * **A key that's set on Vercel doesn't mean this function can see it
+ * yet.** Stuart confirmed via a Vercel dashboard screenshot that
+ * `ELEVENLABS_API_KEY` exists under Production and Preview, added
+ * ~40 minutes before a live request still came back naming a provider
+ * this build no longer even calls — consistent with Vercel's own
+ * documented behavior: "Changes to environment variables are not
+ * applied to previous deployments, they only apply to new deployments.
+ * You must redeploy your project to update the value of any variables
+ * you change" (https://vercel.com/docs/environment-variables/managing-environment-variables).
+ * A Production Function that was already running (or was last built)
+ * before the var was added will not see it until a new deployment
+ * happens — adding the var alone does not restart or rebuild anything.
+ * The `missing_api_key` message above says so explicitly now. **How to
+ * tell which failure mode is live, from the caption alone, without
+ * touching Vercel's dashboard**: if the caption still reads the
+ * `missing_api_key` text above, the deployed function genuinely doesn't
+ * see the key yet — redeploy. If instead it reports a real ElevenLabs
+ * error (an `auth_error`, `rate_limited`, etc. — see
+ * `classifyElevenLabsFailure` below), the key **is** visible to the
+ * function — the problem is on ElevenLabs' side (permissions, rotation,
+ * quota), not deployment freshness.
+ *
+ * The **"Needs Attention" badge** Stuart saw next to both
+ * `ELEVENLABS_API_KEY` and `OPENAI_API_KEY` in that same screenshot is,
+ * per Vercel's own Security Dashboard docs
+ * (https://vercel.com/docs/security/security-dashboard), most likely
+ * the "Environment variables not marked Sensitive" check (medium risk:
+ * "Values that can be read back from the dashboard or API after they
+ * are written") — a security best-practice reminder about how the
+ * variable is *stored*, unrelated to whether any given deployment has
+ * picked up its current value. This is inferred from Vercel's
+ * documented checks matching what the screenshot shows (one key's value
+ * still partially visible in the row, the other toggled hidden but
+ * still in a revealable, non-"Sensitive" format) — not confirmed by
+ * opening Stuart's actual Security Dashboard, which isn't accessible
+ * from here. Either way: **do not** mark these Sensitive to "fix" this
+ * bug — that's an orthogonal security hardening step (re-adding the
+ * variable with Sensitive enabled and rotating the previously-readable
+ * value), not the redeploy this specific symptom needs.
+ *
  * This route only ever proxies a request Stuart already initiated by
  * attaching an MP3 in the UI — it doesn't store the audio, doesn't log
  * its contents, and holds nothing in memory beyond the single request/
@@ -408,7 +448,9 @@ export async function POST(request: Request) {
           "word-level transcription is unavailable here. Falling back to the client-side " +
           "energy heuristic. (Stuart's ElevenLabs key is expected to already be on this " +
           "project's Vercel environment under one of those names \u2014 if it's there under a " +
-          "different name, add a one-line alias env var rather than a new key.)",
+          "different name, add a one-line alias env var rather than a new key. If you just " +
+          "added or changed it, Vercel only applies environment variable changes to new " +
+          "deployments \u2014 redeploy the project for this function to see it.)",
         code: "missing_api_key",
       },
       { status: 501 }

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { classifyElevenLabsFailure, extractElevenLabsErrorDetail } from "./route";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { classifyElevenLabsFailure, extractElevenLabsErrorDetail, POST } from "./route";
 
 /**
  * `extractElevenLabsErrorDetail`/`classifyElevenLabsFailure` are this
@@ -154,5 +154,46 @@ describe("classifyElevenLabsFailure", () => {
   it("still classifies correctly off the raw HTTP status alone when there's no parsed detail", () => {
     expect(classifyElevenLabsFailure(401, null)).toEqual({ httpStatus: 401, code: "auth_error" });
     expect(classifyElevenLabsFailure(429, null)).toEqual({ httpStatus: 429, code: "rate_limited" });
+  });
+});
+
+/**
+ * `POST`'s `missing_api_key` path, exercised directly (no ElevenLabs
+ * `fetch` needed — it returns before ever making one). This sandbox's
+ * process actually has a real `ELEVENLABS_API_KEY` set (for this
+ * session's own investigation, see the route's module doc comment) —
+ * `vi.stubEnv` clears both candidate names so this test reflects
+ * Stuart's real "neither name is set" case, not this sandbox's own.
+ *
+ * This is the case the "Needs Attention" / redeploy investigation is
+ * about: if a live caption still shows this exact message after Stuart
+ * added the key on Vercel, the deployed function genuinely doesn't see
+ * it yet (a redeploy issue) — as opposed to a real ElevenLabs error
+ * (which would mean the key *is* visible, and the problem is upstream).
+ * See the module doc comment's "A key that's set on Vercel doesn't mean
+ * this function can see it yet" note.
+ */
+describe("POST (missing_api_key)", () => {
+  beforeEach(() => {
+    vi.stubEnv("ELEVENLABS_API_KEY", "");
+    vi.stubEnv("ELEVEN_LABS_API_KEY", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("names both checked env var names and points at redeploying after an env var change", async () => {
+    const request = new Request("http://localhost/api/skidmarks/transcribe", { method: "POST" });
+    const res = await POST(request);
+    const body = await res.json();
+
+    expect(res.status).toBe(501);
+    expect(body.code).toBe("missing_api_key");
+    expect(body.error).toContain("ELEVENLABS_API_KEY");
+    expect(body.error).toContain("ELEVEN_LABS_API_KEY");
+    // The actual point of this test: the message now tells Stuart to
+    // redeploy if he just added the var, not just that it's missing.
+    expect(body.error.toLowerCase()).toContain("redeploy");
   });
 });

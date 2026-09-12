@@ -1028,6 +1028,68 @@ now (see "Explicitly out of scope" below).
      any file content is even read). If Stuart still sees an ElevenLabs
      failure after this ships, the message itself is the next
      diagnostic step, not a bare "Transcription failed".
+
+     **Fifth report, a Vercel dashboard screenshot, not a new code
+     symptom**: Stuart confirmed `ELEVENLABS_API_KEY` exists on
+     **Production and Preview**, added ~40 minutes before a live request
+     still named a provider (OpenAI Whisper) this build no longer even
+     calls — and both `ELEVENLABS_API_KEY` and `OPENAI_API_KEY` showed a
+     yellow **"Needs Attention"** badge in that screenshot. Two things,
+     both real, neither one requiring (or benefiting from) pasting any
+     key material to diagnose:
+       - **Redeploy after adding/changing an env var — this is
+         documented Vercel behavior, not a guess**: "Changes to
+         environment variables are not applied to previous deployments,
+         they only apply to new deployments. You must redeploy your
+         project to update the value of any variables you change" (
+         [Vercel docs](https://vercel.com/docs/environment-variables/managing-environment-variables)).
+         Adding a var on the dashboard does not restart or rebuild
+         anything by itself — a Production Function that was already
+         running, or was last built before the var existed, keeps not
+         seeing it until a new deployment happens. **How to tell which
+         failure mode is live from the caption alone**, without opening
+         Vercel at all: if the caption still shows the
+         `missing_api_key` text (see `app/api/skidmarks/transcribe/
+         route.ts`'s `POST`, now updated to say so explicitly — "if you
+         just added or changed it, Vercel only applies environment
+         variable changes to new deployments — redeploy the project for
+         this function to see it"), the deployed function genuinely
+         doesn't see the key yet. If instead the caption names a real
+         ElevenLabs error (an `auth_error`, `rate_limited`, etc. — see
+         hypothesis 4 above), the key **is** visible to the function —
+         the problem is on ElevenLabs' side, not deployment freshness.
+       - **The "Needs Attention" badge is most likely a separate,
+         security-focused flag, not a deployment-freshness one** — per
+         [Vercel's Security Dashboard docs](https://vercel.com/docs/security/security-dashboard),
+         the most likely match for "an env var that just got added and
+         is now flagged" is the **"Environment variables not marked
+         Sensitive"** check (medium risk: "Values that can be read back
+         from the dashboard or API after they are written"). This is
+         inferred from Vercel's own documented checks matching what the
+         screenshot showed (one key's value still partially visible in
+         its row, the other toggled hidden but still in a revealable,
+         non-`Sensitive` format) — **not confirmed** by opening Stuart's
+         actual Security Dashboard, which isn't reachable from this
+         environment. Either way, marking a variable `Sensitive` is an
+         orthogonal security-hardening step (remove and re-add it with
+         `Sensitive` enabled, then rotate the previously-readable value
+         — see that doc) — it is **not** the fix for a stale-deployment
+         caption, and this PR does not touch either key's Sensitive
+         setting.
+     **Whisper-specific asks from this report are already moot**: this
+     report's original framing (write in terms of "when EL fails and
+     Whisper is used, surface the EL reason" / "don't let sparse Whisper
+     hide an EL failure") predates, in this report's own words, a
+     scenario this build can no longer produce — the fourth report above
+     already removed Whisper from this route entirely, per Stuart's
+     explicit product call. There is no Whisper path left for an
+     ElevenLabs failure to hide behind; every ElevenLabs failure
+     (including one caused by a stale deployment not seeing the key at
+     all) now reaches the caption directly. What this report added that
+     genuinely wasn't covered yet: the redeploy-required behavior, now
+     both documented here and stated in the `missing_api_key` message
+     itself (`app/api/skidmarks/transcribe/route.test.ts` covers that
+     message's exact wording).
   7. **Real(ish) vocal/instrumental analysis, kept as a fallback**
      (`lib/audioAnalysis.ts`, `analyzeVocalActivity`) — runs **in
      parallel** with step 6 above, unconditionally, the moment a file's
