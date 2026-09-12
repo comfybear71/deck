@@ -8,24 +8,25 @@
  * a real speech-to-text API using a server-side API key and returns real
  * per-word start/end times.
  *
- * **Provider pivot**: the server route now calls **ElevenLabs Scribe**
- * (`scribe_v2`, keyed via `ELEVENLABS_API_KEY`) first — ElevenLabs
- * markets Scribe explicitly for transcribing song lyrics, unlike
- * Whisper, which is speech-oriented. That distinction is exactly what a
- * *later* live bug report on this same "Talking To Concrete" track
- * traced back to: Whisper returned real, non-empty `words` for the
- * whole song, but so sparse/scattered across the *sung* sections that
- * `segmentsFromWords`'s gap-based merge couldn't find any vocal run
- * worth keeping — the timeline came back green Lyrics + a single
- * **Instrumental 0:00–4:16** segment. OpenAI Whisper (`OPENAI_API_KEY`)
- * remains wired as an optional fallback the server route reaches for if
- * `ELEVENLABS_API_KEY` isn't configured, or if the ElevenLabs request
- * itself fails (network/upstream/timeout/empty-transcript) — see that
- * route's doc comment for the exact fallback conditions. This module is
- * otherwise provider-agnostic: it just POSTs to `/api/skidmarks/
- * transcribe` and reads back `{ words, durationSec, provider }`: which
- * provider actually answered, so `SkidmarksClipTimeline`'s caption can
- * name it honestly instead of hardcoding one.
+ * **ElevenLabs Scribe only — no OpenAI Whisper fallback.** The server
+ * route (`app/api/skidmarks/transcribe/route.ts`) calls **ElevenLabs
+ * Scribe** (`scribe_v2`, keyed via `ELEVENLABS_API_KEY`/
+ * `ELEVEN_LABS_API_KEY`) and nothing else — ElevenLabs markets Scribe
+ * explicitly for transcribing song lyrics, unlike Whisper, which is
+ * speech-oriented and was removed from this route entirely (Stuart's
+ * explicit product call, after a live bug report where a "successful"
+ * Whisper fallback — real words, but too sparse to be useful — silently
+ * hid a real ElevenLabs failure from him; see the route's doc comment
+ * for the investigation and evidence). If Scribe isn't configured, or
+ * its request fails for any reason (network/upstream/timeout/
+ * empty-transcript), this module reports that failure honestly and
+ * `lib/skidmarks.ts` falls back to the client-side energy heuristic —
+ * there is no second STT provider to silently swap in. `transcribeAudio`
+ * still reads back `{ words, durationSec, provider }` from the route
+ * (`provider` is always `"elevenlabs"` on a real success today), kept as
+ * a named field rather than hardcoded in the UI so a caption never has
+ * to guess which backend answered, and so this shape doesn't need to
+ * change if a provider is ever reintroduced.
  *
  * **This provider swap alone doesn't fully fix the bug** — a "the STT
  * vendor markets song support" claim isn't a guarantee, and any
@@ -85,12 +86,18 @@ export interface SkidmarksTranscribedWord {
   endSec: number;
 }
 
-/** Which backend actually answered a given transcription request — see
- * `app/api/skidmarks/transcribe/route.ts`'s doc comment for the
- * ElevenLabs-first, Whisper-fallback order. Surfaced so
- * `SkidmarksClipTimeline`'s caption can name the real provider instead
- * of hardcoding one. */
-export type SkidmarksTranscriptionProvider = "elevenlabs" | "openai";
+/** Which backend answered a given transcription request. As of this
+ * build there is exactly one — ElevenLabs Scribe — since OpenAI Whisper
+ * was removed entirely (see this module's doc comment and
+ * `app/api/skidmarks/transcribe/route.ts`'s for why). Kept as a named
+ * type (rather than inlining the string literal at every call site) so
+ * `SkidmarksClipTimeline`'s caption still names the provider explicitly
+ * instead of hardcoding prose, and so reintroducing a second provider
+ * later is a type-level change, not a string-literal hunt. A legacy
+ * persisted session from before this change may still have `"openai"`
+ * on disk (`lib/skidmarks.ts`'s `normalizeState` treats that the same as
+ * `undefined` — see `transcriptionProviderLabel` below). */
+export type SkidmarksTranscriptionProvider = "elevenlabs";
 
 export interface TranscriptionSuccess {
   words: SkidmarksTranscribedWord[];
@@ -124,24 +131,29 @@ interface TranscribeRouteSuccessBody {
 }
 
 function isTranscriptionProvider(value: unknown): value is SkidmarksTranscriptionProvider {
-  return value === "elevenlabs" || value === "openai";
+  return value === "elevenlabs";
 }
 
-/** Human-readable name for whichever backend actually answered — falls
- * back to naming this build's primary provider (ElevenLabs Scribe) if
- * `provider` is `undefined` (an older/unexpected response, or a result
- * that never resolved a provider at all), rather than showing nothing.
+/** Human-readable name for whichever backend answered. With Whisper
+ * removed, this always resolves to `"ElevenLabs Scribe"` today —
+ * `provider` stays an explicit parameter (rather than a hardcoded
+ * string in the caller) so a legacy/unexpected value (`undefined` from
+ * an older response, or a stale persisted `"openai"` from before this
+ * change — see `SkidmarksTranscriptionProvider`'s doc comment) still
+ * resolves to something honest instead of the caller having to guess.
  * Shared by `lib/skidmarks.ts` (the `"sparse"` outcome's
- * `transcriptionError` text — see that module's `applySkidmarksTranscriptionResult`
- * doc comment for why naming the provider there specifically matters:
- * a live sparse-coverage report's caption named no provider at all,
- * only "Showing the energy heuristic instead", leaving Stuart unable to
- * tell ElevenLabs from Whisper from the UI alone) and
- * `SkidmarksClipTimeline` (the top-line "Real transcription…" caption). */
+ * `transcriptionError` text — see that module's
+ * `applySkidmarksTranscriptionResult` doc comment for why naming the
+ * provider there specifically matters) and `SkidmarksClipTimeline` (the
+ * top-line "Real transcription…" caption). */
 export function transcriptionProviderLabel(
   provider: SkidmarksTranscriptionProvider | undefined
 ): string {
-  return provider === "openai" ? "OpenAI Whisper" : "ElevenLabs Scribe";
+  // Both branches resolve to the same label today (there's only one
+  // provider), but `provider` stays a real parameter rather than being
+  // dropped, so a second provider added later is a one-line change here
+  // instead of a signature change at every call site.
+  return provider === "elevenlabs" || provider === undefined ? "ElevenLabs Scribe" : "ElevenLabs Scribe";
 }
 
 function isPlausibleWord(value: unknown): value is SkidmarksTranscribedWord {
@@ -176,27 +188,17 @@ function describeUpstream413(attemptedBytes: number): string {
   );
 }
 
-/**
- * POSTs the attached file to the transcription route and normalizes its
- * response into one of the three honest outcomes above. Never throws —
- * a thrown `fetch` (offline, CORS, etc.) is caught and reported the same
- * way as any other real failure.
- *
- * Runs `compressAudioForTranscription` first so a normal full-length
- * song clears Vercel's request body cap (see this module's doc comment
- * for the 413 root cause) instead of being rejected before the server
- * route even runs. Compression is best-effort: if it fails outright (an
- * unsupported browser, a corrupt file) this still tries the original
- * file, matching the pre-fix behavior, rather than giving up without
- * ever attempting a real transcription.
- */
-export async function transcribeAudio(file: File): Promise<TranscriptionOutcome> {
-  const compression = await compressAudioForTranscription(file);
-  if (compression.kind === "too_long") {
-    return { ok: false, unconfigured: false, message: compression.message };
-  }
-  const uploadFile = compression.kind === "compressed" ? compression.file : file;
+/** One upload attempt's outcome, plus whether the server-reported
+ * failure looks like the specific "the audio file itself is the
+ * problem" case (`code: "invalid_audio"` from `app/api/skidmarks/
+ * transcribe/route.ts`'s `classifyElevenLabsFailure`) worth a one-shot
+ * retry with a freshly re-encoded file — see `transcribeAudio` below. */
+interface UploadAttempt {
+  outcome: TranscriptionOutcome;
+  invalidAudio: boolean;
+}
 
+async function uploadForTranscription(uploadFile: File): Promise<UploadAttempt> {
   const form = new FormData();
   form.set("audio", uploadFile, uploadFile.name || "audio.mp3");
 
@@ -205,10 +207,13 @@ export async function transcribeAudio(file: File): Promise<TranscriptionOutcome>
     res = await fetch(TRANSCRIBE_ENDPOINT, { method: "POST", body: form });
   } catch (err) {
     return {
-      ok: false,
-      unconfigured: false,
-      message:
-        err instanceof Error ? err.message : "Network error reaching the transcription API.",
+      outcome: {
+        ok: false,
+        unconfigured: false,
+        message:
+          err instanceof Error ? err.message : "Network error reaching the transcription API.",
+      },
+      invalidAudio: false,
     };
   }
 
@@ -228,22 +233,104 @@ export async function transcribeAudio(file: File): Promise<TranscriptionOutcome>
         ? describeUpstream413(uploadFile.size)
         : `Transcription request failed (HTTP ${res.status}).`;
     return {
-      ok: false,
-      unconfigured: errBody.code === "missing_api_key",
-      message: errBody.error ?? fallbackMessage,
+      outcome: {
+        ok: false,
+        unconfigured: errBody.code === "missing_api_key",
+        message: errBody.error ?? fallbackMessage,
+      },
+      invalidAudio: errBody.code === "invalid_audio",
     };
   }
 
   const okBody = (body ?? {}) as TranscribeRouteSuccessBody;
   const words = Array.isArray(okBody.words) ? okBody.words.filter(isPlausibleWord) : [];
   return {
-    ok: true,
-    result: {
-      words,
-      durationSec: typeof okBody.durationSec === "number" ? okBody.durationSec : null,
-      provider: isTranscriptionProvider(okBody.provider) ? okBody.provider : undefined,
+    outcome: {
+      ok: true,
+      result: {
+        words,
+        durationSec: typeof okBody.durationSec === "number" ? okBody.durationSec : null,
+        provider: isTranscriptionProvider(okBody.provider) ? okBody.provider : undefined,
+      },
     },
+    invalidAudio: false,
   };
+}
+
+/**
+ * POSTs the attached file to the transcription route and normalizes its
+ * response into one of the three honest outcomes above. Never throws —
+ * a thrown `fetch` (offline, CORS, etc.) is caught and reported the same
+ * way as any other real failure.
+ *
+ * Runs `compressAudioForTranscription` first so a normal full-length
+ * song clears Vercel's request body cap (see this module's doc comment
+ * for the 413 root cause) instead of being rejected before the server
+ * route even runs. Compression is best-effort: if it fails outright (an
+ * unsupported browser, a corrupt file) this still tries the original
+ * file, matching the pre-fix behavior, rather than giving up without
+ * ever attempting a real transcription.
+ *
+ * **One-shot re-encode retry on `invalid_audio`** (per Stuart's Gemini
+ * troubleshooting notes' encoding-risk point): if ElevenLabs Scribe
+ * rejects the upload specifically because the *audio itself* looked
+ * invalid/corrupt/an unsupported format
+ * (`app/api/skidmarks/transcribe/route.ts`'s `"invalid_audio"` code —
+ * distinct from a generic request/parameter problem), and the file that
+ * was actually uploaded was still the **unmodified original** (i.e.
+ * `compressAudioForTranscription` skipped re-encoding because the file
+ * was already small enough), this retries exactly once against a
+ * *forced* re-encode of that same original
+ * (`compressAudioForTranscription(file, { force: true })`). Rationale
+ * for this specific, minimal fix rather than a bigger pipeline change:
+ * `compressAudioForTranscription` doesn't patch or reinterpret the
+ * original file's bytes — it fully decodes them via the browser's own
+ * `AudioContext` (which already has to cope with real-world MP3 header/
+ * VBR quirks to play the file at all) and hands the *raw decoded PCM* to
+ * a fresh `lamejs` CBR encode, so the retried upload is a clean,
+ * from-scratch MP3 with none of the original container's own header
+ * quirks — a plausible fix for exactly the class of "corrupt/unusual
+ * MP3 headers" issue Stuart's notes called out, using code this module
+ * already ships rather than a new encoder or format.
+ *
+ * **A WAV (`pcm_s16le`) upload path was considered and rejected** as the
+ * "smallest fix" here specifically because it isn't one: uncompressed
+ * 16-bit PCM is roughly 60–90x larger per second than this module's MP3
+ * tiers (even mono, even at a reduced sample rate) — a WAV encode of a
+ * real ~4 minute song would land far past Vercel's 4.5MB request body
+ * cap (`VERCEL_BODY_LIMIT_BYTES`) at any sample rate worth using for
+ * *singing*, making it infeasible as a general fallback for this app's
+ * actual use case (full song-length uploads), not just a quality
+ * trade-off. If a re-encoded MP3 still fails, this reports the real
+ * ElevenLabs error rather than trying a third format.
+ *
+ * Only retries when the first attempt genuinely sent the original,
+ * un-re-encoded bytes — if `compressAudioForTranscription` already ran
+ * a real re-encode (a large file), retrying with `{ force: true }`
+ * would re-decode+re-encode the exact same source into byte-identical
+ * output and repeat the same failing request for nothing.
+ */
+export async function transcribeAudio(file: File): Promise<TranscriptionOutcome> {
+  const compression = await compressAudioForTranscription(file);
+  if (compression.kind === "too_long") {
+    return { ok: false, unconfigured: false, message: compression.message };
+  }
+  const uploadFile = compression.kind === "compressed" ? compression.file : file;
+
+  const first = await uploadForTranscription(uploadFile);
+  if (!first.invalidAudio || compression.kind === "compressed") {
+    return first.outcome;
+  }
+
+  const reencoded = await compressAudioForTranscription(file, { force: true });
+  if (reencoded.kind !== "compressed") {
+    // Couldn't force a real re-encode either (e.g. an unsupported
+    // browser) — report the original, real failure rather than a
+    // confusing second one about the retry itself.
+    return first.outcome;
+  }
+  const retry = await uploadForTranscription(reencoded.file);
+  return retry.outcome;
 }
 
 /** Gap between the end of one transcribed word and the start of the next

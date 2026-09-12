@@ -324,17 +324,35 @@ function deriveCompressedFileName(originalName: string): string {
   return `${base}.compressed.mp3`;
 }
 
+export interface CompressionOptions {
+  /** Skip the "already small enough, upload untouched" shortcut and run
+   * the full decode → resample → re-encode pass regardless of size.
+   * Added for `lib/transcription.ts`'s one-shot retry when ElevenLabs
+   * Scribe rejects an *unmodified* original file as `invalid_audio` —
+   * see that module's `transcribeAudio` doc comment for why a freshly
+   * `lamejs`-encoded file is a plausible, minimal fix for that specific
+   * failure (a clean, real-encoder-produced CBR MP3 doesn't carry
+   * whatever container/header quirk the original file had), without
+   * standing up a second output format. Defaults to `false` so every
+   * existing call site (skip compression when the file's already
+   * small) is unaffected. */
+  force?: boolean;
+}
+
 /**
  * Shrinks `file` for upload if (and only if) it's large enough that it
- * risks Vercel's `VERCEL_BODY_LIMIT_BYTES` request body cap; otherwise
- * returns it untouched. Never throws — every browser-API failure mode
- * (can't decode, can't render, can't encode) comes back as a `"failed"`
- * outcome so `lib/transcription.ts` can fall back to sending the
- * original file (today's behavior) rather than losing the attempt
- * entirely.
+ * risks Vercel's `VERCEL_BODY_LIMIT_BYTES` request body cap, or
+ * `options.force` is set; otherwise returns it untouched. Never throws —
+ * every browser-API failure mode (can't decode, can't render, can't
+ * encode) comes back as a `"failed"` outcome so `lib/transcription.ts`
+ * can fall back to sending the original file (today's behavior) rather
+ * than losing the attempt entirely.
  */
-export async function compressAudioForTranscription(file: File): Promise<CompressionOutcome> {
-  if (file.size <= DIRECT_UPLOAD_SAFE_BYTES) {
+export async function compressAudioForTranscription(
+  file: File,
+  options: CompressionOptions = {}
+): Promise<CompressionOutcome> {
+  if (!options.force && file.size <= DIRECT_UPLOAD_SAFE_BYTES) {
     return { kind: "unchanged", file };
   }
 

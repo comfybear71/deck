@@ -122,6 +122,24 @@ describe("compressAudioForTranscription", () => {
     const outcome = await compressAudioForTranscription(bigFile);
     expect(outcome.kind).toBe("failed");
   });
+
+  it("with { force: true }, does not take the 'already small enough' shortcut even for a tiny file", async () => {
+    // `lib/transcription.ts`'s invalid_audio retry needs a *real*
+    // re-encode of a file that would otherwise skip compression
+    // entirely — confirm `force` actually bypasses that shortcut (and,
+    // since there's still no AudioContext in this Node test
+    // environment, lands on the same honest decode-failure outcome the
+    // normal too-big path does, not a silent no-op).
+    const tinyFile = new File([new Uint8Array(16)], "tone.mp3", { type: "audio/mpeg" });
+    const outcome = await compressAudioForTranscription(tinyFile, { force: true });
+    expect(outcome.kind).toBe("failed");
+  });
+
+  it("without force (default), still takes the shortcut for the same tiny file", async () => {
+    const tinyFile = new File([new Uint8Array(16)], "tone.mp3", { type: "audio/mpeg" });
+    const outcome = await compressAudioForTranscription(tinyFile);
+    expect(outcome).toEqual({ kind: "unchanged", file: tinyFile });
+  });
 });
 
 describe("sanity: the numbers this module's messaging relies on", () => {
