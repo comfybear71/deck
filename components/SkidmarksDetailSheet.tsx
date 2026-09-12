@@ -194,13 +194,6 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 />
               </div>
             )}
-
-            <p className="text-center text-[11px] leading-relaxed text-white/25">
-              Front end only {"\u2014"} bands, looks, and the checklist above are
-              mocked for this build. No real Comfy MCP / Seedance / LTX /
-              ElevenLabs render happens from here, and plates + everything after
-              MP3 come later.
-            </p>
           </div>
         </div>
       </div>

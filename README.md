@@ -704,10 +704,6 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
      sheet's rounded top corners; the stronger scrim keeps a graph
      button/card from reading as if it were floating chrome belonging to
      the sheet itself.
-  - A short, always-visible disclaimer line closes the sheet: bands,
-    looks, and the checklist are mocked for this build; no real Comfy
-    MCP / Seedance / LTX / ElevenLabs call happens from here, and plates +
-    everything after MP3 come later.
   - **Make lane dial** — the same small dial mirror the generic
     `GraphNodeSheet` shows for any suit-mapped node (Skidmarks is mapped
     to ♥ Make): pausing it here pauses it everywhere, including the cost
