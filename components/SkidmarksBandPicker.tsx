@@ -113,9 +113,12 @@ function BandTile({
         className={[
           "relative flex h-28 w-28 shrink-0 overflow-hidden rounded-2xl transition-transform active:scale-[0.98]",
           band.coverImage ? "bg-zinc-900" : `bg-gradient-to-br ${coverGradientClass(band.coverSeed)}`,
-          active
-            ? "ring-2 ring-rose-400 ring-offset-2 ring-offset-zinc-950"
-            : "ring-1 ring-white/10 hover:ring-white/25",
+          // `ring-inset`, not `ring-offset` — an offset ring draws *outside*
+          // the box (via an extra box-shadow layer), which a scrolling
+          // ancestor's `overflow` can clip clean off; an inset ring draws
+          // inside the box's own edge, so no ancestor overflow can ever
+          // clip it, no matter how tight the scroll row's padding is.
+          active ? "ring-2 ring-inset ring-rose-400" : "ring-1 ring-inset ring-white/10 hover:ring-white/25",
         ].join(" ")}
       >
         {band.coverImage ? (
@@ -213,14 +216,15 @@ export function SkidmarksBandPicker({
   onRemoveBand,
 }: SkidmarksBandPickerProps) {
   return (
-    // `-mx-1.5`/`px-1.5 py-1.5`: the active tile's `ring-offset-2` shadow
-    // extends ~4px past its box on every edge, and this row scrolls
-    // (`overflow-x-auto`, which also makes `overflow-y` implicit `auto`)
-    // — with no padding, that shadow got clipped, most visibly the top
-    // ring on the first row. The padding gives the ring room; the
-    // matching negative margin cancels it back out so the row's edges
-    // still line up with the "Choose a band" label above.
-    <div className="-mx-1.5 flex items-center gap-3 overflow-x-auto px-1.5 py-1.5 [scrollbar-width:thin]">
+    // A previous fix tried to out-pad the active tile's `ring-offset`
+    // shadow so this row's `overflow-x-auto` (which makes `overflow-y`
+    // implicit `auto` too) wouldn't clip it — that still clipped the top
+    // ring in practice. The real fix is on the ring itself (`ring-inset`
+    // in `BandTile`, below): an inset ring can't be clipped by an
+    // ancestor's overflow no matter how this row is padded, so this
+    // container just needs enough padding for comfortable edge-to-edge
+    // tap targets, nothing load-bearing for the ring anymore.
+    <div className="flex items-center gap-3 overflow-x-auto py-1 pl-0.5 pr-1 [scrollbar-width:thin]">
       <NewBandTile onClick={onCreateBand} />
       {bands.map((band) => (
         <BandTile

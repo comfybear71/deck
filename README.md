@@ -713,26 +713,43 @@ now (see "Explicitly out of scope" below).
      STT or singing detection, matching the checklist chips' own mocked
      staged timers above. Each clip is its own **collapsible row**:
      collapsed shows the time range (e.g. "0:15–0:45"), a Verse/Bridge/
-     Lead/Instrumental label pill, and a compact **model pill** that
-     cycles to the next model on tap (no picker, no confirmation — "one
-     tap, no heavy thinking"); expanded appends that clip's
-     `SkidmarksPlatesAndCamera` panel: a horizontal scroll of five seed
-     **location plates** (Neon Stage, Rainy Alley, Desert Highway,
-     Warehouse, Crowd Pit — deterministic gradient swatches, no real
-     plate photos), a wrapped row of five **camera angles** (Close-up,
-     Wide, Low Angle, Tracking, Overhead), and the full **Model** row
-     (LTX Lip-sync, H3, SIRAY Uncensored, Kling) for an explicit pick
-     instead of cycling. Plates and camera angles are single-select
-     with an off state (tapping the active one again clears it); the
-     model is always assigned to something (`defaultSegmentModel`) so
-     there's nothing to clear. **Default model rule**: vocal segments
-     (verse/bridge) default to **LTX Lip-sync**; non-vocal ones (lead/
-     instrumental) cycle through H3 / SIRAY Uncensored / Kling — still a
-     one-tap switch to anything else. A stub **Generate Clips** button
-     closes the section — tapping it only shows a "Stub only — no Comfy
-     MCP / LTX render kicked off" message (`SkidmarksClipTimeline`'s
-     local `stubMessage` state, same pattern as `PropfolioDetailSheet`'s
-     chip feedback line); it never calls a real pipeline.
+     Lead/Instrumental label pill, and a compact **model badge pill**
+     (e.g. "LTX", "H3" — a 🎤 glyph joins it when the current model is
+     LTX Lip-sync) that cycles to the next model on tap (no picker, no
+     confirmation — "one tap, no heavy thinking"); expanded appends that
+     clip's `SkidmarksPlatesAndCamera` panel:
+     - A horizontal scroll of five seed **location plates** (Neon Stage,
+       Rainy Alley, Desert Highway, Warehouse, Crowd Pit — deterministic
+       gradient swatches, no real plate photos). Each plate **card**
+       repeats the clip's own time range, duration ("30s"), and current
+       model badge in a footer strip, so scrolling through plates never
+       loses that context; a singing clip's cards also show a small
+       **"Lip-sync"** badge and a decorative vocalist-position dot on the
+       plate (a fixed seed placement — not real pose/vision detection).
+     - A wrapped row of five **camera angles** (Close-up, Wide, Low
+       Angle, Tracking, Overhead), captioned as intentionally light: one
+       angle per clip for now, with real Seedance/Framer-style
+       multi-camera coverage from a single still called out as a later
+       upgrade, not crammed in here.
+     - The full **Model** row — **LTX Lip-sync, H3, Grok, SIRAY
+       Uncensored, Kling** — for an explicit pick instead of cycling,
+       captioned with the same default rule below.
+
+     Plates and camera angles are single-select with an off state
+     (tapping the active one again clears it); the model is always
+     assigned to something (`defaultSegmentModel`) so there's nothing to
+     clear. **Default model rule**: vocal segments (verse/bridge) default
+     to **LTX Lip-sync**; non-vocal ones (lead/instrumental) cycle
+     through H3 / Grok / SIRAY Uncensored / Kling — still a one-tap
+     switch to anything else, and switching a vocal clip *off* LTX drops
+     its Lip-sync badge (the badge reflects the current pick, not the
+     label). A stub **Generate Clips** button closes the section —
+     tapping it only shows a "Stub only — no Comfy MCP / LTX render
+     kicked off" message (`SkidmarksClipTimeline`'s local `stubMessage`
+     state, same pattern as `PropfolioDetailSheet`'s chip feedback line);
+     it never calls a real pipeline. **Phase note**: this whole step is
+     UI/interaction only — picking a plate/angle/model is real (persists
+     to `localStorage`, see below), but no clip ever actually renders.
   - The sheet's backdrop is a darker/more opaque scrim
      (`bg-black/90 backdrop-blur-md`, vs. the generic `GraphNodeSheet`'s
      `bg-black/70`) — this sheet opens tall and near the top of the

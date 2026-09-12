@@ -175,36 +175,54 @@ export const SKIDMARKS_SEGMENT_LABEL_META: Record<SkidmarksSegmentLabel, Skidmar
   instrumental: { label: "Instrumental", vocal: false },
 };
 
-/** Model options for a clip's one-tap pill — matches the locked plates
- * mockup's row exactly (LTX Lip-sync, H3, SIRAY Uncensored, Kling). No
- * model here actually renders anything; picking one just tags the
- * segment for whenever a real Comfy MCP / LTX pipeline lands. */
-export type SkidmarksModelId = "ltx-lipsync" | "h3" | "siray-uncensored" | "kling";
+/** Model options for a clip's one-tap pill — LTX Lip-sync, H3, Grok,
+ * SIRAY Uncensored, Kling. No model here actually renders anything;
+ * picking one just tags the segment for whenever a real Comfy MCP / LTX
+ * pipeline lands. `badge` is the short form used on the plate cards'
+ * compact chip and the timeline row's collapsed pill — `label` (the full
+ * name) is only spelled out in the expanded panel's one-tap Model row,
+ * where there's room for it. */
+export type SkidmarksModelId = "ltx-lipsync" | "h3" | "grok" | "siray-uncensored" | "kling";
 
 export interface SkidmarksModelMeta {
   id: SkidmarksModelId;
   label: string;
+  badge: string;
 }
 
 export const SKIDMARKS_MODELS: SkidmarksModelMeta[] = [
-  { id: "ltx-lipsync", label: "LTX Lip-sync" },
-  { id: "h3", label: "H3" },
-  { id: "siray-uncensored", label: "SIRAY Uncensored" },
-  { id: "kling", label: "Kling" },
+  { id: "ltx-lipsync", label: "LTX Lip-sync", badge: "LTX" },
+  { id: "h3", label: "H3", badge: "H3" },
+  { id: "grok", label: "Grok", badge: "Grok" },
+  { id: "siray-uncensored", label: "SIRAY Uncensored", badge: "SIRAY" },
+  { id: "kling", label: "Kling", badge: "Kling" },
 ];
 
 export function skidmarksModelLabel(id: SkidmarksModelId): string {
   return SKIDMARKS_MODELS.find((m) => m.id === id)?.label ?? id;
 }
 
-/** Non-vocal segments cycle through these three so a multi-clip band
+export function skidmarksModelBadge(id: SkidmarksModelId): string {
+  return SKIDMARKS_MODELS.find((m) => m.id === id)?.badge ?? id;
+}
+
+/** LTX is the only model in this lineup that actually does lip-sync —
+ * driving the plate card's "Lip-sync" badge and vocalist-position marker
+ * (see `SkidmarksPlatesAndCamera`). A vocal segment one-tap-switched to
+ * a different model loses that badge, since the badge reflects the
+ * *current* pick, not the segment's label. */
+export function isLipSyncModel(id: SkidmarksModelId): boolean {
+  return id === "ltx-lipsync";
+}
+
+/** Non-vocal segments cycle through these four so a multi-clip band
  * doesn't land every break/lead on the same model by default — still a
  * one-tap switch to anything else. */
-const NON_VOCAL_MODEL_CYCLE: SkidmarksModelId[] = ["h3", "siray-uncensored", "kling"];
+const NON_VOCAL_MODEL_CYCLE: SkidmarksModelId[] = ["h3", "grok", "siray-uncensored", "kling"];
 
 /** The one default-model rule this feature encodes in the UI: singing
  * (verse/bridge) → LTX Lip-sync; instrumental/lead/break → cycle the
- * other three. `nonVocalIndex` is this segment's position among *only*
+ * other four. `nonVocalIndex` is this segment's position among *only*
  * the non-vocal segments so far, so the cycle doesn't skip on vocal runs. */
 export function defaultSegmentModel(
   label: SkidmarksSegmentLabel,
@@ -946,6 +964,12 @@ export function formatDuration(totalSeconds: number | null): string {
 /** "0:15–0:45" — a clip segment's time range for the timeline row. */
 export function formatSegmentRange(startSec: number, endSec: number): string {
   return `${formatDuration(startSec)}\u2013${formatDuration(endSec)}`;
+}
+
+/** Whole seconds between a segment's start/end — the plate card's
+ * "30s"-style duration readout. */
+export function segmentDurationSec(startSec: number, endSec: number): number {
+  return Math.max(0, Math.round(endSec - startSec));
 }
 
 /**

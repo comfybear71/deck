@@ -3,8 +3,10 @@
 import { useRef, useState } from "react";
 import {
   formatSegmentRange,
+  isLipSyncModel,
   SKIDMARKS_MODELS,
   SKIDMARKS_SEGMENT_LABEL_META,
+  skidmarksModelBadge,
   skidmarksModelLabel,
   type SkidmarksCameraAngleId,
   type SkidmarksClipSegment,
@@ -57,6 +59,7 @@ function SegmentRow({
   onSetCameraAngle: (cameraAngle: SkidmarksCameraAngleId) => void;
 }) {
   const meta = SKIDMARKS_SEGMENT_LABEL_META[segment.label];
+  const lipSync = isLipSyncModel(segment.model);
 
   const cycleModel = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -103,10 +106,15 @@ function SegmentRow({
           type="button"
           onClick={cycleModel}
           title="Tap to switch model"
-          aria-label={`Model: ${skidmarksModelLabel(segment.model)}. Tap to switch.`}
-          className="shrink-0 rounded-full border border-white/15 bg-white/[0.04] px-2.5 py-1 text-[10px] font-medium text-white/70 transition-colors hover:border-rose-400/40 hover:text-rose-200"
+          aria-label={`Model: ${skidmarksModelLabel(segment.model)}${lipSync ? " (lip-sync)" : ""}. Tap to switch.`}
+          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/15 bg-white/[0.04] px-2.5 py-1 text-[10px] font-medium text-white/70 transition-colors hover:border-rose-400/40 hover:text-rose-200"
         >
-          {skidmarksModelLabel(segment.model)}
+          {lipSync && (
+            <span aria-hidden className="text-[9px] leading-none">
+              {"\u{1F3A4}"}
+            </span>
+          )}
+          {skidmarksModelBadge(segment.model)}
         </button>
       </div>
 
@@ -134,11 +142,17 @@ function SegmentRow({
  * in the shape a future real STT + singing-detect pass can populate.
  *
  * Each row is individually collapsible (collapsed = time range + label +
- * a one-tap model pill that cycles on tap; expanded = the full
- * `SkidmarksPlatesAndCamera` panel for that clip). The whole section can
- * also collapse, same pattern as `ControlPlaneDemo`. The footer's
- * "Generate Clips" button is a stub — it never calls a real Comfy MCP /
- * LTX pipeline, just shows that it's a stub.
+ * a compact model badge pill — a 🎤 glyph joins it when the current
+ * model is LTX Lip-sync — that cycles to the next model on tap; expanded
+ * = the full `SkidmarksPlatesAndCamera` panel for that clip, whose plate
+ * cards repeat the same time/duration/model/lip-sync tags so they stay
+ * self-describing while scrolled). The whole section can also collapse,
+ * same pattern as `ControlPlaneDemo`.
+ *
+ * **Phase note**: this is the plates/clip UI only. The footer's
+ * "Generate Clips" button is a **stub** — tapping it only shows a "stub,
+ * not wired" message; no Comfy MCP / LTX / Seedance render call happens
+ * anywhere in this file or `SkidmarksPlatesAndCamera`.
  */
 export function SkidmarksClipTimeline({
   segments,
