@@ -733,6 +733,48 @@ now (see "Explicitly out of scope" below).
      merged `segments`) even though the UI only renders segments for
      now, so a later per-word lyric-emphasis pass (highlighting the
      current word during playback) can use them without re-transcribing.
+     **Full-length songs are shrunk client-side before upload**
+     (`lib/audioCompression.ts`, `compressAudioForTranscription`) — this
+     is the fix for a real production bug report: Stuart re-attached
+     "Talking To Concrete" at its actual ~4:16 length and got a bare
+     `Transcription failed (Transcription request failed (HTTP 413).)`,
+     even though a tiny test tone POST had already confirmed
+     `OPENAI_API_KEY` was wired correctly. The cause wasn't OpenAI's
+     25MB limit (`MAX_UPLOAD_BYTES` in `app/api/skidmarks/transcribe/
+     route.ts`) — it was **Vercel's own platform-level 4.5MB cap on a
+     Function's request body**
+     ([docs](https://vercel.com/docs/functions/limitations#request-body-size)),
+     which rejects an oversized multipart upload with `413
+     FUNCTION_PAYLOAD_TOO_LARGE` *before the route handler's code runs
+     at all* — a typical 128–192kbps 4+ minute MP3 is already 4–6MB, well
+     over that cap on its own. There's no `next.config`/`vercel.json`
+     setting that raises it. The fix: before every upload that isn't
+     already comfortably small (`DIRECT_UPLOAD_SAFE_BYTES`, 4MiB),
+     `transcribeAudio` now downmixes the attached file to mono, resamples
+     it to 16kHz (the rate Whisper itself internally resamples every
+     input to anyway, so this isn't discarding resolution Whisper would
+     have used), and re-encodes it to a low, duration-adaptive MP3
+     bitrate via `@breezystack/lamejs` (a pure-JS LAME encoder — no
+     server binary, works unmodified on Vercel's Node.js runtime)
+     entirely in the browser, picking the highest bitrate tier
+     (`MP3_BITRATE_TIERS_KBPS`, 64→8kbps) whose predicted output still
+     clears the cap. **A real ~4:16 song at the top 64kbps tier lands
+     around ~2MB** — comfortably under the 4.5MB limit with real margin
+     for multipart overhead, verified against the actual `lamejs`
+     encoder's output (not just the size estimate) for this exact
+     scenario. **The honest remaining ceiling**: even the lowest 8kbps
+     tier only fits under the 4.5MB budget up to roughly a 66-minute
+     track (`chooseCompressionPlan` returns `null` past that, and
+     `transcribeAudio` reports a plain-language "too long to shrink for
+     upload" message instead of attempting a request that would still
+     413) — no real song is anywhere near that, so this should be a
+     non-issue in practice. Compression is best-effort: if the browser
+     can't decode/resample/encode the file for any reason, the original
+     file is still sent as-is (matching this feature's pre-fix
+     behavior), and a genuine remaining 413 (or any other real failure)
+     is now reported in plain language — file size and the actual
+     server limit, not a bare HTTP status code — rather than the
+     cryptic message from before this fix.
   7. **Real(ish) vocal/instrumental analysis, kept as a fallback**
      (`lib/audioAnalysis.ts`, `analyzeVocalActivity`) — runs **in
      parallel** with step 6 above, unconditionally, the moment a file's
