@@ -2,14 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BudjuData, GraphData, GraphNode, PropfolioData } from "@/lib/types";
+import type { SkidmarksProject } from "@/lib/skidmarks";
 import { edgesFrom, findNode } from "@/lib/graph";
-import { BUDJU_NODE_ID, PROPFOLIO_NODE_ID } from "@/lib/constants";
+import { BUDJU_NODE_ID, PROPFOLIO_NODE_ID, SKIDMARKS_NODE_ID } from "@/lib/constants";
 import { useGraphBoardPositions } from "@/hooks/useGraphBoardPositions";
 import { clamp } from "@/lib/graphLayout";
 import { GraphBoardNode } from "./GraphBoardNode";
 import { GraphNodeCard } from "./GraphNodeCard";
 import { BudjuNodeCard } from "./BudjuNodeCard";
 import { PropfolioNodeCard } from "./PropfolioNodeCard";
+import { SkidmarksNodeCard } from "./SkidmarksNodeCard";
 
 /** Fixed card width in px — close enough to the mobile stack's content
  * width that BudjuNodeCard/PropfolioNodeCard/GraphNodeCard don't need any
@@ -21,6 +23,7 @@ interface GraphBoardProps {
   nodes: GraphNode[];
   budjuData: BudjuData;
   propfolioData: PropfolioData;
+  skidmarksActiveProject: SkidmarksProject | undefined;
   onOpenNode: (id: string) => void;
 }
 
@@ -43,6 +46,7 @@ export function GraphBoard({
   nodes,
   budjuData,
   propfolioData,
+  skidmarksActiveProject,
   onOpenNode,
 }: GraphBoardProps) {
   const { positions, moveNode, dropNode, reset } = useGraphBoardPositions();
@@ -122,6 +126,11 @@ export function GraphBoard({
               ) : node.id === PROPFOLIO_NODE_ID ? (
                 <PropfolioNodeCard
                   data={propfolioData}
+                  onOpen={() => onOpenNode(node.id)}
+                />
+              ) : node.id === SKIDMARKS_NODE_ID ? (
+                <SkidmarksNodeCard
+                  project={skidmarksActiveProject}
                   onOpen={() => onOpenNode(node.id)}
                 />
               ) : (

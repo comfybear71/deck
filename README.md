@@ -61,6 +61,10 @@ total.
   `lib/deck-ask-client.ts` — the Ask-Grok bridge (shared types + prompt
   builder, the server-side store, and the client-side POST helper). See
   "Ask Grok (v0 stub)" below.
+- `lib/skidmarks.ts` / `hooks/useSkidmarksProjects.ts` — the Skidmarks
+  vibe-director project/chat model and its `localStorage` store (pure
+  brief → project builder, `useSyncExternalStore` React binding). See
+  "Skidmarks node (vibe director)" below.
 - `app/api/deck/ask/` — the `POST`/`GET` route backing Ask Grok.
 - `lib/clipboard.ts` — shared "copy to clipboard, with a manual-selection
   fallback" helper used by the action chips and Ask Grok's copy-prompt
@@ -77,7 +81,10 @@ total.
   light stub covered by these — see "Same Game Multi node" below),
   `BudjuNodeCard` / `BudjuDetailSheet` (the featured Budju node's face +
   detail sheet), `PropfolioNodeCard` / `PropfolioDetailSheet` (the
-  Propfolio status node's face + detail sheet), `ActionChips` /
+  Propfolio status node's face + detail sheet), `SkidmarksNodeCard` /
+  `SkidmarksDetailSheet` / `SkidmarksStageChips` (the Skidmarks
+  vibe-director node's face, director-chat detail sheet, and stage-chip
+  row — see "Skidmarks node (vibe director)" below), `ActionChips` /
   `AskGrokPanel` (generic detail-sheet primitives — see "Ask Grok (v0
   stub)" below).
 
@@ -577,6 +584,107 @@ it's light enough that a few small, generic additions to
 - Board default position lives in `DEFAULT_BOARD_POSITIONS`
   (`lib/graphLayout.ts`), next to Skidmarks in the second row — see the
   "GraphBoard default layout" note there before changing the grid.
+
+### Skidmarks node (vibe director)
+
+**Skidmarks** is a sibling project that eventually does real music-video
+direction (Comfy MCP, Seedance, LTX, ElevenLabs, and friends, plus its own
+`skidmarks.aiglitch.app` Crash Lab). This node is deliberately **not**
+that — it's a **front hand for that convoluted backend**: Stuart types one
+vibe brief, and the node replies with staged, abstract director copy
+(brief locked → cast suggestions → an empty plate board → the stage
+chips), never a dump of Comfy/ffmpeg-flavored internals. First build only
+— see "Explicitly out of scope" below for exactly what isn't wired up
+yet.
+
+- **Node face** (`components/SkidmarksNodeCard.tsx`) — a warm rose/pink
+  identity treatment (border, gradient wash, glow, ♥ avatar; distinct from
+  Budju's violet and Propfolio's emerald/teal, but still reading as the ♥
+  Make lane it's mapped to) instead of the generic `GraphNodeCard`. Shows
+  "No project yet — tap to start directing" until a project exists, then
+  the active project's brief (truncated) plus a small "Directing ·
+  \<stage\>" chip.
+- Tapping it opens **`components/SkidmarksDetailSheet.tsx`** — a scrolling
+  director-chat thread (message bubbles, not a form) plus a composer
+  pinned to the bottom of the sheet:
+  - **Empty state**: no project yet — just the composer and a one-line
+    explanation of what typing a brief does.
+  - **New project**: typing a vibe brief (e.g. "desert band music video,
+    Hole Jo on sax, dune buggy driving shots at dusk") and tapping **Start
+    directing** calls `createSkidmarksProject` (`lib/skidmarks.ts`), which
+    builds a whole project — cast stubs, empty plate slots, and a
+    five-message thread — from the brief text alone, then makes it the
+    active project. The just-created project's messages reveal one at a
+    time (a short delay per message, `SkidmarksDetailSheet`'s
+    `revealNext`) so the thread reads as the director actually replying,
+    not a wall of text dumped at once; reopening an *existing* project (a
+    fresh sheet mount, or picking one from "Earlier projects") shows its
+    whole thread immediately instead of replaying the reveal.
+  - **The scripted thread** (`buildProjectFromBrief` in `lib/skidmarks.ts`)
+    is, in order: the brief itself (as the user's own chat bubble); a
+    "Brief locked — ⟨brief⟩. Starting casting." line; a **cast-cards**
+    message with a small grid of placeholder cast holds (`Frontperson`
+    always, plus whichever instrument/role keywords the brief mentions —
+    `sax` → "Sax lead", `guitar` → "Guitar", `vocal`/`sing` → "Vocals",
+    etc., a fixed keyword table in `castRolesFromBrief`, not real NLP); a
+    **plate-board** message with four empty, dashed timeline slots ("Wide
+    establishing", "Performance close-up", "Location B-roll",
+    "Transition / cutaway" — always the same four, always empty, nothing
+    shot); and a final **stage-chips** message showing the
+    `SkidmarksStageChips` row (`Cast · Plates · Multi-angle · Voice ·
+    Animate · Stitch`) with `plates` highlighted as the current stage —
+    cast suggestions are already out, so the "next" step reads as filling
+    the (still-empty) plate board. All of it is templated from the brief
+    text alone; the same brief always produces the same stub project.
+  - **Earlier projects**: once more than one project exists in this
+    browser's history, a small pill row above the composer lets Stuart
+    reopen an older brief's thread (`setActiveSkidmarksProject`) without
+    losing the current one — projects aren't deleted, just capped to the
+    8 most recent (`PROJECT_HISTORY_LIMIT` in `lib/skidmarks.ts`).
+  - **Ask Grok** (reused, unchanged, from `components/AskGrokPanel.tsx`)
+    — an opt-in handoff chip that packages the active project's brief,
+    stage, and cast/plate counts as its `statusSnapshot`, so a queued ask
+    carries the same context Stuart saw when he sent it. Only shows once
+    a project exists.
+  - **Make lane dial** — the same small dial mirror the generic
+    `GraphNodeSheet` shows for any suit-mapped node (Skidmarks is mapped
+    to ♥ Make, same as before this feature): pausing it here pauses it
+    everywhere, including the cost deep-dive's vendor table.
+  - A short, always-visible disclaimer line closes the sheet: this is the
+    front end only, no Comfy MCP / Seedance / LTX / ElevenLabs calls
+    happen from here, and it doesn't touch `skidmarks.aiglitch.app`'s
+    Crash Lab — every reply above is scripted from the brief text, not a
+    real render.
+- **Data shape** (`lib/skidmarks.ts`): `SkidmarksProject` (`id`, `brief`,
+  `createdAt`, `stage`, `cast: SkidmarksCastStub[]`,
+  `plates: SkidmarksPlateSlot[]`, `messages: SkidmarksMessage[]`) and
+  `SkidmarksState` (`projects` most-recent-first, `activeProjectId`).
+  `SkidmarksMessage.kind` (`"text" | "cast-cards" | "plate-board" |
+  "stage-chips"`) drives which extra payload is attached, and
+  `SkidmarksDetailSheet` switches on it to render the right bubble/card/
+  chip-row shape.
+- **Persistence**: `localStorage` (key `the-tab:skidmarks-projects`),
+  mirroring the same in-memory-cache-plus-`useSyncExternalStore` shape as
+  `lib/control-plane.ts` / `lib/graphLayout.ts` (see
+  `hooks/useSkidmarksProjects.ts`). This is per-browser, invented-on-the-
+  spot content typed by Stuart, not hand-authored seed data, so
+  `localStorage` fits better here than a new `data/skidmarks.json` file —
+  there's nothing to seed ahead of time, unlike Budju/Propfolio's glances.
+  A fresh browser (or private mode) always starts from the empty state;
+  nothing here is shared across devices.
+- `GraphView` special-cases `SKIDMARKS_NODE_ID` (`lib/constants.ts`) to
+  render `SkidmarksNodeCard`/`SkidmarksDetailSheet` instead of the generic
+  `GraphNodeCard`/`GraphNodeSheet`, same pattern as Budju/Propfolio; the
+  GraphBoard (≥768px) path gets the same swap, reading the active
+  project off the same `useSkidmarksProjects` store `GraphView` reads (one
+  hook call, passed down as a prop, not a second independent subscription
+  duplicating state).
+- **Explicitly out of scope for this build**: any real Comfy MCP,
+  Seedance, LTX, or ElevenLabs call; an actual rendered music video; and
+  replacing `skidmarks.aiglitch.app`'s own Crash Lab. Also out of scope:
+  editing/deleting a project's brief after the fact, re-running a stage,
+  and any real casting/plate/voice/animation data — every card and slot
+  on screen is a stub, and the copy says so.
 
 ### Ask Grok + action chips (v0 stub)
 
