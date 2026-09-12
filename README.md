@@ -61,11 +61,13 @@ total.
   `lib/deck-ask-client.ts` — the Ask-Grok bridge (shared types + prompt
   builder, the server-side store, and the client-side POST helper). See
   "Ask Grok (v0 stub)" below.
-- `lib/skidmarks.ts` / `hooks/useSkidmarksStudio.ts` — the Skidmarks
-  Music-video studio model (bands/members/looks/MP3/checklist/clip
-  timeline) and its `localStorage` store (pure mock builders,
-  `useSyncExternalStore` React binding, staged checklist timers). See
-  "Skidmarks node (vibe director)" below.
+- `lib/skidmarks.ts` / `lib/audioAnalysis.ts` /
+  `hooks/useSkidmarksStudio.ts` — the Skidmarks Music-video studio model
+  (bands/members/looks/MP3/clip timeline) and its `localStorage` store
+  (pure mock builders, `useSyncExternalStore` React binding, and real
+  client-side vocal/instrumental MP3 analysis — an FFT-based heuristic,
+  no API key — driving the clip timeline and the Lyrics/Timing/Ready
+  chips). See "Skidmarks node (vibe director)" below.
 - `app/api/deck/ask/` — the `POST`/`GET` route backing Ask Grok.
 - `lib/clipboard.ts` — shared "copy to clipboard, with a manual-selection
   fallback" helper used by the action chips and Ask Grok's copy-prompt
@@ -686,38 +688,73 @@ now (see "Explicitly out of scope" below).
      created here**, only an existing file attached). Once a file's
      picked: a real `<audio>` element (via `URL.createObjectURL`, session-
      only — a `File` can't round-trip through `localStorage`, so a page
-     reload loses playback, though the filename/duration/checklist
+     reload loses playback, though the filename/duration/analysis-result
      metadata persists) drives a real play/pause and a real probed
-     duration; the waveform itself is decorative (`waveformBars`,
-     deterministic off the filename — no real audio analysis).
-  6. **Checklist chips** (`SkidmarksChecklistChips`) — three always-
+     duration; the waveform itself is still decorative (`waveformBars`,
+     deterministic off the filename, not derived from the real audio).
+     Attaching also hands the raw `File` to `useSkidmarksStudio`, which
+     kicks off the real analysis pass described next.
+  6. **Real(ish) vocal/instrumental analysis** (`lib/audioAnalysis.ts`,
+     `analyzeVocalActivity`) — runs the moment a file's attached, entirely
+     **client-side, no API key, no network call**: it decodes the actual
+     picked MP3 via the browser's `AudioContext`, frames the real PCM
+     samples, runs a real FFT per frame, and scores each frame on (a) how
+     loud it is (RMS) and (b) how much of its energy sits in the
+     ~300–3400Hz band human vocal formants live in. Frames that are both
+     loud enough and vocal-band-dominant are flagged "vocal"; a median-
+     filter smoothing pass turns the frame-level flags into a handful of
+     contiguous real-time segments. It's a genuine signal-processing
+     heuristic against the real file — not a mock — but it's also not
+     speech-to-text and can't see song structure, so it only ever labels
+     output **Vocal**/**Instrumental** (never verse/bridge — see below).
+     It's tuned by ear, not a trained/validated model, so it calls loud
+     instrumental sections or quiet vocals wrong sometimes; that's why
+     the UI calls it "real(ish)", not "real". A Whisper-style
+     transcription pass was considered for real lyric timing instead, but
+     that needs a paid API key and a server upload route Stuart doesn't
+     have configured — scaffolding a silently-non-functional keyed path
+     wasn't worth it when this local heuristic already answers the actual
+     product question ("is this bit sung or not") for free. If real
+     transcribed lyrics are wanted later, that's a distinct follow-up.
+  7. **Checklist chips** (`SkidmarksChecklistChips`) — three always-
      present, equal-width chips under the MP3 card: **Lyrics · Timing ·
-     Ready**. All start grey/pending; attaching a file kicks off staged
-     timers (`SKIDMARKS_CHECKLIST_DELAY_MS` in `lib/skidmarks.ts` —
-     Timing fastest, then Lyrics, then Ready once both are in) that flip
-     each to green, simulating a background "sniff" (lyrics reading as a
-     speech-to-text-style pass, timing as just the file's own length).
-     No lyrics panel, no paste-lyrics box, no manual vocal-start pin —
-     this is the entire surface for that.
-  7. **Clip / segment timeline** (`SkidmarksClipTimeline`) — appended
+     Ready**, each showing one of four *real* states
+     (`skidmarksChecklistState` in `lib/skidmarks.ts` — no staged timers
+     anymore): grey **pending** (nothing to report), blue spinning
+     **analyzing** (the duration probe or `analyzeVocalActivity` is
+     actually running), green **done** (that real signal resolved), or
+     amber **stub** (analysis failed, so the chip is honestly showing the
+     seed fallback below instead of pretending success — **never
+     rendered green**). `Timing` flips real the moment the browser's own
+     duration probe resolves; `Lyrics` flips real once vocal/instrumental
+     analysis finishes (or amber if it failed); `Ready` is green only
+     once both are real, amber if the clip list is only usable via the
+     fallback. No lyrics panel, no paste-lyrics box, no manual vocal-start
+     pin — this is the entire surface for that.
+  8. **Clip / segment timeline** (`SkidmarksClipTimeline`) — appended
      right under the checklist chips, as soon as an MP3 is attached (not
      gated on the checklist reaching "Ready"): a collapsible **Clip /
-     segment list** section with an explicit honesty line above the
-     rows — *"Seed timeline — a demo verse/bridge/lead/instrumental
-     cadence, not real lyrics timing or singing detection. Editable
-     structure for now; refined once real analysis lands."* The
-     segments themselves (`buildDemoSegments` in `lib/skidmarks.ts`) are
-     a **deterministic seed cadence** scaled to the track's real
-     duration (7 segments: intro instrumental → verse → instrumental
-     break → verse → bridge → lead → verse) — explicitly **not** real
-     STT or singing detection, matching the checklist chips' own mocked
-     staged timers above. Each clip is its own **collapsible row**:
-     collapsed shows the time range (e.g. "0:15–0:45"), a Verse/Bridge/
-     Lead/Instrumental label pill, and a compact **model badge pill**
-     (e.g. "LTX", "H3" — a 🎤 glyph joins it when the current model is
-     LTX Lip-sync) that cycles to the next model on tap (no picker, no
-     confirmation — "one tap, no heavy thinking"); expanded appends that
-     clip's `SkidmarksPlatesAndCamera` panel:
+     segment list** section with an honesty caption above the rows that
+     changes with real state — *"Analyzing…"* while `analyzeVocalActivity`
+     is still running, *"Real(ish) analysis: vocal vs. instrumental
+     sections detected from the MP3's own audio…"* once it succeeds, or
+     *"Vocal analysis failed (\<reason\>) — showing the seed demo cadence
+     below as a fallback. This is NOT real lyrics timing or singing
+     detection."* if it didn't. **Segments prefer the real analysis
+     result** (`segmentsSource: "analysis"`, labeled **Vocal**/
+     **Instrumental**) over the seed cadence whenever analysis succeeds;
+     the seed cadence (`buildDemoSegments` in `lib/skidmarks.ts` — 7
+     segments: intro instrumental → verse → instrumental break → verse →
+     bridge → lead → verse, labeled **Verse**/**Bridge**/**Lead**/
+     **Instrumental**) only shows as an honestly-captioned fallback while
+     analysis is running or after it fails — explicitly **not** real STT
+     or singing detection either way. Each clip is its own **collapsible
+     row**: collapsed shows the time range (e.g. "0:15–0:45"), its label
+     pill, and a compact **model badge pill** (e.g. "LTX", "H3" — a 🎤
+     glyph joins it when the current model is LTX Lip-sync) that cycles
+     to the next model on tap (no picker, no confirmation — "one tap, no
+     heavy thinking"); expanded appends that clip's
+     `SkidmarksPlatesAndCamera` panel:
      - A horizontal scroll of five seed **location plates** (Neon Stage,
        Rainy Alley, Desert Highway, Warehouse, Crowd Pit — deterministic
        gradient swatches, no real plate photos). Each plate **card**
@@ -738,18 +775,22 @@ now (see "Explicitly out of scope" below).
      Plates and camera angles are single-select with an off state
      (tapping the active one again clears it); the model is always
      assigned to something (`defaultSegmentModel`) so there's nothing to
-     clear. **Default model rule**: vocal segments (verse/bridge) default
-     to **LTX Lip-sync**; non-vocal ones (lead/instrumental) cycle
-     through H3 / Grok / SIRAY Uncensored / Kling — still a one-tap
-     switch to anything else, and switching a vocal clip *off* LTX drops
-     its Lip-sync badge (the badge reflects the current pick, not the
-     label). A stub **Generate Clips** button closes the section —
-     tapping it only shows a "Stub only — no Comfy MCP / LTX render
-     kicked off" message (`SkidmarksClipTimeline`'s local `stubMessage`
-     state, same pattern as `PropfolioDetailSheet`'s chip feedback line);
-     it never calls a real pipeline. **Phase note**: this whole step is
-     UI/interaction only — picking a plate/angle/model is real (persists
-     to `localStorage`, see below), but no clip ever actually renders.
+     clear. **Default model rule**: vocal segments (verse/bridge, or the
+     real analysis path's Vocal) default to **LTX Lip-sync**; non-vocal
+     ones (lead/instrumental, either path) cycle through H3 / Grok /
+     SIRAY Uncensored / Kling — still a one-tap switch to anything else,
+     and switching a vocal clip *off* LTX drops its Lip-sync badge (the
+     badge reflects the current pick, not the label). A stub **Generate
+     Clips** button closes the section — tapping it never calls a real
+     Comfy MCP / LTX pipeline; it only shows a "Stub only — no Comfy MCP
+     / LTX render kicked off" message (`SkidmarksClipTimeline`'s local
+     `stubMessage` state, same pattern as `PropfolioDetailSheet`'s chip
+     feedback line, but always mounted with `role="status"`/
+     `aria-live="polite"` so it reaches the accessibility tree/screen
+     readers too, not just sighted users). **Phase note**: this whole
+     step is UI/interaction only — picking a plate/angle/model is real
+     (persists to `localStorage`, see below), but no clip ever actually
+     renders.
   - The sheet's backdrop is a darker/more opaque scrim
      (`bg-black/90 backdrop-blur-md`, vs. the generic `GraphNodeSheet`'s
      `bg-black/70`) — this sheet opens tall and near the top of the
@@ -766,37 +807,52 @@ now (see "Explicitly out of scope" below).
   `SkidmarksMember` (`id`, `name`, optional `role`, `emoji`,
   `looks: SkidmarksLook[]`); `SkidmarksLook` (`id`, `seed`, `prompt`,
   `photoreal`, `createdAt`); `SkidmarksMp3Attachment` (`fileName`,
-  `durationSec`, `attachedAt`, `checklist: Record<SkidmarksChecklistKey,
-  boolean>`, `segments: SkidmarksClipSegment[]`); `SkidmarksClipSegment`
-  (`id`, `startSec`, `endSec`, `label`, `model`, `plateId`,
-  `cameraAngle`); and `SkidmarksState` (`bands`, `session:
-  { projectKind, bandId, mp3 }`, `removedSeedBandIds` — hand-seeded band
-  ids Stuart has deleted, so `normalizeState` doesn't resurrect them).
+  `durationSec`, `attachedAt`, `segments: SkidmarksClipSegment[]`,
+  `segmentsSource: "analysis" | "seed-fallback"`,
+  `analysisStatus: "analyzing" | "done" | "failed"`, optional
+  `analysisError`); `SkidmarksClipSegment` (`id`, `startSec`, `endSec`,
+  `label`, `model`, `plateId`, `cameraAngle`); and `SkidmarksState`
+  (`bands`, `session: { projectKind, bandId, mp3 }`, `removedSeedBandIds`
+  — hand-seeded band ids Stuart has deleted, so `normalizeState` doesn't
+  resurrect them). The Lyrics/Timing/Ready chip states aren't stored at
+  all — `skidmarksChecklistState` derives them on the fly from
+  `durationSec`/`analysisStatus`, so there's nothing to keep in sync.
 - **Persistence**: `localStorage` (key `the-tab:skidmarks-studio`),
   mirroring the same in-memory-cache-plus-`useSyncExternalStore` shape as
   `lib/control-plane.ts` / `lib/graphLayout.ts` (see
-  `hooks/useSkidmarksStudio.ts`, which also owns the checklist's staged
-  `setTimeout`s, cleared on unmount). Bands (seed + any "New" ones created
-  this browser, capped at `BAND_HISTORY_LIMIT`), band/member deletions
-  (`removedSeedBandIds`), wizard progress, and each clip's plate/camera/
-  model tags persist; the attached audio file itself does not (see
-  above). Segments are seeded off a fallback duration (210s) the instant
-  an MP3 attaches, then rebuilt once the real `<audio>` duration first
-  resolves (`setSkidmarksMp3Duration` in `lib/skidmarks.ts`) — invisible
-  in practice since that resolves within a beat. A fresh browser (or
-  private mode) always starts from the empty state; nothing here is
-  shared across devices. **This is a placeholder store**, not the
-  intended long-term one — see "Follow-up: real persistence" below.
+  `hooks/useSkidmarksStudio.ts`, which also owns kicking off
+  `analyzeVocalActivity` against the attached file and applying its
+  result, guarded by a generation-token ref so a slow analysis for a
+  file the user has since removed/replaced can't land on top of what's
+  current). Bands (seed + any "New" ones created this browser, capped at
+  `BAND_HISTORY_LIMIT`), band/member deletions (`removedSeedBandIds`),
+  wizard progress, the finished analysis result (segments +
+  `segmentsSource`/`analysisStatus`), and each clip's plate/camera/model
+  tags persist; the attached audio `File` itself does not (see above) —
+  which means an analysis that's still `"analyzing"` when the tab closes
+  can never resume after a reload (no file left to re-decode).
+  `normalizeState` handles that honestly: any stored `"analyzing"` status
+  (or a pre-this-feature session with no `analysisStatus` at all) is
+  normalized to `"failed"` on load, with an `analysisError` explaining
+  why, rather than leaving a chip stuck showing "in progress" forever. A
+  fresh browser (or private mode) always starts from the empty state;
+  nothing here is shared across devices. **This is a placeholder store**,
+  not the intended long-term one — see "Follow-up: real persistence"
+  below.
 - **Mock vs. real, at a glance**: real — band/member identity (hand-seeded
   or user-created, no invented names), a picked cover/avatar photo
   (`readImageFileAsDataUrl`), deleting a band or member
   (`removeSkidmarksBand`/`removeSkidmarksMember`), the attached MP3 file
-  and its real duration/playback. Mock — generated "looks"
-  (`buildMockLook`, a color swatch stand-in), the MP3 checklist's three
-  ticks (staged timers, not real lyrics/timing analysis), and the clip
-  timeline's segment cadence (`buildDemoSegments` — a deterministic seed
-  cadence, not real STT or singing detection). See the module doc comment
-  atop `lib/skidmarks.ts` for the same breakdown in code.
+  and its real duration/playback, and now the clip timeline's
+  vocal/instrumental segments when analysis succeeds (`analyzeVocalActivity`
+  in `lib/audioAnalysis.ts` — a real FFT-based heuristic against the real
+  file, see step 6 above for its honest ceiling). Mock — generated
+  "looks" (`buildMockLook`, a color swatch stand-in), and the clip
+  timeline's seed cadence (`buildDemoSegments`) whenever it's showing (a
+  deterministic verse/bridge/lead/instrumental scaffold — while analysis
+  is still running, or as the honestly-labeled fallback if it failed).
+  See the module doc comment atop `lib/skidmarks.ts` for the same
+  breakdown in code.
 - **Follow-up: real persistence (Neon)**. Stuart wants Skidmarks' data
   (bands, members, looks, session, clip timeline) moved off `localStorage`
   onto real Neon Postgres persistence, so it survives across
