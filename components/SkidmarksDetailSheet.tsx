@@ -1,12 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { SkidmarksMessage, SkidmarksProject } from "@/lib/skidmarks";
+import type {
+  SkidmarksMessage,
+  SkidmarksProject,
+  SkidmarksPunchcard,
+} from "@/lib/skidmarks";
 import { useDialModes } from "@/hooks/useDialModes";
 import { useSkidmarksProjects } from "@/hooks/useSkidmarksProjects";
 import { DialControl } from "./DialControl";
 import { AskGrokPanel } from "./AskGrokPanel";
 import { SkidmarksStageChips } from "./SkidmarksStageChips";
+import { SkidmarksPunchcardPanel } from "./SkidmarksPunchcardPanel";
 
 interface SkidmarksDetailSheetProps {
   onClose: () => void;
@@ -18,6 +23,177 @@ interface SkidmarksDetailSheetProps {
  * so the thread reads as "typing", not a wall of text dumped at once. */
 const FIRST_REVEAL_DELAY_MS = 250;
 const REPLY_REVEAL_DELAY_MS = 650;
+
+const PROMPT_PLACEHOLDER = "Tell me what you want to create";
+
+/** Light quick-start pills for the empty landing — tap one to drop a
+ * sample brief into the composer (not an auto-submit), same spirit as
+ * OpenArt Director's "Create film trailer" row. Purely a typing shortcut;
+ * nothing here is wired to anything real. */
+const QUICK_START_PILLS: { label: string; brief: string }[] = [
+  {
+    label: "Music video",
+    brief: "desert band music video, dune buggy driving shots at dusk",
+  },
+  {
+    label: "Band performance",
+    brief: "live band performance, stage lights, punchy crowd cutaways",
+  },
+  {
+    label: "Short film",
+    brief: "short film, two characters, quiet diner at night, slow push-ins",
+  },
+];
+
+function PlusButton({
+  active,
+  onClick,
+}: {
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      aria-label="Attach a JSON punchcard"
+      title="Attach a JSON punchcard"
+      className={[
+        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
+        active
+          ? "bg-rose-400/20 text-rose-300"
+          : "text-white/40 hover:bg-white/10 hover:text-white/70",
+      ].join(" ")}
+    >
+      <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+        <path
+          d="M10 4v12M4 10h12"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
+function PunchcardChip({
+  punchcard,
+  onRemove,
+}: {
+  punchcard: SkidmarksPunchcard;
+  onRemove: () => void;
+}) {
+  return (
+    <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-rose-400/25 bg-rose-400/10 px-2.5 py-1 text-[11px] font-medium text-rose-200">
+      <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3 w-3 shrink-0">
+        <path
+          d="M4 10.5l3.5 3.5L16 5"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <span className="truncate">
+        Punchcard loaded {"\u2014"} {punchcard.title}
+      </span>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label="Remove punchcard"
+        className="shrink-0 text-rose-300/70 hover:text-rose-100"
+      >
+        {"\u2715"}
+      </button>
+    </span>
+  );
+}
+
+function SubmitButton({ disabled }: { disabled: boolean }) {
+  return (
+    <button
+      type="submit"
+      disabled={disabled}
+      aria-label="Start directing"
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-400 text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/30"
+    >
+      <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+        <path
+          d="M10 15V5M5 9l5-5 5 5"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
+interface ComposerProps {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  size: "lg" | "sm";
+  autoFocus?: boolean;
+  punchcardActive: boolean;
+  onTogglePunchcard: () => void;
+}
+
+/** The one control that starts (or continues) directing — a rounded pill
+ * with a "+" that opens the JSON punchcard attach panel, the brief
+ * textarea, and a rose submit button. Shared between the empty landing
+ * (`size="lg"`) and the compact "new project" bar shown once a thread
+ * exists (`size="sm"`) so both read as the same control, just
+ * differently sized. */
+function Composer({
+  value,
+  onChange,
+  onSubmit,
+  size,
+  autoFocus,
+  punchcardActive,
+  onTogglePunchcard,
+}: ComposerProps) {
+  const isLarge = size === "lg";
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit();
+      }}
+      className={[
+        "flex w-full items-end gap-2 rounded-3xl border border-white/10 bg-white/[0.04] transition-colors focus-within:border-rose-400/40",
+        isLarge ? "p-2.5 pl-3.5" : "p-1.5 pl-2.5",
+      ].join(" ")}
+    >
+      <PlusButton active={punchcardActive} onClick={onTogglePunchcard} />
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            onSubmit();
+          }
+        }}
+        placeholder={PROMPT_PLACEHOLDER}
+        rows={isLarge ? 2 : 1}
+        maxLength={500}
+        autoFocus={autoFocus}
+        aria-label="Vibe brief"
+        className={[
+          "flex-1 resize-none bg-transparent text-white placeholder:text-white/30 focus:outline-none",
+          isLarge ? "py-2 text-base" : "py-1.5 text-sm",
+        ].join(" ")}
+      />
+      <SubmitButton disabled={value.trim().length === 0} />
+    </form>
+  );
+}
 
 function DirectorBubble({ text }: { text?: string }) {
   if (!text) return null;
@@ -98,18 +274,139 @@ function ChatMessage({ message }: { message: SkidmarksMessage }) {
   return null;
 }
 
+function EarlierProjectsRow({
+  projects,
+  onSelect,
+}: {
+  projects: SkidmarksProject[];
+  onSelect: (id: string) => void;
+}) {
+  if (projects.length === 0) return null;
+  return (
+    <div className="flex flex-wrap justify-center gap-1.5">
+      {projects.map((p) => (
+        <button
+          key={p.id}
+          type="button"
+          onClick={() => onSelect(p.id)}
+          className="max-w-[220px] truncate rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] text-white/50 transition-colors hover:bg-white/[0.07] hover:text-white/80"
+          title={p.brief}
+        >
+          {p.brief}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Skidmarks' empty state — the OpenArt Director–style landing Stuart
+ * asked for: a clean title, a one-line tagline, one big centered prompt,
+ * and (optionally) a few quick-start pills and past-project chips. This
+ * landing *is* the "new project" flow — there's no separate start screen.
+ */
+function EmptyLanding({
+  brief,
+  onBriefChange,
+  onSubmit,
+  pastProjects,
+  onSelectProject,
+  punchcard,
+  onAttachPunchcard,
+  onRemovePunchcard,
+  showPunchcardPanel,
+  onTogglePunchcard,
+}: {
+  brief: string;
+  onBriefChange: (v: string) => void;
+  onSubmit: () => void;
+  pastProjects: SkidmarksProject[];
+  onSelectProject: (id: string) => void;
+  punchcard: SkidmarksPunchcard | null;
+  onAttachPunchcard: (punchcard: SkidmarksPunchcard) => void;
+  onRemovePunchcard: () => void;
+  showPunchcardPanel: boolean;
+  onTogglePunchcard: () => void;
+}) {
+  return (
+    <div className="flex min-h-full flex-col items-center justify-center gap-6 py-10 text-center">
+      <div>
+        <h1 className="bg-gradient-to-br from-rose-200 via-rose-300 to-pink-400 bg-clip-text text-2xl font-bold text-transparent">
+          Skidmarks Director
+        </h1>
+        <p className="mt-1.5 text-sm text-white/40">
+          Vibe direct your next video
+        </p>
+      </div>
+
+      <div className="w-full max-w-sm">
+        <Composer
+          value={brief}
+          onChange={onBriefChange}
+          onSubmit={onSubmit}
+          size="lg"
+          autoFocus
+          punchcardActive={showPunchcardPanel || Boolean(punchcard)}
+          onTogglePunchcard={onTogglePunchcard}
+        />
+
+        {showPunchcardPanel && (
+          <SkidmarksPunchcardPanel onAttach={onAttachPunchcard} onClose={onTogglePunchcard} />
+        )}
+
+        {punchcard && !showPunchcardPanel && (
+          <div className="mt-2 flex justify-center">
+            <PunchcardChip punchcard={punchcard} onRemove={onRemovePunchcard} />
+          </div>
+        )}
+
+        <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+          {QUICK_START_PILLS.map((pill) => (
+            <button
+              key={pill.label}
+              type="button"
+              onClick={() => onBriefChange(pill.brief)}
+              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 transition-colors hover:border-rose-400/30 hover:text-rose-200"
+            >
+              {pill.label}
+              <span aria-hidden className="text-white/30">
+                {"\u2197"}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {pastProjects.length > 0 && (
+        <div className="w-full max-w-sm">
+          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+            Earlier projects
+          </p>
+          <EarlierProjectsRow projects={pastProjects} onSelect={onSelectProject} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Skidmarks' detail sheet — a "vibe director" front end for a convoluted
- * backend, deliberately abstract. Opens a scrolling director-chat thread
- * (rendered by `ChatMessage` below) plus a "new project" composer,
- * instead of any Comfy/ffmpeg-flavored dump. See the README's "Skidmarks
- * node (vibe director)" section for exactly what's real vs. scripted
- * here.
+ * backend, deliberately abstract. Opens straight to an OpenArt
+ * Director–style landing (`EmptyLanding`) when there's no project yet;
+ * once a brief is submitted it switches to a scrolling director-chat
+ * thread (`ChatMessage` below) with a compact composer pinned to the
+ * bottom for starting the next one. See the README's "Skidmarks node
+ * (vibe director)" section for exactly what's real vs. scripted here.
  */
 export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const { modes, setMode } = useDialModes();
-  const { projects, activeProjectId, createProject, setActiveProject } =
-    useSkidmarksProjects();
+  const {
+    projects,
+    activeProjectId,
+    createProject,
+    setActiveProject,
+    setProjectPunchcard,
+  } = useSkidmarksProjects();
   const activeProject = projects.find((p) => p.id === activeProjectId);
 
   const [brief, setBrief] = useState("");
@@ -117,6 +414,15 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const justCreatedIdRef = useRef<string | null>(null);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Pending punchcard attached before a project exists yet — carried
+  // into `createProject` on submit, then cleared. Once a project *is*
+  // active, its own `punchcard` field (persisted via
+  // `setProjectPunchcard`) is the source of truth instead.
+  const [pendingPunchcard, setPendingPunchcard] = useState<SkidmarksPunchcard | null>(
+    null
+  );
+  const [showPunchcardPanel, setShowPunchcardPanel] = useState(false);
 
   // Reopening a past project (or the sheet mounting with an already-active
   // one) should show its whole thread at once — only a project created in
@@ -167,16 +473,38 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     const trimmed = brief.trim();
     if (!trimmed) return;
     if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
-    const project = createProject(trimmed);
+    const project = createProject(trimmed, pendingPunchcard ?? undefined);
     justCreatedIdRef.current = project.id;
     setBrief("");
     setRevealCount(0);
+    setPendingPunchcard(null);
+    setShowPunchcardPanel(false);
     revealNext(project, 0);
   };
 
   const handleSelectProject = (id: string) => {
     if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
     setActiveProject(id);
+    setShowPunchcardPanel(false);
+  };
+
+  // No project yet: hold the punchcard in local state until submit.
+  // Project already active: attach it straight to that project (persisted).
+  const handleAttachPunchcard = (punchcard: SkidmarksPunchcard) => {
+    if (activeProject) {
+      setProjectPunchcard(activeProject.id, punchcard);
+    } else {
+      setPendingPunchcard(punchcard);
+    }
+    setShowPunchcardPanel(false);
+  };
+
+  const handleRemovePunchcard = () => {
+    if (activeProject) {
+      setProjectPunchcard(activeProject.id, null);
+    } else {
+      setPendingPunchcard(null);
+    }
   };
 
   const visibleMessages = activeProject
@@ -216,52 +544,73 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
         aria-modal="true"
         aria-label="Skidmarks — vibe director"
       >
-        <div className="flex items-center justify-between p-5 pb-3">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-2 p-4 pb-2">
+          <div className="flex min-w-0 items-center gap-2">
             <span
               aria-hidden
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-rose-400/15 text-sm font-semibold text-rose-300"
             >
               {"\u2665"}
             </span>
-            <div>
-              <h2 className="text-base font-semibold text-white">Skidmarks</h2>
-              <p className="text-[11px] uppercase tracking-wide text-rose-300">
-                Vibe director
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-white">
+                Skidmarks
+              </h2>
+              <p className="truncate text-[11px] text-rose-300/80">
+                {activeProject
+                  ? `Directing \u00b7 ${activeProject.brief}`
+                  : "Vibe director"}
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="shrink-0 rounded-full p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
-            aria-label="Close"
-          >
-            <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
-              <path
-                d="M5 5l10 10M15 5L5 15"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <DialControl
+              value={modes.hearts}
+              onChange={(mode) => setMode("hearts", mode)}
+              size="sm"
+            />
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-full p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+              aria-label="Close"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+                <path
+                  d="M5 5l10 10M15 5L5 15"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5">
           {!activeProject ? (
-            <div className="rounded-2xl border border-dashed border-rose-400/20 bg-rose-400/[0.03] px-4 py-6 text-center">
-              <p className="text-sm font-medium text-white/80">
-                Nothing running yet.
-              </p>
-              <p className="mt-1.5 text-xs leading-relaxed text-white/40">
-                Type a vibe brief below — a scene, a band, a mood — and
-                Skidmarks starts directing: locks the brief, suggests cast,
-                opens an empty plate board, and lines up the stages ahead.
-              </p>
-            </div>
+            <EmptyLanding
+              brief={brief}
+              onBriefChange={setBrief}
+              onSubmit={handleCreateProject}
+              pastProjects={pastProjects}
+              onSelectProject={handleSelectProject}
+              punchcard={pendingPunchcard}
+              onAttachPunchcard={handleAttachPunchcard}
+              onRemovePunchcard={handleRemovePunchcard}
+              showPunchcardPanel={showPunchcardPanel}
+              onTogglePunchcard={() => setShowPunchcardPanel((v) => !v)}
+            />
           ) : (
-            <div className="flex flex-col gap-3 pb-2">
+            <div className="flex flex-col gap-3 py-3">
+              {activeProject.punchcard && (
+                <div className="flex justify-start">
+                  <PunchcardChip
+                    punchcard={activeProject.punchcard}
+                    onRemove={handleRemovePunchcard}
+                  />
+                </div>
+              )}
               {visibleMessages.map((message) => (
                 <ChatMessage key={message.id} message={message} />
               ))}
@@ -275,84 +624,58 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 </div>
               )}
               <div ref={chatEndRef} />
-            </div>
-          )}
 
-          {pastProjects.length > 0 && (
-            <div className="mt-3">
-              <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
-                Earlier projects
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {pastProjects.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => handleSelectProject(p.id)}
-                    className="max-w-[160px] truncate rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] text-white/50 transition-colors hover:bg-white/[0.07] hover:text-white/80"
-                    title={p.brief}
-                  >
-                    {p.brief}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+              {pastProjects.length > 0 && (
+                <div className="mt-1">
+                  <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+                    Earlier projects
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {pastProjects.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => handleSelectProject(p.id)}
+                        className="max-w-[160px] truncate rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] text-white/50 transition-colors hover:bg-white/[0.07] hover:text-white/80"
+                        title={p.brief}
+                      >
+                        {p.brief}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-          {activeProject && (
-            <AskGrokPanel
-              project="skidmarks"
-              projectLabel="Skidmarks"
-              placeholder="loop Grok in on this vibe brief…"
-              statusSnapshot={askGrokSnapshot}
-            />
-          )}
-
-          <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.03] p-3">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs font-medium text-white/70">Make lane dial</p>
-              <DialControl
-                value={modes.hearts}
-                onChange={(mode) => setMode("hearts", mode)}
-                size="md"
+              <AskGrokPanel
+                project="skidmarks"
+                projectLabel="Skidmarks"
+                placeholder="loop Grok in on this vibe brief…"
+                statusSnapshot={askGrokSnapshot}
               />
             </div>
-            <p className="mt-2 text-[11px] leading-relaxed text-white/40">
-              Same control-plane dial as the Tab&rsquo;s Make lane — pausing it
-              here pauses it there too.
-            </p>
+          )}
+        </div>
+
+        {activeProject && (
+          <div className="border-t border-white/10 bg-zinc-950 p-4">
+            {showPunchcardPanel && (
+              <SkidmarksPunchcardPanel
+                onAttach={handleAttachPunchcard}
+                onClose={() => setShowPunchcardPanel(false)}
+              />
+            )}
+            <div className={showPunchcardPanel ? "mt-2" : undefined}>
+              <Composer
+                value={brief}
+                onChange={setBrief}
+                onSubmit={handleCreateProject}
+                size="sm"
+                punchcardActive={showPunchcardPanel || Boolean(activeProject.punchcard)}
+                onTogglePunchcard={() => setShowPunchcardPanel((v) => !v)}
+              />
+            </div>
           </div>
-
-          <p className="mt-4 text-[11px] leading-relaxed text-white/30">
-            This is the front end only — no Comfy MCP, Seedance, LTX, or
-            ElevenLabs calls happen from here yet, and it doesn&rsquo;t
-            touch {"skidmarks.aiglitch.app"}&rsquo;s Crash Lab. Every reply
-            above is scripted from your brief text, not a real render.
-          </p>
-        </div>
-
-        <div className="border-t border-white/10 bg-zinc-950 p-5 pt-3">
-          <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-white/40">
-            {activeProject ? "Start a new project" : "New project"}
-          </p>
-          <textarea
-            value={brief}
-            onChange={(e) => setBrief(e.target.value)}
-            placeholder="desert band music video, Hole Jo on sax, dusk light…"
-            rows={2}
-            maxLength={500}
-            aria-label="Vibe brief"
-            className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={handleCreateProject}
-            disabled={brief.trim().length === 0}
-            className="mt-2 w-full rounded-xl bg-rose-400/20 px-4 py-2.5 text-sm font-medium text-rose-100 transition-colors hover:bg-rose-400/30 active:bg-rose-400/35 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Start directing
-          </button>
-        </div>
+        )}
       </div>
     </div>
   );
