@@ -35,14 +35,15 @@
  * `SkidmarksClipTimeline` calls this "real(ish)" rather than "real".
  *
  * No network calls, no API key, nothing to configure — everything here
- * runs in the browser against the file Stuart already picked. (A real
- * transcription pass — e.g. Whisper — would give word-level lyric
- * timing and was considered, but it needs an API key and a server route
- * to send audio to; scaffolding that paid/keyed path wasn't worth it for
- * this PR when this local heuristic already answers the actual product
- * question — "is this bit sung or not" — without Stuart needing to
- * configure anything. If real transcribed lyrics are wanted later, that
- * would be a clearly-separate follow-up, not silently implied by this.)
+ * runs in the browser against the file Stuart already picked. This is
+ * now the **fallback** path, not the only one: `lib/transcription.ts` +
+ * `app/api/skidmarks/transcribe/route.ts` add a real word-level
+ * speech-to-text pass (OpenAI Whisper, keyed via `OPENAI_API_KEY`) that
+ * `useSkidmarksStudio` prefers whenever it succeeds — see that module's
+ * doc comment for the honest "transcription > this heuristic >
+ * seed cadence" priority order. This heuristic still runs unconditionally
+ * (in parallel, no key needed) so there's always a real-ish signal when
+ * transcription is unavailable (no key configured) or fails.
  */
 
 export interface VocalAnalysisSegment {
@@ -155,8 +156,10 @@ const EXIT_VOCAL_HOLD_SEC = 4.5;
  * Raised from an earlier 1.5s (then 3.0s) — 17 segments for one
  * 4-minute track was too choppy to be a useful "where do I cut this"
  * reference, and short isolated blips are usually either noise or
- * smaller than anyone would actually clip to. */
-const MIN_SEGMENT_SEC = 5.0;
+ * smaller than anyone would actually clip to. Exported so
+ * `lib/transcription.ts`'s word-timestamp-derived segments fold to the
+ * same granularity instead of reinventing this number. */
+export const MIN_SEGMENT_SEC = 5.0;
 
 /** Hard ceiling on how long analysis is allowed to run before we give up
  * and fall back to the seed timeline — protects against a pathological
@@ -394,8 +397,10 @@ function runLengthEncode(
 /** Folds any segment shorter than `MIN_SEGMENT_SEC` into whichever
  * neighbor is longer, repeating until stable (or only one segment is
  * left) — keeps the final list a handful of real sections instead of a
- * flicker of near-instant flips. */
-function mergeTinySegments(segments: VocalAnalysisSegment[]): VocalAnalysisSegment[] {
+ * flicker of near-instant flips. Exported for `lib/transcription.ts` to
+ * reuse on word-timestamp-derived runs — same "handful of sections, not
+ * one row per line" fold, same rule either way. */
+export function mergeTinySegments(segments: VocalAnalysisSegment[]): VocalAnalysisSegment[] {
   let current = segments;
   let changed = true;
   while (changed && current.length > 1) {

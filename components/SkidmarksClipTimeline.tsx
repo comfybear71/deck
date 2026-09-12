@@ -14,6 +14,7 @@ import {
   type SkidmarksModelId,
   type SkidmarksPlateId,
   type SkidmarksSegmentsSource,
+  type SkidmarksTranscriptionStatus,
 } from "@/lib/skidmarks";
 import { SkidmarksPlatesAndCamera } from "./SkidmarksPlatesAndCamera";
 
@@ -22,6 +23,8 @@ interface SkidmarksClipTimelineProps {
   segmentsSource: SkidmarksSegmentsSource;
   analysisStatus: SkidmarksAnalysisStatus;
   analysisError?: string;
+  transcriptionStatus: SkidmarksTranscriptionStatus;
+  transcriptionError?: string;
   onSetSegmentModel: (segmentId: string, model: SkidmarksModelId) => void;
   onSetSegmentPlate: (segmentId: string, plateId: SkidmarksPlateId) => void;
   onSetSegmentCameraAngle: (segmentId: string, cameraAngle: SkidmarksCameraAngleId) => void;
@@ -137,42 +140,70 @@ function SegmentRow({
   );
 }
 
-/** Honesty caption shown above the rows — varies with real analysis
- * state (`analysisStatus`/`segmentsSource`) rather than being a single
- * fixed line, so the timeline never claims to be more real than it is. */
+/** Honesty caption shown above the rows — varies with real state
+ * (`segmentsSource`/`analysisStatus`/`transcriptionStatus`) rather than
+ * being a single fixed line, so the timeline never claims to be more
+ * real than it is. Priority mirrors `lib/skidmarks.ts`'s source ranking:
+ * a landed transcription result always gets the top-line caption; short
+ * of that, whether transcription is still pending, unconfigured, or
+ * failed changes how the (heuristic/seed) fallback line is framed. */
 function timelineCaption(
   segmentsSource: SkidmarksSegmentsSource,
   analysisStatus: SkidmarksAnalysisStatus,
-  analysisError: string | undefined
+  analysisError: string | undefined,
+  transcriptionStatus: SkidmarksTranscriptionStatus,
+  transcriptionError: string | undefined
 ): string {
+  if (segmentsSource === "transcription") {
+    return (
+      "Real transcription: word-level timestamps from OpenAI Whisper, merged " +
+      "into vocal/instrumental runs (see lib/transcription.ts). This is genuine " +
+      "speech-to-text timing, not an energy heuristic \u2014 a gap of ~2s+ between " +
+      "words is treated as an instrumental break."
+    );
+  }
+
+  const sttNote =
+    transcriptionStatus === "checking"
+      ? "Requesting word-level transcription\u2026 "
+      : transcriptionStatus === "unconfigured"
+        ? "No OPENAI_API_KEY configured, so real word-level transcription is " +
+          "unavailable \u2014 "
+        : `Transcription failed${transcriptionError ? ` (${transcriptionError})` : ""} \u2014 `;
+
   if (analysisStatus === "analyzing") {
     return (
-      "Analyzing the attached MP3 for vocal vs. instrumental sections \u2014 " +
-      "showing the seed demo cadence below until that finishes."
+      `${sttNote}analyzing the attached MP3 for vocal vs. instrumental sections ` +
+      "via the energy heuristic \u2014 showing the seed demo cadence below until " +
+      "that finishes."
     );
   }
   if (segmentsSource === "analysis" && analysisStatus === "done") {
     return (
-      "Real(ish) analysis: vocal vs. instrumental sections detected from the " +
-      "MP3's own audio (energy + vocal-band frequency ratio, computed in your " +
-      "browser \u2014 see lib/audioAnalysis.ts). Not transcribed lyrics, and not " +
-      "verse/bridge song structure \u2014 just sung vs. not, with real times. " +
-      "Expect the occasional wrong call on loud instrumental sections or quiet vocals."
+      `${sttNote}showing real(ish) analysis instead: vocal vs. instrumental ` +
+      "sections detected from the MP3's own audio (energy + vocal-band " +
+      "frequency ratio, computed in your browser \u2014 see lib/audioAnalysis.ts). " +
+      "Not transcribed lyrics, and not verse/bridge song structure \u2014 just sung " +
+      "vs. not, with real times. Expect the occasional wrong call on loud " +
+      "instrumental sections or quiet vocals."
     );
   }
   // analysisStatus === "failed"
   const reason = analysisError ? ` (${analysisError})` : "";
   return (
-    `Vocal analysis failed${reason} \u2014 showing the seed demo cadence below ` +
-    "as a fallback. This is NOT real lyrics timing or singing detection."
+    `${sttNote}vocal analysis also failed${reason} \u2014 showing the seed demo ` +
+    "cadence below as a fallback. This is NOT real lyrics timing or singing detection."
   );
 }
 
 /**
  * The clip/segment timeline — appended right under the MP3 checklist
- * once an MP3 exists. `segments` prefers real output from
- * `analyzeVocalActivity` (`segmentsSource === "analysis"`) once it
- * finishes; while it's still running, or if it failed, this instead
+ * once an MP3 exists. `segments` prefers real word-level transcription
+ * (`transcribeAudio`/`segmentsFromWords` in `lib/transcription.ts`,
+ * `segmentsSource === "transcription"`) whenever it lands; short of
+ * that, real output from the energy heuristic
+ * (`analyzeVocalActivity`, `segmentsSource === "analysis"`); short of
+ * that (still resolving, or both failed/unconfigured), this instead
  * shows `buildDemoSegments`' deterministic seed cadence as a clearly
  * labeled fallback (see `timelineCaption` above) — never presented as if
  * it were real. This is editable structure for Stuart to assign plates/
@@ -198,6 +229,8 @@ export function SkidmarksClipTimeline({
   segmentsSource,
   analysisStatus,
   analysisError,
+  transcriptionStatus,
+  transcriptionError,
   onSetSegmentModel,
   onSetSegmentPlate,
   onSetSegmentCameraAngle,
@@ -248,10 +281,21 @@ export function SkidmarksClipTimeline({
           <p
             className={[
               "text-[11px] leading-relaxed",
-              analysisStatus === "failed" ? "text-amber-200/70" : "text-white/35",
+              // Amber whenever we're not showing real transcription — a
+              // real energy-heuristic call is still "real(ish)", but it's
+              // not the transcribed-lyrics timing this caption's honesty
+              // contract cares about most, so it gets the same "not the
+              // best signal" tint as an outright failure.
+              segmentsSource === "transcription" ? "text-white/35" : "text-amber-200/70",
             ].join(" ")}
           >
-            {timelineCaption(segmentsSource, analysisStatus, analysisError)}
+            {timelineCaption(
+              segmentsSource,
+              analysisStatus,
+              analysisError,
+              transcriptionStatus,
+              transcriptionError
+            )}
           </p>
 
           <div className="flex flex-col gap-2">

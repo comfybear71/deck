@@ -24,11 +24,13 @@ interface SkidmarksDetailSheetProps {
  * step (choose a band → cast members → attach MP3 → tag each clip)
  * appends underneath the previous one — there is no separate screen to
  * navigate to. See the README's "Skidmarks node (vibe director)" section
- * for exactly what's real (file pick, real audio duration/playback, and
- * now the clip timeline's vocal/instrumental analysis — see
+ * for exactly what's real (file pick, real audio duration/playback, real
+ * word-level transcription when `OPENAI_API_KEY` is configured — see
+ * `lib/transcription.ts` — and the energy-heuristic vocal/instrumental
+ * analysis that runs alongside it either way — see
  * `lib/audioAnalysis.ts`) vs. mocked/seed (bands, looks, and the seed
- * cadence the clip timeline falls back to if that analysis fails) in
- * this build.
+ * cadence the clip timeline falls back to if neither real signal
+ * produces anything usable) in this build.
  */
 export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const {
@@ -207,6 +209,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 segmentsSource={session.mp3.segmentsSource}
                 analysisStatus={session.mp3.analysisStatus}
                 analysisError={session.mp3.analysisError}
+                transcriptionStatus={session.mp3.transcriptionStatus}
+                transcriptionError={session.mp3.transcriptionError}
                 onSetSegmentModel={setSegmentModel}
                 onSetSegmentPlate={setSegmentPlate}
                 onSetSegmentCameraAngle={setSegmentCameraAngle}

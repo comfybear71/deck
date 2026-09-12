@@ -2,16 +2,20 @@
 
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import { analyzeVocalActivity } from "@/lib/audioAnalysis";
+import { transcribeAudio } from "@/lib/transcription";
 import {
   addSkidmarksLook,
   addSkidmarksMember,
   applySkidmarksAnalysisResult,
+  applySkidmarksTranscriptionResult,
   attachSkidmarksMp3,
   clearSkidmarksMp3,
   createMp3Attachment,
   createSkidmarksBand,
   getSkidmarksSnapshot,
   markSkidmarksAnalysisFailed,
+  markSkidmarksTranscriptionFailed,
+  markSkidmarksTranscriptionUnconfigured,
   removeSkidmarksBand,
   removeSkidmarksMember,
   renameSkidmarksMember,
@@ -45,14 +49,19 @@ const EMPTY_STATE: SkidmarksState = {
  * empty state and the client re-renders with whatever's in
  * `localStorage` right after hydration.
  *
- * Also owns the one piece of real side-effecting logic this flow needs:
- * kicking off `analyzeVocalActivity` (`lib/audioAnalysis.ts`) against the
- * just-attached file, and writing its result (or failure) back to the
- * store once it settles. `analysisTokenRef` is a generation counter, not
- * a timer id — it exists so a slow analysis for a file the user has
- * since removed or replaced can't land its result on top of whatever's
- * current; every `attachMp3`/`removeMp3` bumps it, and any in-flight
- * analysis whose captured token no longer matches just gets dropped.
+ * Also owns the real side-effecting logic this flow needs: kicking off
+ * both `analyzeVocalActivity` (`lib/audioAnalysis.ts`, the energy
+ * heuristic) *and* `transcribeAudio` (`lib/transcription.ts`, real
+ * word-level STT) against the just-attached file **in parallel**, and
+ * writing whichever settles back to the store as it happens —
+ * transcription always wins over the heuristic once it lands, per
+ * `lib/skidmarks.ts`'s priority order, regardless of which finishes
+ * first. `analysisTokenRef` is a generation counter, not a timer id —
+ * it exists so a slow result for a file the user has since removed or
+ * replaced can't land on top of whatever's current; every
+ * `attachMp3`/`removeMp3` bumps it, and any in-flight analysis or
+ * transcription whose captured token no longer matches just gets
+ * dropped.
  */
 export function useSkidmarksStudio() {
   const state = useSyncExternalStore(
@@ -105,16 +114,24 @@ export function useSkidmarksStudio() {
   );
 
   /**
-   * Attach a picked MP3 `File` and kick off real vocal/instrumental
-   * analysis against it in the background. The store gets the seed-
-   * fallback attachment immediately (so the card/checklist render right
-   * away), then either `applySkidmarksAnalysisResult` (success) or
-   * `markSkidmarksAnalysisFailed` (any rejection — unsupported browser,
-   * bad decode, or the analysis's own timeout) once it settles.
+   * Attach a picked MP3 `File` and kick off both real signals against it
+   * in the background, in parallel: `analyzeVocalActivity` (the energy
+   * heuristic, no key needed) and `transcribeAudio` (real word-level
+   * STT, needs `OPENAI_API_KEY` set server-side). The store gets the
+   * seed-fallback attachment immediately (so the card/checklist render
+   * right away), then each signal writes back independently as it
+   * settles — `applySkidmarksAnalysisResult`/`markSkidmarksAnalysisFailed`
+   * for the heuristic, `applySkidmarksTranscriptionResult`/
+   * `markSkidmarksTranscriptionUnconfigured`/
+   * `markSkidmarksTranscriptionFailed` for transcription. Transcription
+   * always wins over the heuristic once it lands (see
+   * `lib/skidmarks.ts`'s `applySkidmarksAnalysisResult`), so it doesn't
+   * matter which of the two `.then()`s below actually runs first.
    */
   const attachMp3 = useCallback((file: File) => {
     const token = (analysisTokenRef.current += 1);
     attachSkidmarksMp3(createMp3Attachment(file.name, null));
+
     analyzeVocalActivity(file).then(
       (result) => {
         if (analysisTokenRef.current !== token) return; // superseded — drop it
@@ -126,6 +143,17 @@ export function useSkidmarksStudio() {
         markSkidmarksAnalysisFailed(message);
       }
     );
+
+    transcribeAudio(file).then((outcome) => {
+      if (analysisTokenRef.current !== token) return; // superseded — drop it
+      if (outcome.ok) {
+        applySkidmarksTranscriptionResult(outcome.result.words, outcome.result.durationSec);
+      } else if (outcome.unconfigured) {
+        markSkidmarksTranscriptionUnconfigured(outcome.message);
+      } else {
+        markSkidmarksTranscriptionFailed(outcome.message);
+      }
+    });
   }, []);
 
   const removeMp3 = useCallback(() => {

@@ -702,74 +702,116 @@ now (see "Explicitly out of scope" below).
      deterministic off the filename, not derived from the real audio).
      Attaching also hands the raw `File` to `useSkidmarksStudio`, which
      kicks off the real analysis pass described next.
-  6. **Real(ish) vocal/instrumental analysis** (`lib/audioAnalysis.ts`,
-     `analyzeVocalActivity`) — runs the moment a file's attached, entirely
-     **client-side, no API key, no network call**: it decodes the actual
-     picked MP3 via the browser's `AudioContext`, frames the real PCM
-     samples, runs a real FFT per frame, and scores each frame on (a) how
-     loud it is (RMS), (b) how much of its energy sits in the ~300–3400Hz
-     band human vocal formants live in, and (c) how *concentrated* that
-     vocal-band energy is in a single FFT bin — a sustained near-pure
-     tone (a lead flute is the motivating case, since it sits in the
-     same band real vocal formants do) reads as "peaky", while a sung
-     vowel's broader formant structure doesn't. Frames that are loud
-     enough, vocal-band-dominant, and not too "peaky" are flagged
-     "vocal"; an attack/release **hysteresis** pass (quick to call a
-     frame "vocal", much slower to call it back "instrumental" — see the
-     module doc comment in `lib/audioAnalysis.ts`) turns the frame-level
-     flags into a handful of contiguous real-time segments without
-     flickering mid-phrase every time a syllable, a beat, or a brief
-     flute interlude gets in the way. It's a genuine signal-processing
-     heuristic against the real file — not a mock — but it's also not
-     speech-to-text and can't see song structure, so it only ever labels
-     output **Vocal**/**Instrumental** (never verse/bridge — see below).
-     It's tuned by ear against Stuart's reports on one track (Jack Ash –
-     "Talking To Concrete"), not a trained/validated model or verified
-     against Stuart's actual file in this repo, so expect it to still
-     call loud instrumental sections, quiet vocals, or an unusually
-     "vocal-shaped" instrumental (the flute cue is a heuristic, not a
-     solved problem — see that constant's doc comment) wrong sometimes;
-     that's why the UI calls it "real(ish)", not "real". A Whisper-style
-     transcription pass was considered for real lyric timing instead, but
-     that needs a paid API key and a server upload route Stuart doesn't
-     have configured — scaffolding a silently-non-functional keyed path
-     wasn't worth it when this local heuristic already answers the actual
-     product question ("is this bit sung or not") for free. If real
-     transcribed lyrics are wanted later, that's a distinct follow-up.
-  7. **Checklist chips** (`SkidmarksChecklistChips`) — three always-
+  6. **Real word-level transcription** (`lib/transcription.ts`,
+     `transcribeAudio` + `segmentsFromWords`, backed by
+     `app/api/skidmarks/transcribe/route.ts`) — this is Stuart's actual
+     ask after the live bug report: energy/formant heuristics + a long
+     hysteresis hold glued "Talking To Concrete"'s intro + flute into one
+     giant Vocal segment (0:07–4:02) when vocals really start ~0:32, so
+     he wanted **speech-to-text with word start times, like phone
+     dictation**, instead of another mid-band-energy guess. The moment a
+     file's attached, the client POSTs it (as `multipart/form-data`) to
+     `/api/skidmarks/transcribe`, which forwards it server-side to
+     OpenAI's audio transcription API (`whisper-1`,
+     `response_format: "verbose_json"`,
+     `timestamp_granularities: ["word"]`) using the **`OPENAI_API_KEY`**
+     environment variable (see "Wiring up transcription" below for
+     exactly how to set it and what it costs) and returns real per-word
+     `start`/`end` timestamps. `segmentsFromWords` then merges consecutive
+     words into vocal runs (a gap over ~2s between words becomes an
+     instrumental segment — see that function's doc comment), which is
+     what lets a segment boundary land at an actual measured vocal onset
+     instead of an energy-threshold guess. **This is wired, not a stub**
+     — but it's also **never claimed live without a key**: if
+     `OPENAI_API_KEY` isn't set server-side, the route honestly returns
+     `501`/`missing_api_key` rather than pretending to have attempted
+     anything, and the UI falls back to step 7 below without implying a
+     failure. A genuine request failure (network error, bad audio, an
+     actual upstream API error, or a request that doesn't get a response
+     within 90s) is reported honestly too, distinct from "unconfigured".
+     Word timings are kept on the attachment (`words`, alongside the
+     merged `segments`) even though the UI only renders segments for
+     now, so a later per-word lyric-emphasis pass (highlighting the
+     current word during playback) can use them without re-transcribing.
+  7. **Real(ish) vocal/instrumental analysis, kept as a fallback**
+     (`lib/audioAnalysis.ts`, `analyzeVocalActivity`) — runs **in
+     parallel** with step 6 above, unconditionally, the moment a file's
+     attached, entirely **client-side, no API key, no network call**: it
+     decodes the actual picked MP3 via the browser's `AudioContext`,
+     frames the real PCM samples, runs a real FFT per frame, and scores
+     each frame on (a) how loud it is (RMS), (b) how much of its energy
+     sits in the ~300–3400Hz band human vocal formants live in, and (c)
+     how *concentrated* that vocal-band energy is in a single FFT bin —
+     a sustained near-pure tone (a lead flute is the motivating case,
+     since it sits in the same band real vocal formants do) reads as
+     "peaky", while a sung vowel's broader formant structure doesn't.
+     Frames that are loud enough, vocal-band-dominant, and not too
+     "peaky" are flagged "vocal"; an attack/release **hysteresis** pass
+     (quick to call a frame "vocal", much slower to call it back
+     "instrumental" — see the module doc comment in
+     `lib/audioAnalysis.ts`) turns the frame-level flags into a handful
+     of contiguous real-time segments without flickering mid-phrase every
+     time a syllable, a beat, or a brief flute interlude gets in the way.
+     It's a genuine signal-processing heuristic against the real file —
+     not a mock — but it's also not speech-to-text and can't see song
+     structure, so it only ever labels output **Vocal**/**Instrumental**
+     (never verse/bridge — see below). It's tuned by ear against
+     Stuart's reports on one track (Jack Ash – "Talking To Concrete"),
+     not a trained/validated model, so expect it to still call loud
+     instrumental sections, quiet vocals, or an unusually "vocal-shaped"
+     instrumental (the flute cue is a heuristic, not a solved problem —
+     see that constant's doc comment) wrong sometimes; that's why the UI
+     calls it "real(ish)", not "real". **This heuristic is never removed
+     by transcription landing** — it keeps running and stays the fallback
+     signal whenever `OPENAI_API_KEY` isn't configured or a transcription
+     request fails, per Stuart's explicit ask to keep it as a real
+     fallback rather than a maybe-it-works stub. Real transcription (step
+     6) always outranks it once transcription lands, though — see
+     `segmentsSource` below.
+  8. **Checklist chips** (`SkidmarksChecklistChips`) — three always-
      present, equal-width chips under the MP3 card: **Lyrics · Timing ·
      Ready**, each showing one of four *real* states
      (`skidmarksChecklistState` in `lib/skidmarks.ts` — no staged timers
      anymore): grey **pending** (nothing to report), blue spinning
-     **analyzing** (the duration probe or `analyzeVocalActivity` is
-     actually running), green **done** (that real signal resolved), or
-     amber **stub** (analysis failed, so the chip is honestly showing the
-     seed fallback below instead of pretending success — **never
-     rendered green**). `Timing` flips real the moment the browser's own
-     duration probe resolves; `Lyrics` flips real once vocal/instrumental
-     analysis finishes (or amber if it failed); `Ready` is green only
-     once both are real, amber if the clip list is only usable via the
-     fallback. No lyrics panel, no paste-lyrics box, no manual vocal-start
-     pin — this is the entire surface for that.
-  8. **Clip / segment timeline** (`SkidmarksClipTimeline`) — appended
+     **analyzing** (the duration probe, `transcribeAudio`, or
+     `analyzeVocalActivity` is actually running), green **done** (that
+     real signal resolved), or amber **stub** (never rendered green).
+     `Timing` flips real the moment the browser's own duration probe
+     resolves. **`Lyrics` now specifically means real transcription** —
+     it only turns green once word-level transcription actually lands
+     (`segmentsSource === "transcription"`); a *successful* energy
+     heuristic alone (no key configured, or the transcription request
+     failed) keeps it amber, since that heuristic answers "is this bit
+     sung", not "what are the actual lyrics/word timing" — this chip is
+     about the latter, and never claims more than it has. `Ready` is
+     green only once both `Timing` and `Lyrics` are real, amber if the
+     clip list is only usable via the heuristic or seed fallback. No
+     lyrics panel, no paste-lyrics box, no manual vocal-start pin — this
+     is the entire surface for that.
+  9. **Clip / segment timeline** (`SkidmarksClipTimeline`) — appended
      right under the checklist chips, as soon as an MP3 is attached (not
      gated on the checklist reaching "Ready"): a collapsible **Clip /
      segment list** section with an honesty caption above the rows that
-     changes with real state — *"Analyzing…"* while `analyzeVocalActivity`
-     is still running, *"Real(ish) analysis: vocal vs. instrumental
-     sections detected from the MP3's own audio…"* once it succeeds, or
-     *"Vocal analysis failed (\<reason\>) — showing the seed demo cadence
-     below as a fallback. This is NOT real lyrics timing or singing
-     detection."* if it didn't. **Segments prefer the real analysis
-     result** (`segmentsSource: "analysis"`, labeled **Vocal**/
-     **Instrumental**) over the seed cadence whenever analysis succeeds;
-     the seed cadence (`buildDemoSegments` in `lib/skidmarks.ts` — 7
-     segments: intro instrumental → verse → instrumental break → verse →
-     bridge → lead → verse, labeled **Verse**/**Bridge**/**Lead**/
-     **Instrumental**) only shows as an honestly-captioned fallback while
-     analysis is running or after it fails — explicitly **not** real STT
-     or singing detection either way. Each clip is its own **collapsible
-     row**: collapsed shows the time range (e.g. "0:15–0:45"), its label
+     changes with real state — e.g. *"Requesting word-level
+     transcription… analyzing the attached MP3 for vocal vs. instrumental
+     sections via the energy heuristic — showing the seed demo cadence
+     below until that finishes"* while both are still resolving; *"Real
+     transcription: word-level timestamps from OpenAI Whisper, merged
+     into vocal/instrumental runs…"* once transcription succeeds; *"No
+     OPENAI_API_KEY configured, so real word-level transcription is
+     unavailable — showing real(ish) analysis instead: vocal vs.
+     instrumental sections detected from the MP3's own audio…"* if only
+     the heuristic came through; or a "both failed" variant naming both
+     reasons if neither did. **Segments prefer real transcription**
+     (`segmentsSource: "transcription"`) whenever it lands; short of
+     that, the real energy heuristic (`segmentsSource: "analysis"`); short
+     of that, the seed cadence (`buildDemoSegments` in `lib/skidmarks.ts`
+     — 7 segments: intro instrumental → verse → instrumental break →
+     verse → bridge → lead → verse, labeled **Verse**/**Bridge**/
+     **Lead**/**Instrumental**) as an honestly-captioned fallback — see
+     `timelineCaption` in `SkidmarksClipTimeline.tsx` for the exact
+     priority logic. Each clip is its own **collapsible row**: collapsed
+     shows the time range (e.g. "0:15–0:45"), its label
      pill, and a compact **model badge pill** (e.g. "LTX", "H3" — a 🎤
      glyph joins it when the current model is LTX Lip-sync) that cycles
      to the next model on tap (no picker, no confirmation — "one tap, no
@@ -795,10 +837,11 @@ now (see "Explicitly out of scope" below).
      Plates and camera angles are single-select with an off state
      (tapping the active one again clears it); the model is always
      assigned to something (`defaultSegmentModel`) so there's nothing to
-     clear. **Default model rule**: vocal segments (verse/bridge, or the
-     real analysis path's Vocal) default to **LTX Lip-sync**; non-vocal
-     ones (lead/instrumental, either path) cycle through H3 / Grok /
-     SIRAY Uncensored / Kling — still a one-tap switch to anything else,
+     clear. **Default model rule**: vocal segments (verse/bridge, or
+     either real path's Vocal — transcription or the energy heuristic)
+     default to **LTX Lip-sync**; non-vocal ones (lead/instrumental, any
+     path) cycle through H3 / Grok / SIRAY Uncensored / Kling — still a
+     one-tap switch to anything else,
      and switching a vocal clip *off* LTX drops its Lip-sync badge (the
      badge reflects the current pick, not the label). A stub **Generate
      Clips** button closes the section — tapping it never calls a real
@@ -822,55 +865,82 @@ now (see "Explicitly out of scope" below).
     `GraphNodeSheet` shows for any suit-mapped node (Skidmarks is mapped
     to ♥ Make): pausing it here pauses it everywhere, including the cost
     deep-dive's vendor table.
+- **Wiring up transcription**: set the **`OPENAI_API_KEY`** environment
+  variable (a standard OpenAI API key, `sk-...`) — server-side only,
+  never exposed to the client — and word-level transcription (step 6
+  above) goes live on the next deploy/restart; leave it unset and the
+  build runs exactly as before this PR (energy heuristic + seed
+  fallback), just with an honest "unconfigured" caption instead of a
+  silent gap. **Cost**: OpenAI bills Whisper transcription by audio
+  duration (a few cents per hour of audio at current published rates,
+  effectively pennies for a typical 3–5 minute song) — check
+  [OpenAI's current pricing](https://openai.com/api/pricing/) before
+  relying on this at any volume, since rates can change. This build
+  makes exactly one transcription call per MP3 attach (no retries, no
+  polling) — re-attaching the same file re-transcribes it.
 - **Data shape** (`lib/skidmarks.ts`): `SkidmarksBand` (`id`, `name`,
   `tagline`, `coverSeed`, `editIcon`, `members: SkidmarksMember[]`);
   `SkidmarksMember` (`id`, `name`, optional `role`, `emoji`,
   `looks: SkidmarksLook[]`); `SkidmarksLook` (`id`, `seed`, `prompt`,
   `photoreal`, `createdAt`); `SkidmarksMp3Attachment` (`fileName`,
   `durationSec`, `attachedAt`, `segments: SkidmarksClipSegment[]`,
-  `segmentsSource: "analysis" | "seed-fallback"`,
+  `segmentsSource: "transcription" | "analysis" | "seed-fallback"`,
   `analysisStatus: "analyzing" | "done" | "failed"`, optional
-  `analysisError`); `SkidmarksClipSegment` (`id`, `startSec`, `endSec`,
-  `label`, `model`, `plateId`, `cameraAngle`); and `SkidmarksState`
-  (`bands`, `session: { projectKind, bandId, mp3 }`, `removedSeedBandIds`
-  — hand-seeded band ids Stuart has deleted, so `normalizeState` doesn't
+  `analysisError`, `transcriptionStatus: "checking" | "unconfigured" |
+  "done" | "failed"`, optional `transcriptionError`, optional
+  `words: { word, startSec, endSec }[]` — real per-word timestamps once
+  transcription succeeds, kept for a later lyric-emphasis pass even
+  though only the merged `segments` render today);
+  `SkidmarksClipSegment` (`id`, `startSec`, `endSec`, `label`, `model`,
+  `plateId`, `cameraAngle`); and `SkidmarksState` (`bands`,
+  `session: { projectKind, bandId, mp3 }`, `removedSeedBandIds` —
+  hand-seeded band ids Stuart has deleted, so `normalizeState` doesn't
   resurrect them). The Lyrics/Timing/Ready chip states aren't stored at
   all — `skidmarksChecklistState` derives them on the fly from
-  `durationSec`/`analysisStatus`, so there's nothing to keep in sync.
+  `durationSec`/`segmentsSource`/`transcriptionStatus`/`analysisStatus`,
+  so there's nothing to keep in sync.
 - **Persistence**: `localStorage` (key `the-tab:skidmarks-studio`),
   mirroring the same in-memory-cache-plus-`useSyncExternalStore` shape as
   `lib/control-plane.ts` / `lib/graphLayout.ts` (see
-  `hooks/useSkidmarksStudio.ts`, which also owns kicking off
-  `analyzeVocalActivity` against the attached file and applying its
-  result, guarded by a generation-token ref so a slow analysis for a
-  file the user has since removed/replaced can't land on top of what's
-  current). Bands (seed + any "New" ones created this browser, capped at
-  `BAND_HISTORY_LIMIT`), band/member deletions (`removedSeedBandIds`),
-  wizard progress, the finished analysis result (segments +
-  `segmentsSource`/`analysisStatus`), and each clip's plate/camera/model
-  tags persist; the attached audio `File` itself does not (see above) —
-  which means an analysis that's still `"analyzing"` when the tab closes
-  can never resume after a reload (no file left to re-decode).
-  `normalizeState` handles that honestly: any stored `"analyzing"` status
-  (or a pre-this-feature session with no `analysisStatus` at all) is
-  normalized to `"failed"` on load, with an `analysisError` explaining
-  why, rather than leaving a chip stuck showing "in progress" forever. A
-  fresh browser (or private mode) always starts from the empty state;
-  nothing here is shared across devices. **This is a placeholder store**,
-  not the intended long-term one — see "Follow-up: real persistence"
-  below.
+  `hooks/useSkidmarksStudio.ts`, which also owns kicking off both
+  `transcribeAudio` and `analyzeVocalActivity` against the attached file
+  in parallel and applying whichever result lands, guarded by a
+  generation-token ref so a slow result for a file the user has since
+  removed/replaced can't land on top of what's current). Bands (seed +
+  any "New" ones created this browser, capped at `BAND_HISTORY_LIMIT`),
+  band/member deletions (`removedSeedBandIds`), wizard progress, the
+  finished transcription/analysis results (segments + `segmentsSource`/
+  `transcriptionStatus`/`analysisStatus`, and `words` if transcription
+  succeeded), and each clip's plate/camera/model tags persist; the
+  attached audio `File` itself does not (see above) — which means a
+  transcription or analysis request that's still in flight when the tab
+  closes can never resume after a reload (no file left to re-send/
+  re-decode). `normalizeState` handles that honestly: a stuck
+  `"analyzing"`/`"checking"` status is normalized to `"failed"` on load
+  with an explanatory error, rather than leaving a chip stuck showing
+  "in progress" forever (a pre-transcription-feature session with no
+  `transcriptionStatus` at all normalizes to `"unconfigured"` instead —
+  honest about "we don't know a real attempt happened here", not a
+  fabricated interruption). A fresh browser (or private mode) always
+  starts from the empty state; nothing here is shared across devices.
+  **This is a placeholder store**, not the intended long-term one — see
+  "Follow-up: real persistence" below.
 - **Mock vs. real, at a glance**: real — band/member identity (hand-seeded
   or user-created, no invented names), a picked cover/avatar photo
   (`readImageFileAsDataUrl`), deleting a band or member
   (`removeSkidmarksBand`/`removeSkidmarksMember`), the attached MP3 file
-  and its real duration/playback, and now the clip timeline's
-  vocal/instrumental segments when analysis succeeds (`analyzeVocalActivity`
-  in `lib/audioAnalysis.ts` — a real FFT-based heuristic against the real
-  file, see step 6 above for its honest ceiling). Mock — generated
-  "looks" (`buildMockLook`, a color swatch stand-in), and the clip
-  timeline's seed cadence (`buildDemoSegments`) whenever it's showing (a
-  deterministic verse/bridge/lead/instrumental scaffold — while analysis
-  is still running, or as the honestly-labeled fallback if it failed).
+  and its real duration/playback, real word-level transcription when
+  `OPENAI_API_KEY` is configured and the request succeeds
+  (`transcribeAudio`/`segmentsFromWords` in `lib/transcription.ts`, via
+  `app/api/skidmarks/transcribe/route.ts`), and the clip timeline's
+  energy-heuristic vocal/instrumental segments whenever transcription
+  isn't available (`analyzeVocalActivity` in `lib/audioAnalysis.ts` — a
+  real FFT-based heuristic against the real file, see step 7 above for
+  its honest ceiling). Mock — generated "looks" (`buildMockLook`, a
+  color swatch stand-in), and the clip timeline's seed cadence
+  (`buildDemoSegments`) whenever it's showing (a deterministic
+  verse/bridge/lead/instrumental scaffold — while both real signals are
+  still resolving, or as the honestly-labeled fallback if both failed).
   See the module doc comment atop `lib/skidmarks.ts` for the same
   breakdown in code.
 - **Follow-up: real persistence (Neon)**. Stuart wants Skidmarks' data
@@ -892,14 +962,20 @@ now (see "Explicitly out of scope" below).
 - **Explicitly out of scope for this build**: voice, animate, and stitch
   (the flow stops dead after the clip timeline's plate/camera/model
   tags); any real Comfy MCP, Seedance, LTX, or ElevenLabs call; any real
-  image/video generation, real speech-to-text for lyrics, or real singing
-  detection (the clip timeline's segments are a seed cadence — see above,
-  and the checklist chips' own staged timers); creating/editing music
-  (MP3 attach is existing-file-only); real plate photos or real camera
-  coverage capture (plates/angles are seed tags, not renders); and
-  replacing `skidmarks.aiglitch.app`'s own Crash Lab. Also out of scope:
-  the "Skidmarks" and "Sunnybank" landing tiles (rendered, inert), and
-  editing a band's name or a member's name/role after creation.
+  image/video generation, or real trained/validated singing detection
+  (the energy heuristic is a real signal, not a trained model — see step
+  7 above; the seed cadence is still a pure fallback whenever neither
+  real signal produces anything usable); a UI for per-word lyric
+  emphasis during playback (`words` timing is stored, per Stuart's ask,
+  but nothing renders it yet); creating/editing music (MP3 attach is
+  existing-file-only); real plate photos or real camera coverage capture
+  (plates/angles are seed tags, not renders); and replacing
+  `skidmarks.aiglitch.app`'s own Crash Lab. Also out of scope: the
+  "Skidmarks" and "Sunnybank" landing tiles (rendered, inert), and
+  editing a band's name or a member's name/role after creation. Real
+  word-level **speech-to-text is now wired** (see step 6 above) — it's
+  no longer on this out-of-scope list, though it's honestly inert
+  without `OPENAI_API_KEY` configured.
 
 ### Ask Grok + action chips (v0 stub)
 
@@ -1011,5 +1087,14 @@ npm run dev
   those routes are unauthenticated (fine for local dev, not recommended
   once a real mail job is pointed at a public deploy). Set it as a Vercel
   environment variable, never commit it.
+- `OPENAI_API_KEY` (optional) — an OpenAI API key that enables Skidmarks'
+  real word-level MP3 transcription (`app/api/skidmarks/transcribe/route.ts`,
+  see the "Skidmarks node" section's "Wiring up transcription" note for
+  what it costs). **Already set on Vercel Production** for this app —
+  nothing further to configure there; a redeploy after this PR merges
+  will pick it up automatically. Leaving it unset (e.g. in local dev)
+  just means that route honestly returns "unconfigured" and the UI falls
+  back to the client-side energy heuristic instead — the app still
+  works, just without real transcription.
 - No other environment variables are required — the rest is static seed
   data plus whatever's been ingested into `data/overrides.json`.
