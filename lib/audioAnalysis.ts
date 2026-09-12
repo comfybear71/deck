@@ -11,17 +11,17 @@
  * much of that frame's energy sits in the ~300–3400Hz band where human
  * vocal formants concentrate, via a real FFT run on the actual samples.
  * Frames that are loud enough, vocal-band-dominant, *and* not a
- * sustained near-pure tone (see `FLUTE_PEAKINESS_THRESHOLD` — a lead
- * instrument like a flute would live in the same 300–3400Hz band as
- * sung formants, so ratio alone can't tell them apart; this is a
- * defensive general safeguard, not a claim that any particular track
- * actually has one) are flagged "vocal"; everything else (silence, a
- * bassline, a sustained pad, a cymbal wash) is "instrumental". An
- * attack/release **hysteresis** pass (see `applyHysteresis` below —
- * fast to call a frame "vocal", a bit slower to call it back
- * "instrumental") turns per-frame flags into a handful of contiguous
- * real-time segments without flickering back to "instrumental" every
- * time a single syllable or beat dips below the vocal-band threshold.
+ * sustained near-pure tone (see `FLUTE_PEAKINESS_THRESHOLD` — Stuart
+ * confirmed "Talking To Concrete" has flute interludes woven into its
+ * main vocal section, and flute lives in the same 300–3400Hz band as
+ * sung formants, so ratio alone can't tell them apart) are flagged
+ * "vocal"; everything else (silence, a bassline, a sustained pad, a
+ * cymbal wash, a flute passage) is "instrumental". An attack/release
+ * **hysteresis** pass (see `applyHysteresis` below — fast to call a
+ * frame "vocal", slower to call it back "instrumental") turns per-frame
+ * flags into a handful of contiguous real-time segments without
+ * flickering back to "instrumental" every time a syllable, a beat, or
+ * a brief flute interlude dips below the vocal-band threshold.
  *
  * **What this is not**: it is not speech-to-text, it does not know any
  * words, and it cannot tell verse from bridge from chorus — those are
@@ -85,65 +85,65 @@ const SILENCE_FLOOR_RATIO = 0.06;
  * to the rest, before we call it sung rather than instrumental. Tuned
  * by ear, not derived from a dataset — see the module doc comment.
  *
- * Left at its original 0.42. An earlier revision of this file lowered
- * this to 0.36 on the theory that a dense mix under-calls sustained
- * singing, using a live run on "Talking To Concrete" as justification
- * — but that justification assumed singing stayed continuous well past
- * 0:32, which was actually the reporter's own extrapolation, not
- * something Stuart had confirmed. Reverted rather than keep an
- * unverified change stacked on a retracted assumption; if Stuart
- * confirms sustained vocals are genuinely being under-called, revisit
- * this number against that real confirmation instead. */
+ * Left at its original 0.42 for now. The main fix for
+ * "0:32–1:52 mostly-vocal getting under-called" is the hysteresis hold
+ * below (bridging brief flute dips) plus the peakiness cue (rejecting
+ * the flute itself), not this number — lowering it too is a real lever
+ * still on the table if Stuart reports genuine vocal frames (not flute)
+ * still getting missed in that region, but that needs an actual report
+ * against this build to justify, not another guess stacked on top. */
 const VOCAL_RATIO_THRESHOLD = 0.42;
 
 /** Above this, a frame's vocal-band energy is concentrated enough in a
- * single FFT bin that we treat it as a sustained near-pure tone (a
- * lead flute or similar melodic instrument is the motivating case:
- * same 300–3400Hz band as sung vocal formants, so `VOCAL_RATIO_THRESHOLD`
- * alone can't tell them apart) and refuse to call it "vocal" even if
- * `vocalRatio` clears the threshold above.
+ * single FFT bin that we treat it as a sustained near-pure tone — a
+ * lead flute is the confirmed motivating case here: Stuart confirmed
+ * "Talking To Concrete" has flute interludes in its 0:32–1:52 vocal
+ * section and a standalone flute passage at 1:52–2:05, and flute sits
+ * in the same 300–3400Hz band as sung vocal formants, so
+ * `VOCAL_RATIO_THRESHOLD` alone can't tell them apart. This is what
+ * lets a real flute dip actually flip to "Instrumental" (the 13-second
+ * 1:52–2:05 passage) while a brief 2–3s flute interlude inside a verse
+ * doesn't (see `EXIT_VOCAL_HOLD_SEC` — that's the hysteresis side of
+ * the same fix; this is the per-frame classification side).
  *
- * **Honesty caveat, not a solved problem, and not yet confirmed
- * relevant to any specific track**: an earlier revision of this file
- * added this specifically because a report described flute interludes
- * in "Talking To Concrete" — but that description was the reporter's
- * own unconfirmed extrapolation, not something Stuart had verified, so
- * this is being kept only as a generically-reasonable defensive
- * safeguard (voiced formants spread energy across several resonance
- * peaks at once; a pure melodic tone's is dominated by its
+ * **Honesty caveat, not a solved problem**: this is a real,
+ * physically-motivated signal (voiced formants spread energy across
+ * several resonance peaks at once; a flute's is dominated by its
  * fundamental — verified against synthetic pure-tone-vs-multi-formant
- * signals in `lib/audioAnalysis.test.ts`), not as a fix for a
- * confirmed flute-mislabeling problem. It is still a heuristic tuned
- * by ear with no ground-truth recording to check it against: a fast,
- * breathy, or heavily-vibrato'd melodic line could still read as
- * "vocal" here (lower peakiness than a clean sustained tone); a clean,
- * steady, low-vibrato sung note could in principle read as
- * "instrumental" (higher peakiness than a typical formant-rich vowel).
- * Don't tune this further without an actual confirmed case to check it
- * against. */
+ * signals in `lib/audioAnalysis.test.ts`), but it's still a heuristic
+ * tuned by ear with no ground-truth flute recording to check it
+ * against. A fast, breathy, or heavily-vibrato'd flute line could
+ * still read as "vocal" here (lower peakiness than a clean sustained
+ * tone); a clean, steady, low-vibrato sung note could in principle
+ * read as "instrumental" (higher peakiness than a typical
+ * formant-rich vowel). If Stuart's real track still mislabels flute
+ * after this change, that's the number to revisit first, alongside
+ * actually listening through the false calls it makes. */
 const FLUTE_PEAKINESS_THRESHOLD = 0.5;
 
 /** Hysteresis hold times for `applyHysteresis` — modeled on an audio
- * envelope follower's attack/release. Both numbers are deliberately
- * conservative right now, tied only to *confirmed* facts about
- * "Talking To Concrete" rather than the fuller extrapolated timeline an
- * earlier revision of this file assumed (Stuart confirmed the vocal
- * onset lands specifically at 0:31–0:32, but has not yet confirmed
- * whether — or how long — singing continues past 0:32; don't
- * reintroduce a "must stay vocal through X" assumption here without
- * that confirmation):
+ * envelope follower's attack/release, tuned against Stuart's confirmed
+ * ground truth for "Talking To Concrete":
+ * - 0:31–0:32 vocal onset.
+ * - 0:32–1:52 mostly vocal, with several 2–3 *second* flute interludes
+ *   woven in that must NOT flip the section to Instrumental.
+ * - 1:52–2:05 (13 seconds) is an actual standalone flute
+ *   passage/instrumental break that SHOULD flip to Instrumental.
+ *
  * - Switching *into* "vocal" only needs this many seconds of clearly
  *   vocal-flagged frames — short on purpose, so the detected onset
  *   lands tightly inside the confirmed 0:31–0:32 window instead of
  *   drifting noticeably late.
  * - Switching *out of* "vocal" back to "instrumental" needs this many
- *   *consecutive* seconds of clearly non-vocal frames. The live run's
- *   own screenshot showed a 2-second "0:30–0:32 Vocal" blip immediately
- *   flipping to "Instrumental" right after — this just needs to
- *   comfortably outlast a blip that short without presuming anything
- *   longer than that is real. */
+ *   *consecutive* seconds of clearly non-vocal frames — comfortably
+ *   longer than a 2–3s flute interlude (with real margin, since
+ *   "2–3 seconds" is Stuart's estimate, not a frame-accurate
+ *   measurement) but far shorter than the confirmed 13-second flute
+ *   break, so that one still ends the vocal segment promptly. Verified
+ *   against synthetic 2–3s opposite-label dips inside a longer vocal
+ *   run in `lib/audioAnalysis.test.ts`. */
 const ENTER_VOCAL_HOLD_SEC = 0.3;
-const EXIT_VOCAL_HOLD_SEC = 2.5;
+const EXIT_VOCAL_HOLD_SEC = 4.5;
 
 /** Segments shorter than this get folded into a neighbor after
  * hysteresis — keeps the final list readable (a handful of verse-scale

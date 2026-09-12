@@ -16,14 +16,13 @@ import {
  * re-running the real analysis against "Talking To Concrete" — see the
  * PR description for that caveat.
  *
- * Deliberately scoped to *confirmed* facts and generic mechanism
- * checks only: Stuart has confirmed the vocal onset lands at
- * 0:31–0:32, and the live run's own screenshot showed a false-ish
- * ~4s "vocal" blip at 0:09–0:13 and a 2-second "0:30–0:32 Vocal"
- * flicker that immediately flipped back to "Instrumental". Whether (or
- * how long) singing continues past 0:32 has *not* been confirmed, so
- * none of these tests assume a specific answer to that — see
- * `lib/audioAnalysis.ts`'s constant doc comments for the same caveat.
+ * Tuned against Stuart's confirmed ground truth for that track:
+ * 0:00–0:31 instrumental, 0:31–0:32 vocal onset, 0:32–1:52 mostly vocal
+ * with several 2–3s flute interludes woven in (must NOT flip the whole
+ * section to Instrumental), 1:52–2:05 a standalone flute
+ * passage/instrumental break, 2:05–3:08 vocals, 3:08–3:51 a mixed break
+ * with some vocals, 3:51–4:16 no vocals. Also covers the live run's own
+ * reported false-ish ~4s blip at 0:09–0:13.
  */
 
 const FRAME_DURATION_SEC = 0.2; // 5 synthetic "frames" per second — plenty of resolution to exercise second-scale hysteresis without needing real FFT frame counts.
@@ -84,20 +83,20 @@ describe("buildSegmentsFromFeatures", () => {
     expect(segments).toEqual([{ startSec: 0, endSec: 60, vocal: true }]);
   });
 
-  it("does not carve an Instrumental island out of a brief (<2.5s) dip inside a longer vocal run", () => {
-    // Generic mechanism test: this does NOT assert anything about how
-    // long singing actually continues on any real track (that's
-    // unconfirmed) — it just checks that a short masked dip in the
-    // middle of an otherwise-sustained vocal-flagged run gets absorbed
-    // instead of splitting the run in two, which is the general
-    // flip-flopping behavior the live run's screenshot showed (a 2s
-    // "Vocal" blip immediately flipping back to "Instrumental").
+  it("does not carve an Instrumental island out of a brief (up to 3s) dip inside a longer vocal run", () => {
+    // Generic mechanism test, plus the direct check for Stuart's
+    // confirmed "2-3s flute interludes must not flip 0:32-1:52 to
+    // Instrumental" requirement: a short masked dip in the middle of an
+    // otherwise-sustained vocal-flagged run should get absorbed instead
+    // of splitting the run in two. Uses 3.0s — the upper end of
+    // Stuart's "2-3 second" estimate — to check the margin actually
+    // holds, not just a comfortably-short dip.
     const before = frames(VOCAL, 10);
-    const shortDip = frames(INSTRUMENTAL, 2); // shorter than EXIT_VOCAL_HOLD_SEC
+    const dip = frames(INSTRUMENTAL, 3.0); // upper end of the confirmed "2-3s" estimate
     const after = frames(VOCAL, 10);
 
-    const features = [...before, ...shortDip, ...after];
-    const total = totalDuration(before, shortDip, after);
+    const features = [...before, ...dip, ...after];
+    const total = totalDuration(before, dip, after);
     const segments = buildSegmentsFromFeatures(features, FRAME_DURATION_SEC, total);
 
     expect(segments).toEqual([{ startSec: 0, endSec: total, vocal: true }]);
@@ -136,33 +135,36 @@ describe("buildSegmentsFromFeatures", () => {
     expect(segmentAt(segments, 45).vocal).toBe(true); // inside `after`
   });
 
-  it("does not let a couple of brief (<2.5s) near-pure-tone dips end a sustained vocal section", () => {
+  it("does not let several 2-3s flute interludes end a sustained vocal section", () => {
+    // Directly models Stuart's confirmed "0:32-1:52 mostly vocal, with
+    // many little 2-3 second flute interludes woven in" — none of them
+    // should end the run, including the ones right at the 3.0s edge of
+    // his estimate.
     const before = frames(VOCAL, 10);
-    const dip1 = frames(FLUTE, 1.8);
+    const dip1 = frames(FLUTE, 2.0);
     const mid1 = frames(VOCAL, 8);
-    const dip2 = frames(FLUTE, 2.2);
+    const dip2 = frames(FLUTE, 3.0);
+    const mid2 = frames(VOCAL, 8);
+    const dip3 = frames(FLUTE, 2.5);
     const after = frames(VOCAL, 10);
 
-    const features = [...before, ...dip1, ...mid1, ...dip2, ...after];
-    const total = totalDuration(before, dip1, mid1, dip2, after);
+    const features = [...before, ...dip1, ...mid1, ...dip2, ...mid2, ...dip3, ...after];
+    const total = totalDuration(before, dip1, mid1, dip2, mid2, dip3, after);
 
     const segments = buildSegmentsFromFeatures(features, FRAME_DURATION_SEC, total);
 
-    // One continuous Vocal run start-to-finish; neither brief dip
-    // should have carved out its own Instrumental segment.
+    // One continuous Vocal run start-to-finish; none of the flute
+    // interludes should have carved out their own Instrumental segment.
     expect(segments).toEqual([{ startSec: 0, endSec: total, vocal: true }]);
   });
 
   it("aligns onset tightly at the confirmed 0:31-0:32 window and keeps everything before it Instrumental", () => {
-    // Only encodes what's actually confirmed so far: instrumental
-    // through 0:31, the live run's own false-ish blip at 0:09-0:13
-    // (should be suppressed), and a vocal onset specifically at
-    // 0:31-0:32. Deliberately does NOT encode any claim about what
-    // happens after 0:32 — that hasn't been confirmed. `tail` below is
-    // just enough synthetic continuation for the onset segment to
-    // survive the `MIN_SEGMENT_SEC` merge step so its start time is
-    // observable; it is not a claim about how long singing actually
-    // continues on the real track.
+    // Encodes the start of the confirmed timeline: instrumental through
+    // 0:31, the live run's own false-ish blip at 0:09-0:13 (should be
+    // suppressed), and a vocal onset specifically at 0:31-0:32. `tail`
+    // is just enough continuation for the onset segment to survive the
+    // `MIN_SEGMENT_SEC` merge step so its start time is observable (the
+    // fuller test below covers what actually happens after 0:32).
     const intro = frames(INSTRUMENTAL, 9);
     const falseBlip = frames(FALSE_BLIP, 4); // 0:09-0:13
     const gap = frames(INSTRUMENTAL, 18); // 0:13-0:31
@@ -185,6 +187,93 @@ describe("buildSegmentsFromFeatures", () => {
     expect(onsetSegment.vocal).toBe(true);
     expect(onsetSegment.startSec).toBeGreaterThanOrEqual(31);
     expect(onsetSegment.startSec).toBeLessThanOrEqual(32);
+  });
+
+  it("matches Stuart's confirmed ground-truth map for Jack Ash - Talking To Concrete (~4:16)", () => {
+    // 0:00-0:09 instrumental
+    const intro = frames(INSTRUMENTAL, 9);
+    // 0:09-0:13 the live run's own false-ish vocal blip
+    const falseBlip = frames(FALSE_BLIP, 4);
+    // 0:13-0:31 instrumental
+    const gap = frames(INSTRUMENTAL, 18);
+    // 0:31-0:32 vocal onset
+    const onset = frames(VOCAL, 1);
+    // 0:32-1:52 (80s) mostly vocal, with several 2-3s flute interludes
+    // woven in — durations deliberately span the full 2-3s confirmed
+    // range, including the 3.0s upper edge.
+    const verseA = frames(VOCAL, 13);
+    const fluteDip1 = frames(FLUTE, 2.0);
+    const verseB = frames(VOCAL, 12);
+    const fluteDip2 = frames(FLUTE, 3.0);
+    const verseC = frames(VOCAL, 23);
+    const fluteDip3 = frames(FLUTE, 2.4);
+    const verseD = frames(VOCAL, 12.6);
+    const fluteDip4 = frames(FLUTE, 2.0);
+    const verseE = frames(VOCAL, 10);
+    // 1:52-2:05 (13s) standalone flute passage, no vocal
+    const fluteBreak = frames(FLUTE, 13);
+    // 2:05-3:08 (63s) vocals
+    const verseF = frames(VOCAL, 63);
+    // 3:08-3:51 (43s) mixed break, some vocal
+    const mixedA = frames(VOCAL, 11);
+    const mixedB = frames(INSTRUMENTAL, 11);
+    const mixedC = frames(VOCAL, 11);
+    const mixedD = frames(INSTRUMENTAL, 10);
+    // 3:51-4:16 (25s) no vocals
+    const outro = frames(INSTRUMENTAL, 25);
+
+    const sections = [
+      intro,
+      falseBlip,
+      gap,
+      onset,
+      verseA,
+      fluteDip1,
+      verseB,
+      fluteDip2,
+      verseC,
+      fluteDip3,
+      verseD,
+      fluteDip4,
+      verseE,
+      fluteBreak,
+      verseF,
+      mixedA,
+      mixedB,
+      mixedC,
+      mixedD,
+      outro,
+    ];
+    const features = sections.flat();
+    const total = totalDuration(...sections);
+    expect(total).toBeCloseTo(256, 5); // 4:16
+
+    const segments = buildSegmentsFromFeatures(features, FRAME_DURATION_SEC, total);
+
+    // Fewer, verse-scale segments — nowhere near the live run's 17.
+    expect(segments.length).toBeLessThanOrEqual(10);
+
+    // 0:00-0:31: instrumental throughout, including where the false
+    // blip sits — folded away, not its own Vocal segment.
+    for (const seg of segmentsOverlapping(segments, 0, 31)) {
+      expect(seg.vocal).toBe(false);
+    }
+
+    // 0:32-1:52: one continuous Vocal run bridging every flute
+    // interlude — the exact case the live run got wrong (it called
+    // 0:32-1:04 Instrumental).
+    const mainVerse = segmentsOverlapping(segments, 32, 112);
+    expect(mainVerse).toHaveLength(1);
+    expect(mainVerse[0].vocal).toBe(true);
+
+    // 1:52-2:05: the standalone flute passage reads as Instrumental.
+    expect(segmentAt(segments, 118).vocal).toBe(false);
+
+    // 2:05-3:08: vocals.
+    expect(segmentAt(segments, 150).vocal).toBe(true);
+
+    // 3:51-4:16: no vocals.
+    expect(segmentAt(segments, 245).vocal).toBe(false);
   });
 });
 
