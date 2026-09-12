@@ -23,6 +23,15 @@ import { NextResponse } from "next/server";
  * provider's word list actually mapped to enough singing to trust,
  * independent of which backend answered.
  *
+ * **Confirmed against this exact track**: Stuart ran the same file
+ * through ElevenLabs' own hosted transcribe tool and got back real sung
+ * lyrics ("I drew the blueprint straight in the dust. Spelled it out
+ * clear, no room for mistrust…") with per-line timing, where Whisper had
+ * returned words too sparse to build any usable vocal map from — direct
+ * evidence this pivot addresses the actual reported failure on the
+ * actual reported track, not just a theoretical "should be better at
+ * lyrics" argument.
+ *
  * **Key wiring**: Stuart confirmed he already has an ElevenLabs API key
  * set on Vercel Production (he uses it there for voice generation in
  * other productions) — this build does **not** ask him to create or add
@@ -163,6 +172,20 @@ async function transcribeWithElevenLabs(audio: File, apiKey: string): Promise<Pr
   form.set("file", audio, audio.name || "audio.mp3");
   form.set("model_id", ELEVENLABS_MODEL_ID);
   form.set("timestamps_granularity", "word");
+  // No documented surcharge (unlike entity_detection/keyterms/diarize
+  // extras — see https://elevenlabs.io/docs/eleven-api/resources/errors
+  // and the convert endpoint's own param docs), and Stuart's own proof
+  // run against this exact track (ElevenLabs' hosted transcribe tool)
+  // came back tagged `[singing]` — this just asks the API for the same
+  // non-speech/context tagging that run showed, for free. Not used for
+  // vocal/instrumental segmentation below (`audio_event` entries are
+  // filtered out same as `spacing` — ElevenLabs doesn't document a
+  // fixed tag vocabulary, so treating specific tag text as an
+  // authoritative "this is singing" signal would be guessing at an
+  // undocumented format, not a real check); segmentation still comes
+  // entirely from real per-word timestamps via `segmentsFromWords` +
+  // `hasUsefulVocalCoverage`.
+  form.set("tag_audio_events", "true");
 
   let res: Response;
   try {
