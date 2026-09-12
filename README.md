@@ -61,13 +61,17 @@ total.
   `lib/deck-ask-client.ts` — the Ask-Grok bridge (shared types + prompt
   builder, the server-side store, and the client-side POST helper). See
   "Ask Grok (v0 stub)" below.
-- `lib/skidmarks.ts` / `lib/audioAnalysis.ts` /
-  `hooks/useSkidmarksStudio.ts` — the Skidmarks Music-video studio model
-  (bands/members/looks/MP3/clip timeline) and its `localStorage` store
-  (pure mock builders, `useSyncExternalStore` React binding, and real
-  client-side vocal/instrumental MP3 analysis — an FFT-based heuristic,
-  no API key — driving the clip timeline and the Lyrics/Timing/Ready
-  chips). See "Skidmarks node (vibe director)" below.
+- `lib/skidmarks.ts` / `lib/audioAnalysis.ts` (+
+  `lib/audioAnalysis.test.ts`) / `hooks/useSkidmarksStudio.ts` — the
+  Skidmarks Music-video studio model (bands/members/looks/MP3/clip
+  timeline) and its `localStorage` store (pure mock builders,
+  `useSyncExternalStore` React binding, and real client-side
+  vocal/instrumental MP3 analysis — an FFT-based heuristic, no API key —
+  driving the clip timeline and the Lyrics/Timing/Ready chips). The
+  analysis heuristic has its own `vitest` suite (`npm test`) against
+  synthetic signals — see "Skidmarks node (vibe director)" below for the
+  honest ceiling on what that suite can and can't prove without
+  Stuart's actual MP3 in the repo.
 - `app/api/deck/ask/` — the `POST`/`GET` route backing Ask Grok.
 - `lib/clipboard.ts` — shared "copy to clipboard, with a manual-selection
   fallback" helper used by the action chips and Ask Grok's copy-prompt
@@ -703,17 +707,29 @@ now (see "Explicitly out of scope" below).
      **client-side, no API key, no network call**: it decodes the actual
      picked MP3 via the browser's `AudioContext`, frames the real PCM
      samples, runs a real FFT per frame, and scores each frame on (a) how
-     loud it is (RMS) and (b) how much of its energy sits in the
-     ~300–3400Hz band human vocal formants live in. Frames that are both
-     loud enough and vocal-band-dominant are flagged "vocal"; a median-
-     filter smoothing pass turns the frame-level flags into a handful of
-     contiguous real-time segments. It's a genuine signal-processing
+     loud it is (RMS), (b) how much of its energy sits in the ~300–3400Hz
+     band human vocal formants live in, and (c) how *concentrated* that
+     vocal-band energy is in a single FFT bin — a sustained near-pure
+     tone (a lead flute is the motivating case, since it sits in the
+     same band real vocal formants do) reads as "peaky", while a sung
+     vowel's broader formant structure doesn't. Frames that are loud
+     enough, vocal-band-dominant, and not too "peaky" are flagged
+     "vocal"; an attack/release **hysteresis** pass (quick to call a
+     frame "vocal", much slower to call it back "instrumental" — see the
+     module doc comment in `lib/audioAnalysis.ts`) turns the frame-level
+     flags into a handful of contiguous real-time segments without
+     flickering mid-phrase every time a syllable, a beat, or a brief
+     flute interlude gets in the way. It's a genuine signal-processing
      heuristic against the real file — not a mock — but it's also not
      speech-to-text and can't see song structure, so it only ever labels
      output **Vocal**/**Instrumental** (never verse/bridge — see below).
-     It's tuned by ear, not a trained/validated model, so it calls loud
-     instrumental sections or quiet vocals wrong sometimes; that's why
-     the UI calls it "real(ish)", not "real". A Whisper-style
+     It's tuned by ear against Stuart's reports on one track (Jack Ash –
+     "Talking To Concrete"), not a trained/validated model or verified
+     against Stuart's actual file in this repo, so expect it to still
+     call loud instrumental sections, quiet vocals, or an unusually
+     "vocal-shaped" instrumental (the flute cue is a heuristic, not a
+     solved problem — see that constant's doc comment) wrong sometimes;
+     that's why the UI calls it "real(ish)", not "real". A Whisper-style
      transcription pass was considered for real lyric timing instead, but
      that needs a paid API key and a server upload route Stuart doesn't
      have configured — scaffolding a silently-non-functional keyed path

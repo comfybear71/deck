@@ -10,10 +10,17 @@
  * frames it, and for each frame computes (a) loudness (RMS) and (b) how
  * much of that frame's energy sits in the ~300–3400Hz band where human
  * vocal formants concentrate, via a real FFT run on the actual samples.
- * Frames that are both loud enough and vocal-band-dominant are flagged
- * "vocal"; everything else (silence, a bassline, a sustained pad, a
- * cymbal wash) is "instrumental". A short median-filter smoothing pass
- * turns per-frame flags into a handful of contiguous real-time segments.
+ * Frames that are loud enough, vocal-band-dominant, *and* not a
+ * sustained near-pure tone (see `FLUTE_PEAKINESS_THRESHOLD` — a lead
+ * flute lives in the same 300–3400Hz band as sung formants, so ratio
+ * alone can't tell them apart) are flagged "vocal"; everything else
+ * (silence, a bassline, a sustained pad, a cymbal wash, a flute break)
+ * is "instrumental". An attack/release **hysteresis** pass (see
+ * `applyHysteresis` below — fast to call a frame "vocal", much slower
+ * to call it back "instrumental") turns per-frame flags into a handful
+ * of contiguous real-time segments without flickering back to
+ * "instrumental" mid-phrase just because a syllable, a beat, or a brief
+ * flute interlude got in the way.
  *
  * **What this is not**: it is not speech-to-text, it does not know any
  * words, and it cannot tell verse from bridge from chorus — those are
@@ -55,11 +62,11 @@ export interface VocalAnalysisResult {
  * samples is ~46ms at 44.1kHz: fine time resolution for "is this second
  * sung", plenty of frequency resolution (~21.5Hz/bin) to separate the
  * vocal formant band from bass/treble. */
-const FRAME_SIZE = 2048;
+export const FRAME_SIZE = 2048;
 /** No overlap between frames — halves the FFT work vs. 50% overlap.
  * Segments are seconds long, so losing a little time precision between
  * frame centers doesn't matter here. */
-const HOP_SIZE = FRAME_SIZE;
+export const HOP_SIZE = FRAME_SIZE;
 
 /** Human vocal formants live roughly here; below is mostly bass/kick/
  * bassline, above is mostly cymbals/hi-hats/sibilance-adjacent noise —
@@ -75,19 +82,71 @@ const SILENCE_FLOOR_RATIO = 0.06;
 
 /** How much of a frame's energy has to sit in the vocal band, relative
  * to the rest, before we call it sung rather than instrumental. Tuned
- * by ear, not derived from a dataset — see the module doc comment. */
-const VOCAL_RATIO_THRESHOLD = 0.42;
+ * by ear, not derived from a dataset — see the module doc comment.
+ *
+ * Lowered from an earlier 0.42 after a live run (Jack Ash - "Talking To
+ * Concrete") showed sustained, clearly-sung verses sitting at ~1:04 of
+ * mid-band dominance getting called "instrumental": in a fuller mix,
+ * other instruments (guitars, keys) also live in the 300–3400Hz vocal
+ * band, so requiring vocals to be a full 42% majority of *all* spectral
+ * energy under-calls real singing once it's not the only thing in that
+ * band. 0.36 still requires the vocal band to be the single largest of
+ * the three bands most of the time, just not by as wide a margin. */
+const VOCAL_RATIO_THRESHOLD = 0.36;
 
-/** Smoothing window for the frame-level vocal/instrumental flag —
- * roughly this many seconds of majority vote, so a single vocal-ish
- * frame in the middle of an instrumental break doesn't create a
- * flickery one-frame segment. */
-const SMOOTHING_WINDOW_SEC = 1.0;
+/** Above this, a frame's vocal-band energy is concentrated enough in a
+ * single FFT bin that we treat it as a sustained near-pure tone (a
+ * flute is the motivating case: same 300–3400Hz band as sung vocal
+ * formants, so `VOCAL_RATIO_THRESHOLD` alone can't tell them apart) and
+ * refuse to call it "vocal" even if `vocalRatio` clears the threshold
+ * above.
+ *
+ * **Honesty caveat, not a solved problem**: this is a real, physically-
+ * motivated signal (voiced formants spread energy across several
+ * resonance peaks at once; a flute's is dominated by its fundamental),
+ * verified against synthetic pure-tone-vs-multi-formant signals in
+ * `lib/audioAnalysis.test.ts`, but it is still a heuristic tuned by ear
+ * with no ground-truth flute recording to check it against. A flute
+ * playing a fast, breathy, or heavily-vibrato'd line could still read
+ * as "vocal" here (lower peakiness than a clean sustained tone); a
+ * clean, steady, low-vibrato sung note could in principle read as
+ * "instrumental" (higher peakiness than a typical formant-rich vowel).
+ * If Stuart's real track still mislabels flute after this change,
+ * that's the number to revisit first, alongside actually listening
+ * through the false calls it makes. */
+const FLUTE_PEAKINESS_THRESHOLD = 0.5;
+
+/** Hysteresis hold times for `applyHysteresis` — modeled on an audio
+ * envelope follower's attack/release, and the direct fix for the
+ * reported bug (real singing getting flipped to "Instrumental" after a
+ * short dip below `VOCAL_RATIO_THRESHOLD` — Stuart's ground-truth
+ * example is a verse-length vocal section on "Talking To Concrete" with
+ * "many little 2–3 second flute interludes woven in" that must not end
+ * the vocal segment):
+ * - Switching *into* "vocal" only needs this many seconds of clearly
+ *   vocal-flagged frames — quick to catch a real vocal entrance.
+ * - Switching *out of* "vocal" back to "instrumental" needs this many
+ *   *consecutive* seconds of clearly non-vocal frames — comfortably
+ *   longer than a 2–3s flute dip (with margin, since "2–3 seconds" is
+ *   Stuart's estimate, not a hard measurement) but much shorter than an
+ *   actual instrumental break (Stuart's flute break on the same track
+ *   is a full 13 seconds), so a real break still ends the segment
+ *   promptly. */
+const ENTER_VOCAL_HOLD_SEC = 0.6;
+const EXIT_VOCAL_HOLD_SEC = 5.0;
 
 /** Segments shorter than this get folded into a neighbor after
- * smoothing — keeps the final list readable (a handful of real
- * sections, not dozens of near-instant flips). */
-const MIN_SEGMENT_SEC = 1.5;
+ * hysteresis — keeps the final list readable (a handful of verse-scale
+ * sections, not dozens of near-instant flips) and is also the backstop
+ * that suppresses isolated false micro-vocals, like the live run's
+ * ~4s "vocal" blip at 0:09–0:13 on "Talking To Concrete" sitting inside
+ * a long real instrumental intro: too short to trust as its own
+ * section, so it gets folded into whichever neighboring run is longer.
+ * Raised from an earlier 1.5s (then 3.0s) — 17 segments for one
+ * 4-minute track was too choppy to be a useful "where do I cut this"
+ * reference, and short isolated blips are usually either noise or
+ * smaller than anyone would actually clip to. */
+const MIN_SEGMENT_SEC = 5.0;
 
 /** Hard ceiling on how long analysis is allowed to run before we give up
  * and fall back to the seed timeline — protects against a pathological
@@ -170,12 +229,23 @@ function toMonoSamples(buffer: AudioBuffer): Float32Array {
   return mono;
 }
 
-interface FrameFeatures {
+export interface FrameFeatures {
   rms: number;
   vocalRatio: number;
+  /** How concentrated the vocal-band energy is in a single FFT bin
+   * (that bin's power over the whole vocal band's power). A sustained,
+   * near-pure single-note tone — a flute is the textbook case, and it
+   * lives in the same 300–3400Hz band as sung vocal formants — puts
+   * almost all of its vocal-band energy in one bin (plus a couple of
+   * weak harmonics), so this comes out high. A sung vowel's formant
+   * structure spreads energy across several resonance peaks at once, so
+   * this comes out lower even when the note itself is steady. See
+   * `FLUTE_PEAKINESS_THRESHOLD`'s doc comment for how this is used, and
+   * its honesty caveat for where this cue can still be fooled. */
+  vocalBandPeakiness: number;
 }
 
-async function computeFrameFeatures(
+export async function computeFrameFeatures(
   samples: Float32Array,
   sampleRate: number
 ): Promise<FrameFeatures[]> {
@@ -214,15 +284,25 @@ async function computeFrameFeatures(
     let lowPower = 0;
     let midPower = 0;
     let highPower = 0;
+    let midPeakPower = 0;
     const nyquistBin = FRAME_SIZE / 2;
     for (let bin = 1; bin < nyquistBin; bin++) {
       const power = re[bin] * re[bin] + im[bin] * im[bin];
-      if (bin < lowBinEnd) lowPower += power;
-      else if (bin < highBinEnd) midPower += power;
-      else highPower += power;
+      if (bin < lowBinEnd) {
+        lowPower += power;
+      } else if (bin < highBinEnd) {
+        midPower += power;
+        if (power > midPeakPower) midPeakPower = power;
+      } else {
+        highPower += power;
+      }
     }
     const totalPower = lowPower + midPower + highPower + 1e-9;
-    features.push({ rms, vocalRatio: midPower / totalPower });
+    features.push({
+      rms,
+      vocalRatio: midPower / totalPower,
+      vocalBandPeakiness: midPeakPower / (midPower + 1e-9),
+    });
 
     if (f % FRAMES_PER_YIELD === FRAMES_PER_YIELD - 1) {
       await yieldToEventLoop();
@@ -232,20 +312,49 @@ async function computeFrameFeatures(
   return features;
 }
 
-function medianSmoothBooleans(flags: boolean[], windowSize: number): boolean[] {
-  if (windowSize <= 1) return flags;
-  const half = Math.floor(windowSize / 2);
-  const smoothed: boolean[] = new Array(flags.length);
-  for (let i = 0; i < flags.length; i++) {
-    let trueCount = 0;
-    let total = 0;
-    for (let j = Math.max(0, i - half); j <= Math.min(flags.length - 1, i + half); j++) {
-      total++;
-      if (flags[j]) trueCount++;
+/**
+ * Debounces the frame-level vocal/instrumental flags with **asymmetric**
+ * hysteresis, like an audio envelope follower's attack/release: quick to
+ * raise ("vocal"), slow to fall ("instrumental").
+ *
+ * Walks the flags as a sequence of same-value runs. A run only flips the
+ * running state if it's long enough to clear the hold time *for the
+ * direction it's flipping in* (`enterVocalHoldSec` to turn "vocal" on,
+ * `exitVocalHoldSec` to turn it back off); short runs are swallowed and
+ * just keep whatever the current state already is. Because
+ * `exitVocalHoldSec` is set much longer than `enterVocalHoldSec` (see
+ * the constants above), this is exactly the fix for the reported bug:
+ * a genuine vocal entrance is still caught quickly, but a short dip
+ * back below the vocal-band threshold in the middle of sustained
+ * singing (a masked syllable, a beat where the mix buries the vocal) no
+ * longer flips the whole phrase to "instrumental" — only a dip that
+ * lasts as long as a real instrumental break does.
+ */
+function applyHysteresis(
+  flags: boolean[],
+  frameDurationSec: number,
+  enterVocalHoldSec: number,
+  exitVocalHoldSec: number
+): boolean[] {
+  if (flags.length === 0) return flags;
+  const out: boolean[] = new Array(flags.length);
+  let state = flags[0];
+  let i = 0;
+  while (i < flags.length) {
+    const runValue = flags[i];
+    let runEnd = i + 1;
+    while (runEnd < flags.length && flags[runEnd] === runValue) runEnd++;
+    if (runValue !== state) {
+      const runLenSec = (runEnd - i) * frameDurationSec;
+      const requiredSec = runValue ? enterVocalHoldSec : exitVocalHoldSec;
+      if (runLenSec >= requiredSec) {
+        state = runValue;
+      }
     }
-    smoothed[i] = trueCount * 2 > total;
+    for (let k = i; k < runEnd; k++) out[k] = state;
+    i = runEnd;
   }
-  return smoothed;
+  return out;
 }
 
 function runLengthEncode(
@@ -333,28 +442,50 @@ async function decodeFile(file: File): Promise<AudioBuffer> {
   }
 }
 
+/**
+ * Turns per-frame loudness/vocal-band features into the final segment
+ * list: silence-floor + ratio threshold to raw per-frame flags, then
+ * attack/release hysteresis (`applyHysteresis`) to hold "vocal" through
+ * brief dips, then run-length encoding, then folding away anything
+ * still shorter than `MIN_SEGMENT_SEC`. Split out from
+ * `analyzeVocalActivityInner` so tests can exercise the actual tuning
+ * logic against synthetic frame features without needing a real MP3 or
+ * a browser `AudioContext` — see `lib/audioAnalysis.test.ts`.
+ */
+export function buildSegmentsFromFeatures(
+  features: FrameFeatures[],
+  frameDurationSec: number,
+  totalDurationSec: number
+): VocalAnalysisSegment[] {
+  const peakRms = features.reduce((max, f) => Math.max(max, f.rms), 0);
+  const silenceFloor = peakRms * SILENCE_FLOOR_RATIO;
+
+  const rawFlags = features.map(
+    (f) =>
+      f.rms > silenceFloor &&
+      f.vocalRatio > VOCAL_RATIO_THRESHOLD &&
+      f.vocalBandPeakiness < FLUTE_PEAKINESS_THRESHOLD
+  );
+
+  const hysteresisFlags = applyHysteresis(
+    rawFlags,
+    frameDurationSec,
+    ENTER_VOCAL_HOLD_SEC,
+    EXIT_VOCAL_HOLD_SEC
+  );
+
+  const rawSegments = runLengthEncode(hysteresisFlags, frameDurationSec, totalDurationSec);
+  return mergeTinySegments(rawSegments);
+}
+
 async function analyzeVocalActivityInner(file: File): Promise<VocalAnalysisResult> {
   const buffer = await decodeFile(file);
   const samples = toMonoSamples(buffer);
   const totalDurationSec = buffer.duration;
 
   const features = await computeFrameFeatures(samples, buffer.sampleRate);
-  const peakRms = features.reduce((max, f) => Math.max(max, f.rms), 0);
-  const silenceFloor = peakRms * SILENCE_FLOOR_RATIO;
-
-  const rawFlags = features.map(
-    (f) => f.rms > silenceFloor && f.vocalRatio > VOCAL_RATIO_THRESHOLD
-  );
-
   const frameDurationSec = HOP_SIZE / buffer.sampleRate;
-  const smoothingWindowFrames = Math.max(
-    1,
-    Math.round(SMOOTHING_WINDOW_SEC / frameDurationSec)
-  );
-  const smoothedFlags = medianSmoothBooleans(rawFlags, smoothingWindowFrames);
-
-  const rawSegments = runLengthEncode(smoothedFlags, frameDurationSec, totalDurationSec);
-  const segments = mergeTinySegments(rawSegments);
+  const segments = buildSegmentsFromFeatures(features, frameDurationSec, totalDurationSec);
 
   return { segments, durationSec: totalDurationSec };
 }
