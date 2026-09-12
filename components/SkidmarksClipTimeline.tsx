@@ -178,7 +178,7 @@ function timelineCaption(
     transcriptionStatus === "checking"
       ? "Requesting word-level transcription\u2026 "
       : transcriptionStatus === "unconfigured"
-        ? `${transcriptionError ?? "No ELEVENLABS_API_KEY (or OPENAI_API_KEY) configured, so real word-level transcription is unavailable"} \u2014 `
+        ? `${transcriptionError ?? "No ELEVENLABS_API_KEY (or ELEVEN_LABS_API_KEY) configured, so real word-level transcription is unavailable"} \u2014 `
         : transcriptionStatus === "sparse"
           ? `${transcriptionError ?? `${transcriptionProviderLabel(transcriptionProvider)} ran but found too little usable vocal timing for this track`} \u2014 `
           : `Transcription failed${transcriptionError ? ` (${transcriptionError})` : ""} \u2014 `;

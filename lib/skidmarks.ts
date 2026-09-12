@@ -25,20 +25,23 @@
  * 1. **Real word-level transcription** (`lib/transcription.ts`,
  *    `transcribeAudio` + `segmentsFromWords`) — a real speech-to-text
  *    call (server route: `app/api/skidmarks/transcribe/route.ts`,
- *    **ElevenLabs Scribe** primary via `ELEVENLABS_API_KEY`, OpenAI
- *    Whisper as an optional fallback via `OPENAI_API_KEY`) that returns
+ *    **ElevenLabs Scribe only** via `ELEVENLABS_API_KEY`/
+ *    `ELEVEN_LABS_API_KEY` — OpenAI Whisper was removed entirely, see
+ *    that route's doc comment for why) that returns
  *    real per-word start/end times; `applySkidmarksTranscriptionResult`
  *    below merges consecutive words into vocal runs (gaps =
  *    instrumental) — this is what lets a segment boundary land at an
  *    actual measured vocal onset (Stuart's original ask, after the
  *    energy heuristic glued "Talking To Concrete"'s intro + flute into
  *    one giant Vocal call) instead of a mid-band-energy guess. **Never
- *    claimed live without a key** — if neither provider key is set
- *    server-side, or every configured provider's request fails, this is
- *    honestly skipped (`transcriptionStatus`), not silently retried as
- *    something else. **Also never claimed useful just because words
- *    came back** — a live run against this exact track once returned
- *    real, non-empty words from Whisper that still merged into a single
+ *    claimed live without a key** — if no ElevenLabs key is set
+ *    server-side, or the Scribe request fails, this is
+ *    honestly skipped (`transcriptionStatus`), not silently retried
+ *    against another provider — there isn't one anymore; the energy
+ *    heuristic (step 2 below) is the only fallback. **Also never
+ *    claimed useful just because words came back** — a live run
+ *    against this exact track once returned real, non-empty words
+ *    from an STT provider that still merged into a single
  *    Instrumental segment covering the whole song (too sparse across the
  *    sung sections for `segmentsFromWords`'s gap merge to find any
  *    vocal run worth keeping), so `applySkidmarksTranscriptionResult`
@@ -457,7 +460,7 @@ export function buildDemoSegments(totalSec: number): SkidmarksClipSegment[] {
  * it's landed — see `applySkidmarksAnalysisResult`):
  * - `transcription` — real output of `transcribeAudio` +
  *   `segmentsFromWords` (`lib/transcription.ts`): actual word timestamps
- *   (ElevenLabs Scribe, or OpenAI Whisper as a fallback — see
+ *   (ElevenLabs Scribe only — see
  *   `app/api/skidmarks/transcribe/route.ts`) merged into vocal/
  *   instrumental runs, via `applySkidmarksTranscriptionResult` — but
  *   only once that merged map clears `hasUsefulVocalCoverage`. The only
@@ -483,26 +486,28 @@ export type SkidmarksSegmentsSource = "transcription" | "analysis" | "seed-fallb
  *   flight (or, after a page reload with no file to resume, about to be
  *   normalized to `failed`).
  * - `unconfigured` — the server has neither `ELEVENLABS_API_KEY` nor
- *   `OPENAI_API_KEY` set. A distinct, expected outcome, not an error —
+ *   `ELEVEN_LABS_API_KEY` set. A distinct, expected outcome, not an error —
  *   never surfaced as a failure.
  * - `done` — it finished *and* produced a usable word timing map
  *   (`hasUsefulVocalCoverage` cleared its bar) — `segmentsSource ===
  *   "transcription"`.
- * - `sparse` — it finished, a provider returned a real, non-empty word
- *   list, but the resulting vocal/instrumental map came out with
- *   near-zero real singing coverage for this track
+ * - `sparse` — it finished, ElevenLabs Scribe returned a real,
+ *   non-empty word list, but the resulting vocal/instrumental map came
+ *   out with near-zero real singing coverage for this track
  *   (`hasUsefulVocalCoverage` in `lib/transcription.ts` said no) — not
  *   trusted enough to show or to turn the Lyrics chip green.
  *   `transcriptionError` explains why in plain language. This is the
- *   honest outcome for the exact live bug this status was added for:
- *   Whisper returning real words for "Talking To Concrete" that still
- *   merged into a single Instrumental segment covering the whole track
- *   — a `"done"` status back then couldn't distinguish "produced a real
- *   map" from "technically responded", which is exactly how that got
- *   shown as green Lyrics.
- * - `failed` — the request itself errored (network, bad audio, upstream
- *   API error, every configured provider failed) after a key *was*
- *   configured; `transcriptionError` (if present) says why.
+ *   honest outcome for the live bug this status was originally added
+ *   for: a real STT provider returning real words for "Talking To
+ *   Concrete" that still merged into a single Instrumental segment
+ *   covering the whole track — a `"done"` status back then couldn't
+ *   distinguish "produced a real map" from "technically responded",
+ *   which is exactly how that got shown as green Lyrics.
+ * - `failed` — the Scribe request itself errored (network, bad audio,
+ *   an ElevenLabs API error, or an outright rejection like an auth/
+ *   permission error) after a key *was* configured; `transcriptionError`
+ *   names the real reason (never a silent fallback to another
+ *   provider — there isn't one).
  */
 export type SkidmarksTranscriptionStatus =
   | "checking"
@@ -548,11 +553,13 @@ export interface SkidmarksMp3Attachment {
   transcriptionStatus: SkidmarksTranscriptionStatus;
   /** Which backend produced `words`/`segments` (when `segmentsSource
    * === "transcription"`) or the sparse result (when `transcriptionStatus
-   * === "sparse"`) — `"elevenlabs"` (this build's primary path) or
-   * `"openai"` (the fallback). `undefined` while unresolved, unconfigured,
-   * or after an outright request failure with no successful provider.
-   * Surfaced in the timeline's caption so it names the real backend
-   * instead of hardcoding one. */
+   * === "sparse"`) — always `"elevenlabs"` on a real response today
+   * (OpenAI Whisper was removed entirely, see
+   * `app/api/skidmarks/transcribe/route.ts`'s doc comment). `undefined`
+   * while unresolved, unconfigured, or after an outright request
+   * failure. Surfaced in the timeline's caption so it names the real
+   * backend instead of hardcoding one, and so this field doesn't need
+   * to change if a provider is ever reintroduced. */
   transcriptionProvider?: SkidmarksTranscriptionProvider;
   /** Human-readable reason a *configured* transcription request failed
    * (network/upstream error), or — for `transcriptionStatus === "sparse"`
@@ -1277,7 +1284,7 @@ export function applySkidmarksTranscriptionResult(
 
 /**
  * Marks transcription as unconfigured — the server has neither
- * `ELEVENLABS_API_KEY` nor `OPENAI_API_KEY` set. Deliberately **not**
+ * `ELEVENLABS_API_KEY` nor `ELEVEN_LABS_API_KEY` set. Deliberately **not**
  * treated as a failure (no amber "error" styling implied beyond what
  * the energy-heuristic/seed fallback already honestly shows) since
  * nothing actually went wrong; transcription just isn't wired up in

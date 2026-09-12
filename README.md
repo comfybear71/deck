@@ -711,23 +711,29 @@ now (see "Explicitly out of scope" below).
      he wanted **speech-to-text with word start times, like phone
      dictation**, instead of another mid-band-energy guess. The moment a
      file's attached, the client POSTs it (as `multipart/form-data`) to
-     `/api/skidmarks/transcribe`, which forwards it server-side to a
-     real STT provider — **ElevenLabs Scribe** (`scribe_v2`) first, via
-     Stuart's already-configured **`ELEVENLABS_API_KEY`** (or
-     `ELEVEN_LABS_API_KEY`, checked as a fallback name), with **OpenAI
-     Whisper** (`whisper-1`) as an automatic fallback provider via
-     **`OPENAI_API_KEY`** if no ElevenLabs key is found under either name
-     or its request itself fails (see "Wiring up transcription" below
-     for exactly which names are checked and what each provider costs)
-     — and returns real per-word `start`/`end` timestamps, tagged with
-     which provider actually
-     answered (`provider`). `segmentsFromWords` then merges consecutive
+     `/api/skidmarks/transcribe`, which forwards it server-side to
+     **ElevenLabs Scribe** (`scribe_v2`) — and **only** ElevenLabs Scribe,
+     via Stuart's already-configured **`ELEVENLABS_API_KEY`** (or
+     `ELEVEN_LABS_API_KEY`, checked as a fallback name). **There is no
+     OpenAI Whisper fallback** — an earlier build of this feature carried
+     one, but Stuart's explicit product call (after the fourth live bug
+     report below) was to remove it entirely: it isn't reliable for sung
+     tracks, and its "success" on a sparse word list was silently masking
+     real ElevenLabs failures from him (see that report for the full
+     story and the evidence behind it). If Scribe isn't configured, or
+     its request fails for any reason, this route reports that failure
+     honestly (see "Wiring up transcription" below for exactly which env
+     var names are checked and what it costs) and the UI falls back
+     straight to step 7's energy heuristic — and returns real per-word
+     `start`/`end` timestamps, tagged with the provider that answered
+     (`provider`, always `"elevenlabs"` on a real success today).
+     `segmentsFromWords` then merges consecutive
      words into vocal runs (a gap over ~2s between words becomes an
      instrumental segment — see that function's doc comment), which is
      what lets a segment boundary land at an actual measured vocal onset
      instead of an energy-threshold guess. **This is wired, not a stub**
-     — but it's also **never claimed live without a key**: if neither
-     key is set server-side, the route honestly returns
+     — but it's also **never claimed live without a key**: if the key
+     isn't set server-side, the route honestly returns
      `501`/`missing_api_key` rather than pretending to have attempted
      anything, and the UI falls back to step 7 below without implying a
      failure. A genuine request failure (network error, bad audio, an
@@ -915,6 +921,175 @@ now (see "Explicitly out of scope" below).
      would point somewhere this PR couldn't reach (e.g. Scribe's own
      handling of this specific mix, or a genuinely quiet/buried vocal
      take) rather than back at this compression step.
+
+     **Fourth live bug report, and Stuart's resulting product call —
+     remove OpenAI Whisper entirely**: after the ElevenLabs-primary
+     pivot above shipped and started naming its provider in the
+     caption, Stuart re-attached "Talking To Concrete" once more and
+     the caption read **"OpenAI Whisper returned 18 words…"** — proof
+     that ElevenLabs was tried first, failed, and the old Whisper
+     fallback quietly took over and "succeeded" by the same low bar
+     (any non-empty word list) the third bug report above was already
+     about, without ever surfacing *why* ElevenLabs failed. Investigated
+     directly against the **live ElevenLabs API**, using this route's
+     exact request shape and a real (not necessarily Stuart's own)
+     ElevenLabs key available in this sandbox: that call returned a
+     real `401` — `{"detail":{"type":"authentication_error","code":
+     "unauthorized","status":"missing_permissions","message":"The API
+     key you used is missing the permission speech_to_text to execute
+     this operation."}}` — i.e. a key that authenticates fine but is
+     scoped without the `speech_to_text` permission. This is plausible
+     context here specifically because Stuart's own account uses this
+     key for **voice generation** (text-to-speech) elsewhere — a
+     separate ElevenLabs permission from transcription (speech-to-text)
+     that a key scoped for the former doesn't automatically carry. **This
+     is confirmed, reproducible behavior of the real ElevenLabs API
+     against this route's real request — not confirmed to be Stuart's
+     *exact* failure**, since this sandbox's key isn't his Vercel
+     project's key. Stuart's own product decision, independent of which
+     exact cause this turns out to be: **remove the Whisper fallback
+     entirely** — it isn't reliable for sung tracks, and a "success" on
+     a sparse word list was actively hiding real ElevenLabs failures,
+     which is a worse outcome than an honest failure caption. The fix,
+     landed in this build:
+       - `app/api/skidmarks/transcribe/route.ts` no longer calls OpenAI
+         Whisper at all — `OPENAI_API_KEY` isn't read by this route.
+         ElevenLabs Scribe succeeds, or the route reports exactly why it
+         didn't; `lib/skidmarks.ts` falls back to the energy heuristic
+         either way, same as it always has when transcription isn't
+         available.
+       - Every real ElevenLabs failure now reaches
+         `transcriptionError`/the timeline caption verbatim — a
+         permissions-scoped key, an expired/rotated key, a rate limit, a
+         genuine outage, a timeout — instead of a bare "Transcription
+         failed" or (the actual bug) a silent provider swap. The
+         plain-language message from ElevenLabs' own error body (e.g.
+         "…missing the permission speech_to_text…") is exactly what
+         Stuart needs to act on: check the key's scopes in the
+         ElevenLabs dashboard.
+       - **Verified against Stuart's own separate Gemini troubleshooting
+         notes** as a second pass, point by point, against the actual
+         code (not assumed): the endpoint/params/field names
+         (`file`/`model_id=scribe_v2`/`timestamps_granularity=word`)
+         match ElevenLabs' documented API; the multipart request never
+         hand-sets `Content-Type` (letting `fetch` generate the real
+         boundary) and always uploads a real `File`/`Blob`, never a
+         path string; the `xi-api-key` auth header is correct and a
+         `401`/`403` is now classified as its own `"auth_error"` code
+         (`classifyElevenLabsFailure` in the route) rather than a
+         generic upstream failure; ElevenLabs' documented error taxonomy
+         (`{ detail: { message, type, code, status } }`) is parsed into
+         specific codes — `auth_error`, `rate_limited`,
+         `payment_required`, `invalid_audio` (a validation error
+         specifically about the audio file itself — `invalid_audio`/
+         `invalid_audio_format`/`audio_too_long`/`audio_too_short`/
+         `invalid_file_type`), `invalid_request` (any other bad
+         parameter), or `upstream_error` — each carrying ElevenLabs' own
+         human-readable message verbatim.
+       - **Encoding risk, considered and addressed with the smallest
+         fix, not a new pipeline**: Stuart's notes flagged that a highly
+         compressed/VBR/corrupt MP3 could trip an `invalid_audio`
+         rejection. For files this app already re-encodes for size
+         (`lib/audioCompression.ts`'s `compressAudioForTranscription`,
+         anything over ~4MiB), that risk is already low — the pipeline
+         fully decodes the original via the browser's own `AudioContext`
+         and re-encodes fresh, clean CBR MP3 frames via `lamejs`, so the
+         upload never carries the original file's own container quirks.
+         The real remaining risk is a small file (under the
+         direct-upload-safe size) sent **unmodified** — if *that*
+         upload comes back `invalid_audio`, `lib/transcription.ts`'s
+         `transcribeAudio` now retries **exactly once**, forcing that
+         same original through the same decode → re-encode pass
+         (`compressAudioForTranscription(file, { force: true })`) and
+         re-uploading the result — reusing existing code as a
+         normalization step, not standing up a second upload format. A
+         WAV (`pcm_s16le`) upload path was considered and rejected as
+         *not* actually the smaller fix here: uncompressed 16-bit PCM
+         runs 60–90x larger per second than this module's MP3 tiers, so
+         a real song-length WAV upload would blow past Vercel's 4.5MB
+         request body cap at any sample rate worth using for singing —
+         infeasible as a general fallback for this app's actual use case
+         (full songs), not just a fidelity trade-off. If the retry also
+         fails, the real ElevenLabs error is reported rather than trying
+         a third format.
+     **Honest scope of this fix**: the Whisper removal, the
+     provider-swap-masking-failures root cause and the live 401
+     evidence behind it, the new error classification, and the
+     re-encode retry are all landed and covered by
+     `app/api/skidmarks/transcribe/route.test.ts` and
+     `lib/transcribeAudio.test.ts`. What's **not** verified: whether a
+     permissions-scoped key is *actually* Stuart's real Vercel "deck"
+     project failure (this sandbox has no way to inspect his key's
+     scopes), and whether the re-encode retry actually resolves a real
+     `invalid_audio` rejection against the live API on his exact track
+     (no such failure was reproducible in this sandbox — the available
+     key here fails *every* Scribe call with `401`/`missing_permissions`
+     regardless of the audio, since the permission check happens before
+     any file content is even read). If Stuart still sees an ElevenLabs
+     failure after this ships, the message itself is the next
+     diagnostic step, not a bare "Transcription failed".
+
+     **Fifth report, a Vercel dashboard screenshot, not a new code
+     symptom**: Stuart confirmed `ELEVENLABS_API_KEY` exists on
+     **Production and Preview**, added ~40 minutes before a live request
+     still named a provider (OpenAI Whisper) this build no longer even
+     calls — and both `ELEVENLABS_API_KEY` and `OPENAI_API_KEY` showed a
+     yellow **"Needs Attention"** badge in that screenshot. Two things,
+     both real, neither one requiring (or benefiting from) pasting any
+     key material to diagnose:
+       - **Redeploy after adding/changing an env var — this is
+         documented Vercel behavior, not a guess**: "Changes to
+         environment variables are not applied to previous deployments,
+         they only apply to new deployments. You must redeploy your
+         project to update the value of any variables you change" (
+         [Vercel docs](https://vercel.com/docs/environment-variables/managing-environment-variables)).
+         Adding a var on the dashboard does not restart or rebuild
+         anything by itself — a Production Function that was already
+         running, or was last built before the var existed, keeps not
+         seeing it until a new deployment happens. **How to tell which
+         failure mode is live from the caption alone**, without opening
+         Vercel at all: if the caption still shows the
+         `missing_api_key` text (see `app/api/skidmarks/transcribe/
+         route.ts`'s `POST`, now updated to say so explicitly — "if you
+         just added or changed it, Vercel only applies environment
+         variable changes to new deployments — redeploy the project for
+         this function to see it"), the deployed function genuinely
+         doesn't see the key yet. If instead the caption names a real
+         ElevenLabs error (an `auth_error`, `rate_limited`, etc. — see
+         hypothesis 4 above), the key **is** visible to the function —
+         the problem is on ElevenLabs' side, not deployment freshness.
+       - **The "Needs Attention" badge is most likely a separate,
+         security-focused flag, not a deployment-freshness one** — per
+         [Vercel's Security Dashboard docs](https://vercel.com/docs/security/security-dashboard),
+         the most likely match for "an env var that just got added and
+         is now flagged" is the **"Environment variables not marked
+         Sensitive"** check (medium risk: "Values that can be read back
+         from the dashboard or API after they are written"). This is
+         inferred from Vercel's own documented checks matching what the
+         screenshot showed (one key's value still partially visible in
+         its row, the other toggled hidden but still in a revealable,
+         non-`Sensitive` format) — **not confirmed** by opening Stuart's
+         actual Security Dashboard, which isn't reachable from this
+         environment. Either way, marking a variable `Sensitive` is an
+         orthogonal security-hardening step (remove and re-add it with
+         `Sensitive` enabled, then rotate the previously-readable value
+         — see that doc) — it is **not** the fix for a stale-deployment
+         caption, and this PR does not touch either key's Sensitive
+         setting.
+     **Whisper-specific asks from this report are already moot**: this
+     report's original framing (write in terms of "when EL fails and
+     Whisper is used, surface the EL reason" / "don't let sparse Whisper
+     hide an EL failure") predates, in this report's own words, a
+     scenario this build can no longer produce — the fourth report above
+     already removed Whisper from this route entirely, per Stuart's
+     explicit product call. There is no Whisper path left for an
+     ElevenLabs failure to hide behind; every ElevenLabs failure
+     (including one caused by a stale deployment not seeing the key at
+     all) now reaches the caption directly. What this report added that
+     genuinely wasn't covered yet: the redeploy-required behavior, now
+     both documented here and stated in the `missing_api_key` message
+     itself (`app/api/skidmarks/transcribe/route.test.ts` covers that
+     message's exact wording).
   7. **Real(ish) vocal/instrumental analysis, kept as a fallback**
      (`lib/audioAnalysis.ts`, `analyzeVocalActivity`) — runs **in
      parallel** with step 6 above, unconditionally, the moment a file's
@@ -984,9 +1159,8 @@ now (see "Explicitly out of scope" below).
      sections via the energy heuristic — showing the seed demo cadence
      below until that finishes"* while both are still resolving; *"Real
      transcription: word-level timestamps from ElevenLabs Scribe, merged
-     into vocal/instrumental runs…"* (or "OpenAI Whisper", naming
-     whichever provider actually answered) once *useful* transcription
-     succeeds; *"No ELEVENLABS_API_KEY (or OPENAI_API_KEY) configured,
+     into vocal/instrumental runs…"* once *useful* transcription
+     succeeds; *"No ELEVENLABS_API_KEY (or ELEVEN_LABS_API_KEY) configured,
      so real word-level transcription is unavailable — showing real(ish)
      analysis instead: vocal vs. instrumental sections detected from the
      MP3's own audio…"* if only the heuristic came through; *"ElevenLabs
@@ -1074,26 +1248,28 @@ now (see "Explicitly out of scope" below).
   Vercel env var under one of the two names above, set to the same
   value as his existing key) rather than a code change or a new key.
   Once found under either name, word-level transcription (step 6 above)
-  goes live via ElevenLabs Scribe on the next deploy/restart.
-  `OPENAI_API_KEY` (a standard OpenAI key, `sk-...`) is optional and
-  only used as a fallback if no ElevenLabs key is found under either
-  name, or if an ElevenLabs request itself fails — it's safe to leave
-  unset, or to keep it set from before this PR, either way. Leave
-  **both** unset (or unfindable under a checked name) and the build
-  runs exactly as before real transcription existed (energy heuristic +
-  seed fallback), just with an honest "unconfigured" caption instead of
-  a silent gap — that caption/error message names exactly which env var
-  names were checked, so a naming mismatch is easy to spot and fix.
-  **Cost**: both vendors bill by audio duration (a few cents per hour of
-  audio at current published rates for either, effectively pennies for
-  a typical 3–5 minute song) — check
-  [ElevenLabs' current pricing](https://elevenlabs.io/pricing) and
-  [OpenAI's current pricing](https://openai.com/api/pricing/) before
+  goes live via ElevenLabs Scribe on the next deploy/restart. **No
+  OpenAI Whisper fallback exists to configure** — `OPENAI_API_KEY` isn't
+  read by this route at all (Stuart's explicit removal, see the fourth
+  live bug report below); it's harmless to leave set for other features
+  or unset, either way, but setting or unsetting it has zero effect on
+  Skidmarks transcription. Leave `ELEVENLABS_API_KEY`/
+  `ELEVEN_LABS_API_KEY` both unset (or unfindable under a checked name)
+  and the build runs exactly as before real transcription existed
+  (energy heuristic + seed fallback), just with an honest "unconfigured"
+  caption instead of a silent gap — that caption/error message names
+  exactly which env var names were checked, so a naming mismatch is easy
+  to spot and fix. **Cost**: ElevenLabs bills by audio duration (a few
+  cents per hour of audio at current published rates, effectively
+  pennies for a typical 3–5 minute song) — check
+  [ElevenLabs' current pricing](https://elevenlabs.io/pricing) before
   relying on this at any volume, since rates can change. This build
-  makes at most two transcription calls per MP3 attach (ElevenLabs, then
-  a Whisper retry only if ElevenLabs itself failed — never both just to
-  compare results; no polling) — re-attaching the same file
-  re-transcribes it.
+  makes exactly one transcription call per MP3 attach (plus, as of the
+  fourth live bug report below, one further retry — same provider, a
+  freshly re-encoded copy of the same file — specifically when Scribe
+  reports the *audio itself* as invalid, never as a generic retry) — no
+  second provider, no polling; re-attaching the same file re-transcribes
+  it.
 - **Data shape** (`lib/skidmarks.ts`): `SkidmarksBand` (`id`, `name`,
   `tagline`, `coverSeed`, `editIcon`, `members: SkidmarksMember[]`);
   `SkidmarksMember` (`id`, `name`, optional `role`, `emoji`,
@@ -1153,7 +1329,7 @@ now (see "Explicitly out of scope" below).
   (`readImageFileAsDataUrl`), deleting a band or member
   (`removeSkidmarksBand`/`removeSkidmarksMember`), the attached MP3 file
   and its real duration/playback, real word-level transcription when
-  `ELEVENLABS_API_KEY` (or `OPENAI_API_KEY` as a fallback) is configured,
+  `ELEVENLABS_API_KEY` (or `ELEVEN_LABS_API_KEY`) is configured,
   the request succeeds, *and* the result maps to enough real singing to
   trust (`hasUsefulVocalCoverage`) (`transcribeAudio`/`segmentsFromWords`
   in `lib/transcription.ts`, via `app/api/skidmarks/transcribe/route.ts`),
@@ -1202,7 +1378,7 @@ now (see "Explicitly out of scope" below).
   editing a band's name or a member's name/role after creation. Real
   word-level **speech-to-text is now wired** (see step 6 above) — it's
   no longer on this out-of-scope list, though it's honestly inert
-  without either `ELEVENLABS_API_KEY` or `OPENAI_API_KEY` configured,
+  without `ELEVENLABS_API_KEY` (or `ELEVEN_LABS_API_KEY`) configured,
   and honestly falls back to the energy heuristic/seed cadence
   (`transcriptionStatus === "sparse"`) on a track where the configured
   provider's real output doesn't map to enough singing to trust.
@@ -1317,32 +1493,21 @@ npm run dev
   those routes are unauthenticated (fine for local dev, not recommended
   once a real mail job is pointed at a public deploy). Set it as a Vercel
   environment variable, never commit it.
-- `ELEVENLABS_API_KEY` (optional, but the **primary** transcription
-  provider as of this PR) — enables Skidmarks' real word-level MP3
+- `ELEVENLABS_API_KEY` (optional, but the **only** transcription
+  provider as of the fourth live bug report below — no OpenAI Whisper
+  fallback exists anymore) — enables Skidmarks' real word-level MP3
   transcription via **ElevenLabs Scribe** (`app/api/skidmarks/
   transcribe/route.ts`, see the "Skidmarks node" section's "Wiring up
-  transcription" note for what it costs and why this replaced Whisper
-  as the primary path). **Already set on Vercel Production per
-  Stuart** — he uses this same ElevenLabs account/key for voice
-  generation elsewhere, so this PR does **not** ask him to add a new
-  key. The route checks for it under this name first, then under
-  `ELEVEN_LABS_API_KEY` as a fallback name (see
-  `resolveElevenLabsApiKey` in that route) — this repo has no other
-  ElevenLabs integration to confirm which exact name his existing
-  Production var uses, so if it turns out to be neither, the fix is a
-  one-line alias env var under one of those two names, not a new key
-  or a code change. Leaving it unset/unfindable just means that
-  provider is skipped and the route falls through to `OPENAI_API_KEY`
-  (below) if that's configured, or to the honest "unconfigured" outcome
-  (energy heuristic fallback) if neither key is found.
-- `OPENAI_API_KEY` (optional) — an OpenAI API key that now serves as
-  Skidmarks' transcription **fallback** (used only if no ElevenLabs key
-  is found under either name above, or if an ElevenLabs request itself
-  fails). **Already set on Vercel Production** for this app from a
-  previous PR — nothing further to configure there for this key
-  specifically. Leaving both keys unset/unfindable means the transcribe route
-  honestly returns "unconfigured" and the UI falls back to the
-  client-side energy heuristic instead — the app still works, just
-  without real transcription.
+  transcription" note for what it costs). Stuart confirmed he added
+  this specific key to **this "deck" Vercel project** under this exact
+  name (it previously existed only on the sibling "skidmarks" project),
+  so this PR does **not** ask him to create a new one. The route checks
+  for it under this name first, then under `ELEVEN_LABS_API_KEY` as a
+  fallback name (see `resolveElevenLabsApiKey` in that route). Leaving
+  it unset/unfindable just means the honest "unconfigured" outcome
+  (energy heuristic fallback) — the app still works, just without real
+  transcription. `OPENAI_API_KEY` has **no effect on this route at
+  all** — it isn't read here; it's fine to leave it set (for other
+  features, if any) or unset.
 - No other environment variables are required — the rest is static seed
   data plus whatever's been ingested into `data/overrides.json`.

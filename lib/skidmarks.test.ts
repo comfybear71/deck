@@ -56,7 +56,7 @@ describe("applySkidmarksTranscriptionResult", () => {
       scattered.push(word(`w${t}`, t, t + 0.3));
     }
 
-    applySkidmarksTranscriptionResult(scattered, null, "openai");
+    applySkidmarksTranscriptionResult(scattered, null, "elevenlabs");
 
     let mp3 = getSkidmarksSnapshot().session.mp3;
     expect(mp3?.transcriptionStatus).toBe("sparse");
@@ -70,12 +70,13 @@ describe("applySkidmarksTranscriptionResult", () => {
     // reason is honest, non-empty, plain language.
     expect(mp3?.words).toHaveLength(scattered.length);
     expect(mp3?.transcriptionError).toBeTruthy();
-    expect(mp3?.transcriptionProvider).toBe("openai");
+    expect(mp3?.transcriptionProvider).toBe("elevenlabs");
     // Names the actual provider that ran \u2014 the live bug report's
     // caption ("Transcription returned 28 words...") named no provider
-    // at all, so Stuart couldn't tell ElevenLabs from Whisper from the
-    // UI. See lib/transcription.ts's `transcriptionProviderLabel`.
-    expect(mp3?.transcriptionError).toContain("OpenAI Whisper");
+    // at all, so Stuart couldn't tell which backend produced the sparse
+    // result from the UI. See lib/transcription.ts's
+    // `transcriptionProviderLabel`.
+    expect(mp3?.transcriptionError).toContain("ElevenLabs Scribe");
 
     // Never fake-green: Lyrics reads "analyzing", not "done", while the
     // heuristic is still in flight (`analysisStatus === "analyzing"`) —
@@ -149,7 +150,7 @@ describe("applySkidmarksTranscriptionResult", () => {
     for (let t = 32; t < TRACK_DURATION_SEC; t += 4) {
       scattered.push(word(`w${t}`, t, t + 0.3));
     }
-    applySkidmarksTranscriptionResult(scattered, null, "openai");
+    applySkidmarksTranscriptionResult(scattered, null, "elevenlabs");
     markSkidmarksAnalysisFailed("Analysis took too long and was cancelled.");
 
     const mp3 = getSkidmarksSnapshot().session.mp3;
