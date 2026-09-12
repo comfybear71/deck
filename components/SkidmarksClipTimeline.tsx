@@ -16,6 +16,7 @@ import {
   type SkidmarksSegmentsSource,
   type SkidmarksTranscriptionStatus,
 } from "@/lib/skidmarks";
+import type { SkidmarksTranscriptionProvider } from "@/lib/transcription";
 import { SkidmarksPlatesAndCamera } from "./SkidmarksPlatesAndCamera";
 
 interface SkidmarksClipTimelineProps {
@@ -25,6 +26,7 @@ interface SkidmarksClipTimelineProps {
   analysisError?: string;
   transcriptionStatus: SkidmarksTranscriptionStatus;
   transcriptionError?: string;
+  transcriptionProvider?: SkidmarksTranscriptionProvider;
   onSetSegmentModel: (segmentId: string, model: SkidmarksModelId) => void;
   onSetSegmentPlate: (segmentId: string, plateId: SkidmarksPlateId) => void;
   onSetSegmentCameraAngle: (segmentId: string, cameraAngle: SkidmarksCameraAngleId) => void;
@@ -140,24 +142,37 @@ function SegmentRow({
   );
 }
 
+/** Human-readable name for whichever backend actually answered — falls
+ * back to naming this build's primary provider (ElevenLabs Scribe) if
+ * an older/unexpected response omitted it, rather than showing nothing. */
+function transcriptionProviderLabel(provider: SkidmarksTranscriptionProvider | undefined): string {
+  return provider === "openai" ? "OpenAI Whisper" : "ElevenLabs Scribe";
+}
+
 /** Honesty caption shown above the rows — varies with real state
  * (`segmentsSource`/`analysisStatus`/`transcriptionStatus`) rather than
  * being a single fixed line, so the timeline never claims to be more
  * real than it is. Priority mirrors `lib/skidmarks.ts`'s source ranking:
- * a landed transcription result always gets the top-line caption; short
- * of that, whether transcription is still pending, unconfigured, or
- * failed changes how the (heuristic/seed) fallback line is framed. */
+ * a landed, *useful* transcription result always gets the top-line
+ * caption; short of that, whether transcription is still pending,
+ * unconfigured, sparse, or failed changes how the (heuristic/seed)
+ * fallback line is framed. `"sparse"` is a distinct, honest middle
+ * ground from `"failed"` — a provider really did respond with real
+ * words, they just didn't map to enough singing on this track to trust
+ * (the literal live bug this caption exists to never repeat: green
+ * Lyrics + one Instrumental segment covering a whole sung song). */
 function timelineCaption(
   segmentsSource: SkidmarksSegmentsSource,
   analysisStatus: SkidmarksAnalysisStatus,
   analysisError: string | undefined,
   transcriptionStatus: SkidmarksTranscriptionStatus,
-  transcriptionError: string | undefined
+  transcriptionError: string | undefined,
+  transcriptionProvider: SkidmarksTranscriptionProvider | undefined
 ): string {
   if (segmentsSource === "transcription") {
     return (
-      "Real transcription: word-level timestamps from OpenAI Whisper, merged " +
-      "into vocal/instrumental runs (see lib/transcription.ts). This is genuine " +
+      `Real transcription: word-level timestamps from ${transcriptionProviderLabel(transcriptionProvider)}, ` +
+      "merged into vocal/instrumental runs (see lib/transcription.ts). This is genuine " +
       "speech-to-text timing, not an energy heuristic \u2014 a gap of ~2s+ between " +
       "words is treated as an instrumental break."
     );
@@ -167,9 +182,10 @@ function timelineCaption(
     transcriptionStatus === "checking"
       ? "Requesting word-level transcription\u2026 "
       : transcriptionStatus === "unconfigured"
-        ? "No OPENAI_API_KEY configured, so real word-level transcription is " +
-          "unavailable \u2014 "
-        : `Transcription failed${transcriptionError ? ` (${transcriptionError})` : ""} \u2014 `;
+        ? `${transcriptionError ?? "No ELEVENLABS_API_KEY (or OPENAI_API_KEY) configured, so real word-level transcription is unavailable"} \u2014 `
+        : transcriptionStatus === "sparse"
+          ? `${transcriptionError ?? `${transcriptionProviderLabel(transcriptionProvider)} ran but found too little usable vocal timing for this track`} \u2014 `
+          : `Transcription failed${transcriptionError ? ` (${transcriptionError})` : ""} \u2014 `;
 
   if (analysisStatus === "analyzing") {
     return (
@@ -231,6 +247,7 @@ export function SkidmarksClipTimeline({
   analysisError,
   transcriptionStatus,
   transcriptionError,
+  transcriptionProvider,
   onSetSegmentModel,
   onSetSegmentPlate,
   onSetSegmentCameraAngle,
@@ -294,7 +311,8 @@ export function SkidmarksClipTimeline({
               analysisStatus,
               analysisError,
               transcriptionStatus,
-              transcriptionError
+              transcriptionError,
+              transcriptionProvider
             )}
           </p>
 
