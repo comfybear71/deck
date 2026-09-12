@@ -117,9 +117,10 @@ export function useSkidmarksStudio() {
    * Attach a picked MP3 `File` and kick off both real signals against it
    * in the background, in parallel: `analyzeVocalActivity` (the energy
    * heuristic, no key needed) and `transcribeAudio` (real word-level
-   * STT, needs `ELEVENLABS_API_KEY` — or `OPENAI_API_KEY` as a server-side
-   * fallback, see `app/api/skidmarks/transcribe/route.ts` — set
-   * server-side). The store gets the
+   * STT, needs `ELEVENLABS_API_KEY` (or `ELEVEN_LABS_API_KEY`) set
+   * server-side — see `app/api/skidmarks/transcribe/route.ts`; there is
+   * no other-provider fallback, only the energy heuristic below). The
+   * store gets the
    * seed-fallback attachment immediately (so the card/checklist render
    * right away), then each signal writes back independently as it
    * settles — `applySkidmarksAnalysisResult`/`markSkidmarksAnalysisFailed`
