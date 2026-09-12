@@ -40,7 +40,19 @@ const OPENAI_API_KEY_ENV = "OPENAI_API_KEY";
 const OPENAI_TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions";
 const OPENAI_TRANSCRIPTION_MODEL = "whisper-1";
 /** OpenAI's own hard cap for this endpoint — rejecting past it here gives
- * a clear message instead of a confusing upstream 4xx. */
+ * a clear message instead of a confusing upstream 4xx.
+ *
+ * This is a *different, larger* ceiling than the one that actually bit
+ * Stuart on a real full-length song: Vercel enforces its own 4.5MB hard
+ * cap on a Function's *request body*, ahead of this route entirely (see
+ * https://vercel.com/docs/functions/limitations#request-body-size and
+ * `lib/audioCompression.ts`'s doc comment for the full story). A request
+ * over *that* limit never reaches this file at all — this `MAX_UPLOAD_
+ * BYTES` check only ever gets a chance to run for uploads that already
+ * cleared Vercel's platform limit, so it can't be the fix for a 413 on a
+ * multi-MB attachment by itself. The real fix is `lib/transcription.ts`
+ * shrinking the file client-side, before it's ever sent, so it clears
+ * both limits. */
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 /** Hard ceiling on how long we'll wait on the upstream call — a real
  * network outage or an unreachable host would otherwise hang until the

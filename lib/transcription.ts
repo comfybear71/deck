@@ -31,9 +31,21 @@
  * never gets turned off by this — it's the answer whenever a key isn't
  * configured or the request fails, per the product ask to keep it as a
  * real fallback, not a maybe-it-works stub.
+ *
+ * **A real full-length song 413'd here** (Stuart re-attached "Talking To
+ * Concrete" at ~4:16 and got a bare `HTTP 413`, even though the tiny
+ * test tone he'd tried earlier worked fine) — that's Vercel's own
+ * platform-level 4.5MB request body cap rejecting the multipart upload
+ * before `app/api/skidmarks/transcribe/route.ts` ever runs, not an
+ * `OPENAI_API_KEY` problem (see `lib/audioCompression.ts`'s doc comment
+ * for the confirmed root cause, with sources). `transcribeAudio` now
+ * runs `compressAudioForTranscription` first on anything close to that
+ * limit, so a normal song-length MP3 gets downmixed/resampled/re-encoded
+ * small enough to clear it before it's ever POSTed.
  */
 
 import { mergeTinySegments, type VocalAnalysisSegment } from "./audioAnalysis";
+import { compressAudioForTranscription, VERCEL_BODY_LIMIT_BYTES } from "./audioCompression";
 
 export interface SkidmarksTranscribedWord {
   word: string;
@@ -78,15 +90,49 @@ function isPlausibleWord(value: unknown): value is SkidmarksTranscribedWord {
   );
 }
 
+/** Plain-language stand-in for a bare `413` with no JSON body — exactly
+ * what Vercel's platform returns when a request body clears its own
+ * 4.5MB cap (see `lib/audioCompression.ts`'s doc comment), which is why
+ * `res.json()` below has nothing to read a real message from: the
+ * request never reached `app/api/skidmarks/transcribe/route.ts` at all.
+ * `compressAudioForTranscription` should keep most real songs well under
+ * that limit now, so seeing this at all means compression itself didn't
+ * happen (e.g. an already-small file that still somehow doesn't fit, or
+ * a `"failed"`/skipped compression outcome) — the message still needs to
+ * read as "file too large", not a bare status code either way. */
+function describeUpstream413(attemptedBytes: number): string {
+  const attemptedMb = (attemptedBytes / (1024 * 1024)).toFixed(1);
+  const limitMb = (VERCEL_BODY_LIMIT_BYTES / (1024 * 1024)).toFixed(1);
+  return (
+    `This audio file (${attemptedMb}MB) is too large to upload for transcription \u2014 ` +
+    `the server only accepts uploads up to ${limitMb}MB. Try a shorter clip or a ` +
+    `lower-bitrate MP3.`
+  );
+}
+
 /**
  * POSTs the attached file to the transcription route and normalizes its
  * response into one of the three honest outcomes above. Never throws —
  * a thrown `fetch` (offline, CORS, etc.) is caught and reported the same
  * way as any other real failure.
+ *
+ * Runs `compressAudioForTranscription` first so a normal full-length
+ * song clears Vercel's request body cap (see this module's doc comment
+ * for the 413 root cause) instead of being rejected before the server
+ * route even runs. Compression is best-effort: if it fails outright (an
+ * unsupported browser, a corrupt file) this still tries the original
+ * file, matching the pre-fix behavior, rather than giving up without
+ * ever attempting a real transcription.
  */
 export async function transcribeAudio(file: File): Promise<TranscriptionOutcome> {
+  const compression = await compressAudioForTranscription(file);
+  if (compression.kind === "too_long") {
+    return { ok: false, unconfigured: false, message: compression.message };
+  }
+  const uploadFile = compression.kind === "compressed" ? compression.file : file;
+
   const form = new FormData();
-  form.set("audio", file, file.name || "audio.mp3");
+  form.set("audio", uploadFile, uploadFile.name || "audio.mp3");
 
   let res: Response;
   try {
@@ -104,16 +150,21 @@ export async function transcribeAudio(file: File): Promise<TranscriptionOutcome>
   try {
     body = await res.json();
   } catch {
-    // Non-JSON response (e.g. a platform-level error page) — the generic
-    // status-code message below still gives Stuart something real to see.
+    // Non-JSON response (e.g. a platform-level error page, like the
+    // 413 this whole fix is about) — the status-code-aware fallback
+    // below still gives Stuart a real, plain-language message.
   }
 
   if (!res.ok) {
     const errBody = (body ?? {}) as TranscribeRouteErrorBody;
+    const fallbackMessage =
+      res.status === 413
+        ? describeUpstream413(uploadFile.size)
+        : `Transcription request failed (HTTP ${res.status}).`;
     return {
       ok: false,
       unconfigured: errBody.code === "missing_api_key",
-      message: errBody.error ?? `Transcription request failed (HTTP ${res.status}).`,
+      message: errBody.error ?? fallbackMessage,
     };
   }
 
