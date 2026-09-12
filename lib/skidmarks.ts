@@ -18,22 +18,50 @@
  * name/role, a picked cover/avatar photo (`coverImage`/`avatarImage`) is
  * a real photo Stuart chose (via `readImageFileAsDataUrl`), and deleting
  * a band or member (`removeSkidmarksBand`/`removeSkidmarksMember`) is a
- * real, persisted removal. The attached MP3's clip/segment timeline is
- * now **real(ish)** too: `hooks/useSkidmarksStudio.ts` runs
- * `analyzeVocalActivity` (`lib/audioAnalysis.ts`) against the actual
- * attached file — a real FFT-based vocal-band-energy heuristic over the
- * real decoded audio, entirely client-side, no API key or network call
- * — and `applySkidmarksAnalysisResult` below turns its vocal/instrumental
- * regions into the segments `SkidmarksClipTimeline` renders. The Lyrics/
- * Timing/Ready chips (`skidmarksChecklistState` below) are derived
- * straight from that real state (`analysisStatus`, `durationSec`), not
- * staged timers. If analysis fails (unsupported browser, corrupt file,
- * timeout), `markSkidmarksAnalysisFailed` keeps the seed cadence
- * (`buildDemoSegments`) as an **honestly-labeled fallback** — see
- * `segmentsSource` — rather than silently pretending it's real. What's
- * still mock: generated "looks" (`buildMockLook` — a color swatch, not
- * an image model call), and the seed fallback cadence itself when it's
- * showing (never real STT or singing detection — a deterministic
+ * real, persisted removal. The attached MP3's clip/segment timeline now
+ * has **two** real signal sources, tried in parallel the moment a file's
+ * attached (`hooks/useSkidmarksStudio.ts`'s `attachMp3`), in this
+ * priority order:
+ * 1. **Real word-level transcription** (`lib/transcription.ts`,
+ *    `transcribeAudio` + `segmentsFromWords`) — an actual OpenAI Whisper
+ *    speech-to-text call (server route:
+ *    `app/api/skidmarks/transcribe/route.ts`, keyed via the
+ *    `OPENAI_API_KEY` environment variable) that returns real per-word
+ *    start/end times; `applySkidmarksTranscriptionResult` below merges
+ *    consecutive words into vocal runs (gaps = instrumental) — this is
+ *    what lets a segment boundary land at an actual measured vocal
+ *    onset (Stuart's ask, after the energy heuristic glued "Talking To
+ *    Concrete"'s intro + flute into one giant Vocal call) instead of a
+ *    mid-band-energy guess. **Never claimed live without a key** — if
+ *    `OPENAI_API_KEY` isn't set server-side, or the request fails, this
+ *    is honestly skipped (`transcriptionStatus`), not silently retried
+ *    as something else.
+ * 2. **The energy heuristic** (`analyzeVocalActivity`,
+ *    `lib/audioAnalysis.ts`) — a real FFT-based vocal-band-energy
+ *    heuristic over the actual decoded audio, entirely client-side, no
+ *    API key or network call. Runs unconditionally (not just when
+ *    transcription is unavailable) so there's always a real-ish signal
+ *    in flight while transcription's network round-trip is pending, and
+ *    stays the fallback whenever transcription is unconfigured or
+ *    fails — this build never drops it.
+ *
+ * `applySkidmarksAnalysisResult`/`applySkidmarksTranscriptionResult`
+ * turn whichever source resolves into the segments `SkidmarksClipTimeline`
+ * renders, with transcription always outranking the heuristic once it
+ * lands (see `segmentsSource`) — a later heuristic result can't
+ * downgrade an already-real transcription. The Lyrics/Timing/Ready
+ * chips (`skidmarksChecklistState` below) are derived straight from
+ * that real state, not staged timers, and **Lyrics only turns green for
+ * real transcription** — the energy heuristic alone (no key, or a
+ * failed request) keeps it amber/`stub`, since it's a real signal but
+ * not actual transcribed lyrics timing. If both sources fail (or
+ * transcription's unconfigured and the heuristic errors too),
+ * `markSkidmarksAnalysisFailed`/`markSkidmarksTranscriptionFailed` keep
+ * the seed cadence (`buildDemoSegments`) as an **honestly-labeled
+ * fallback** — see `segmentsSource` — rather than silently pretending
+ * either is real. What's still mock: generated "looks" (`buildMockLook`
+ * — a color swatch, not an image model call), and the seed fallback
+ * cadence itself when it's showing (a deterministic
  * verse/bridge/lead/instrumental scaffold).
  *
  * Persistence mirrors `lib/control-plane.ts` / `lib/graphLayout.ts`: an
@@ -59,6 +87,7 @@
  */
 
 import type { VocalAnalysisResult } from "./audioAnalysis";
+import { segmentsFromWords, type SkidmarksTranscribedWord } from "./transcription";
 
 const STORAGE_KEY = "the-tab:skidmarks-studio";
 
@@ -162,11 +191,23 @@ export type SkidmarksChipState = "pending" | "analyzing" | "done" | "stub";
 /**
  * Derives the Lyrics/Timing/Ready chip states straight from real
  * session state — no staged timers. `timing` is real once the browser's
- * probed duration resolves; `lyrics` (vocal/instrumental detection) is
- * real once `analyzeVocalActivity` finishes, or `stub` if it failed
- * (never silently green); `ready` only turns fully green once both
- * underlying signals are real, and shows `stub` (not green) if the clip
- * list is only usable via the seed fallback.
+ * probed duration resolves.
+ *
+ * `lyrics` means **real transcription** now, not just "some vocal
+ * signal resolved" — it only turns green once real word-level
+ * transcription actually lands (`segmentsSource === "transcription"`).
+ * While transcription is still in flight (`transcriptionStatus ===
+ * "checking"`) or the energy heuristic is still running, it shows
+ * `analyzing` — there's real work in progress, even if what eventually
+ * lands is only the heuristic. Once both have settled and transcription
+ * didn't produce real word timing (no key configured, or the request
+ * failed), it's `stub` — **never green** — because the energy heuristic
+ * alone answers "is this bit sung", not "what are the actual lyrics/
+ * word timing", and this chip is about the latter.
+ *
+ * `ready` only turns fully green once both `timing` and `lyrics` are
+ * real, and shows `stub` (not green) if the clip list is only usable via
+ * the heuristic or seed fallback.
  */
 export function skidmarksChecklistState(
   mp3: SkidmarksMp3Attachment | null
@@ -175,12 +216,10 @@ export function skidmarksChecklistState(
     return { lyrics: "pending", timing: "pending", ready: "pending" };
   }
   const timing: SkidmarksChipState = mp3.durationSec !== null ? "done" : "analyzing";
+  const stillResolving =
+    mp3.transcriptionStatus === "checking" || mp3.analysisStatus === "analyzing";
   const lyrics: SkidmarksChipState =
-    mp3.analysisStatus === "done"
-      ? "done"
-      : mp3.analysisStatus === "failed"
-        ? "stub"
-        : "analyzing";
+    mp3.segmentsSource === "transcription" ? "done" : stillResolving ? "analyzing" : "stub";
   const ready: SkidmarksChipState =
     timing === "done" && lyrics === "done"
       ? "done"
@@ -194,10 +233,14 @@ export function skidmarksChecklistState(
  * The clip-segment labels the timeline UI works with. `verse`/`bridge`/
  * `lead`/`instrumental` are `buildDemoSegments`' seed-cadence labels
  * (song-structure guesses that seed can afford to invent, since it's
- * clearly marked fake). `vocal` is the real analysis path's label
- * (`analyzeVocalActivity` in `lib/audioAnalysis.ts`) — it only knows
- * "singing" vs. not, so it's deliberately **not** called verse/bridge
- * (that would claim song-structure knowledge the signal doesn't have);
+ * clearly marked fake). `vocal` is shared by **both** real paths —
+ * `analyzeVocalActivity` (`lib/audioAnalysis.ts`, the energy heuristic)
+ * and `transcribeAudio`/`segmentsFromWords` (`lib/transcription.ts`,
+ * real word timing) — since either way it only knows "singing" vs. not,
+ * so it's deliberately **not** called verse/bridge (that would claim
+ * song-structure knowledge neither signal has); `segmentsSource` on the
+ * attachment (not the segment itself) is what distinguishes which real
+ * signal actually produced it, for the timeline's honesty caption;
  * `instrumental` doubles as the real path's non-vocal label too. `vocal`
  * (the boolean on each meta entry) drives the one default-model rule the
  * whole feature hangs off: sung segments default to **LTX Lip-sync**,
@@ -382,15 +425,43 @@ export function buildDemoSegments(totalSec: number): SkidmarksClipSegment[] {
 }
 
 /**
- * Where the current `segments` list actually came from:
- * - `analysis` — real output of `analyzeVocalActivity`, mapped through
- *   `applySkidmarksAnalysisResult`.
+ * Where the current `segments` list actually came from, in priority
+ * order (a lower-ranked source can never overwrite a higher one once
+ * it's landed — see `applySkidmarksAnalysisResult`):
+ * - `transcription` — real output of `transcribeAudio` +
+ *   `segmentsFromWords` (`lib/transcription.ts`): actual OpenAI Whisper
+ *   word timestamps merged into vocal/instrumental runs, via
+ *   `applySkidmarksTranscriptionResult`. The only source real enough to
+ *   turn the Lyrics chip green.
+ * - `analysis` — real output of `analyzeVocalActivity`
+ *   (`lib/audioAnalysis.ts`'s energy heuristic), mapped through
+ *   `applySkidmarksAnalysisResult`. Real signal, but not transcribed
+ *   lyrics timing — shown while transcription is unavailable or after
+ *   it fails.
  * - `seed-fallback` — `buildDemoSegments`' deterministic cadence, shown
- *   either while analysis is still running or because it failed. Always
- *   paired with an honest caption in `SkidmarksClipTimeline` — never
- *   presented as if it were the real thing.
+ *   while both real sources are still resolving or after both failed.
+ *   Always paired with an honest caption in `SkidmarksClipTimeline` —
+ *   never presented as if it were the real thing.
  */
-export type SkidmarksSegmentsSource = "analysis" | "seed-fallback";
+export type SkidmarksSegmentsSource = "transcription" | "analysis" | "seed-fallback";
+
+/**
+ * Real transcription lifecycle for the attached file — mirrors
+ * `SkidmarksAnalysisStatus` but for `lib/transcription.ts`'s
+ * `transcribeAudio` call, which runs in parallel with (not instead of)
+ * the energy heuristic:
+ * - `checking` — the request to `app/api/skidmarks/transcribe` is in
+ *   flight (or, after a page reload with no file to resume, about to be
+ *   normalized to `failed`).
+ * - `unconfigured` — the server has no `OPENAI_API_KEY` set. A distinct,
+ *   expected outcome, not an error — never surfaced as a failure.
+ * - `done` — it finished; if it produced usable word timing,
+ *   `segmentsSource === "transcription"`.
+ * - `failed` — the request itself errored (network, bad audio, upstream
+ *   API error) after a key *was* configured; `transcriptionError` (if
+ *   present) says why.
+ */
+export type SkidmarksTranscriptionStatus = "checking" | "unconfigured" | "done" | "failed";
 
 /**
  * Real analysis lifecycle for the attached file:
@@ -407,16 +478,30 @@ export interface SkidmarksMp3Attachment {
   /** Real duration (seconds) once probed from the picked file; null while probing or if probing failed. */
   durationSec: number | null;
   attachedAt: number;
-  /** The clip/segment timeline. Real vocal/instrumental regions once
-   * `segmentsSource === "analysis"`; the honestly-labeled seed cadence
-   * (`buildDemoSegments`) otherwise. */
+  /** The clip/segment timeline. Real word-timing-derived vocal/
+   * instrumental regions once `segmentsSource === "transcription"`,
+   * real energy-heuristic ones once `segmentsSource === "analysis"`, or
+   * the honestly-labeled seed cadence (`buildDemoSegments`) otherwise. */
   segments: SkidmarksClipSegment[];
   segmentsSource: SkidmarksSegmentsSource;
   analysisStatus: SkidmarksAnalysisStatus;
-  /** Human-readable reason analysis fell back to the seed cadence — only
-   * set when `analysisStatus === "failed"`. Surfaced verbatim in the
-   * timeline's honesty caption, not swallowed. */
+  /** Human-readable reason the energy heuristic fell back to the seed
+   * cadence — only set when `analysisStatus === "failed"`. Surfaced
+   * verbatim in the timeline's honesty caption, not swallowed. */
   analysisError?: string;
+  /** Real per-word start/end times from `transcribeAudio`
+   * (`lib/transcription.ts`), once transcription succeeds — kept even
+   * though the UI only shows merged segments for now, so a later lyric-
+   * emphasis pass (per-word highlight during playback) can use them
+   * without re-transcribing. `undefined` until/unless transcription
+   * actually succeeds. */
+  words?: SkidmarksTranscribedWord[];
+  transcriptionStatus: SkidmarksTranscriptionStatus;
+  /** Human-readable reason a *configured* transcription request failed
+   * (network/upstream error) — not set for the honest `"unconfigured"`
+   * case, which isn't a failure. Surfaced verbatim in the timeline's
+   * honesty caption. */
+  transcriptionError?: string;
 }
 
 /** The Music-video wizard's progress — which project type, which band,
@@ -551,10 +636,14 @@ export function buildMockLook(prompt: string, photoreal: number): SkidmarksLook 
 }
 
 /** Builds the just-attached state: seed-cadence segments as an
- * immediately-visible placeholder while `analyzeVocalActivity` runs in
- * the background (`useSkidmarksStudio`'s `attachMp3`) — replaced by real
- * segments via `applySkidmarksAnalysisResult` once it finishes, or kept
- * (now honestly labeled) via `markSkidmarksAnalysisFailed` if it fails. */
+ * immediately-visible placeholder while `analyzeVocalActivity` (the
+ * energy heuristic) and `transcribeAudio` (real STT) both run in the
+ * background in parallel (`useSkidmarksStudio`'s `attachMp3`) — replaced
+ * by real segments via `applySkidmarksTranscriptionResult` (preferred)
+ * or `applySkidmarksAnalysisResult` once either finishes, or kept (now
+ * honestly labeled) via `markSkidmarksTranscriptionUnconfigured`/
+ * `markSkidmarksTranscriptionFailed`/`markSkidmarksAnalysisFailed` if
+ * they don't produce anything usable. */
 export function createMp3Attachment(
   fileName: string,
   durationSec: number | null
@@ -566,6 +655,7 @@ export function createMp3Attachment(
     segments: buildDemoSegments(durationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC),
     segmentsSource: "seed-fallback",
     analysisStatus: "analyzing",
+    transcriptionStatus: "checking",
   };
 }
 
@@ -598,7 +688,11 @@ function normalizeState(parsed: unknown): SkidmarksState {
       : buildDemoSegments(storedMp3.durationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC)
     : [];
   const segmentsSource: SkidmarksSegmentsSource =
-    storedMp3?.segmentsSource === "analysis" ? "analysis" : "seed-fallback";
+    storedMp3?.segmentsSource === "transcription"
+      ? "transcription"
+      : storedMp3?.segmentsSource === "analysis"
+        ? "analysis"
+        : "seed-fallback";
   // A page reload drops the attached `File` (never persisted — see
   // `SkidmarksMp3Card`), so an analysis that was still `"analyzing"` when
   // the page closed can never resume; normalize it to an honest `"failed"`
@@ -612,8 +706,42 @@ function normalizeState(parsed: unknown): SkidmarksState {
     ? "Analysis doesn't survive a page reload (the audio file itself isn't kept) \u2014 re-attach the MP3 to re-run it."
     : storedMp3?.analysisError;
 
+  // Same "can't resume after a reload" logic for the transcription
+  // request — `"checking"` (in flight when the tab closed) is the only
+  // status that needs normalizing to a real failure; `"done"`,
+  // `"unconfigured"`, and `"failed"` are all settled outcomes that
+  // survive as-is. Sessions saved before this feature shipped (no
+  // `transcriptionStatus` at all) get treated as `"unconfigured"`
+  // instead — honest ("we don't know a real attempt happened here"),
+  // without fabricating a reload-interruption story that never occurred.
+  const wasTranscriptionInterrupted = storedMp3?.transcriptionStatus === "checking";
+  const hasTranscriptionStatus =
+    !!storedMp3 &&
+    (storedMp3.transcriptionStatus === "done" ||
+      storedMp3.transcriptionStatus === "unconfigured" ||
+      storedMp3.transcriptionStatus === "failed" ||
+      storedMp3.transcriptionStatus === "checking");
+  const transcriptionStatus: SkidmarksTranscriptionStatus = wasTranscriptionInterrupted
+    ? "failed"
+    : hasTranscriptionStatus
+      ? storedMp3!.transcriptionStatus
+      : "unconfigured";
+  const transcriptionError = wasTranscriptionInterrupted
+    ? "Transcription doesn't survive a page reload (the audio file itself isn't kept) \u2014 re-attach the MP3 to re-run it."
+    : hasTranscriptionStatus
+      ? storedMp3?.transcriptionError
+      : undefined;
+
   const mp3: SkidmarksMp3Attachment | null = storedMp3
-    ? { ...storedMp3, segments, segmentsSource, analysisStatus, analysisError }
+    ? {
+        ...storedMp3,
+        segments,
+        segmentsSource,
+        analysisStatus,
+        analysisError,
+        transcriptionStatus,
+        transcriptionError,
+      }
     : null;
 
   return {
@@ -881,26 +1009,16 @@ export function setSkidmarksMp3Duration(durationSec: number): void {
   });
 }
 
-/**
- * Applies a finished `analyzeVocalActivity` result: maps its real
- * vocal/instrumental time ranges into `SkidmarksClipSegment`s (each
- * still gets a default model via `defaultSegmentModel`, same rule as
- * the seed cadence), marks `segmentsSource: "analysis"` and
- * `analysisStatus: "done"` so `skidmarksChecklistState` can turn the
- * Lyrics chip genuinely green, and backfills `durationSec` if the
- * `<audio>` element's own probe hasn't resolved yet (the decoded
- * buffer's duration is just as real, sometimes faster). No-ops if the
- * mp3 was removed/replaced before analysis finished — callers should
- * additionally guard against a stale/superseded result themselves (see
- * `useSkidmarksStudio`'s generation-token check) since this function
- * can't tell "still the same file" from "a same-shaped new one".
- */
-export function applySkidmarksAnalysisResult(result: VocalAnalysisResult): void {
-  const current = getSkidmarksSnapshot();
-  const mp3 = current.session.mp3;
-  if (!mp3) return;
+/** Builds the segment list + advancing non-vocal model cycle shared by
+ * `applySkidmarksAnalysisResult` and `applySkidmarksTranscriptionResult`
+ * — both turn a plain "is this vocal" time-range list into tagged
+ * `SkidmarksClipSegment`s the same way, they just get that time-range
+ * list from different real sources. */
+function buildSegmentsFromVocalRanges(
+  ranges: { startSec: number; endSec: number; vocal: boolean }[]
+): SkidmarksClipSegment[] {
   let nonVocalIndex = 0;
-  const segments: SkidmarksClipSegment[] = result.segments.map((seg) => {
+  return ranges.map((seg) => {
     const label: SkidmarksSegmentLabel = seg.vocal ? "vocal" : "instrumental";
     const model = defaultSegmentModel(label, nonVocalIndex);
     if (!seg.vocal) nonVocalIndex += 1;
@@ -914,6 +1032,39 @@ export function applySkidmarksAnalysisResult(result: VocalAnalysisResult): void 
       cameraAngle: null,
     };
   });
+}
+
+/**
+ * Applies a finished `analyzeVocalActivity` result: maps its real
+ * vocal/instrumental time ranges into `SkidmarksClipSegment`s (each
+ * still gets a default model via `defaultSegmentModel`, same rule as
+ * the seed cadence), marks `segmentsSource: "analysis"` and
+ * `analysisStatus: "done"`, and backfills `durationSec` if the
+ * `<audio>` element's own probe hasn't resolved yet (the decoded
+ * buffer's duration is just as real, sometimes faster).
+ *
+ * **Never downgrades a real transcription result.** Real word-level
+ * transcription (`segmentsSource === "transcription"`) always outranks
+ * this heuristic — if transcription already landed (it can resolve
+ * before or after this, since both run in parallel from attach), this
+ * still records `analysisStatus: "done"` (the heuristic itself did run
+ * and succeed) but leaves `segments`/`segmentsSource` alone rather than
+ * replacing real transcribed timing with the heuristic's.
+ *
+ * No-ops if the mp3 was removed/replaced before analysis finished —
+ * callers should additionally guard against a stale/superseded result
+ * themselves (see `useSkidmarksStudio`'s generation-token check) since
+ * this function can't tell "still the same file" from "a same-shaped
+ * new one".
+ */
+export function applySkidmarksAnalysisResult(result: VocalAnalysisResult): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  const hasRealTranscription = mp3.segmentsSource === "transcription";
+  const segments = hasRealTranscription
+    ? mp3.segments
+    : buildSegmentsFromVocalRanges(result.segments);
   persist({
     ...current,
     session: {
@@ -922,7 +1073,7 @@ export function applySkidmarksAnalysisResult(result: VocalAnalysisResult): void 
         ...mp3,
         durationSec: mp3.durationSec ?? result.durationSec,
         segments,
-        segmentsSource: "analysis",
+        segmentsSource: hasRealTranscription ? mp3.segmentsSource : "analysis",
         analysisStatus: "done",
         analysisError: undefined,
       },
@@ -931,14 +1082,86 @@ export function applySkidmarksAnalysisResult(result: VocalAnalysisResult): void 
 }
 
 /**
- * Marks analysis as failed, keeping whatever segments are currently set
- * (the seed fallback `createMp3Attachment` seeded) but honestly labeling
- * them via `segmentsSource`/`analysisStatus`/`analysisError` — never
- * silently presenting the fallback as real. `reason` is shown verbatim
- * in the timeline's caption, so keep it short and non-technical where
- * possible.
+ * Marks the energy heuristic as failed, keeping whatever segments are
+ * currently set (the seed fallback `createMp3Attachment` seeded, or a
+ * real transcription result if that's already landed) but honestly
+ * labeling them via `segmentsSource`/`analysisStatus`/`analysisError` —
+ * never silently presenting the fallback as real. `reason` is shown
+ * verbatim in the timeline's caption, so keep it short and
+ * non-technical where possible. Like `applySkidmarksAnalysisResult`,
+ * never downgrades an already-real transcription result.
  */
 export function markSkidmarksAnalysisFailed(reason: string): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  const hasRealTranscription = mp3.segmentsSource === "transcription";
+  persist({
+    ...current,
+    session: {
+      ...current.session,
+      mp3: {
+        ...mp3,
+        segmentsSource: hasRealTranscription ? mp3.segmentsSource : "seed-fallback",
+        analysisStatus: "failed",
+        analysisError: reason,
+      },
+    },
+  });
+}
+
+/**
+ * Applies a finished real transcription: turns `transcribeAudio`'s
+ * per-word start/end times (`lib/transcription.ts`) into vocal/
+ * instrumental time ranges via `segmentsFromWords` (word gaps over
+ * ~2s become instrumental breaks), then the same `SkidmarksClipSegment`
+ * tagging `applySkidmarksAnalysisResult` uses. Marks
+ * `segmentsSource: "transcription"` and `transcriptionStatus: "done"` —
+ * the only path that turns the Lyrics chip genuinely green — and stores
+ * the raw `words` list too (unused by the UI today beyond driving these
+ * segments, but kept so a later per-word lyric-emphasis pass doesn't
+ * need to re-transcribe). Always wins over whatever's currently showing
+ * — transcription outranks both the energy heuristic and the seed
+ * cadence, regardless of which resolved first (both start in parallel
+ * from attach; transcription's network round-trip means it can land
+ * either before or after the heuristic).
+ */
+export function applySkidmarksTranscriptionResult(
+  words: SkidmarksTranscribedWord[],
+  reportedDurationSec: number | null
+): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  const totalSec = mp3.durationSec ?? reportedDurationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC;
+  const segments = buildSegmentsFromVocalRanges(segmentsFromWords(words, totalSec));
+  persist({
+    ...current,
+    session: {
+      ...current.session,
+      mp3: {
+        ...mp3,
+        durationSec: mp3.durationSec ?? reportedDurationSec,
+        words,
+        segments,
+        segmentsSource: "transcription",
+        transcriptionStatus: "done",
+        transcriptionError: undefined,
+      },
+    },
+  });
+}
+
+/**
+ * Marks transcription as unconfigured — the server has no
+ * `OPENAI_API_KEY` set. Deliberately **not** treated as a failure (no
+ * amber "error" styling implied beyond what the energy-heuristic/seed
+ * fallback already honestly shows) since nothing actually went wrong;
+ * transcription just isn't wired up in this environment. `reason` is
+ * the server's own explanation, shown verbatim in the timeline's
+ * caption.
+ */
+export function markSkidmarksTranscriptionUnconfigured(reason: string): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
   if (!mp3) return;
@@ -946,12 +1169,27 @@ export function markSkidmarksAnalysisFailed(reason: string): void {
     ...current,
     session: {
       ...current.session,
-      mp3: {
-        ...mp3,
-        segmentsSource: "seed-fallback",
-        analysisStatus: "failed",
-        analysisError: reason,
-      },
+      mp3: { ...mp3, transcriptionStatus: "unconfigured", transcriptionError: reason },
+    },
+  });
+}
+
+/**
+ * Marks a *configured* transcription request as failed (network error,
+ * bad audio, an actual upstream API error) — distinct from
+ * `markSkidmarksTranscriptionUnconfigured`, which covers the honest
+ * "no key set" case. `reason` is shown verbatim in the timeline's
+ * caption.
+ */
+export function markSkidmarksTranscriptionFailed(reason: string): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  persist({
+    ...current,
+    session: {
+      ...current.session,
+      mp3: { ...mp3, transcriptionStatus: "failed", transcriptionError: reason },
     },
   });
 }
