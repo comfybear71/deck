@@ -62,10 +62,10 @@ total.
   builder, the server-side store, and the client-side POST helper). See
   "Ask Grok (v0 stub)" below.
 - `lib/skidmarks.ts` / `hooks/useSkidmarksStudio.ts` — the Skidmarks
-  Music-video studio model (bands/members/looks/MP3/checklist) and its
-  `localStorage` store (pure mock builders, `useSyncExternalStore` React
-  binding, staged checklist timers). See "Skidmarks node (vibe director)"
-  below.
+  Music-video studio model (bands/members/looks/MP3/checklist/clip
+  timeline) and its `localStorage` store (pure mock builders,
+  `useSyncExternalStore` React binding, staged checklist timers). See
+  "Skidmarks node (vibe director)" below.
 - `app/api/deck/ask/` — the `POST`/`GET` route backing Ask Grok.
 - `lib/clipboard.ts` — shared "copy to clipboard, with a manual-selection
   fallback" helper used by the action chips and Ask Grok's copy-prompt
@@ -85,9 +85,10 @@ total.
   Propfolio status node's face + detail sheet), `SkidmarksNodeCard` /
   `SkidmarksDetailSheet` (plus `SkidmarksLandingTiles` /
   `SkidmarksBandPicker` / `SkidmarksMembersModule` / `SkidmarksGeneratePopup`
-  / `SkidmarksMp3Card` / `SkidmarksChecklistChips`) — the Skidmarks
-  vibe-director node's face and its locked, one-scroll Music-video flow
-  through the MP3 step — see "Skidmarks node (vibe director)" below),
+  / `SkidmarksMp3Card` / `SkidmarksChecklistChips` / `SkidmarksClipTimeline`
+  / `SkidmarksPlatesAndCamera`) — the Skidmarks vibe-director node's face
+  and its locked, one-scroll Music-video flow through the clip timeline's
+  plate/camera/model tags — see "Skidmarks node (vibe director)" below),
   `ActionChips` /
   `AskGrokPanel` (generic detail-sheet primitives — see "Ask Grok (v0
   stub)" below).
@@ -598,10 +599,11 @@ that — it's a **front hand for that convoluted backend**. This build
 replaces the earlier free-text "type a vibe brief, get a scripted
 director-chat thread" version with Stuart's **locked Music-video flow**:
 a concrete, appended-step wizard (pick a project type → choose a band →
-cast its members → attach an MP3) rendered as **one continuous scroll**,
-never a chat thread and never a separate screen. It's locked through the
-MP3 step only — plates, multi-angle coverage, voice, animate, and stitch
-are explicitly out of scope for now (see "Explicitly out of scope" below).
+cast its members → attach an MP3 → tag each clip's plate/camera/model)
+rendered as **one continuous scroll**, never a chat thread and never a
+separate screen. It's locked through the clip timeline's plate/camera/
+model tags — voice, animate, and stitch are explicitly out of scope for
+now (see "Explicitly out of scope" below).
 
 - **Node face** (`components/SkidmarksNodeCard.tsx`) — the same warm
   rose/pink identity treatment as before (border, gradient wash, glow, ♥
@@ -697,6 +699,40 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
      speech-to-text-style pass, timing as just the file's own length).
      No lyrics panel, no paste-lyrics box, no manual vocal-start pin —
      this is the entire surface for that.
+  7. **Clip / segment timeline** (`SkidmarksClipTimeline`) — appended
+     right under the checklist chips, as soon as an MP3 is attached (not
+     gated on the checklist reaching "Ready"): a collapsible **Clip /
+     segment list** section with an explicit honesty line above the
+     rows — *"Seed timeline — a demo verse/bridge/lead/instrumental
+     cadence, not real lyrics timing or singing detection. Editable
+     structure for now; refined once real analysis lands."* The
+     segments themselves (`buildDemoSegments` in `lib/skidmarks.ts`) are
+     a **deterministic seed cadence** scaled to the track's real
+     duration (7 segments: intro instrumental → verse → instrumental
+     break → verse → bridge → lead → verse) — explicitly **not** real
+     STT or singing detection, matching the checklist chips' own mocked
+     staged timers above. Each clip is its own **collapsible row**:
+     collapsed shows the time range (e.g. "0:15–0:45"), a Verse/Bridge/
+     Lead/Instrumental label pill, and a compact **model pill** that
+     cycles to the next model on tap (no picker, no confirmation — "one
+     tap, no heavy thinking"); expanded appends that clip's
+     `SkidmarksPlatesAndCamera` panel: a horizontal scroll of five seed
+     **location plates** (Neon Stage, Rainy Alley, Desert Highway,
+     Warehouse, Crowd Pit — deterministic gradient swatches, no real
+     plate photos), a wrapped row of five **camera angles** (Close-up,
+     Wide, Low Angle, Tracking, Overhead), and the full **Model** row
+     (LTX Lip-sync, H3, SIRAY Uncensored, Kling) for an explicit pick
+     instead of cycling. Plates and camera angles are single-select
+     with an off state (tapping the active one again clears it); the
+     model is always assigned to something (`defaultSegmentModel`) so
+     there's nothing to clear. **Default model rule**: vocal segments
+     (verse/bridge) default to **LTX Lip-sync**; non-vocal ones (lead/
+     instrumental) cycle through H3 / SIRAY Uncensored / Kling — still a
+     one-tap switch to anything else. A stub **Generate Clips** button
+     closes the section — tapping it only shows a "Stub only — no Comfy
+     MCP / LTX render kicked off" message (`SkidmarksClipTimeline`'s
+     local `stubMessage` state, same pattern as `PropfolioDetailSheet`'s
+     chip feedback line); it never calls a real pipeline.
   - The sheet's backdrop is a darker/more opaque scrim
      (`bg-black/90 backdrop-blur-md`, vs. the generic `GraphNodeSheet`'s
      `bg-black/70`) — this sheet opens tall and near the top of the
@@ -714,7 +750,9 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
   `looks: SkidmarksLook[]`); `SkidmarksLook` (`id`, `seed`, `prompt`,
   `photoreal`, `createdAt`); `SkidmarksMp3Attachment` (`fileName`,
   `durationSec`, `attachedAt`, `checklist: Record<SkidmarksChecklistKey,
-  boolean>`); and `SkidmarksState` (`bands`, `session:
+  boolean>`, `segments: SkidmarksClipSegment[]`); `SkidmarksClipSegment`
+  (`id`, `startSec`, `endSec`, `label`, `model`, `plateId`,
+  `cameraAngle`); and `SkidmarksState` (`bands`, `session:
   { projectKind, bandId, mp3 }`, `removedSeedBandIds` — hand-seeded band
   ids Stuart has deleted, so `normalizeState` doesn't resurrect them).
 - **Persistence**: `localStorage` (key `the-tab:skidmarks-studio`),
@@ -723,29 +761,34 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
   `hooks/useSkidmarksStudio.ts`, which also owns the checklist's staged
   `setTimeout`s, cleared on unmount). Bands (seed + any "New" ones created
   this browser, capped at `BAND_HISTORY_LIMIT`), band/member deletions
-  (`removedSeedBandIds`), and wizard progress persist; the attached audio
-  file itself does not (see above). A fresh browser (or private mode)
-  always starts from the empty state; nothing here is shared across
-  devices. **This is a placeholder store**, not the intended long-term
-  one — see "Follow-up: real persistence" below.
+  (`removedSeedBandIds`), wizard progress, and each clip's plate/camera/
+  model tags persist; the attached audio file itself does not (see
+  above). Segments are seeded off a fallback duration (210s) the instant
+  an MP3 attaches, then rebuilt once the real `<audio>` duration first
+  resolves (`setSkidmarksMp3Duration` in `lib/skidmarks.ts`) — invisible
+  in practice since that resolves within a beat. A fresh browser (or
+  private mode) always starts from the empty state; nothing here is
+  shared across devices. **This is a placeholder store**, not the
+  intended long-term one — see "Follow-up: real persistence" below.
 - **Mock vs. real, at a glance**: real — band/member identity (hand-seeded
   or user-created, no invented names), a picked cover/avatar photo
   (`readImageFileAsDataUrl`), deleting a band or member
   (`removeSkidmarksBand`/`removeSkidmarksMember`), the attached MP3 file
   and its real duration/playback. Mock — generated "looks"
-  (`buildMockLook`, a color swatch stand-in) and the MP3 checklist's three
-  ticks (staged timers, not real lyrics/timing analysis). See the module
-  doc comment atop `lib/skidmarks.ts` for the same breakdown in code.
+  (`buildMockLook`, a color swatch stand-in), the MP3 checklist's three
+  ticks (staged timers, not real lyrics/timing analysis), and the clip
+  timeline's segment cadence (`buildDemoSegments` — a deterministic seed
+  cadence, not real STT or singing detection). See the module doc comment
+  atop `lib/skidmarks.ts` for the same breakdown in code.
 - **Follow-up: real persistence (Neon)**. Stuart wants Skidmarks' data
-  (bands, members, looks, session) moved off `localStorage` onto real
-  Neon Postgres persistence, so it survives across devices/browsers
-  instead of being trapped in one browser's storage — matching how the
-  rest of the app is meant to grow into "AIG!itch" backing services.
-  That migration is a separate, larger change (a schema, a data-access
-  layer swapping out `lib/skidmarks.ts`'s `localStorage` read/write, and
-  likely an API route) and is **explicitly out of scope for this PR**,
-  which stays focused on the delete-band / cover-text / disclaimer /
-  backdrop fixes above.
+  (bands, members, looks, session, clip timeline) moved off `localStorage`
+  onto real Neon Postgres persistence, so it survives across
+  devices/browsers instead of being trapped in one browser's storage —
+  matching how the rest of the app is meant to grow into "AIG!itch"
+  backing services. That migration is a separate, larger change (a
+  schema, a data-access layer swapping out `lib/skidmarks.ts`'s
+  `localStorage` read/write, and likely an API route) and is
+  **explicitly out of scope for this PR**.
 - `GraphView` special-cases `SKIDMARKS_NODE_ID` (`lib/constants.ts`) to
   render `SkidmarksNodeCard`/`SkidmarksDetailSheet` instead of the generic
   `GraphNodeCard`/`GraphNodeSheet`, same pattern as Budju/Propfolio; the
@@ -753,11 +796,14 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
   off the same `useSkidmarksStudio` store `GraphView` reads (one hook
   call, passed down as a prop, not a second independent subscription
   duplicating state).
-- **Explicitly out of scope for this build**: plates, multi-angle
-  coverage, voice, animate, and stitch (the flow stops dead after the MP3
-  checklist); any real Comfy MCP, Seedance, LTX, or ElevenLabs call; any
-  real image generation for a "look" or real speech-to-text for lyrics;
-  creating/editing music (MP3 attach is existing-file-only); and
+- **Explicitly out of scope for this build**: voice, animate, and stitch
+  (the flow stops dead after the clip timeline's plate/camera/model
+  tags); any real Comfy MCP, Seedance, LTX, or ElevenLabs call; any real
+  image/video generation, real speech-to-text for lyrics, or real singing
+  detection (the clip timeline's segments are a seed cadence — see above,
+  and the checklist chips' own staged timers); creating/editing music
+  (MP3 attach is existing-file-only); real plate photos or real camera
+  coverage capture (plates/angles are seed tags, not renders); and
   replacing `skidmarks.aiglitch.app`'s own Crash Lab. Also out of scope:
   the "Skidmarks" and "Sunnybank" landing tiles (rendered, inert), and
   editing a band's name or a member's name/role after creation.
