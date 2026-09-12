@@ -206,6 +206,37 @@ describe("hasUsefulVocalCoverage", () => {
     expect(hasUsefulVocalCoverage(segments, 10)).toBe(true);
   });
 
+  it("reproduces the literal live bug report verbatim: 28 words, 257s track, 0.0s vocal coverage", () => {
+    // The exact numbers from the live caption Stuart saw: "Transcription
+    // returned 28 words, but only 0.0s of that mapped to singing across
+    // a 257s track". Ground truth: real singing runs from ~0:32 through
+    // roughly 4:02 (~210s of singing) on this track — a real dense sung
+    // transcript for that much singing would normally be several hundred
+    // words, not 28. 28 words spread across even just the sung portion
+    // averages one recognized word every ~7.5s, far past the 2s default
+    // gap threshold, so every single word lands on its own sub-1s
+    // island and `mergeTinySegments` correctly folds all of them away —
+    // this is the merge policy working as designed against a
+    // genuinely-too-sparse word list, not a merge bug (see
+    // lib/audioCompression.ts's module doc comment for the evidenced
+    // explanation of *why* the word list itself came back this sparse).
+    const totalDurationSec = 257;
+    const wordCount = 28;
+    const singingStart = 32;
+    const singingEnd = 242;
+    const words: SkidmarksTranscribedWord[] = Array.from({ length: wordCount }, (_, i) => {
+      const t = singingStart + (i * (singingEnd - singingStart)) / (wordCount - 1);
+      return word(`w${i}`, t, t + 0.3);
+    });
+
+    const segments = segmentsFromWords(words, totalDurationSec);
+    const coveredSec = vocalCoverageSec(segments);
+
+    expect(words).toHaveLength(28);
+    expect(coveredSec).toBeCloseTo(0, 1);
+    expect(hasUsefulVocalCoverage(segments, totalDurationSec)).toBe(false);
+  });
+
   it("respects custom threshold parameters", () => {
     const segments = [
       { startSec: 0, endSec: 50, vocal: false },
