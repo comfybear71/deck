@@ -9,6 +9,7 @@ import { SkidmarksMembersModule } from "./SkidmarksMembersModule";
 import { SkidmarksGeneratePopup } from "./SkidmarksGeneratePopup";
 import { SkidmarksMp3Card } from "./SkidmarksMp3Card";
 import { SkidmarksChecklistChips } from "./SkidmarksChecklistChips";
+import { SkidmarksClipTimeline } from "./SkidmarksClipTimeline";
 
 interface SkidmarksDetailSheetProps {
   onClose: () => void;
@@ -16,14 +17,16 @@ interface SkidmarksDetailSheetProps {
 
 /**
  * Skidmarks' detail sheet — the locked Music-video director flow,
- * through the MP3 step only (plates/multi-angle/voice/animate/stitch are
- * explicitly out of scope for this build). **One continuous scroll**:
+ * through the clip/segment timeline's plate/camera/model tags (voice,
+ * animate, and stitch are explicitly out of scope for this build; see
+ * `lib/skidmarks.ts`'s module doc comment). **One continuous scroll**:
  * the landing's three project-type tiles stay put at the top, and each
- * step (choose a band → cast members → attach MP3) appends underneath
- * the previous one — there is no separate screen to navigate to. See the
- * README's "Skidmarks node (vibe director)" section for exactly what's
- * real (file pick, real audio duration/playback) vs. mocked (bands,
- * looks, the checklist's staged timers) in this build.
+ * step (choose a band → cast members → attach MP3 → tag each clip)
+ * appends underneath the previous one — there is no separate screen to
+ * navigate to. See the README's "Skidmarks node (vibe director)" section
+ * for exactly what's real (file pick, real audio duration/playback) vs.
+ * mocked/seed (bands, looks, the checklist's staged timers, and the clip
+ * timeline's segment cadence) in this build.
  */
 export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const {
@@ -42,6 +45,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     attachMp3,
     removeMp3,
     setMp3Duration,
+    setSegmentModel,
+    setSegmentPlate,
+    setSegmentCameraAngle,
   } = useSkidmarksStudio();
 
   const activeBand = bands.find((b) => b.id === session.bandId);
@@ -193,6 +199,15 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   checklist={session.mp3?.checklist ?? EMPTY_SKIDMARKS_CHECKLIST}
                 />
               </div>
+            )}
+
+            {session.mp3 && (
+              <SkidmarksClipTimeline
+                segments={session.mp3.segments}
+                onSetSegmentModel={setSegmentModel}
+                onSetSegmentPlate={setSegmentPlate}
+                onSetSegmentCameraAngle={setSegmentCameraAngle}
+              />
             )}
           </div>
         </div>
