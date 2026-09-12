@@ -11,6 +11,7 @@ interface SkidmarksMembersModuleProps {
   band: SkidmarksBand;
   onOpenMember: (memberId: string) => void;
   onAddMember: () => void;
+  onRemoveMember: (memberId: string) => void;
 }
 
 function MemberAvatar({ member }: { member: SkidmarksMember }) {
@@ -31,43 +32,36 @@ function MemberAvatar({ member }: { member: SkidmarksMember }) {
   return (
     <span
       aria-hidden
-      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-lg ring-1 ring-white/15"
+      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-dashed border-white/15 bg-white/[0.06] text-lg ring-1 ring-white/15"
     >
       {member.emoji}
     </span>
   );
 }
 
-function MemberRow({
-  member,
-  onOpen,
+function RemoveMemberButton({
+  memberName,
+  onRemove,
 }: {
-  member: SkidmarksMember;
-  onOpen: () => void;
+  memberName: string;
+  onRemove: () => void;
 }) {
   return (
     <button
       type="button"
-      onClick={onOpen}
-      aria-label={`Generate a look for ${member.name}`}
-      className="flex w-full items-center gap-3 rounded-xl px-1 py-2 text-left transition-colors hover:bg-white/[0.04]"
+      onClick={(e) => {
+        e.stopPropagation();
+        onRemove();
+      }}
+      aria-label={memberName ? `Remove ${memberName}` : "Remove member"}
+      title="Remove member"
+      className="shrink-0 rounded-full p-1.5 text-white/30 transition-colors hover:bg-red-500/10 hover:text-red-400"
     >
-      <MemberAvatar member={member} />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold text-white">
-          {member.name}
-        </span>
-        {member.role && (
-          <span className="block truncate text-[11px] uppercase tracking-wide text-rose-300/70">
-            {member.role}
-          </span>
-        )}
-      </span>
-      <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4 shrink-0 text-white/25">
+      <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4">
         <path
-          d="M7.5 4l6 6-6 6"
+          d="M5 5.5h10M8.25 5.5v-1a1 1 0 0 1 1-1h1.5a1 1 0 0 1 1 1v1M6.25 5.5l.5 9a1 1 0 0 0 1 .95h4.5a1 1 0 0 0 1-.95l.5-9"
           stroke="currentColor"
-          strokeWidth="1.8"
+          strokeWidth="1.4"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
@@ -76,17 +70,74 @@ function MemberRow({
   );
 }
 
+function MemberRow({
+  member,
+  onOpen,
+  onRemove,
+}: {
+  member: SkidmarksMember;
+  onOpen: () => void;
+  onRemove: () => void;
+}) {
+  const displayName = member.name.trim() || "New member";
+  return (
+    <div className="flex w-full items-center gap-1">
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={
+          member.name.trim() ? `Generate a look for ${member.name}` : "Name and generate a look for this member"
+        }
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-xl px-1 py-2 text-left transition-colors hover:bg-white/[0.04]"
+      >
+        <MemberAvatar member={member} />
+        <span className="min-w-0 flex-1">
+          <span
+            className={[
+              "block truncate text-sm font-semibold",
+              member.name.trim() ? "text-white" : "text-white/35",
+            ].join(" ")}
+          >
+            {displayName}
+          </span>
+          {member.role && (
+            <span className="block truncate text-[11px] uppercase tracking-wide text-rose-300/70">
+              {member.role}
+            </span>
+          )}
+        </span>
+        <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4 shrink-0 text-white/25">
+          <path
+            d="M7.5 4l6 6-6 6"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+      <RemoveMemberButton memberName={member.name} onRemove={onRemove} />
+    </div>
+  );
+}
+
 /**
  * The members module — one shared pink-bordered box (band name once at
- * top, then a member row per cast member; tapping a member's avatar
- * opens the generate-look popup). The "+ Add member" pill lives *outside*
- * the box, under-right, per the locked mockup — it's a sibling of this
- * component in `SkidmarksDetailSheet`, not rendered in here.
+ * top, then a member row per cast member; tapping a row opens the
+ * generate-look/rename popup, tapping the trash glyph removes that
+ * member outright). Newly-added members start completely blank (no
+ * name, role, or emoji — see `buildBlankMember`) and render with a
+ * dashed avatar ring and dimmed "New member" placeholder text until the
+ * user names them or generates a first look. The "+ Add member" pill
+ * lives *outside* the box, under-right, per the locked mockup — it's a
+ * sibling of this component in `SkidmarksDetailSheet`, not rendered in
+ * here.
  */
 export function SkidmarksMembersModule({
   band,
   onOpenMember,
   onAddMember,
+  onRemoveMember,
 }: SkidmarksMembersModuleProps) {
   const canAddMore = band.members.length < MAX_MEMBERS_PER_BAND;
 
@@ -100,6 +151,7 @@ export function SkidmarksMembersModule({
               key={member.id}
               member={member}
               onOpen={() => onOpenMember(member.id)}
+              onRemove={() => onRemoveMember(member.id)}
             />
           ))}
         </div>

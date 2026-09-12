@@ -637,15 +637,21 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
      generated — and Stew Balls, no look yet) appends
      `SkidmarksMembersModule`: one shared pink-bordered box with the band
      name once at top, then a row per member (left: avatar — a look
-     thumbnail if one's been generated, else a plain emoji glyph; right:
-     name + optional role). Tapping a member's row opens the generate
-     popup. A **"+ Add member"** pill sits *outside* the box, under-right
-     — never inside it — and cycles a small pool of mock rockstar names
-     (`ADD_MEMBER_POOL`) up to `MAX_MEMBERS_PER_BAND` (3).
+     thumbnail if one's been generated, else a dashed placeholder ring;
+     right: name + optional role, plus a trash/× **remove** control that
+     deletes that member from the band outright). Tapping a member's row
+     opens the generate/rename popup. A **"+ Add member"** pill sits
+     *outside* the box, under-right — never inside it — and appends a
+     completely **blank** member (`buildBlankMember`: no name, no role, no
+     emoji — nothing invented) up to `MAX_MEMBERS_PER_BAND` (3); a blank
+     row shows dimmed "New member" placeholder text until it's named or
+     given a first look.
   4. **Generate popup** (`SkidmarksGeneratePopup`) — a simple centered
      modal, no side chrome: that member's generated "looks" so far scroll
      horizontally across the top (three empty dashed slots before the
-     first generate, real look swatches after), then a prompt textarea, a
+     first generate, real look swatches after), then a **Name** field
+     (this is how a blank member gets a real name — commits on blur,
+     Cancel/X/Escape, and right before Generate), a prompt textarea, a
      **Photoreal 60–100%** slider (default 80%), and Generate/Cancel.
      Generate has a short (700ms) fake "rendering" delay before
      `buildMockLook` mints a deterministic color-swatch stand-in

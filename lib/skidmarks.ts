@@ -232,22 +232,15 @@ export function buildNewMockBand(): SkidmarksBand {
   };
 }
 
-/** Small pool of silly rockstar-ish add-on members — cycled through as
- * Stuart taps "+ Add member", capped at `MAX_MEMBERS_PER_BAND`. */
-const ADD_MEMBER_POOL: { name: string; role?: string; emoji: string }[] = [
-  { name: "Digi Fret", role: "Guitar", emoji: "\u{1F3B8}" },
-  { name: "Ampy Sue", role: "Bass", emoji: "\u{1F3B5}" },
-  { name: "Clatter Jax", role: "Drums", emoji: "\u{1F941}" },
-  { name: "Vox Nova", role: "Vocals", emoji: "\u{1F3A4}" },
-];
-
-export function buildMockMember(existingCount: number): SkidmarksMember {
-  const pick = ADD_MEMBER_POOL[existingCount % ADD_MEMBER_POOL.length];
+/** A freshly cast member — no name, role, or emoji until the user fills
+ * them in (via the generate popup's name field) or generates a look.
+ * "+ Add member" always mints one of these; nothing here invents a
+ * persona (name, role, or icon) on the user's behalf. */
+export function buildBlankMember(): SkidmarksMember {
   return {
     id: generateId("member"),
-    name: pick.name,
-    role: pick.role,
-    emoji: pick.emoji,
+    name: "",
+    emoji: "",
     looks: [],
   };
 }
@@ -391,15 +384,49 @@ export function createSkidmarksBand(): SkidmarksBand {
   return band;
 }
 
-/** Appends a mock member to a band (capped at `MAX_MEMBERS_PER_BAND`) — the "+ Add member" pill. */
+/** Appends a blank member to a band (capped at `MAX_MEMBERS_PER_BAND`) — the "+ Add member" pill. */
 export function addSkidmarksMember(bandId: string): void {
   const current = getSkidmarksSnapshot();
   const band = current.bands.find((b) => b.id === bandId);
   if (!band || band.members.length >= MAX_MEMBERS_PER_BAND) return;
-  const member = buildMockMember(band.members.length);
+  const member = buildBlankMember();
   const bands = current.bands.map((b) =>
     b.id === bandId ? { ...b, members: [...b.members, member] } : b
   );
+  persist({ ...current, bands });
+}
+
+/** Removes a member from a band — the per-row trash/× control. No cap
+ * bookkeeping needed here; freeing a slot just lets "+ Add member"
+ * reappear once the band drops back under `MAX_MEMBERS_PER_BAND`. */
+export function removeSkidmarksMember(bandId: string, memberId: string): void {
+  const current = getSkidmarksSnapshot();
+  const bands = current.bands.map((b) =>
+    b.id === bandId
+      ? { ...b, members: b.members.filter((m) => m.id !== memberId) }
+      : b
+  );
+  persist({ ...current, bands });
+}
+
+/** Sets a member's display name — how a blank "+ Add member" row gets
+ * filled in, via the generate popup's name field. */
+export function renameSkidmarksMember(
+  bandId: string,
+  memberId: string,
+  name: string
+): void {
+  const current = getSkidmarksSnapshot();
+  const trimmed = name.trim();
+  const bands = current.bands.map((b) => {
+    if (b.id !== bandId) return b;
+    return {
+      ...b,
+      members: b.members.map((m) =>
+        m.id === memberId ? { ...m, name: trimmed } : m
+      ),
+    };
+  });
   persist({ ...current, bands });
 }
 

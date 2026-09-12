@@ -33,6 +33,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     selectBand,
     createBand,
     addMember,
+    removeMember,
+    renameMember,
     editCover,
     addLook,
     attachMp3,
@@ -73,6 +75,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const handleGenerate = (prompt: string, photoreal: number) => {
     if (!activeBand || !openMember) return;
     addLook(activeBand.id, openMember.id, buildMockLook(prompt, photoreal));
+  };
+
+  const handleRenameMember = (name: string) => {
+    if (!activeBand || !openMember) return;
+    renameMember(activeBand.id, openMember.id, name);
   };
 
   return (
@@ -154,6 +161,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   band={activeBand}
                   onOpenMember={setOpenMemberId}
                   onAddMember={() => addMember(activeBand.id)}
+                  onRemoveMember={(memberId) => removeMember(activeBand.id, memberId)}
                 />
               </div>
             )}
@@ -190,6 +198,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
         <SkidmarksGeneratePopup
           member={openMember}
           onGenerate={handleGenerate}
+          onRename={handleRenameMember}
           onClose={() => setOpenMemberId(null)}
         />
       )}

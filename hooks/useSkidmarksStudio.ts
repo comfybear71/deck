@@ -10,6 +10,8 @@ import {
   cycleSkidmarksBandCover,
   getSkidmarksSnapshot,
   markSkidmarksChecklistDone,
+  removeSkidmarksMember,
+  renameSkidmarksMember,
   selectSkidmarksBand,
   selectSkidmarksProjectKind,
   setSkidmarksMp3Duration,
@@ -63,6 +65,15 @@ export function useSkidmarksStudio() {
   const selectBand = useCallback((bandId: string) => selectSkidmarksBand(bandId), []);
   const createBand = useCallback(() => createSkidmarksBand(), []);
   const addMember = useCallback((bandId: string) => addSkidmarksMember(bandId), []);
+  const removeMember = useCallback(
+    (bandId: string, memberId: string) => removeSkidmarksMember(bandId, memberId),
+    []
+  );
+  const renameMember = useCallback(
+    (bandId: string, memberId: string, name: string) =>
+      renameSkidmarksMember(bandId, memberId, name),
+    []
+  );
   const editCover = useCallback((bandId: string) => cycleSkidmarksBandCover(bandId), []);
   const addLook = useCallback(
     (bandId: string, memberId: string, look: SkidmarksLook) =>
@@ -104,6 +115,8 @@ export function useSkidmarksStudio() {
     selectBand,
     createBand,
     addMember,
+    removeMember,
+    renameMember,
     editCover,
     addLook,
     attachMp3,
