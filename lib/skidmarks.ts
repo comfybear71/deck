@@ -154,6 +154,11 @@ export interface SkidmarksState {
   /** Seed bands + any "New" bands created this session, most-recent-first among the "New" ones. */
   bands: SkidmarksBand[];
   session: SkidmarksSession;
+  /** Ids of hand-seeded `SEED_BANDS` entries Stuart has deleted — tracked
+   * separately from `bands` (which only ever holds *live* bands) so a
+   * seed band stays gone after a delete instead of being re-minted from
+   * `SEED_BANDS` on the next `normalizeState` pass. */
+  removedSeedBandIds: string[];
 }
 
 function isBrowser(): boolean {
@@ -196,6 +201,7 @@ function emptyState(): SkidmarksState {
   return {
     bands: SEED_BANDS,
     session: { projectKind: null, bandId: null, mp3: null },
+    removedSeedBandIds: [],
   };
 }
 
@@ -280,20 +286,32 @@ export function createMp3Attachment(
 
 function normalizeState(parsed: unknown): SkidmarksState {
   const p = (parsed ?? {}) as Partial<SkidmarksState>;
+  const removedSeedBandIds = Array.isArray(p.removedSeedBandIds)
+    ? p.removedSeedBandIds.filter((id): id is string => typeof id === "string")
+    : [];
+  const removedSeedSet = new Set(removedSeedBandIds);
   const seedIds = new Set(SEED_BANDS.map((b) => b.id));
   const storedBands = Array.isArray(p.bands) ? (p.bands as SkidmarksBand[]) : [];
   const extraBands = storedBands.filter((b) => b && !seedIds.has(b.id));
-  const bands = [...SEED_BANDS.map((seed) => storedBands.find((b) => b?.id === seed.id) ?? seed), ...extraBands];
+  const bands = [
+    ...SEED_BANDS.filter((seed) => !removedSeedSet.has(seed.id)).map(
+      (seed) => storedBands.find((b) => b?.id === seed.id) ?? seed
+    ),
+    ...extraBands,
+  ];
   const session: Partial<SkidmarksSession> = p.session ?? {};
+  const bandId = typeof session.bandId === "string" ? session.bandId : null;
+  const stillHasBand = bandId !== null && bands.some((b) => b.id === bandId);
   return {
     bands,
+    removedSeedBandIds,
     session: {
       projectKind:
         typeof session.projectKind === "string"
           ? (session.projectKind as SkidmarksProjectKind)
           : null,
-      bandId: typeof session.bandId === "string" ? session.bandId : null,
-      mp3: (session.mp3 as SkidmarksMp3Attachment | null | undefined) ?? null,
+      bandId: stillHasBand ? bandId : null,
+      mp3: stillHasBand ? (session.mp3 as SkidmarksMp3Attachment | null | undefined) ?? null : null,
     },
   };
 }
@@ -387,10 +405,36 @@ export function createSkidmarksBand(): SkidmarksBand {
     seed.length + BAND_HISTORY_LIMIT
   );
   persist({
+    ...current,
     bands,
     session: { ...current.session, bandId: band.id, mp3: null },
   });
   return band;
+}
+
+/** Removes a band outright — the trash glyph on each existing band tile
+ * (never shown on the "New" tile, which doesn't correspond to a band
+ * yet). If the deleted band was hand-seeded (`SEED_BANDS`), its id is
+ * recorded in `removedSeedBandIds` so `normalizeState` doesn't re-mint
+ * it from the hardcoded seed list on the next load — a deleted seed band
+ * stays deleted. If the deleted band was the active session band, the
+ * session's `bandId`/`mp3` reset to `null` (same "downstream resets"
+ * behavior as switching bands via `selectSkidmarksBand`). */
+export function removeSkidmarksBand(bandId: string): void {
+  const current = getSkidmarksSnapshot();
+  const bands = current.bands.filter((b) => b.id !== bandId);
+  const isSeed = SEED_BANDS.some((b) => b.id === bandId);
+  const removedSeedBandIds = isSeed
+    ? Array.from(new Set([...current.removedSeedBandIds, bandId]))
+    : current.removedSeedBandIds;
+  const wasActive = current.session.bandId === bandId;
+  persist({
+    bands,
+    removedSeedBandIds,
+    session: wasActive
+      ? { ...current.session, bandId: null, mp3: null }
+      : current.session,
+  });
 }
 
 /** Appends a blank member to a band (capped at `MAX_MEMBERS_PER_BAND`) — the "+ Add member" pill. */

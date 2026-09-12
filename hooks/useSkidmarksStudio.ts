@@ -9,6 +9,7 @@ import {
   createSkidmarksBand,
   getSkidmarksSnapshot,
   markSkidmarksChecklistDone,
+  removeSkidmarksBand,
   removeSkidmarksMember,
   renameSkidmarksMember,
   selectSkidmarksBand,
@@ -29,6 +30,7 @@ import {
 const EMPTY_STATE: SkidmarksState = {
   bands: [],
   session: { projectKind: null, bandId: null, mp3: null },
+  removedSeedBandIds: [],
 };
 
 /**
@@ -65,6 +67,16 @@ export function useSkidmarksStudio() {
   );
   const selectBand = useCallback((bandId: string) => selectSkidmarksBand(bandId), []);
   const createBand = useCallback(() => createSkidmarksBand(), []);
+  const removeBand = useCallback(
+    (bandId: string) => {
+      // Deleting the active band drops its MP3 too — stop the checklist's
+      // staged timers so they can't call `markSkidmarksChecklistDone` for
+      // a session that no longer exists.
+      if (state.session.bandId === bandId) clearTimers();
+      removeSkidmarksBand(bandId);
+    },
+    [state.session.bandId, clearTimers]
+  );
   const addMember = useCallback((bandId: string) => addSkidmarksMember(bandId), []);
   const removeMember = useCallback(
     (bandId: string, memberId: string) => removeSkidmarksMember(bandId, memberId),
@@ -120,9 +132,11 @@ export function useSkidmarksStudio() {
   return {
     bands: state.bands,
     session: state.session,
+    removedSeedBandIds: state.removedSeedBandIds,
     selectProjectKind,
     selectBand,
     createBand,
+    removeBand,
     addMember,
     removeMember,
     renameMember,
