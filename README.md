@@ -809,30 +809,112 @@ now (see "Explicitly out of scope" below).
      setting that raises it. The fix: before every upload that isn't
      already comfortably small (`DIRECT_UPLOAD_SAFE_BYTES`, 4MiB),
      `transcribeAudio` now downmixes the attached file to mono, resamples
-     it to 16kHz (the rate Whisper itself internally resamples every
-     input to anyway, so this isn't discarding resolution Whisper would
-     have used), and re-encodes it to a low, duration-adaptive MP3
-     bitrate via `@breezystack/lamejs` (a pure-JS LAME encoder — no
-     server binary, works unmodified on Vercel's Node.js runtime)
-     entirely in the browser, picking the highest bitrate tier
-     (`MP3_BITRATE_TIERS_KBPS`, 64→8kbps) whose predicted output still
-     clears the cap. **A real ~4:16 song at the top 64kbps tier lands
-     around ~2MB** — comfortably under the 4.5MB limit with real margin
-     for multipart overhead, verified against the actual `lamejs`
-     encoder's output (not just the size estimate) for this exact
-     scenario. **The honest remaining ceiling**: even the lowest 8kbps
-     tier only fits under the 4.5MB budget up to roughly a 66-minute
-     track (`chooseCompressionPlan` returns `null` past that, and
-     `transcribeAudio` reports a plain-language "too long to shrink for
-     upload" message instead of attempting a request that would still
-     413) — no real song is anywhere near that, so this should be a
-     non-issue in practice. Compression is best-effort: if the browser
-     can't decode/resample/encode the file for any reason, the original
-     file is still sent as-is (matching this feature's pre-fix
-     behavior), and a genuine remaining 413 (or any other real failure)
-     is now reported in plain language — file size and the actual
-     server limit, not a bare HTTP status code — rather than the
-     cryptic message from before this fix.
+     it down, and re-encodes it to a duration-adaptive MP3 bitrate via
+     `@breezystack/lamejs` (a pure-JS LAME encoder — no server binary,
+     works unmodified on Vercel's Node.js runtime) entirely in the
+     browser, picking the highest bitrate tier
+     (`MP3_BITRATE_TIERS_KBPS`) whose predicted output still clears the
+     cap. Compression is best-effort: if the browser can't decode/
+     resample/encode the file for any reason, the original file is still
+     sent as-is (matching this feature's pre-fix behavior), and a genuine
+     remaining 413 (or any other real failure) is reported in plain
+     language — file size and the actual server limit, not a bare HTTP
+     status code — rather than the cryptic message from before this fix.
+
+     **Third live bug report, after the ElevenLabs pivot above shipped**:
+     Stuart added `ELEVENLABS_API_KEY` on Vercel and redeployed, then
+     re-attached the same "Talking To Concrete" (~4:16 = 257s, real
+     singing from ~0:32) — and got the *same* honest-but-wrong outcome
+     as the pre-pivot Whisper report: amber Lyrics, caption reading
+     "Transcription returned 28 words, but only 0.0s of that mapped to
+     singing across a 257s track" (up from 20 words on the earlier
+     Whisper attempt), timeline still one giant energy-heuristic Vocal
+     block from 0:07. Stuart separately ran the *exact same file*
+     through ElevenLabs' own hosted transcription tool and got back
+     dense, correctly-timed sung lyrics with `[singing]` tags — direct
+     proof Scribe *can* transcribe this track when it's given the
+     original, uncompressed audio. **Investigated, not assumed** — five
+     hypotheses, checked against the actual code and tests:
+       1. *Real words landing in tiny islands `mergeTinySegments` folds
+          away, throwing away good timing* — checked directly:
+          `lib/transcription.test.ts`'s
+          `hasUsefulVocalCoverage`/`segmentsFromWords` suite confirms 28
+          words spread ~7.5s apart (reproduced with the literal 28/257s/
+          0.0s numbers) *correctly* collapses to ~0s of vocal coverage —
+          each word is genuinely its own <1s island, further apart than
+          the 2s gap threshold, so no merge-policy tweak recovers a real
+          vocal run from a word list this sparse. Ruled out as the root
+          cause; the merge math is doing its job.
+       2. *ElevenLabs response shape mis-parsed (wrong field names/units)*
+          — checked the actual parsing in
+          `app/api/skidmarks/transcribe/route.ts`'s
+          `transcribeWithElevenLabs` against ElevenLabs' own documented
+          response shape (`text`/`start`/`end`/`type`, seconds, `word`/
+          `spacing`/`audio_event`) — it matches. Ruled out.
+       3. *Coverage computed after a destructive merge instead of raw
+          word spans* — the merge (`segmentsFromWords`) is the thing
+          that's supposed to turn word spans into runs in the first
+          place; for a word list this sparse there's no "gentler merge"
+          that manufactures 200+ seconds of coverage out of 28 real
+          words. Ruled out as a standalone fix (see hypothesis 1).
+       4. **Client compression before upload damages singing enough that
+          the API returns sparse words** — the one variable that
+          actually differs between Stuart's two tests (dense results on
+          ElevenLabs' hosted tool against the *original* file vs. 28
+          scattered words through this app's upload path). Before this
+          fix, every full-length song was downmixed to mono, resampled to
+          a **fixed 16kHz** (an 8kHz frequency ceiling — inherited from
+          *Whisper's* own internal-resample rationale, never revisited
+          once ElevenLabs Scribe became primary), and capped at a **flat
+          64kbps ceiling regardless of available budget** — for this
+          exact 257s track, 64kbps used only ~2MB of the ~4MiB upload
+          budget (`lib/audioCompression.test.ts`'s regression test), real
+          headroom left unused while handing both STT providers a fairly
+          aggressively compressed signal to pick sung lyrics out of a
+          full-band mix (drums, bass, flute) with. **The strongest
+          evidenced explanation, confirmed via the real `lamejs` encoder
+          — not proven against the real ElevenLabs API**, since this
+          repo/environment has no live key to re-run the actual failing
+          request end to end. Fixed: `COMPRESSION_SAMPLE_RATE_HZ` raised
+          16kHz → 22.05kHz (~11kHz ceiling instead of 8kHz) and
+          `MP3_BITRATE_TIERS_KBPS`'s top tier raised 64 → 128kbps — this
+          exact track now lands at the new 128kbps top tier, ~3.9MB,
+          still comfortably under Vercel's 4.5MB cap (verified via
+          `lib/audioCompression.ts`'s manual verification script and its
+          own test suite), using the upload-budget headroom that was
+          already going unused instead of a number sized for Whisper's
+          speech-only assumptions.
+       5. **Caption doesn't name which provider ran** — checked: true.
+          `applySkidmarksTranscriptionResult`'s `"sparse"` message
+          (`lib/skidmarks.ts`) built its `transcriptionError` text
+          without the provider name that was already available as a
+          parameter, so the live caption read "Transcription returned 28
+          words…" with no way for Stuart to tell ElevenLabs from Whisper
+          — even though `SkidmarksClipTimeline`'s *fallback* wording (used
+          only when `transcriptionError` is unset) already named it. Fixed:
+          `transcriptionProviderLabel` (`lib/transcription.ts`, now
+          shared instead of duplicated in the component) is used to
+          prefix that message, so it now reads "ElevenLabs Scribe
+          returned 28 words…" / "OpenAI Whisper returned 28 words…".
+
+     **Honest scope of this fix**: hypotheses 1–3 were investigated and
+     ruled out with direct evidence from the existing merge/coverage
+     code and tests — they were not the cause here. Hypothesis 5 (the
+     caption) is fully fixed and verified by test. Hypothesis 4 (audio
+     compression) has the strongest circumstantial evidence of the five
+     and is fixed in the way the bug report's own constraints asked for
+     (more bitrate/sample-rate headroom when the byte budget allows it),
+     verified against the real MP3 encoder's actual output — but **not**
+     verified against a real ElevenLabs Scribe response on the real
+     track, since no `ELEVENLABS_API_KEY` is available in this
+     environment to run that request. If Stuart re-attaches this track
+     after this fix ships and Scribe still returns a sparse word list,
+     that's real signal that compression wasn't the (or the whole) story
+     — worth a follow-up report with the new word count, since a
+     provider that still can't hear the singing even at 128kbps/22kHz
+     would point somewhere this PR couldn't reach (e.g. Scribe's own
+     handling of this specific mix, or a genuinely quiet/buried vocal
+     take) rather than back at this compression step.
   7. **Real(ish) vocal/instrumental analysis, kept as a fallback**
      (`lib/audioAnalysis.ts`, `analyzeVocalActivity`) — runs **in
      parallel** with step 6 above, unconditionally, the moment a file's
