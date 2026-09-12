@@ -1153,32 +1153,34 @@ now (see "Explicitly out of scope" below).
   9. **Clip / segment timeline** (`SkidmarksClipTimeline`) — appended
      right under the checklist chips, as soon as an MP3 is attached (not
      gated on the checklist reaching "Ready"): a collapsible **Clip /
-     segment list** section with an honesty caption above the rows that
-     changes with real state — e.g. *"Requesting word-level
-     transcription… analyzing the attached MP3 for vocal vs. instrumental
-     sections via the energy heuristic — showing the seed demo cadence
-     below until that finishes"* while both are still resolving; *"Real
-     transcription: word-level timestamps from ElevenLabs Scribe, merged
-     into vocal/instrumental runs…"* once *useful* transcription
-     succeeds; *"No ELEVENLABS_API_KEY (or ELEVEN_LABS_API_KEY) configured,
-     so real word-level transcription is unavailable — showing real(ish)
-     analysis instead: vocal vs. instrumental sections detected from the
-     MP3's own audio…"* if only the heuristic came through; *"ElevenLabs
-     Scribe ran but found too little usable vocal timing for this
-     track…"* (the honest `"sparse"` outcome — a provider really
-     responded, its words just didn't map to enough real singing to
-     trust for this track — see the "Second live bug report" note under
-     step 6 above) with the same real(ish)-analysis fallback line; or a
-     "both failed" variant naming both reasons if neither transcription
-     nor the heuristic came through. **Segments prefer real, *useful*
+     segment list** section. **Per Stuart's explicit product-lock ask**
+     (now that ElevenLabs Scribe reliably works), the long paragraph-
+     length "honesty caption" that used to sit above the rows — naming
+     file paths (`lib/transcription.ts`, `lib/audioAnalysis.ts`), the
+     energy-heuristic mechanics, and the exact provider on every state
+     change — is gone from this screen once real, *useful* transcription
+     lands (`segmentsSource === "transcription"`, the green-Lyrics case):
+     no caption, no note, nothing between the chips and the first
+     segment row. The Lyrics/Timing/Ready chips (step 8) already carry
+     that "is this real" signal, so the timeline doesn't repeat it as
+     prose. Short of that — transcription unconfigured, too sparse to
+     trust, or failed outright (`timelineNote` in
+     `SkidmarksClipTimeline.tsx`) — a single plain-language line still
+     shows (e.g. *"Lyrics timing failed — showing placeholder timing
+     below."* or *"…showing estimated timing below."* when the energy-
+     heuristic fallback actually produced something), with no file
+     paths and no explanation of how either fallback works; it just
+     says which timing is showing so a fallback is never presented as
+     if it were real. **Segments prefer real, *useful*
      transcription** (`segmentsSource: "transcription"`) whenever it
      lands; short of that, the real energy heuristic (`segmentsSource:
      "analysis"`); short of that, the seed cadence (`buildDemoSegments`
      in `lib/skidmarks.ts` — 7 segments: intro instrumental → verse → instrumental break →
      verse → bridge → lead → verse, labeled **Verse**/**Bridge**/
-     **Lead**/**Instrumental**) as an honestly-captioned fallback — see
-     `timelineCaption` in `SkidmarksClipTimeline.tsx` for the exact
-     priority logic. Each clip is its own **collapsible row**: collapsed
+     **Lead**/**Instrumental**) as a fallback, flagged by the short
+     `timelineNote` line above whenever it's showing — see that
+     function in `SkidmarksClipTimeline.tsx` for the exact priority
+     logic. Each clip is its own **collapsible row**: collapsed
      shows the time range (e.g. "0:15–0:45"), its label
      pill, and a compact **model badge pill** (e.g. "LTX", "H3" — a 🎤
      glyph joins it when the current model is LTX Lip-sync) that cycles
