@@ -5,7 +5,9 @@ import {
   createSkidmarksProject,
   getSkidmarksSnapshot,
   setActiveSkidmarksProject,
+  setSkidmarksProjectPunchcard,
   subscribeSkidmarks,
+  type SkidmarksPunchcard,
   type SkidmarksState,
 } from "@/lib/skidmarks";
 
@@ -26,11 +28,17 @@ export function useSkidmarksProjects() {
   );
 
   const createProject = useCallback(
-    (brief: string) => createSkidmarksProject(brief),
+    (brief: string, punchcard?: SkidmarksPunchcard) =>
+      createSkidmarksProject(brief, punchcard),
     []
   );
   const setActiveProject = useCallback(
     (id: string) => setActiveSkidmarksProject(id),
+    []
+  );
+  const setProjectPunchcard = useCallback(
+    (id: string, punchcard: SkidmarksPunchcard | null) =>
+      setSkidmarksProjectPunchcard(id, punchcard),
     []
   );
 
@@ -39,5 +47,6 @@ export function useSkidmarksProjects() {
     activeProjectId: state.activeProjectId,
     createProject,
     setActiveProject,
+    setProjectPunchcard,
   };
 }

@@ -89,6 +89,37 @@ export interface SkidmarksMessage {
   stage?: SkidmarksStage;
 }
 
+/**
+ * A "punchcard" is a JSON script Stuart can paste or upload — like old
+ * piano-roll punchcards, but for movie beats. This build only accepts a
+ * JSON blob, validates it parses, and stores it on the project; nothing
+ * here parses it into scenes/beats or feeds a real pipeline. The shape
+ * below is a placeholder guess for what a punchcard *might* look like
+ * once a real schema exists — deliberately NOT validated against (only
+ * "is this valid JSON?" is checked), so this survives that schema
+ * changing later without a migration:
+ *
+ *   {
+ *     "title": "string",
+ *     "scenes": [
+ *       { "id": "string", "beat": "string", "duration?": number }
+ *     ]
+ *   }
+ */
+export interface SkidmarksPunchcard {
+  id: string;
+  /** Raw JSON text as pasted/uploaded — kept verbatim so re-showing or
+   * copying it never lossy-round-trips through `JSON.stringify`. */
+  raw: string;
+  /** `JSON.parse(raw)` — untyped on purpose; see the placeholder shape above. */
+  parsed: unknown;
+  /** Best-effort display title: `parsed.title` if it's a non-empty
+   * string, else the source file name, else "Untitled punchcard". */
+  title: string;
+  fileName?: string;
+  attachedAt: number;
+}
+
 export interface SkidmarksProject {
   id: string;
   brief: string;
@@ -97,6 +128,9 @@ export interface SkidmarksProject {
   cast: SkidmarksCastStub[];
   plates: SkidmarksPlateSlot[];
   messages: SkidmarksMessage[];
+  /** Set once Stuart attaches a JSON punchcard (landing composer or the
+   * post-start "+" ). UI-only for this build — see `SkidmarksPunchcard`. */
+  punchcard?: SkidmarksPunchcard;
 }
 
 export interface SkidmarksState {
@@ -169,6 +203,58 @@ function buildPlateSlots(): SkidmarksPlateSlot[] {
   return PLATE_SLOT_LABELS.map((label, i) => ({ id: `plate-${i + 1}`, label }));
 }
 
+function titleFromParsedPunchcard(parsed: unknown): string | undefined {
+  if (
+    parsed !== null &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    "title" in parsed
+  ) {
+    const title = (parsed as { title?: unknown }).title;
+    if (typeof title === "string" && title.trim().length > 0) {
+      return title.trim();
+    }
+  }
+  return undefined;
+}
+
+export type PunchcardParseResult =
+  | { ok: true; punchcard: SkidmarksPunchcard }
+  | { ok: false; error: string };
+
+/**
+ * Pure validator/builder: raw pasted or uploaded text → a
+ * `SkidmarksPunchcard`, or a plain-English error. The only check is "does
+ * this parse as JSON?" — see `SkidmarksPunchcard`'s doc comment for why
+ * this deliberately doesn't validate against the placeholder scene shape.
+ */
+export function parsePunchcardJson(raw: string, fileName?: string): PunchcardParseResult {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { ok: false, error: "Paste or upload some JSON first." };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "unknown error";
+    return { ok: false, error: `Not valid JSON \u2014 ${detail}` };
+  }
+
+  return {
+    ok: true,
+    punchcard: {
+      id: generateId("punchcard"),
+      raw: trimmed,
+      parsed,
+      title: titleFromParsedPunchcard(parsed) ?? fileName ?? "Untitled punchcard",
+      fileName,
+      attachedAt: Date.now(),
+    },
+  };
+}
+
 function echoBrief(brief: string): string {
   const trimmed = brief.trim().replace(/\s+/g, " ");
   const snippet = trimmed.length > 140 ? `${trimmed.slice(0, 137)}\u2026` : trimmed;
@@ -182,7 +268,10 @@ function echoBrief(brief: string): string {
  * same stub project (useful for testing, and honest about there being no
  * real intelligence behind it yet).
  */
-export function buildProjectFromBrief(brief: string): SkidmarksProject {
+export function buildProjectFromBrief(
+  brief: string,
+  punchcard?: SkidmarksPunchcard
+): SkidmarksProject {
   const trimmedBrief = brief.trim();
   const id = generateId("skidmarks");
   const now = Date.now();
@@ -205,6 +294,17 @@ export function buildProjectFromBrief(brief: string): SkidmarksProject {
       text: echoBrief(trimmedBrief),
       at: now + 1,
     },
+    ...(punchcard
+      ? [
+          {
+            id: generateId("msg"),
+            role: "director" as const,
+            kind: "text" as const,
+            text: `Punchcard loaded \u2014 \u201c${punchcard.title}\u201d. Holding it for later.`,
+            at: now + 1.5,
+          },
+        ]
+      : []),
     {
       id: generateId("msg"),
       role: "director",
@@ -239,6 +339,7 @@ export function buildProjectFromBrief(brief: string): SkidmarksProject {
     cast,
     plates,
     messages,
+    punchcard,
   };
 }
 
@@ -315,12 +416,33 @@ function persist(next: SkidmarksState) {
  * to the project history (capped at `PROJECT_HISTORY_LIMIT`) — this is
  * the "New project" flow's one entry point.
  */
-export function createSkidmarksProject(brief: string): SkidmarksProject {
-  const project = buildProjectFromBrief(brief);
+export function createSkidmarksProject(
+  brief: string,
+  punchcard?: SkidmarksPunchcard
+): SkidmarksProject {
+  const project = buildProjectFromBrief(brief, punchcard);
   const current = getSkidmarksSnapshot();
   const projects = [project, ...current.projects].slice(0, PROJECT_HISTORY_LIMIT);
   persist({ projects, activeProjectId: project.id });
   return project;
+}
+
+/**
+ * Attaches (or, passing `null`, clears) a punchcard on an existing
+ * project — the "+" affordance in the detail sheet once a project is
+ * already active, separate from attaching one at brief-submit time via
+ * `createSkidmarksProject`. No-op if `id` isn't a known project.
+ */
+export function setSkidmarksProjectPunchcard(
+  id: string,
+  punchcard: SkidmarksPunchcard | null
+): void {
+  const current = getSkidmarksSnapshot();
+  if (!current.projects.some((p) => p.id === id)) return;
+  const projects = current.projects.map((p) =>
+    p.id === id ? { ...p, punchcard: punchcard ?? undefined } : p
+  );
+  persist({ ...current, projects });
 }
 
 /** Reopens a past project (from the history row) without touching its thread. */
