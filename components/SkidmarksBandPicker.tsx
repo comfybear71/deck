@@ -213,7 +213,14 @@ export function SkidmarksBandPicker({
   onRemoveBand,
 }: SkidmarksBandPickerProps) {
   return (
-    <div className="flex items-center gap-3 overflow-x-auto pb-1 pl-0.5 pr-1 [scrollbar-width:thin]">
+    // `-mx-1.5`/`px-1.5 py-1.5`: the active tile's `ring-offset-2` shadow
+    // extends ~4px past its box on every edge, and this row scrolls
+    // (`overflow-x-auto`, which also makes `overflow-y` implicit `auto`)
+    // — with no padding, that shadow got clipped, most visibly the top
+    // ring on the first row. The padding gives the ring room; the
+    // matching negative margin cancels it back out so the row's edges
+    // still line up with the "Choose a band" label above.
+    <div className="-mx-1.5 flex items-center gap-3 overflow-x-auto px-1.5 py-1.5 [scrollbar-width:thin]">
       <NewBandTile onClick={onCreateBand} />
       {bands.map((band) => (
         <BandTile
