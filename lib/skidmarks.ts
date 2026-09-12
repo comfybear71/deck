@@ -1,15 +1,17 @@
 /**
- * Skidmarks "vibe director" — Music-video flow, locked through the MP3
- * step (see the README's "Skidmarks node (vibe director)" section).
+ * Skidmarks "vibe director" — Music-video flow, through the MP3 step and
+ * its clip/segment timeline (see the README's "Skidmarks node (vibe
+ * director)" section).
  *
  * This is a deliberate rewrite of the earlier free-text "type a vibe
  * brief, get a scripted director-chat thread" build (PR #17/#18): the
  * locked mockups replace that with a concrete, appended-step wizard —
- * pick a project type, choose a band, cast its members, attach an MP3 —
- * all on **one continuous scroll**, not a chat thread and not separate
- * screens. Nothing here calls a real backend: no Comfy MCP, no
- * Seedance/LTX/ElevenLabs, no `skidmarks.aiglitch.app` Crash Lab, no
- * actual AI image generation for "looks".
+ * pick a project type, choose a band, cast its members, attach an MP3,
+ * assign each clip a plate/camera/model — all on **one continuous
+ * scroll**, not a chat thread and not separate screens. Nothing here
+ * calls a real backend: no Comfy MCP, no Seedance/LTX/ElevenLabs, no
+ * `skidmarks.aiglitch.app` Crash Lab, no actual AI image/video
+ * generation.
  *
  * **Mock vs. real, precisely**: band/member *identity* is real —
  * bands and members are hand-seeded or user-created with no invented
@@ -17,9 +19,12 @@
  * a real photo Stuart chose (via `readImageFileAsDataUrl`), and deleting
  * a band or member (`removeSkidmarksBand`/`removeSkidmarksMember`) is a
  * real, persisted removal. What's still mock: generated "looks"
- * (`buildMockLook` — a color swatch, not an image model call) and the
- * MP3 checklist's three ticks (staged `setTimeout`s in
- * `hooks/useSkidmarksStudio.ts`, not a real lyrics/timing analysis).
+ * (`buildMockLook` — a color swatch, not an image model call), the MP3
+ * checklist's three ticks (staged `setTimeout`s in
+ * `hooks/useSkidmarksStudio.ts`, not a real lyrics/timing analysis), and
+ * — important, since it's easy to mistake for the real thing — the clip
+ * timeline's segments (`buildDemoSegments`): a deterministic seed
+ * cadence, **not real speech-to-text or singing detection**.
  *
  * Persistence mirrors `lib/control-plane.ts` / `lib/graphLayout.ts`: an
  * in-memory cache is the synchronous source of truth the UI reads via
@@ -28,14 +33,15 @@
  * the wizard survives a refresh. **This is a placeholder store, not the
  * intended long-term one** — `localStorage` is per-browser (nothing here
  * is shared across devices) and has a small quota; Stuart wants Skidmarks
- * data (bands/members/looks/session) moved to real Neon Postgres
- * persistence so it survives across devices/browsers. That migration is
- * explicitly out of scope for this PR (see the README's Skidmarks
- * section, "Follow-up" note) — this file's `localStorage`
+ * data (bands/members/looks/session/clip timeline) moved to real Neon
+ * Postgres persistence so it survives across devices/browsers. That
+ * migration is explicitly out of scope for this PR (see the README's
+ * Skidmarks section, "Follow-up" note) — this file's `localStorage`
  * read/write/`useSyncExternalStore` shape is what a Neon-backed version
- * would replace. Also explicitly out of scope for this build: plates,
- * multi-angle coverage, voice, animate, stitch — the flow stops dead
- * after the MP3 checklist.
+ * would replace. Also explicitly out of scope for this build: voice,
+ * animate, and stitch, and any actual clip rendering ("Generate Clips" is
+ * a stub button — see `SkidmarksClipTimeline`) — the flow stops dead
+ * after the clip timeline's plate/camera/model tags.
  */
 
 const STORAGE_KEY = "the-tab:skidmarks-studio";
@@ -148,12 +154,179 @@ export const EMPTY_SKIDMARKS_CHECKLIST: Record<SkidmarksChecklistKey, boolean> =
   ready: false,
 };
 
+/**
+ * The four clip-segment labels the timeline UI works with. `vocal`
+ * drives the one default-model rule the whole feature hangs off: sung
+ * segments (verse/bridge) default to **LTX Lip-sync**, non-vocal ones
+ * (lead/instrumental) default to a plain video model instead — see
+ * `defaultSegmentModel` below.
+ */
+export type SkidmarksSegmentLabel = "verse" | "bridge" | "lead" | "instrumental";
+
+export interface SkidmarksSegmentLabelMeta {
+  label: string;
+  vocal: boolean;
+}
+
+export const SKIDMARKS_SEGMENT_LABEL_META: Record<SkidmarksSegmentLabel, SkidmarksSegmentLabelMeta> = {
+  verse: { label: "Verse", vocal: true },
+  bridge: { label: "Bridge", vocal: true },
+  lead: { label: "Lead", vocal: false },
+  instrumental: { label: "Instrumental", vocal: false },
+};
+
+/** Model options for a clip's one-tap pill — matches the locked plates
+ * mockup's row exactly (LTX Lip-sync, H3, SIRAY Uncensored, Kling). No
+ * model here actually renders anything; picking one just tags the
+ * segment for whenever a real Comfy MCP / LTX pipeline lands. */
+export type SkidmarksModelId = "ltx-lipsync" | "h3" | "siray-uncensored" | "kling";
+
+export interface SkidmarksModelMeta {
+  id: SkidmarksModelId;
+  label: string;
+}
+
+export const SKIDMARKS_MODELS: SkidmarksModelMeta[] = [
+  { id: "ltx-lipsync", label: "LTX Lip-sync" },
+  { id: "h3", label: "H3" },
+  { id: "siray-uncensored", label: "SIRAY Uncensored" },
+  { id: "kling", label: "Kling" },
+];
+
+export function skidmarksModelLabel(id: SkidmarksModelId): string {
+  return SKIDMARKS_MODELS.find((m) => m.id === id)?.label ?? id;
+}
+
+/** Non-vocal segments cycle through these three so a multi-clip band
+ * doesn't land every break/lead on the same model by default — still a
+ * one-tap switch to anything else. */
+const NON_VOCAL_MODEL_CYCLE: SkidmarksModelId[] = ["h3", "siray-uncensored", "kling"];
+
+/** The one default-model rule this feature encodes in the UI: singing
+ * (verse/bridge) → LTX Lip-sync; instrumental/lead/break → cycle the
+ * other three. `nonVocalIndex` is this segment's position among *only*
+ * the non-vocal segments so far, so the cycle doesn't skip on vocal runs. */
+export function defaultSegmentModel(
+  label: SkidmarksSegmentLabel,
+  nonVocalIndex: number
+): SkidmarksModelId {
+  if (SKIDMARKS_SEGMENT_LABEL_META[label].vocal) return "ltx-lipsync";
+  return NON_VOCAL_MODEL_CYCLE[nonVocalIndex % NON_VOCAL_MODEL_CYCLE.length];
+}
+
+/** Camera angle options for a clip's expanded plates+camera panel —
+ * matches the locked plates mockup's row exactly. Picking one is just a
+ * tag on the segment, same "structure for later" spirit as everything
+ * else in this section. */
+export type SkidmarksCameraAngleId = "close-up" | "wide" | "low-angle" | "tracking" | "overhead";
+
+export const SKIDMARKS_CAMERA_ANGLES: { id: SkidmarksCameraAngleId; label: string }[] = [
+  { id: "close-up", label: "Close-up" },
+  { id: "wide", label: "Wide" },
+  { id: "low-angle", label: "Low Angle" },
+  { id: "tracking", label: "Tracking" },
+  { id: "overhead", label: "Overhead" },
+];
+
+/** Location plate options for a clip's expanded plates panel — matches
+ * the locked plates mockup's five seed plates exactly. There are no real
+ * plate photos in this build; `gradient` is a deterministic swatch
+ * stand-in, same trick as `coverGradientClass`/`lookGradientClass`. */
+export type SkidmarksPlateId =
+  | "neon-stage"
+  | "rainy-alley"
+  | "desert-highway"
+  | "warehouse"
+  | "crowd-pit";
+
+export interface SkidmarksPlateMeta {
+  id: SkidmarksPlateId;
+  label: string;
+  gradient: string;
+}
+
+export const SKIDMARKS_LOCATION_PLATES: SkidmarksPlateMeta[] = [
+  { id: "neon-stage", label: "Neon Stage", gradient: "from-fuchsia-500/70 via-purple-900/80 to-black" },
+  { id: "rainy-alley", label: "Rainy Alley", gradient: "from-slate-400/60 via-slate-900/85 to-black" },
+  { id: "desert-highway", label: "Desert Highway", gradient: "from-orange-400/60 via-amber-900/80 to-black" },
+  { id: "warehouse", label: "Warehouse", gradient: "from-zinc-400/50 via-zinc-800/85 to-black" },
+  { id: "crowd-pit", label: "Crowd Pit", gradient: "from-rose-500/70 via-red-900/80 to-black" },
+];
+
+/**
+ * One clip/segment on the timeline: a time range, a label, and the three
+ * one-tap tags (model / plate / camera angle) the expanded panel edits.
+ * `plateId`/`cameraAngle` start `null` (no plate/angle picked yet);
+ * `model` always starts assigned (via `defaultSegmentModel`) since the
+ * whole point of the default rule is that Stuart never *has* to think
+ * about it before one-tap switching to something else.
+ */
+export interface SkidmarksClipSegment {
+  id: string;
+  startSec: number;
+  endSec: number;
+  label: SkidmarksSegmentLabel;
+  model: SkidmarksModelId;
+  plateId: SkidmarksPlateId | null;
+  cameraAngle: SkidmarksCameraAngleId | null;
+}
+
+/** Fallback total (3:30) used to seed segments before the browser's real
+ * `<audio>` duration probe resolves — attach fires with `durationSec:
+ * null`, and the probe usually resolves within a beat, so this is only
+ * ever visible for a moment. See `setSkidmarksMp3Duration` below, which
+ * rebuilds off the real duration the first time it resolves. */
+const DEMO_SEGMENT_FALLBACK_DURATION_SEC = 210;
+
+/**
+ * Deterministic verse/bridge/lead/instrumental cadence, scaled to
+ * whatever total duration is passed in. **This is seed/demo structure,
+ * not real lyrics timing or singing detection** — see the module doc
+ * comment and the honesty note the timeline UI renders alongside it.
+ * It exists so Stuart has an editable clip list to assign plates/camera/
+ * model to *today*, in the same shape a future real STT + singing-detect
+ * pass can populate once that lands (see the README's "Skidmarks node"
+ * section).
+ */
+export function buildDemoSegments(totalSec: number): SkidmarksClipSegment[] {
+  const pattern: { label: SkidmarksSegmentLabel; frac: number }[] = [
+    { label: "instrumental", frac: 0.1 },
+    { label: "verse", frac: 0.25 },
+    { label: "instrumental", frac: 0.1 },
+    { label: "verse", frac: 0.2 },
+    { label: "bridge", frac: 0.15 },
+    { label: "lead", frac: 0.1 },
+    { label: "verse", frac: 0.1 },
+  ];
+  let cursor = 0;
+  let nonVocalIndex = 0;
+  return pattern.map((step, i) => {
+    const startSec = cursor;
+    const endSec = i === pattern.length - 1 ? totalSec : cursor + step.frac * totalSec;
+    cursor = endSec;
+    const vocal = SKIDMARKS_SEGMENT_LABEL_META[step.label].vocal;
+    const model = defaultSegmentModel(step.label, nonVocalIndex);
+    if (!vocal) nonVocalIndex += 1;
+    return {
+      id: generateId("segment"),
+      startSec,
+      endSec,
+      label: step.label,
+      model,
+      plateId: null,
+      cameraAngle: null,
+    };
+  });
+}
+
 export interface SkidmarksMp3Attachment {
   fileName: string;
   /** Real duration (seconds) once probed from the picked file; null while probing or if probing failed. */
   durationSec: number | null;
   attachedAt: number;
   checklist: Record<SkidmarksChecklistKey, boolean>;
+  /** The clip/segment timeline — always present once an MP3 is attached (seed/demo cadence; see `buildDemoSegments`). */
+  segments: SkidmarksClipSegment[];
 }
 
 /** The Music-video wizard's progress — which project type, which band,
@@ -296,6 +469,7 @@ export function createMp3Attachment(
     durationSec,
     attachedAt: Date.now(),
     checklist: { lyrics: false, timing: false, ready: false },
+    segments: buildDemoSegments(durationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC),
   };
 }
 
@@ -317,6 +491,15 @@ function normalizeState(parsed: unknown): SkidmarksState {
   const session: Partial<SkidmarksSession> = p.session ?? {};
   const bandId = typeof session.bandId === "string" ? session.bandId : null;
   const stillHasBand = bandId !== null && bands.some((b) => b.id === bandId);
+
+  const storedMp3 = (session.mp3 as SkidmarksMp3Attachment | null | undefined) ?? null;
+  // Sessions saved before the clip-timeline feature shipped won't have
+  // `segments` yet — backfill once, off whatever duration is already known.
+  const mp3 =
+    storedMp3 && !Array.isArray(storedMp3.segments)
+      ? { ...storedMp3, segments: buildDemoSegments(storedMp3.durationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC) }
+      : storedMp3;
+
   return {
     bands,
     removedSeedBandIds,
@@ -326,7 +509,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
           ? (session.projectKind as SkidmarksProjectKind)
           : null,
       bandId: stillHasBand ? bandId : null,
-      mp3: stillHasBand ? (session.mp3 as SkidmarksMp3Attachment | null | undefined) ?? null : null,
+      mp3: stillHasBand ? mp3 : null,
     },
   };
 }
@@ -561,12 +744,18 @@ export function attachSkidmarksMp3(mp3: SkidmarksMp3Attachment): void {
  * card can render right away instead of waiting on the probe. */
 export function setSkidmarksMp3Duration(durationSec: number): void {
   const current = getSkidmarksSnapshot();
-  if (!current.session.mp3) return;
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  // The very first time a real duration resolves (attach always starts
+  // with `durationSec: null`), rebuild the demo segments off it instead
+  // of the fallback total they were seeded with — nothing's had a chance
+  // to hand-edit plate/camera/model yet in that split-second window.
+  const segments = mp3.durationSec === null ? buildDemoSegments(durationSec) : mp3.segments;
   persist({
     ...current,
     session: {
       ...current.session,
-      mp3: { ...current.session.mp3, durationSec },
+      mp3: { ...mp3, durationSec, segments },
     },
   });
 }
@@ -575,6 +764,46 @@ export function clearSkidmarksMp3(): void {
   const current = getSkidmarksSnapshot();
   if (!current.session.mp3) return;
   persist({ ...current, session: { ...current.session, mp3: null } });
+}
+
+function updateSkidmarksSegment(
+  segmentId: string,
+  updater: (segment: SkidmarksClipSegment) => SkidmarksClipSegment
+): void {
+  const current = getSkidmarksSnapshot();
+  if (!current.session.mp3) return;
+  const segments = current.session.mp3.segments.map((s) =>
+    s.id === segmentId ? updater(s) : s
+  );
+  persist({
+    ...current,
+    session: { ...current.session, mp3: { ...current.session.mp3, segments } },
+  });
+}
+
+/** One-tap model switch for a clip — no confirmation, no picker modal,
+ * per the "easy one-tap switch, no heavy thinking" product rule. */
+export function setSkidmarksSegmentModel(segmentId: string, model: SkidmarksModelId): void {
+  updateSkidmarksSegment(segmentId, (s) => ({ ...s, model }));
+}
+
+/** Tapping an already-selected plate clears it (single-select with an
+ * off state), same as re-tapping the active camera angle below. */
+export function setSkidmarksSegmentPlate(segmentId: string, plateId: SkidmarksPlateId): void {
+  updateSkidmarksSegment(segmentId, (s) => ({
+    ...s,
+    plateId: s.plateId === plateId ? null : plateId,
+  }));
+}
+
+export function setSkidmarksSegmentCameraAngle(
+  segmentId: string,
+  cameraAngle: SkidmarksCameraAngleId
+): void {
+  updateSkidmarksSegment(segmentId, (s) => ({
+    ...s,
+    cameraAngle: s.cameraAngle === cameraAngle ? null : cameraAngle,
+  }));
 }
 
 /** Flips one checklist key to done — called by the staged "background
@@ -712,6 +941,11 @@ export function formatDuration(totalSeconds: number | null): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+/** "0:15–0:45" — a clip segment's time range for the timeline row. */
+export function formatSegmentRange(startSec: number, endSec: number): string {
+  return `${formatDuration(startSec)}\u2013${formatDuration(endSec)}`;
 }
 
 /**
