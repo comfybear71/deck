@@ -32,6 +32,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     selectProjectKind,
     selectBand,
     createBand,
+    removeBand,
     addMember,
     removeMember,
     renameMember,
@@ -81,6 +82,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const handleRenameMember = (name: string) => {
     if (!activeBand || !openMember) return;
     renameMember(activeBand.id, openMember.id, name);
+  };
+
+  const handleRemoveBand = (bandId: string) => {
+    if (bandId === activeBand?.id) setOpenMemberId(null);
+    removeBand(bandId);
   };
 
   return (
@@ -152,6 +158,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   onSelectBand={selectBand}
                   onCreateBand={createBand}
                   onSetCoverImage={setBandCoverImage}
+                  onRemoveBand={handleRemoveBand}
                 />
               </div>
             )}

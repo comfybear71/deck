@@ -625,18 +625,24 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
      faces, per the locked mockup's product rule) — "New" (+) first, then
      every known band. Two are hand-seeded (`SEED_BANDS`): **Jack Ash**
      ("Dirt roads & bad decisions") and **Solar Rebel** ("Ignite the
-     static"). Each existing band's tile has a small pencil/camera corner
-     glyph; tapping it opens a **real native file picker**
-     (`accept=".jpg,.jpeg,.png,.webp"` — jpg/png/webp only). Once a file's
-     picked, `readImageFileAsDataUrl` downscales it (longest edge capped
-     at 640px, re-encoded as a JPEG data URL — keeps a phone photo from
-     blowing past `localStorage`'s quota) and `setSkidmarksBandCoverImage`
-     stores it on the band; the tile then renders that real photo
-     (`coverImage`) instead of the mock gradient. A band with no picked
-     cover still falls back to the CSS gradient stand-in
-     (`coverGradientClass`, keyed off `coverSeed`) — there's no server
-     upload here, the data URL just lives in this browser's
-     `localStorage`.
+     static"). Each existing band's tile (never the "New" tile) has two
+     small corner glyphs: a pencil/camera "edit cover" glyph (top-right)
+     that opens a **real native file picker**
+     (`accept=".jpg,.jpeg,.png,.webp"` — jpg/png/webp only) — once a
+     file's picked, `readImageFileAsDataUrl` downscales it (longest edge
+     capped at 640px, re-encoded as a JPEG data URL — keeps a phone photo
+     from blowing past `localStorage`'s quota) and
+     `setSkidmarksBandCoverImage` stores it on the band; the tile then
+     renders that real photo (`coverImage`) instead of the mock gradient
+     — and a trash "remove band" glyph (top-left) that deletes the band
+     outright via `removeSkidmarksBand`. Deleting one of the two
+     hand-seeded bands records its id in `removedSeedBandIds` so it stays
+     gone on the next load instead of being re-minted from `SEED_BANDS`;
+     deleting the active band resets the session (`bandId`/`mp3`) back to
+     before a band was chosen. A band with no picked cover still falls
+     back to the CSS gradient stand-in (`coverGradientClass`, keyed off
+     `coverSeed`) — there's no server upload here, the data URL just
+     lives in this browser's `localStorage`.
   3. **Members module** — selecting a band (or tapping "New", which mints
      the locked mockup's exact example band via `buildNewMockBand`: *Grok
      Bot & the destroyers*, with Rock Grok — role "Solo", one look already
@@ -704,7 +710,8 @@ are explicitly out of scope for now (see "Explicitly out of scope" below).
   `photoreal`, `createdAt`); `SkidmarksMp3Attachment` (`fileName`,
   `durationSec`, `attachedAt`, `checklist: Record<SkidmarksChecklistKey,
   boolean>`); and `SkidmarksState` (`bands`, `session:
-  { projectKind, bandId, mp3 }`).
+  { projectKind, bandId, mp3 }`, `removedSeedBandIds` — hand-seeded band
+  ids Stuart has deleted, so `normalizeState` doesn't resurrect them).
 - **Persistence**: `localStorage` (key `the-tab:skidmarks-studio`),
   mirroring the same in-memory-cache-plus-`useSyncExternalStore` shape as
   `lib/control-plane.ts` / `lib/graphLayout.ts` (see

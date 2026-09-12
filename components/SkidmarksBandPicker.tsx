@@ -9,6 +9,7 @@ interface SkidmarksBandPickerProps {
   onSelectBand: (bandId: string) => void;
   onCreateBand: () => void;
   onSetCoverImage: (bandId: string, dataUrl: string) => void;
+  onRemoveBand: (bandId: string) => void;
 }
 
 /** Native file picker's accept list — jpg/png/webp only, matches what a
@@ -41,6 +42,20 @@ function EditGlyph({ icon }: { icon: "pencil" | "camera" }) {
   );
 }
 
+function TrashGlyph() {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3 w-3">
+      <path
+        d="M5 5.5h10M8.25 5.5v-1a1 1 0 0 1 1-1h1.5a1 1 0 0 1 1 1v1M6.25 5.5l.5 9a1 1 0 0 0 1 .95h4.5a1 1 0 0 0 1-.95l.5-9"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function NewBandTile({ onClick }: { onClick: () => void }) {
   return (
     <button
@@ -62,11 +77,13 @@ function BandTile({
   active,
   onSelect,
   onSetCoverImage,
+  onRemove,
 }: {
   band: SkidmarksBand;
   active: boolean;
   onSelect: () => void;
   onSetCoverImage: (dataUrl: string) => void;
+  onRemove: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [picking, setPicking] = useState(false);
@@ -137,6 +154,15 @@ function BandTile({
           <EditGlyph icon={band.editIcon} />
         )}
       </button>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove band ${band.name}`}
+        title="Remove band"
+        className="absolute left-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-white/70 backdrop-blur-sm transition-colors hover:bg-red-500/60 hover:text-white"
+      >
+        <TrashGlyph />
+      </button>
       <input
         ref={fileInputRef}
         type="file"
@@ -153,12 +179,14 @@ function BandTile({
 /**
  * "Choose a band" — a horizontal scroll of square album-cover tiles: New
  * (+) first, then every known band, cover art only (never member faces,
- * per the locked mockup's product rule). Each existing band tile has a
- * small pencil/camera "edit cover" glyph in its corner; tapping it opens
- * a real native file picker (jpg/png/webp) and, once a file's chosen,
- * downscales + stores it as a data URL (`readImageFileAsDataUrl`) that
- * the tile then renders instead of the mock gradient — a real picked
- * photo, not a generated stand-in.
+ * per the locked mockup's product rule). Each existing band tile (never
+ * the "New" tile, which isn't a band yet) has two small corner glyphs: a
+ * pencil/camera "edit cover" glyph (top-right) that opens a real native
+ * file picker (jpg/png/webp) and, once a file's chosen, downscales +
+ * stores it as a data URL (`readImageFileAsDataUrl`) that the tile then
+ * renders instead of the mock gradient — a real picked photo, not a
+ * generated stand-in — and a trash "remove band" glyph (top-left) that
+ * deletes the band outright via `onRemoveBand`.
  */
 export function SkidmarksBandPicker({
   bands,
@@ -166,6 +194,7 @@ export function SkidmarksBandPicker({
   onSelectBand,
   onCreateBand,
   onSetCoverImage,
+  onRemoveBand,
 }: SkidmarksBandPickerProps) {
   return (
     <div className="flex items-center gap-3 overflow-x-auto pb-1 pl-0.5 pr-1 [scrollbar-width:thin]">
@@ -177,6 +206,7 @@ export function SkidmarksBandPicker({
           active={band.id === activeBandId}
           onSelect={() => onSelectBand(band.id)}
           onSetCoverImage={(dataUrl) => onSetCoverImage(band.id, dataUrl)}
+          onRemove={() => onRemoveBand(band.id)}
         />
       ))}
     </div>
