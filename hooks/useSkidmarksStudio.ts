@@ -1,14 +1,17 @@
 "use client";
 
 import { useCallback, useRef, useSyncExternalStore } from "react";
+import { analyzeVocalActivity } from "@/lib/audioAnalysis";
 import {
   addSkidmarksLook,
   addSkidmarksMember,
+  applySkidmarksAnalysisResult,
   attachSkidmarksMp3,
   clearSkidmarksMp3,
+  createMp3Attachment,
   createSkidmarksBand,
   getSkidmarksSnapshot,
-  markSkidmarksChecklistDone,
+  markSkidmarksAnalysisFailed,
   removeSkidmarksBand,
   removeSkidmarksMember,
   renameSkidmarksMember,
@@ -20,14 +23,10 @@ import {
   setSkidmarksSegmentCameraAngle,
   setSkidmarksSegmentModel,
   setSkidmarksSegmentPlate,
-  SKIDMARKS_CHECKLIST_DELAY_MS,
-  SKIDMARKS_CHECKLIST_ORDER,
   subscribeSkidmarks,
   type SkidmarksCameraAngleId,
-  type SkidmarksChecklistKey,
   type SkidmarksLook,
   type SkidmarksModelId,
-  type SkidmarksMp3Attachment,
   type SkidmarksPlateId,
   type SkidmarksProjectKind,
   type SkidmarksState,
@@ -47,11 +46,13 @@ const EMPTY_STATE: SkidmarksState = {
  * `localStorage` right after hydration.
  *
  * Also owns the one piece of real side-effecting logic this flow needs:
- * staging the MP3 checklist's "background sniff" (`attachMp3` kicks off
- * timers that flip `lyrics` → `timing` → `ready` after
- * `SKIDMARKS_CHECKLIST_DELAY_MS`, mirroring the old chat build's
- * `revealNext` staged-reveal pattern). Timers are cleared on unmount so a
- * closed sheet can't keep marking checklist items done in the background.
+ * kicking off `analyzeVocalActivity` (`lib/audioAnalysis.ts`) against the
+ * just-attached file, and writing its result (or failure) back to the
+ * store once it settles. `analysisTokenRef` is a generation counter, not
+ * a timer id — it exists so a slow analysis for a file the user has
+ * since removed or replaced can't land its result on top of whatever's
+ * current; every `attachMp3`/`removeMp3` bumps it, and any in-flight
+ * analysis whose captured token no longer matches just gets dropped.
  */
 export function useSkidmarksStudio() {
   const state = useSyncExternalStore(
@@ -60,12 +61,7 @@ export function useSkidmarksStudio() {
     () => EMPTY_STATE
   );
 
-  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-
-  const clearTimers = useCallback(() => {
-    timersRef.current.forEach(clearTimeout);
-    timersRef.current = [];
-  }, []);
+  const analysisTokenRef = useRef(0);
 
   const selectProjectKind = useCallback(
     (kind: SkidmarksProjectKind) => selectSkidmarksProjectKind(kind),
@@ -75,13 +71,13 @@ export function useSkidmarksStudio() {
   const createBand = useCallback(() => createSkidmarksBand(), []);
   const removeBand = useCallback(
     (bandId: string) => {
-      // Deleting the active band drops its MP3 too — stop the checklist's
-      // staged timers so they can't call `markSkidmarksChecklistDone` for
-      // a session that no longer exists.
-      if (state.session.bandId === bandId) clearTimers();
+      // Deleting the active band drops its MP3 too — invalidate any
+      // in-flight analysis so a late result can't land on a session that
+      // no longer exists.
+      if (state.session.bandId === bandId) analysisTokenRef.current += 1;
       removeSkidmarksBand(bandId);
     },
-    [state.session.bandId, clearTimers]
+    [state.session.bandId]
   );
   const addMember = useCallback((bandId: string) => addSkidmarksMember(bandId), []);
   const removeMember = useCallback(
@@ -108,27 +104,34 @@ export function useSkidmarksStudio() {
     []
   );
 
-  const attachMp3 = useCallback(
-    (mp3: SkidmarksMp3Attachment) => {
-      clearTimers();
-      attachSkidmarksMp3(mp3);
-      const orderedKeys: SkidmarksChecklistKey[] = [...SKIDMARKS_CHECKLIST_ORDER].sort(
-        (a, b) => SKIDMARKS_CHECKLIST_DELAY_MS[a] - SKIDMARKS_CHECKLIST_DELAY_MS[b]
-      );
-      for (const key of orderedKeys) {
-        const timer = setTimeout(() => {
-          markSkidmarksChecklistDone(key);
-        }, SKIDMARKS_CHECKLIST_DELAY_MS[key]);
-        timersRef.current.push(timer);
+  /**
+   * Attach a picked MP3 `File` and kick off real vocal/instrumental
+   * analysis against it in the background. The store gets the seed-
+   * fallback attachment immediately (so the card/checklist render right
+   * away), then either `applySkidmarksAnalysisResult` (success) or
+   * `markSkidmarksAnalysisFailed` (any rejection — unsupported browser,
+   * bad decode, or the analysis's own timeout) once it settles.
+   */
+  const attachMp3 = useCallback((file: File) => {
+    const token = (analysisTokenRef.current += 1);
+    attachSkidmarksMp3(createMp3Attachment(file.name, null));
+    analyzeVocalActivity(file).then(
+      (result) => {
+        if (analysisTokenRef.current !== token) return; // superseded — drop it
+        applySkidmarksAnalysisResult(result);
+      },
+      (err: unknown) => {
+        if (analysisTokenRef.current !== token) return;
+        const message = err instanceof Error ? err.message : "Vocal analysis failed.";
+        markSkidmarksAnalysisFailed(message);
       }
-    },
-    [clearTimers]
-  );
+    );
+  }, []);
 
   const removeMp3 = useCallback(() => {
-    clearTimers();
+    analysisTokenRef.current += 1; // invalidate any in-flight analysis
     clearSkidmarksMp3();
-  }, [clearTimers]);
+  }, []);
 
   const setMp3Duration = useCallback(
     (durationSec: number) => setSkidmarksMp3Duration(durationSec),

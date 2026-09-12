@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
-import { buildMockLook, EMPTY_SKIDMARKS_CHECKLIST } from "@/lib/skidmarks";
+import { buildMockLook, skidmarksChecklistState } from "@/lib/skidmarks";
 import { SkidmarksLandingTiles } from "./SkidmarksLandingTiles";
 import { SkidmarksBandPicker } from "./SkidmarksBandPicker";
 import { SkidmarksMembersModule } from "./SkidmarksMembersModule";
@@ -24,9 +24,11 @@ interface SkidmarksDetailSheetProps {
  * step (choose a band → cast members → attach MP3 → tag each clip)
  * appends underneath the previous one — there is no separate screen to
  * navigate to. See the README's "Skidmarks node (vibe director)" section
- * for exactly what's real (file pick, real audio duration/playback) vs.
- * mocked/seed (bands, looks, the checklist's staged timers, and the clip
- * timeline's segment cadence) in this build.
+ * for exactly what's real (file pick, real audio duration/playback, and
+ * now the clip timeline's vocal/instrumental analysis — see
+ * `lib/audioAnalysis.ts`) vs. mocked/seed (bands, looks, and the seed
+ * cadence the clip timeline falls back to if that analysis fails) in
+ * this build.
  */
 export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const {
@@ -195,15 +197,16 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   onDurationResolved={setMp3Duration}
                   onRemove={removeMp3}
                 />
-                <SkidmarksChecklistChips
-                  checklist={session.mp3?.checklist ?? EMPTY_SKIDMARKS_CHECKLIST}
-                />
+                <SkidmarksChecklistChips checklist={skidmarksChecklistState(session.mp3)} />
               </div>
             )}
 
             {session.mp3 && (
               <SkidmarksClipTimeline
                 segments={session.mp3.segments}
+                segmentsSource={session.mp3.segmentsSource}
+                analysisStatus={session.mp3.analysisStatus}
+                analysisError={session.mp3.analysisError}
                 onSetSegmentModel={setSegmentModel}
                 onSetSegmentPlate={setSegmentPlate}
                 onSetSegmentCameraAngle={setSegmentCameraAngle}

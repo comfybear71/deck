@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  createMp3Attachment,
   formatDuration,
   waveformBars,
   type SkidmarksMp3Attachment,
@@ -10,7 +9,10 @@ import {
 
 interface SkidmarksMp3CardProps {
   mp3: SkidmarksMp3Attachment | null;
-  onAttach: (mp3: SkidmarksMp3Attachment) => void;
+  /** Raw picked file — the caller (`useSkidmarksStudio`) builds the
+   * attachment record *and* kicks off real vocal/instrumental analysis
+   * against this same file (see `analyzeVocalActivity`). */
+  onAttach: (file: File) => void;
   onDurationResolved: (durationSec: number) => void;
   onRemove: () => void;
 }
@@ -88,10 +90,14 @@ function Waveform({ fileName, progress }: { fileName: string; progress: number }
  * MP3 card — attach an existing MP3 only (the song is made elsewhere;
  * this build never generates or edits audio). Same width/alignment as
  * the members module box above it. Once attached: a compact decorative
- * waveform, a real play/pause over the actual picked file (via an
+ * waveform (still just a filename-seeded stand-in, not derived from the
+ * real audio), a real play/pause over the actual picked file (via an
  * `<audio>` element + object URL — not persisted across reload, since a
  * `File` can't round-trip through `localStorage`), the filename, and the
- * real probed duration once the browser resolves it.
+ * real probed duration once the browser resolves it. `onAttach` hands
+ * the raw `File` up to `useSkidmarksStudio`, which is what actually
+ * kicks off real vocal/instrumental analysis against it — see
+ * `lib/audioAnalysis.ts`.
  */
 export function SkidmarksMp3Card({
   mp3,
@@ -121,7 +127,7 @@ export function SkidmarksMp3Card({
     setAudioUrl(url);
     setIsPlaying(false);
     setProgress(0);
-    onAttach(createMp3Attachment(file.name, null));
+    onAttach(file);
   };
 
   const handleLoadedMetadata = () => {

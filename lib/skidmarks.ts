@@ -18,13 +18,23 @@
  * name/role, a picked cover/avatar photo (`coverImage`/`avatarImage`) is
  * a real photo Stuart chose (via `readImageFileAsDataUrl`), and deleting
  * a band or member (`removeSkidmarksBand`/`removeSkidmarksMember`) is a
- * real, persisted removal. What's still mock: generated "looks"
- * (`buildMockLook` — a color swatch, not an image model call), the MP3
- * checklist's three ticks (staged `setTimeout`s in
- * `hooks/useSkidmarksStudio.ts`, not a real lyrics/timing analysis), and
- * — important, since it's easy to mistake for the real thing — the clip
- * timeline's segments (`buildDemoSegments`): a deterministic seed
- * cadence, **not real speech-to-text or singing detection**.
+ * real, persisted removal. The attached MP3's clip/segment timeline is
+ * now **real(ish)** too: `hooks/useSkidmarksStudio.ts` runs
+ * `analyzeVocalActivity` (`lib/audioAnalysis.ts`) against the actual
+ * attached file — a real FFT-based vocal-band-energy heuristic over the
+ * real decoded audio, entirely client-side, no API key or network call
+ * — and `applySkidmarksAnalysisResult` below turns its vocal/instrumental
+ * regions into the segments `SkidmarksClipTimeline` renders. The Lyrics/
+ * Timing/Ready chips (`skidmarksChecklistState` below) are derived
+ * straight from that real state (`analysisStatus`, `durationSec`), not
+ * staged timers. If analysis fails (unsupported browser, corrupt file,
+ * timeout), `markSkidmarksAnalysisFailed` keeps the seed cadence
+ * (`buildDemoSegments`) as an **honestly-labeled fallback** — see
+ * `segmentsSource` — rather than silently pretending it's real. What's
+ * still mock: generated "looks" (`buildMockLook` — a color swatch, not
+ * an image model call), and the seed fallback cadence itself when it's
+ * showing (never real STT or singing detection — a deterministic
+ * verse/bridge/lead/instrumental scaffold).
  *
  * Persistence mirrors `lib/control-plane.ts` / `lib/graphLayout.ts`: an
  * in-memory cache is the synchronous source of truth the UI reads via
@@ -38,11 +48,17 @@
  * migration is explicitly out of scope for this PR (see the README's
  * Skidmarks section, "Follow-up" note) — this file's `localStorage`
  * read/write/`useSyncExternalStore` shape is what a Neon-backed version
- * would replace. Also explicitly out of scope for this build: voice,
- * animate, and stitch, and any actual clip rendering ("Generate Clips" is
- * a stub button — see `SkidmarksClipTimeline`) — the flow stops dead
- * after the clip timeline's plate/camera/model tags.
+ * would replace. Note the attached audio `File` itself never persists
+ * (see `SkidmarksMp3Card`), so a completed analysis result persists fine
+ * across a reload, but an *in-progress* one can't resume — `normalizeState`
+ * below turns a stale `"analyzing"` status into an honest `"failed"` one
+ * on load rather than hanging forever. Also explicitly out of scope for
+ * this build: voice, animate, and stitch, and any actual clip rendering
+ * ("Generate Clips" is a stub button — see `SkidmarksClipTimeline`) — the
+ * flow stops dead after the clip timeline's plate/camera/model tags.
  */
+
+import type { VocalAnalysisResult } from "./audioAnalysis";
 
 const STORAGE_KEY = "the-tab:skidmarks-studio";
 
@@ -131,37 +147,64 @@ export const SKIDMARKS_CHECKLIST_LABEL: Record<SkidmarksChecklistKey, string> = 
 };
 
 /**
- * Staged "background sniff" delays (ms after attach) for each checklist
- * item — long enough to read as real analysis, short enough not to make
- * Stuart wait around. Lyrics reads as a speech-to-text-style pass (slower
- * than timing, which is just the file's own length), and Ready only ticks
- * once both are in. The actual `setTimeout` staging lives in
- * `hooks/useSkidmarksStudio.ts`, mirroring the reveal-timer pattern the
- * old chat build used.
+ * A chip's honest state — deliberately more than a boolean so "still
+ * mock/fallback" never has to borrow the same green "done" look as
+ * "genuinely finished":
+ * - `pending` — nothing to report yet (no MP3 attached).
+ * - `analyzing` — real work in flight (probing duration / running
+ *   `analyzeVocalActivity`).
+ * - `done` — the real signal actually resolved.
+ * - `stub` — the real signal failed, so we're showing the honestly-
+ *   labeled seed fallback instead. Never rendered as green.
  */
-export const SKIDMARKS_CHECKLIST_DELAY_MS: Record<SkidmarksChecklistKey, number> = {
-  timing: 900,
-  lyrics: 2200,
-  ready: 3000,
-};
-
-/** All-false checklist — shown under the MP3 card before anything's
- * attached yet, so the three chips are always present (just pending)
- * instead of popping into existence only once a file lands. */
-export const EMPTY_SKIDMARKS_CHECKLIST: Record<SkidmarksChecklistKey, boolean> = {
-  lyrics: false,
-  timing: false,
-  ready: false,
-};
+export type SkidmarksChipState = "pending" | "analyzing" | "done" | "stub";
 
 /**
- * The four clip-segment labels the timeline UI works with. `vocal`
- * drives the one default-model rule the whole feature hangs off: sung
- * segments (verse/bridge) default to **LTX Lip-sync**, non-vocal ones
- * (lead/instrumental) default to a plain video model instead — see
+ * Derives the Lyrics/Timing/Ready chip states straight from real
+ * session state — no staged timers. `timing` is real once the browser's
+ * probed duration resolves; `lyrics` (vocal/instrumental detection) is
+ * real once `analyzeVocalActivity` finishes, or `stub` if it failed
+ * (never silently green); `ready` only turns fully green once both
+ * underlying signals are real, and shows `stub` (not green) if the clip
+ * list is only usable via the seed fallback.
+ */
+export function skidmarksChecklistState(
+  mp3: SkidmarksMp3Attachment | null
+): Record<SkidmarksChecklistKey, SkidmarksChipState> {
+  if (!mp3) {
+    return { lyrics: "pending", timing: "pending", ready: "pending" };
+  }
+  const timing: SkidmarksChipState = mp3.durationSec !== null ? "done" : "analyzing";
+  const lyrics: SkidmarksChipState =
+    mp3.analysisStatus === "done"
+      ? "done"
+      : mp3.analysisStatus === "failed"
+        ? "stub"
+        : "analyzing";
+  const ready: SkidmarksChipState =
+    timing === "done" && lyrics === "done"
+      ? "done"
+      : timing === "done" && lyrics === "stub"
+        ? "stub"
+        : "pending";
+  return { lyrics, timing, ready };
+}
+
+/**
+ * The clip-segment labels the timeline UI works with. `verse`/`bridge`/
+ * `lead`/`instrumental` are `buildDemoSegments`' seed-cadence labels
+ * (song-structure guesses that seed can afford to invent, since it's
+ * clearly marked fake). `vocal` is the real analysis path's label
+ * (`analyzeVocalActivity` in `lib/audioAnalysis.ts`) — it only knows
+ * "singing" vs. not, so it's deliberately **not** called verse/bridge
+ * (that would claim song-structure knowledge the signal doesn't have);
+ * `instrumental` doubles as the real path's non-vocal label too. `vocal`
+ * (the boolean on each meta entry) drives the one default-model rule the
+ * whole feature hangs off: sung segments default to **LTX Lip-sync**,
+ * non-vocal ones default to a plain video model instead — see
  * `defaultSegmentModel` below.
  */
-export type SkidmarksSegmentLabel = "verse" | "bridge" | "lead" | "instrumental";
+export type SkidmarksSegmentLabel = "verse" | "bridge" | "lead" | "instrumental" | "vocal";
 
 export interface SkidmarksSegmentLabelMeta {
   label: string;
@@ -173,6 +216,7 @@ export const SKIDMARKS_SEGMENT_LABEL_META: Record<SkidmarksSegmentLabel, Skidmar
   bridge: { label: "Bridge", vocal: true },
   lead: { label: "Lead", vocal: false },
   instrumental: { label: "Instrumental", vocal: false },
+  vocal: { label: "Vocal", vocal: true },
 };
 
 /** Model options for a clip's one-tap pill — LTX Lip-sync, H3, Grok,
@@ -337,14 +381,42 @@ export function buildDemoSegments(totalSec: number): SkidmarksClipSegment[] {
   });
 }
 
+/**
+ * Where the current `segments` list actually came from:
+ * - `analysis` — real output of `analyzeVocalActivity`, mapped through
+ *   `applySkidmarksAnalysisResult`.
+ * - `seed-fallback` — `buildDemoSegments`' deterministic cadence, shown
+ *   either while analysis is still running or because it failed. Always
+ *   paired with an honest caption in `SkidmarksClipTimeline` — never
+ *   presented as if it were the real thing.
+ */
+export type SkidmarksSegmentsSource = "analysis" | "seed-fallback";
+
+/**
+ * Real analysis lifecycle for the attached file:
+ * - `analyzing` — `analyzeVocalActivity` is running (or, after a page
+ *   reload with no file to resume, about to be normalized to `failed`).
+ * - `done` — it finished; `segments`/`segmentsSource` reflect its output.
+ * - `failed` — it errored or timed out; `segments` is the seed fallback
+ *   and `analysisError` (if present) says why.
+ */
+export type SkidmarksAnalysisStatus = "analyzing" | "done" | "failed";
+
 export interface SkidmarksMp3Attachment {
   fileName: string;
   /** Real duration (seconds) once probed from the picked file; null while probing or if probing failed. */
   durationSec: number | null;
   attachedAt: number;
-  checklist: Record<SkidmarksChecklistKey, boolean>;
-  /** The clip/segment timeline — always present once an MP3 is attached (seed/demo cadence; see `buildDemoSegments`). */
+  /** The clip/segment timeline. Real vocal/instrumental regions once
+   * `segmentsSource === "analysis"`; the honestly-labeled seed cadence
+   * (`buildDemoSegments`) otherwise. */
   segments: SkidmarksClipSegment[];
+  segmentsSource: SkidmarksSegmentsSource;
+  analysisStatus: SkidmarksAnalysisStatus;
+  /** Human-readable reason analysis fell back to the seed cadence — only
+   * set when `analysisStatus === "failed"`. Surfaced verbatim in the
+   * timeline's honesty caption, not swallowed. */
+  analysisError?: string;
 }
 
 /** The Music-video wizard's progress — which project type, which band,
@@ -478,6 +550,11 @@ export function buildMockLook(prompt: string, photoreal: number): SkidmarksLook 
   };
 }
 
+/** Builds the just-attached state: seed-cadence segments as an
+ * immediately-visible placeholder while `analyzeVocalActivity` runs in
+ * the background (`useSkidmarksStudio`'s `attachMp3`) — replaced by real
+ * segments via `applySkidmarksAnalysisResult` once it finishes, or kept
+ * (now honestly labeled) via `markSkidmarksAnalysisFailed` if it fails. */
 export function createMp3Attachment(
   fileName: string,
   durationSec: number | null
@@ -486,8 +563,9 @@ export function createMp3Attachment(
     fileName,
     durationSec,
     attachedAt: Date.now(),
-    checklist: { lyrics: false, timing: false, ready: false },
     segments: buildDemoSegments(durationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC),
+    segmentsSource: "seed-fallback",
+    analysisStatus: "analyzing",
   };
 }
 
@@ -513,10 +591,30 @@ function normalizeState(parsed: unknown): SkidmarksState {
   const storedMp3 = (session.mp3 as SkidmarksMp3Attachment | null | undefined) ?? null;
   // Sessions saved before the clip-timeline feature shipped won't have
   // `segments` yet — backfill once, off whatever duration is already known.
-  const mp3 =
-    storedMp3 && !Array.isArray(storedMp3.segments)
-      ? { ...storedMp3, segments: buildDemoSegments(storedMp3.durationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC) }
-      : storedMp3;
+  const hasSegments = !!storedMp3 && Array.isArray(storedMp3.segments);
+  const segments = storedMp3
+    ? hasSegments
+      ? storedMp3.segments
+      : buildDemoSegments(storedMp3.durationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC)
+    : [];
+  const segmentsSource: SkidmarksSegmentsSource =
+    storedMp3?.segmentsSource === "analysis" ? "analysis" : "seed-fallback";
+  // A page reload drops the attached `File` (never persisted — see
+  // `SkidmarksMp3Card`), so an analysis that was still `"analyzing"` when
+  // the page closed can never resume; normalize it to an honest `"failed"`
+  // instead of leaving the chip stuck showing "in progress" forever.
+  // Sessions from before this feature shipped (no `analysisStatus` at
+  // all) get the same honest treatment.
+  const wasInterrupted =
+    storedMp3?.analysisStatus !== "done" && storedMp3?.analysisStatus !== "failed";
+  const analysisStatus: SkidmarksAnalysisStatus = wasInterrupted ? "failed" : storedMp3!.analysisStatus;
+  const analysisError = wasInterrupted
+    ? "Analysis doesn't survive a page reload (the audio file itself isn't kept) \u2014 re-attach the MP3 to re-run it."
+    : storedMp3?.analysisError;
+
+  const mp3: SkidmarksMp3Attachment | null = storedMp3
+    ? { ...storedMp3, segments, segmentsSource, analysisStatus, analysisError }
+    : null;
 
   return {
     bands,
@@ -759,21 +857,101 @@ export function attachSkidmarksMp3(mp3: SkidmarksMp3Attachment): void {
 
 /** Fills in the real duration once the browser's `<audio>` metadata probe
  * resolves — attach happens immediately with `durationSec: null` so the
- * card can render right away instead of waiting on the probe. */
+ * card can render right away instead of waiting on the probe. Also
+ * drives the `timing` chip (`skidmarksChecklistState`) straight off
+ * `durationSec !== null` — no separate timer/flag needed. */
 export function setSkidmarksMp3Duration(durationSec: number): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
   if (!mp3) return;
   // The very first time a real duration resolves (attach always starts
-  // with `durationSec: null`), rebuild the demo segments off it instead
-  // of the fallback total they were seeded with — nothing's had a chance
-  // to hand-edit plate/camera/model yet in that split-second window.
-  const segments = mp3.durationSec === null ? buildDemoSegments(durationSec) : mp3.segments;
+  // with `durationSec: null`) *and* nothing real has replaced the seed
+  // segments yet, rebuild them off the real total instead of the
+  // fallback one they were seeded with. If real analysis has already
+  // finished (a fast decode can beat the `<audio>` element's own probe),
+  // leave its segments alone — don't clobber real output with seed data.
+  const shouldRebuildSeed = mp3.durationSec === null && mp3.segmentsSource === "seed-fallback";
+  const segments = shouldRebuildSeed ? buildDemoSegments(durationSec) : mp3.segments;
   persist({
     ...current,
     session: {
       ...current.session,
       mp3: { ...mp3, durationSec, segments },
+    },
+  });
+}
+
+/**
+ * Applies a finished `analyzeVocalActivity` result: maps its real
+ * vocal/instrumental time ranges into `SkidmarksClipSegment`s (each
+ * still gets a default model via `defaultSegmentModel`, same rule as
+ * the seed cadence), marks `segmentsSource: "analysis"` and
+ * `analysisStatus: "done"` so `skidmarksChecklistState` can turn the
+ * Lyrics chip genuinely green, and backfills `durationSec` if the
+ * `<audio>` element's own probe hasn't resolved yet (the decoded
+ * buffer's duration is just as real, sometimes faster). No-ops if the
+ * mp3 was removed/replaced before analysis finished — callers should
+ * additionally guard against a stale/superseded result themselves (see
+ * `useSkidmarksStudio`'s generation-token check) since this function
+ * can't tell "still the same file" from "a same-shaped new one".
+ */
+export function applySkidmarksAnalysisResult(result: VocalAnalysisResult): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  let nonVocalIndex = 0;
+  const segments: SkidmarksClipSegment[] = result.segments.map((seg) => {
+    const label: SkidmarksSegmentLabel = seg.vocal ? "vocal" : "instrumental";
+    const model = defaultSegmentModel(label, nonVocalIndex);
+    if (!seg.vocal) nonVocalIndex += 1;
+    return {
+      id: generateId("segment"),
+      startSec: seg.startSec,
+      endSec: seg.endSec,
+      label,
+      model,
+      plateId: null,
+      cameraAngle: null,
+    };
+  });
+  persist({
+    ...current,
+    session: {
+      ...current.session,
+      mp3: {
+        ...mp3,
+        durationSec: mp3.durationSec ?? result.durationSec,
+        segments,
+        segmentsSource: "analysis",
+        analysisStatus: "done",
+        analysisError: undefined,
+      },
+    },
+  });
+}
+
+/**
+ * Marks analysis as failed, keeping whatever segments are currently set
+ * (the seed fallback `createMp3Attachment` seeded) but honestly labeling
+ * them via `segmentsSource`/`analysisStatus`/`analysisError` — never
+ * silently presenting the fallback as real. `reason` is shown verbatim
+ * in the timeline's caption, so keep it short and non-technical where
+ * possible.
+ */
+export function markSkidmarksAnalysisFailed(reason: string): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  persist({
+    ...current,
+    session: {
+      ...current.session,
+      mp3: {
+        ...mp3,
+        segmentsSource: "seed-fallback",
+        analysisStatus: "failed",
+        analysisError: reason,
+      },
     },
   });
 }
@@ -822,23 +1000,6 @@ export function setSkidmarksSegmentCameraAngle(
     ...s,
     cameraAngle: s.cameraAngle === cameraAngle ? null : cameraAngle,
   }));
-}
-
-/** Flips one checklist key to done — called by the staged "background
- * sniff" timers in `hooks/useSkidmarksStudio.ts`, never straight from user input. */
-export function markSkidmarksChecklistDone(key: SkidmarksChecklistKey): void {
-  const current = getSkidmarksSnapshot();
-  if (!current.session.mp3 || current.session.mp3.checklist[key]) return;
-  persist({
-    ...current,
-    session: {
-      ...current.session,
-      mp3: {
-        ...current.session.mp3,
-        checklist: { ...current.session.mp3.checklist, [key]: true },
-      },
-    },
-  });
 }
 
 export function getActiveSkidmarksBand(
@@ -975,7 +1136,10 @@ export function segmentDurationSec(startSec: number, endSec: number): number {
 /**
  * One-line glance for `SkidmarksNodeCard` — deliberately terse. "idle"
  * when nothing's picked yet, "in-progress" once a band or MP3 exists,
- * "ready" once every checklist item ticks.
+ * "ready" once the clip list has *something* usable (real analysis, or
+ * an honestly-labeled fallback) to show — the terse glance can't spell
+ * out "stub"/"real" the way the chips do, so it errs toward "ready" once
+ * there's anything to look at rather than blocking on real analysis.
  */
 export function skidmarksGlance(state: SkidmarksState): {
   status: "idle" | "in-progress" | "ready";
@@ -983,7 +1147,8 @@ export function skidmarksGlance(state: SkidmarksState): {
 } {
   const band = getActiveSkidmarksBand(state);
   const mp3 = state.session.mp3;
-  if (mp3 && SKIDMARKS_CHECKLIST_ORDER.every((k) => mp3.checklist[k])) {
+  const ready = skidmarksChecklistState(mp3).ready;
+  if (mp3 && (ready === "done" || ready === "stub")) {
     return { status: "ready", label: `${band?.name ?? "Music video"} \u00b7 ready` };
   }
   if (band) {

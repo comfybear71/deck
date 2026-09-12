@@ -8,15 +8,20 @@ import {
   SKIDMARKS_SEGMENT_LABEL_META,
   skidmarksModelBadge,
   skidmarksModelLabel,
+  type SkidmarksAnalysisStatus,
   type SkidmarksCameraAngleId,
   type SkidmarksClipSegment,
   type SkidmarksModelId,
   type SkidmarksPlateId,
+  type SkidmarksSegmentsSource,
 } from "@/lib/skidmarks";
 import { SkidmarksPlatesAndCamera } from "./SkidmarksPlatesAndCamera";
 
 interface SkidmarksClipTimelineProps {
   segments: SkidmarksClipSegment[];
+  segmentsSource: SkidmarksSegmentsSource;
+  analysisStatus: SkidmarksAnalysisStatus;
+  analysisError?: string;
   onSetSegmentModel: (segmentId: string, model: SkidmarksModelId) => void;
   onSetSegmentPlate: (segmentId: string, plateId: SkidmarksPlateId) => void;
   onSetSegmentCameraAngle: (segmentId: string, cameraAngle: SkidmarksCameraAngleId) => void;
@@ -132,14 +137,46 @@ function SegmentRow({
   );
 }
 
+/** Honesty caption shown above the rows — varies with real analysis
+ * state (`analysisStatus`/`segmentsSource`) rather than being a single
+ * fixed line, so the timeline never claims to be more real than it is. */
+function timelineCaption(
+  segmentsSource: SkidmarksSegmentsSource,
+  analysisStatus: SkidmarksAnalysisStatus,
+  analysisError: string | undefined
+): string {
+  if (analysisStatus === "analyzing") {
+    return (
+      "Analyzing the attached MP3 for vocal vs. instrumental sections \u2014 " +
+      "showing the seed demo cadence below until that finishes."
+    );
+  }
+  if (segmentsSource === "analysis" && analysisStatus === "done") {
+    return (
+      "Real(ish) analysis: vocal vs. instrumental sections detected from the " +
+      "MP3's own audio (energy + vocal-band frequency ratio, computed in your " +
+      "browser \u2014 see lib/audioAnalysis.ts). Not transcribed lyrics, and not " +
+      "verse/bridge song structure \u2014 just sung vs. not, with real times. " +
+      "Expect the occasional wrong call on loud instrumental sections or quiet vocals."
+    );
+  }
+  // analysisStatus === "failed"
+  const reason = analysisError ? ` (${analysisError})` : "";
+  return (
+    `Vocal analysis failed${reason} \u2014 showing the seed demo cadence below ` +
+    "as a fallback. This is NOT real lyrics timing or singing detection."
+  );
+}
+
 /**
  * The clip/segment timeline — appended right under the MP3 checklist
- * once an MP3 exists. **Important honesty note**: `segments` is a
- * deterministic seed cadence (`buildDemoSegments` in `lib/skidmarks.ts`),
- * not real lyrics timing or singing detection — the checklist's Lyrics/
- * Timing/Ready chips above are still staged mock timers too. This is
- * editable structure for Stuart to assign plates/camera/model to today,
- * in the shape a future real STT + singing-detect pass can populate.
+ * once an MP3 exists. `segments` prefers real output from
+ * `analyzeVocalActivity` (`segmentsSource === "analysis"`) once it
+ * finishes; while it's still running, or if it failed, this instead
+ * shows `buildDemoSegments`' deterministic seed cadence as a clearly
+ * labeled fallback (see `timelineCaption` above) — never presented as if
+ * it were real. This is editable structure for Stuart to assign plates/
+ * camera/model to regardless of which source is showing.
  *
  * Each row is individually collapsible (collapsed = time range + label +
  * a compact model badge pill — a 🎤 glyph joins it when the current
@@ -150,12 +187,17 @@ function SegmentRow({
  * same pattern as `ControlPlaneDemo`.
  *
  * **Phase note**: this is the plates/clip UI only. The footer's
- * "Generate Clips" button is a **stub** — tapping it only shows a "stub,
- * not wired" message; no Comfy MCP / LTX / Seedance render call happens
- * anywhere in this file or `SkidmarksPlatesAndCamera`.
+ * "Generate Clips" button is a **stub** — tapping it never calls a real
+ * Comfy MCP / LTX / Seedance render anywhere in this file or
+ * `SkidmarksPlatesAndCamera`; it only shows a "stub, not wired" message,
+ * surfaced in an always-mounted `role="status"` + `aria-live` line so
+ * assistive tech reaches it too, not just sighted users.
  */
 export function SkidmarksClipTimeline({
   segments,
+  segmentsSource,
+  analysisStatus,
+  analysisError,
   onSetSegmentModel,
   onSetSegmentPlate,
   onSetSegmentCameraAngle,
@@ -203,10 +245,13 @@ export function SkidmarksClipTimeline({
 
       {sectionOpen && (
         <>
-          <p className="text-[11px] leading-relaxed text-white/35">
-            Seed timeline {"\u2014"} a demo verse/bridge/lead/instrumental
-            cadence, not real lyrics timing or singing detection. Editable
-            structure for now; refined once real analysis lands.
+          <p
+            className={[
+              "text-[11px] leading-relaxed",
+              analysisStatus === "failed" ? "text-amber-200/70" : "text-white/35",
+            ].join(" ")}
+          >
+            {timelineCaption(segmentsSource, analysisStatus, analysisError)}
           </p>
 
           <div className="flex flex-col gap-2">
@@ -232,9 +277,22 @@ export function SkidmarksClipTimeline({
           >
             Generate Clips
           </button>
-          {stubMessage && (
-            <p className="text-center text-[11px] leading-relaxed text-white/45">{stubMessage}</p>
-          )}
+          {/* Always mounted (not conditionally rendered) with role="status" +
+              aria-live so assistive tech reliably announces the stub
+              message on tap — some browsers/screen readers miss the first
+              update on a live region that only enters the DOM after the
+              click that changes it. Empty and visually collapsed
+              (h-0/opacity-0) until there's something to say. */}
+          <p
+            role="status"
+            aria-live="polite"
+            className={[
+              "text-center text-[11px] leading-relaxed text-white/45 transition-opacity",
+              stubMessage ? "opacity-100" : "h-0 overflow-hidden opacity-0",
+            ].join(" ")}
+          >
+            {stubMessage}
+          </p>
         </>
       )}
     </div>
