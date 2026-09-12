@@ -1,6 +1,10 @@
 "use client";
 
 import {
+  formatSegmentRange,
+  isLipSyncModel,
+  segmentDurationSec,
+  skidmarksModelBadge,
   SKIDMARKS_CAMERA_ANGLES,
   SKIDMARKS_LOCATION_PLATES,
   SKIDMARKS_MODELS,
@@ -72,9 +76,11 @@ function CameraAngleIcon({ id }: { id: SkidmarksCameraAngleId }) {
  * Plates & Camera — a clip's expanded body: a horizontal scroll of
  * location plates, a wrapped row of camera angles, and the model row.
  * Every option here is a seed/stub tag (no real plate photos, no real
- * camera coverage, no real model call) — see `lib/skidmarks.ts`'s module
- * doc comment. Rendered per-clip inside `SkidmarksClipTimeline`, not as
- * a shared section, per the locked plates mockup.
+ * camera coverage, no real model call — the "Lip-sync" badge and
+ * vocalist-position dot below are decorative UI, not a real pose/vision
+ * detection) — see `lib/skidmarks.ts`'s module doc comment. Rendered
+ * per-clip inside `SkidmarksClipTimeline`, not as a shared section, per
+ * the locked plates mockup.
  */
 export function SkidmarksPlatesAndCamera({
   segment,
@@ -82,12 +88,21 @@ export function SkidmarksPlatesAndCamera({
   onSetCameraAngle,
   onSetModel,
 }: SkidmarksPlatesAndCameraProps) {
+  const durationSec = segmentDurationSec(segment.startSec, segment.endSec);
+  const timeRange = formatSegmentRange(segment.startSec, segment.endSec);
+  const lipSync = isLipSyncModel(segment.model);
+
   return (
     <div className="flex flex-col gap-3 border-t border-white/[0.06] pt-3">
       <div>
         <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-white/35">
           Location plates
         </p>
+        {/* Each card repeats this clip's time range, duration, and current
+            model/lip-sync tags — a horizontal scroll can lose the
+            segment's own header out of view, so every plate stays
+            self-describing on its own rather than relying on scroll
+            position for context. */}
         <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin]">
           {SKIDMARKS_LOCATION_PLATES.map((plate) => {
             const active = segment.plateId === plate.id;
@@ -97,14 +112,45 @@ export function SkidmarksPlatesAndCamera({
                 type="button"
                 onClick={() => onSetPlate(plate.id)}
                 aria-pressed={active}
+                aria-label={`${plate.label} plate \u2014 ${timeRange}, ${durationSec}s, ${skidmarksModelBadge(segment.model)}${lipSync ? ", lip-sync" : ""}`}
                 className={[
-                  "flex h-16 w-20 shrink-0 flex-col items-center justify-end gap-1 rounded-xl bg-gradient-to-br px-1.5 pb-1.5 text-center transition-transform active:scale-[0.97]",
-                  plate.gradient,
+                  "flex w-24 shrink-0 flex-col overflow-hidden rounded-xl text-left transition-transform active:scale-[0.97]",
                   active ? "ring-2 ring-rose-400 ring-offset-1 ring-offset-zinc-950" : "ring-1 ring-white/10",
                 ].join(" ")}
               >
-                <span className="line-clamp-2 text-[10px] font-medium leading-tight text-white drop-shadow">
-                  {plate.label}
+                <span
+                  aria-hidden
+                  className={[
+                    "relative flex h-14 w-full items-center justify-center bg-gradient-to-br px-1",
+                    plate.gradient,
+                  ].join(" ")}
+                >
+                  <span className="line-clamp-2 text-[10px] font-medium leading-tight text-white drop-shadow">
+                    {plate.label}
+                  </span>
+                  {lipSync && (
+                    <>
+                      <span className="absolute right-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[7px] font-semibold uppercase tracking-wide text-rose-200">
+                        Lip-sync
+                      </span>
+                      {/* Seed placement, not a real pose/vision detection —
+                          just "roughly here" so the lip-sync framing reads
+                          as intentional, not arbitrary. */}
+                      <span
+                        title="Vocalist position (seed placement, not detected)"
+                        className="absolute bottom-1.5 left-1/2 h-2 w-2 -translate-x-1/2 rounded-full bg-rose-300 ring-2 ring-white/80"
+                      />
+                    </>
+                  )}
+                </span>
+                <span className="flex flex-col gap-0.5 bg-black/50 px-1.5 py-1">
+                  <span className="text-[9px] font-medium tabular-nums text-white/70">{timeRange}</span>
+                  <span className="flex items-center justify-between gap-1">
+                    <span className="text-[8px] text-white/40">{durationSec}s</span>
+                    <span className="rounded bg-white/10 px-1 py-[1px] text-[8px] font-semibold text-white/70">
+                      {skidmarksModelBadge(segment.model)}
+                    </span>
+                  </span>
                 </span>
               </button>
             );
@@ -113,8 +159,12 @@ export function SkidmarksPlatesAndCamera({
       </div>
 
       <div>
-        <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-white/35">
+        <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-white/35">
           Camera angles
+        </p>
+        <p className="mb-1.5 text-[10px] leading-relaxed text-white/30">
+          One angle for now {"\u2014"} Seedance/Framer-style multi-camera
+          coverage from a single still is a later upgrade, not this pass.
         </p>
         <div className="flex flex-wrap gap-1.5">
           {SKIDMARKS_CAMERA_ANGLES.map((angle) => {
@@ -141,8 +191,12 @@ export function SkidmarksPlatesAndCamera({
       </div>
 
       <div>
-        <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-white/35">
+        <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-white/35">
           Model
+        </p>
+        <p className="mb-1.5 text-[10px] leading-relaxed text-white/30">
+          Singing defaults to LTX Lip-sync; instrumental/lead/break default
+          to a plain model {"\u2014"} tap any pill to override.
         </p>
         <div className="flex flex-wrap gap-1.5">
           {SKIDMARKS_MODELS.map((model) => {
