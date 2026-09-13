@@ -21,6 +21,8 @@ import {
   markSkidmarksMp3AudioUnconfigured,
   markSkidmarksTranscriptionFailed,
   markSkidmarksTranscriptionUnconfigured,
+  nudgeSkidmarksSegmentEnd,
+  nudgeSkidmarksSegmentStart,
   removeSkidmarksBand,
   removeSkidmarksClipPlate,
   removeSkidmarksMember,
@@ -248,6 +250,22 @@ export function useSkidmarksStudio() {
     []
   );
 
+  /** The compact −1s/+1s stepper's own handlers — see
+   * `nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd`'s doc
+   * comments. Stuart's 2026-09-13 ask: ElevenLabs Scribe timing is
+   * "mostly right but sometimes 3-4 seconds off," so he wants to slip a
+   * clip's start/end after transcription — never a re-run of Scribe or
+   * the energy heuristic, just a local edit to the already-resolved
+   * segment times. */
+  const nudgeSegmentStart = useCallback(
+    (segmentId: string, deltaSec: number) => nudgeSkidmarksSegmentStart(segmentId, deltaSec),
+    []
+  );
+  const nudgeSegmentEnd = useCallback(
+    (segmentId: string, deltaSec: number) => nudgeSkidmarksSegmentEnd(segmentId, deltaSec),
+    []
+  );
+
   /** Sets/replaces (`still` non-null) or clears (`still: null`) one plate
    * slot's still — see `setSkidmarksClipPlateStill`'s doc comment.
    * Actually calling xAI's Grok Imagine API (`lib/plateGeneration.ts`)
@@ -335,6 +353,8 @@ export function useSkidmarksStudio() {
     removeMp3,
     setMp3Duration,
     setSegmentShotPrompt,
+    nudgeSegmentStart,
+    nudgeSegmentEnd,
     setClipPlateStill,
     addClipPlate,
     removeClipPlate,

@@ -25,6 +25,7 @@ import {
 } from "@/lib/plateGeneration";
 import { computeLtxPlateDurationSec, computePlateDurationSec } from "@/lib/clipGeneration";
 import { SkidmarksClipRender } from "./SkidmarksClipRender";
+import { SkidmarksClipTimingNudge } from "./SkidmarksClipTimingNudge";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 
 interface SkidmarksClipStubProps {
@@ -51,6 +52,19 @@ interface SkidmarksClipStubProps {
    * `setSkidmarksSegmentInstrumentalVideoModel`. Only meaningful (and
    * only rendered) on an Instrumental clip. */
   onSetClipInstrumentalModel: (model: SkidmarksInstrumentalVideoModel) => void;
+  /** The compact −1s/+1s stepper's own start/end nudge handlers — see
+   * `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentStart`/
+   * `nudgeSkidmarksSegmentEnd`. `canNudge*` are pre-computed by
+   * `SkidmarksClipTimeline` (it's the one with the whole `segments`
+   * array + the mp3's own `durationSec`, both needed to know each
+   * button's real bound) — this component just renders whatever it's
+   * told. */
+  onNudgeStart: (deltaSec: number) => void;
+  onNudgeEnd: (deltaSec: number) => void;
+  canNudgeStartEarlier: boolean;
+  canNudgeStartLater: boolean;
+  canNudgeEndEarlier: boolean;
+  canNudgeEndLater: boolean;
   /** Which of *this clip's* plates already have a persisted render —
    * drives each plate tile's tick and the Render control's "already
    * rendered" status line. Scoped to this one segment by the caller
@@ -939,6 +953,16 @@ function SkidmarksPlateBox({
  * 5–15s). See `lib/skidmarks.ts`'s `resolveSelectedPlateId` for exactly
  * how "nothing explicitly selected yet" resolves (first unrendered
  * filled plate, or first filled plate — never mysteriously nothing).
+ *
+ * **Clip start/end nudge** (added 2026-09-13, Stuart's explicit ask —
+ * ElevenLabs Scribe timing lands "mostly right but sometimes 3-4
+ * seconds off"): the very first thing in this expanded panel, right
+ * above the plate strip, is `SkidmarksClipTimingNudge` — a compact
+ * −1s/+1s stepper for this clip's `startSec`/`endSec`. See that
+ * component's doc comment for the UI shape and `lib/skidmarks.ts`'s
+ * `nudgeSkidmarksSegmentBoundary` for the actual clamp/neighbor-
+ * boundary logic; this component only renders the pre-computed
+ * `canNudge*` flags and forwards taps.
  */
 export function SkidmarksClipStub({
   segment,
@@ -951,6 +975,12 @@ export function SkidmarksClipStub({
   onSelectPlate,
   onSetPlateMotionPrompt,
   onSetClipInstrumentalModel,
+  onNudgeStart,
+  onNudgeEnd,
+  canNudgeStartEarlier,
+  canNudgeStartLater,
+  canNudgeEndEarlier,
+  canNudgeEndLater,
   renderedPlateIds,
   renderLocked,
   onRenderStart,
@@ -991,6 +1021,17 @@ export function SkidmarksClipStub({
 
   return (
     <div className="flex flex-col gap-2.5 border-t border-white/[0.06] pt-3">
+      <SkidmarksClipTimingNudge
+        startSec={segment.startSec}
+        endSec={segment.endSec}
+        canNudgeStartEarlier={canNudgeStartEarlier}
+        canNudgeStartLater={canNudgeStartLater}
+        canNudgeEndEarlier={canNudgeEndEarlier}
+        canNudgeEndLater={canNudgeEndLater}
+        onNudgeStart={onNudgeStart}
+        onNudgeEnd={onNudgeEnd}
+      />
+
       {/* `-webkit-overflow-scrolling:touch` + `overscroll-x-contain`
           for reliable iOS Safari momentum scroll on this strip. */}
       <div className="flex gap-2 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch]">
