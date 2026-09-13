@@ -20,11 +20,18 @@
  * modules means neither doc comment has to caveat the other's very
  * different cost/latency/persistence story.
  *
- * **Intentionally not persisted anywhere in `lib/skidmarks.ts`'s store.**
- * A rendered clip's result (a temporary xAI video URL) lives only in
- * `components/SkidmarksClipRender.tsx`'s own React state \u2014 gone on
- * refresh. See `app/api/skidmarks/generate-clip/route.ts`'s module doc
- * comment for why (video size vs. `localStorage`'s small shared quota).
+ * **Not persisted in `lib/skidmarks.ts`'s `localStorage`-backed store
+ * \u2014 but a successful render itself now lands in durable Vercel Blob
+ * storage**, not just ephemeral React state. `generateSkidmarksClip`
+ * returns `persisted: true` plus a durable Blob URL once
+ * `app/api/skidmarks/generate-clip/route.ts` finishes re-uploading the
+ * finished render server-side; `app/api/skidmarks/clip-renders/
+ * route.ts` is the read side `SkidmarksClipTimeline` uses so a saved
+ * render still shows up after a refresh. See that route's module doc
+ * comment for the full story (this used to be genuinely ephemeral in
+ * #42 \u2014 Stuart rejected that) and `lib/clipRenderBlob.ts` for why
+ * Blob, not `localStorage` (a 5s/480p clip is roughly a megabyte,
+ * nowhere near that store's small shared quota).
  */
 
 const MAX_CLIP_REFERENCE_IMAGES = 3;
@@ -52,16 +59,30 @@ export function estimateClipRenderCostUsd(referenceImageCount: number): number {
   return CLIP_DURATION_SEC * CLIP_SECOND_RATE_USD + referenceImageCount * PER_REFERENCE_IMAGE_USD;
 }
 
+/** Longest a typed camera-motion override can be \u2014 short by design
+ * (a phrase like "slow pan left, then hold", not a paragraph); enforced
+ * both as the `<input>`'s own `maxLength` in
+ * `components/SkidmarksClipRender.tsx` and here, so a request built
+ * without going through that input (a test, a future caller) can't
+ * quietly bypass the same cap. */
+export const MAX_MOTION_PROMPT_LENGTH = 140;
+
 /**
  * Motion language keyed off how many plate stills are feeding this
  * render \u2014 the video-render equivalent of `lib/plateGeneration.ts`'s
  * `routingFramingHint`, but for camera *motion* rather than framing.
  * Stuart's creative lock for the opener is a **continuous zoom** across
  * the door \u2192 keyhole \u2192 Jack plate sequence, under one Instrumental
- * clip, with pulse/other motion styles explicitly a later pass \u2014 so
- * that's the one default this function encodes, not a menu of motion
- * styles to pick from (per the "keep plating UI tiny, no button farm"
- * lock, there's no motion-style control in the UI at all right now).
+ * clip \u2014 so that's the one default this function encodes when Stuart
+ * hasn't typed his own motion direction. **No longer the only option**:
+ * `buildClipGenerationRequest` below lets an explicit, short
+ * `motionPrompt` override this default outright (added on Stuart's own
+ * explicit ask, after the per-clip Render control shipped in #42 with
+ * no way to ask for anything other than a push-in/zoom \u2014 a pan, a
+ * held static shot, a whip-pan, etc. had no way to reach xAI). Still
+ * the smallest control this could be: one short optional text field,
+ * not a style picker/menu \u2014 leaving it blank keeps the exact same
+ * automatic behavior this shipped with.
  * Two-or-more references get the multi-plate continuity phrasing
  * (xAI's reference-to-video mode, guided by the whole sequence in
  * order); exactly one gets a single-image push-in instead (xAI's
@@ -84,9 +105,9 @@ function routingMotionHint(referenceCount: number): string {
 export interface ClipGenerationRequest {
   /** The full prompt sent to xAI \u2014 Stuart's own clip `shotPrompt`
    * (shared across the whole plate strip, same field the still-generation
-   * flow already reads \u2014 deliberately not a second free-text field,
-   * per the "keep plating UI tiny" lock) plus this module's motion
-   * routing hint and a band/no-text/no-watermark footer. */
+   * flow already reads) plus either his own typed `motionPrompt` (when
+   * given) or this module's automatic motion routing hint, plus a
+   * band/no-text/no-watermark footer. */
   prompt: string;
   /** The plate stills feeding this render, in the clip's own strip
    * order (continuity direction matters \u2014 door, then keyhole, then
@@ -100,6 +121,18 @@ export interface ClipGenerationRequest {
    * the user-authored text only" fix as
    * `lib/plateGeneration.ts`'s `PlateGenerationRequest.shotPrompt`. */
   shotPrompt: string;
+  /** The four fields `app/api/skidmarks/generate-clip/route.ts` needs to
+   * persist a successful render to durable Vercel Blob storage under a
+   * stable pathname (`lib/clipRenderBlob.ts`) instead of only returning
+   * xAI's temporary URL \u2014 see that route's module doc comment.
+   * Optional so any existing/hypothetical caller that builds a request
+   * without them still gets the exact same wire shape as before this
+   * feature existed; the real UI (`components/SkidmarksClipRender.tsx`)
+   * always sends all four. */
+  segmentId?: string;
+  clipIndex?: number;
+  startSec?: number;
+  endSec?: number;
 }
 
 export interface BuildClipGenerationRequestParams {
@@ -113,6 +146,21 @@ export interface BuildClipGenerationRequestParams {
    * `plateStillDataUrls.length > MAX_CLIP_REFERENCE_IMAGES` themselves
    * (see `components/SkidmarksClipRender.tsx`). */
   plateStillDataUrls: string[];
+  /** An optional, short camera-motion direction Stuart typed himself
+   * (e.g. "slow pan left, then hold on the door") \u2014 when given
+   * (non-blank), this replaces `routingMotionHint`'s automatic
+   * push-in/zoom phrasing outright rather than being appended alongside
+   * it, so Stuart's own explicit direction is never diluted or
+   * contradicted by the default. Trimmed and capped at
+   * `MAX_MOTION_PROMPT_LENGTH`; blank/omitted keeps the exact same
+   * automatic behavior this shipped with in #42. */
+  motionPrompt?: string;
+  /** Passed straight through to the built `ClipGenerationRequest` \u2014
+   * see that interface's doc comment. */
+  segmentId?: string;
+  clipIndex?: number;
+  startSec?: number;
+  endSec?: number;
 }
 
 /**
@@ -123,9 +171,10 @@ export interface BuildClipGenerationRequestParams {
  */
 export function buildClipGenerationRequest(params: BuildClipGenerationRequestParams): ClipGenerationRequest {
   const referenceImageDataUrls = params.plateStillDataUrls.slice(0, MAX_CLIP_REFERENCE_IMAGES);
+  const trimmedMotionPrompt = params.motionPrompt?.trim().slice(0, MAX_MOTION_PROMPT_LENGTH) || "";
   const parts = [
     params.shotPrompt.trim(),
-    routingMotionHint(referenceImageDataUrls.length),
+    trimmedMotionPrompt || routingMotionHint(referenceImageDataUrls.length),
     `Music video for ${params.bandName}. Cinematic motion, no on-screen text, no watermark.`,
   ];
   return {
@@ -135,11 +184,29 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
       .join(" "),
     shotPrompt: params.shotPrompt.trim(),
     referenceImageDataUrls,
+    segmentId: params.segmentId,
+    clipIndex: params.clipIndex,
+    startSec: params.startSec,
+    endSec: params.endSec,
   };
 }
 
 export type ClipGenerationOutcome =
-  | { ok: true; videoUrl: string; durationSec: number }
+  | {
+      ok: true;
+      videoUrl: string;
+      durationSec: number;
+      /** Whether `videoUrl` is a durable Vercel Blob URL that will still
+       * work after a refresh, vs. xAI's own temporary URL (persistence
+       * skipped or failed \u2014 see `persistError`). Always present on a
+       * success outcome so the UI never has to guess. */
+      persisted: boolean;
+      /** Set only when `persisted` is `false` *and* persistence was
+       * actually attempted (a real Blob failure) \u2014 not set when the
+       * caller never asked for persistence in the first place. Plain-
+       * language, shown verbatim to Stuart rather than swallowed. */
+      persistError?: string;
+    }
   | { ok: false; unconfigured: boolean; message: string };
 
 const GENERATE_CLIP_ENDPOINT = "/api/skidmarks/generate-clip";
@@ -151,6 +218,8 @@ interface GenerateClipRouteErrorBody {
 interface GenerateClipRouteSuccessBody {
   videoUrl?: unknown;
   durationSec?: unknown;
+  persisted?: unknown;
+  persistError?: unknown;
 }
 
 /**
@@ -204,7 +273,9 @@ export async function generateSkidmarksClip(
     return { ok: false, unconfigured: false, message: "Clip render succeeded but returned no video." };
   }
   const durationSec = typeof okBody.durationSec === "number" ? okBody.durationSec : 0;
-  return { ok: true, videoUrl, durationSec };
+  const persisted = okBody.persisted === true;
+  const persistError = typeof okBody.persistError === "string" ? okBody.persistError : undefined;
+  return persistError ? { ok: true, videoUrl, durationSec, persisted, persistError } : { ok: true, videoUrl, durationSec, persisted };
 }
 
-export { MAX_CLIP_REFERENCE_IMAGES };
+export { CLIP_DURATION_SEC, MAX_CLIP_REFERENCE_IMAGES };
