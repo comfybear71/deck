@@ -117,10 +117,20 @@ export interface SkidmarksCharacterLock {
    * prompt string as an explicit "do not show" clause rather than a
    * separate request field. */
   negativeCues?: string;
+  /** A short, human-facing one-liner for this character's look — the
+   * director's-shorthand version of `promptHallmarks`, not phrased for
+   * a model. Used by `lib/skidmarksArchive.ts`'s per-song `brief.txt`
+   * export (the "Artist:" line) so a locked character's own look ships
+   * with every archived song's project zip, not just this feature's
+   * internal prompt-building. Optional — a member with a lock but no
+   * `directorNote` yet just leaves that line blank for Stuart to fill
+   * in by hand, same as an unlocked member always has. */
+  directorNote?: string;
 }
 
 export const SKIDMARKS_CHARACTER_LOCKS: Record<string, SkidmarksCharacterLock> = {
   "jack-ash-frontman": {
+    directorNote: "fedora, face in brim shadow, neon lips only when mouth is in frame, never a lens stare",
     promptHallmarks:
       "Jack Ash's signature look, locked, non-negotiable: a mysterious noir silhouette wearing a wide-brim " +
       "black fedora and a suit, desert-noir atmosphere. His face stays entirely hidden in deep shadow at all " +

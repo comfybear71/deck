@@ -63,6 +63,34 @@ describe("planAutoPlateFill", () => {
     expect(firstClipTargets[2].continueFromPreviousPlate).toBe(true);
   });
 
+  /**
+   * Stuart's exact wording for *Talking to Concrete*'s 0:00–0:40
+   * opener, recreating three plates lost in the Neon-migration incident
+   * — pasted verbatim, not paraphrased. Locks the real text in place so
+   * a future "tidy up the prompts" pass can't silently drift from what
+   * he actually asked for, the same way `CONCRETE_OPENER_SHOTS`'s own
+   * inline comments explain each line's job.
+   */
+  it("uses Stuart's exact door/keyhole/Jack wording, dead-on framing and all", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [3]);
+    const targets = planAutoPlateFill(segments, "door, keyhole, Jack", "Jack Ash");
+
+    expect(targets[0].shotPrompt).toBe(
+      "Front-on dark door, keyhole centered, mild blue neon only in the cracks around the frame, no light from the hole."
+    );
+    expect(targets[1].shotPrompt).toBe(
+      "Same door, same angle, closer — keyhole centered and large, mild half-strength blue seep inside the hole only, no beam, no angle."
+    );
+    expect(targets[2].shotPrompt).toBe(
+      "Same keyhole as the frame. Jack Ash, black brim fedora, sitting in a dim room, legs slightly apart, feet on the floor, hands on knees, face in deep shadow under the brim, neon blue lips only, no other face light. Not a new man, no lit portrait, no bare head."
+    );
+    // Names him by name specifically — this is what keeps
+    // `shotPromptMentionsLockedCharacter` (lib/plateGeneration.ts)
+    // firing his identity reference + hallmark lock on plate 3, the
+    // actual fix for the "random guy" failure mode Stuart hit before.
+    expect(targets[2].shotPrompt).toMatch(/\bJack\b/);
+  });
+
   it("never applies the scripted opener to a later clip, even if it too has empty plates", () => {
     const segments = withPlateCount(buildDemoSegments(210), [1, 3]);
     const targets = planAutoPlateFill(segments, "door, keyhole, Jack", "Jack Ash");
@@ -79,7 +107,11 @@ describe("planAutoPlateFill", () => {
   it("falls back to the attached filename as a hint when the typed brief is blank", () => {
     const segments = withPlateCount(buildDemoSegments(210), [1]).slice(0, 1);
     const targets = planAutoPlateFill(segments, "", "Jack Ash", "JACK ASH - behind the concrete door.mp3");
-    expect(targets[0].shotPrompt.toLowerCase()).toContain("concrete");
+    // The filename's "concrete" is only the *trigger* keyword — the
+    // opener's own shot 1 wording doesn't have to repeat it back
+    // (Stuart's exact text for shot 1 doesn't), it just has to be the
+    // scripted door shot and not a generic fallback prompt.
+    expect(targets[0].shotPrompt.toLowerCase()).toContain("door");
   });
 
   it("caps the brief at MAX_AUTO_PLATE_BRIEF_LENGTH before matching keywords", () => {

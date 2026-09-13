@@ -39,7 +39,8 @@
 import { upload } from "@vercel/blob/client";
 import { buildStoreZip } from "./zipDownload";
 import { fetchPersistedClipRenders } from "./clipRenders";
-import type { SkidmarksBand, SkidmarksMp3Attachment } from "./skidmarks";
+import { getSkidmarksCharacterLock, resolveVocalistForPrompt } from "./plateGeneration";
+import { formatDuration, type SkidmarksBand, type SkidmarksMp3Attachment } from "./skidmarks";
 
 const ARCHIVE_PATH_PREFIX = "skidmarks/archive/";
 const HANDLE_UPLOAD_URL = "/api/skidmarks/blob-upload";
@@ -287,6 +288,74 @@ function extensionFromDataUrl(dataUrl: string): string {
   return "jpg";
 }
 
+/** Strips a trailing `.mp3`/`.wav`/etc. extension for a readable "Song:"
+ * line \u2014 this app has no separate song-title field distinct from the
+ * attached file's own name, so the filename minus its extension is the
+ * most honest title available without inventing one. */
+function stripAudioExtension(fileName: string): string {
+  return fileName.replace(/\.[a-z0-9]{2,4}$/i, "");
+}
+
+/**
+ * `song-brief.txt` \u2014 Stuart's own per-song template (Song/Band/
+ * Length/MP3/Lyrics/Brief/Artist), auto-filled with whatever this app
+ * already knows and left blank for the rest, per his "Auto bit" ask.
+ * Lyrics and Brief are never known to this app (no full-lyrics
+ * transcript, and "Brief" is Stuart's own creative direction) \u2014
+ * always blank, a real template field, not a missing-data bug. Artist
+ * auto-fills from a locked character's `directorNote`
+ * (`lib/plateGeneration.ts`) when the resolved vocalist has one (Jack
+ * Ash today); every other band leaves it blank, same as an unlocked
+ * member always has no injected look. New every song, per Stuart's
+ * "brief + plan are new every song, brain stays" split \u2014 unlike
+ * `director-brain.txt` (`docs/skidmarks/`), this is generated fresh
+ * into each project zip, never a static repo file.
+ */
+export function buildSongBriefText(song: SkidmarksArchivedSong, snapshot: SkidmarksArchiveSnapshot): string {
+  const vocalist = resolveVocalistForPrompt(snapshot.band.members);
+  const artistLine = vocalist ? getSkidmarksCharacterLock(vocalist.id)?.directorNote ?? "" : "";
+  const lengthText = song.durationSec !== null ? formatDuration(song.durationSec) : "";
+  return [
+    `Song: ${stripAudioExtension(song.fileName)}`,
+    `Band: ${song.bandName}`,
+    `Length: ${lengthText}`,
+    `MP3: ${song.fileName}`,
+    "Lyrics:",
+    "Brief:",
+    "",
+    `Artist: ${artistLine}`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * `song-plan.txt` \u2014 Stuart's own beat/cut/frame planning table,
+ * rewritten fresh per song (per his "rewrite the table every MP3" ask).
+ * Only `Song:` is auto-filled; the table itself is a blank scaffold in
+ * his own exact shape (Open/Lyric1/Verse/Chorus/Break), not derived
+ * from this song's real segments \u2014 those don't map onto his beat
+ * names (Verse/Chorus/etc. are song-structure beats, this app's
+ * segments are Vocal/Instrumental time ranges), so inventing that
+ * mapping would be guessing at his own creative process rather than
+ * automating something this app genuinely knows.
+ */
+export function buildSongPlanText(song: SkidmarksArchivedSong): string {
+  return [
+    `Song: ${stripAudioExtension(song.fileName)}`,
+    "",
+    "Beat | Cut (Music Video Study) | Frame (Plate Study)",
+    "-----|-------------------------|--------------------",
+    "Open | linger / ease push |",
+    "Lyric1 | mouth-on punch on attack |",
+    "Verse | hold mouth-on; gesture between |",
+    "Chorus | denser punches + one Wide |",
+    "Break | leave mouth; Wide/Low travel |",
+    "",
+    "Notes:",
+    "",
+  ].join("\n");
+}
+
 function buildManifestText(song: SkidmarksArchivedSong, snapshot: SkidmarksArchiveSnapshot): string {
   const lines: string[] = [
     `Skidmarks project export \u2014 ${song.bandName}`,
@@ -331,6 +400,13 @@ export async function buildArchiveZip(
   const entries: { name: string; data: Uint8Array }[] = [];
 
   entries.push({ name: "manifest.txt", data: new TextEncoder().encode(buildManifestText(song, snapshot)) });
+  // Stuart's own per-song brief/plan templates \u2014 see this module's
+  // "Auto bit" doc comments above. `director-brain.txt` deliberately
+  // does NOT go in here: it's the one persistent, cross-song document
+  // ("brief + plan are new every song, brain stays"), kept in
+  // `docs/skidmarks/` instead.
+  entries.push({ name: "brief.txt", data: new TextEncoder().encode(buildSongBriefText(song, snapshot)) });
+  entries.push({ name: "plan.txt", data: new TextEncoder().encode(buildSongPlanText(song)) });
 
   snapshot.mp3.segments.forEach((segment, segmentIndex) => {
     segment.plates.forEach((plate, plateIndex) => {

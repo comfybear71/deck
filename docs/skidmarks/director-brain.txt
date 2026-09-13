@@ -1,0 +1,30 @@
+Skidmarks director's brain — Stuart's own living notes on how to cut and
+plate a music video with this app's real tools. Persists across songs;
+only edited when something is learned. Not rewritten per song — see
+song-brief.txt and song-plan.txt (also in this folder) for the parts
+that change every time. Not bundled into a song's "Download project
+zip" — that only carries brief + plan; this stays here as the one
+shared reference behind every song.
+
+Prompt = story + energy only
+Open/dread: linger (~8–10s), ease push, no speed-ramp
+Lyric attack: mouth-on LTX punch (not mid-word)
+Verse: hold mouth-on; gesture B-roll only between phrases
+Chorus: denser mouth-on punches + one Wide/downbeat
+Break: leave mouth — hands/shoulders / Wide / Low
+~5s default; ~3s flash; ~8–10s creep
+Don't hold a wrong face
+Stills default; video opt-in
+
+CAPABILITIES
+LTX / Comfy Cloud: LIVE — mouth-on vocal lip-sync (Deck clamp 5–20s; you already get ~30s — bump after hotfix). Needs mouth in frame. Not for door/keyhole / person-less B-roll. Hold burns until vocal plates are back.
+Grok: instrumental / travel / complex placement. Stills + video ~5–15s. Not lip-sync.
+H3 / MiniMax: same job as Grok, switchable. Not lip-sync. Test override until you say permanent.
+SIRAY: uncensored stills; Seedance gateway. Never default vocal animate.
+Seedance (via SIRAY): 17-angle from a still. Not wired — name in plan only until that test.
+
+PACE ROUTE
+Lyric/mouth-on punch → LTX only
+Open/travel/break → Grok or H3; never LTX
+Angle variety → Seedance via SIRAY when live; until then stills + cut variety
+Don't plan a beat on a tool that can't do it

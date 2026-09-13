@@ -23,16 +23,37 @@
  * invented model call" spirit as `defaultSegmentModel`/
  * `routingFramingHint` elsewhere in this feature.
  *
- * **The one scripted exception**: Stuart's own concrete opener idea —
- * a weathered door in a cracked concrete wall with neon-blue light
- * bleeding through → a look through its keyhole → Jack Ash seated in
- * shadow beyond it — only fires when the brief (or the attached
- * filename, as a fallback hint) actually mentions it (`door`,
- * `concrete`, or `keyhole`), and only onto the *first* clip's own empty
- * plate slots, in strip order. It's never applied just because the
- * active band happens to be Jack Ash — Stuart has other Jack Ash songs
- * that aren't this one, and this opener is a specific creative choice
- * for a specific brief, not a band-wide default.
+ * **The one scripted exception**: Stuart's own concrete opener idea for
+ * *Talking to Concrete*'s 0:00–0:40 opener — a front-on dark door
+ * with a centered keyhole → the same shot, closer, on the keyhole
+ * itself → Jack Ash seen through that hole — only fires when the
+ * brief (or the attached filename, as a fallback hint) actually
+ * mentions it (`door`, `concrete`, or `keyhole`), and only onto the
+ * *first* clip's own empty plate slots, in strip order. It's never
+ * applied just because the active band happens to be Jack Ash —
+ * Stuart has other Jack Ash songs that aren't this one, and this
+ * opener is a specific creative choice for a specific brief, not a
+ * band-wide default.
+ *
+ * **All three shots are locked-off ("dead-on the whole way", Stuart's
+ * words) — same angle throughout, only the framing tightens.** They
+ * are Instrumental/B-roll, not Vocal — the door and keyhole have no
+ * one in frame, and even plate 3's Jack is seen through a keyhole, not
+ * performing to camera. That's not something this module has to
+ * enforce: Auto-plate never renders video at all (see this module's own
+ * doc comment above), so "don't LTX these" is already structurally true
+ * for every shot it plans, this opener included.
+ *
+ * **Plate 3's own failure mode, live-QA'd and already fixed one layer
+ * down**: an earlier pass generated this exact shot and got back a
+ * fully-lit stranger's face, not Jack. `lib/plateGeneration.ts`'s
+ * `shotPromptMentionsLockedCharacter` is the fix — it matches "Jack"
+ * as a whole word in the shot prompt and attaches his hallmarks/
+ * negative cues + his reference photo automatically, on an Instrumental
+ * clip same as a Vocal one. `CONCRETE_OPENER_SHOTS[2]` below names him
+ * by name specifically so that lock keeps firing; don't reword it to
+ * something like "the mysterious figure" that drops his name out of
+ * the sentence.
  */
 
 import {
@@ -87,9 +108,21 @@ function mentionsConcreteOpener(text: string): boolean {
  * ever applied to the first clip's own plate slots (index 0/1/2 within
  * that one strip), and only into whichever of those are still empty. */
 const CONCRETE_OPENER_SHOTS = [
-  "A weathered wooden door set into a crumbling concrete wall, a jagged crack across it glowing with neon-blue light bleeding through.",
-  "Looking through the door's keyhole into a dim room beyond, neon-blue light spilling around the edges of the frame.",
-  "Jack seated in shadow just beyond the keyhole, glowing neon-blue lips the only thing visible in the dark.",
+  // 1 — door. Front-on, locked-off; only the cracks carry any neon,
+  // the hole itself stays unlit — nothing to see through it yet.
+  "Front-on dark door, keyhole centered, mild blue neon only in the cracks around the frame, no light from the hole.",
+  // 2 — keyhole. Same door, same angle, just closer — the keyhole
+  // itself now carries a mild, half-strength blue seep (no beam, no
+  // angle change) as the one hint of what's on the other side.
+  "Same door, same angle, closer — keyhole centered and large, mild half-strength blue seep inside the hole only, no beam, no angle.",
+  // 3 — Jack through the hole. Names him explicitly (keeps
+  // `shotPromptMentionsLockedCharacter` firing — see this module's doc
+  // comment) and states the fedora/shadow/neon-lips lock hard, since
+  // this exact shot has come back as a random, fully-lit stranger
+  // before. If that happens again, strengthen this wording further
+  // before anything else — the character-lock machinery already
+  // attaches Jack's reference photo whenever his name appears here.
+  "Same keyhole as the frame. Jack Ash, black brim fedora, sitting in a dim room, legs slightly apart, feet on the floor, hands on knees, face in deep shadow under the brim, neon blue lips only, no other face light. Not a new man, no lit portrait, no bare head.",
 ];
 
 /** Small, varied, hand-authored templates for a *generic* empty plate —
