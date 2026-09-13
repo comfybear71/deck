@@ -1560,6 +1560,54 @@ function readLegacySkidmarksLocalStorageSession(): SkidmarksState | null {
   }
 }
 
+/** LocalStorage key for the *live* session's ongoing local mirror
+ * (2026-09-14 resilience fix) — distinct from `LEGACY_LOCAL_STORAGE_KEY`
+ * above, which is the one-time pre-#57 migration key and never written
+ * to again. Real, repeated live bug: on a weak mobile connection, a Neon
+ * PUT can keep failing for longer than `pushSkidmarksSessionNow`'s one
+ * retry covers (a genuine sustained failure, not just a one-off blip) —
+ * Stuart's local edits (real generated plates) looked fine on screen but
+ * were never actually durable, and a refresh silently reverted him to
+ * Neon's last *successful* save, discarding everything since. This key
+ * is kept current by every `persist()` (see `writeLocalBackup`) purely
+ * as a same-device safety net; Neon via `SESSION_ENDPOINT` stays the
+ * only source of truth read on a *different* device. */
+const LOCAL_BACKUP_KEY = "skidmarks_local_backup_v1";
+
+function writeLocalBackup(state: SkidmarksState): void {
+  if (!isBrowser()) return;
+  try {
+    window.localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(state));
+  } catch {
+    // Private-mode Safari, a full/disabled localStorage — this backup
+    // is a best-effort safety net, never a hard requirement to keep
+    // editing normally.
+  }
+}
+
+function readLocalBackup(): SkidmarksState | null {
+  if (!isBrowser()) return null;
+  try {
+    const raw = window.localStorage.getItem(LOCAL_BACKUP_KEY);
+    if (!raw) return null;
+    return normalizeState(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+/** How many real plate stills a state actually has — the concrete,
+ * countable signal `hydrateSkidmarksSessionOnce` uses to tell whether
+ * the local backup is genuinely *ahead* of what Neon just returned
+ * (real generated plates a failed save never got to persist), rather
+ * than just stale leftovers. Deliberately narrow — this exists to catch
+ * exactly that one failure mode, not to be a general-purpose merge. */
+function countFilledPlates(state: SkidmarksState): number {
+  return (state.session.mp3?.segments ?? []).reduce(
+    (sum, segment) => sum + segment.plates.filter((p) => p.still).length,
+    0
+  );
+}
 
 /**
  * One-time cleanup for a session hydrated from *before* the 2026-09-14
@@ -1670,12 +1718,16 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     const body = (await res.json().catch(() => null)) as SessionGetRouteBody | null;
 
     if (!res.ok || !body || body.configured !== true) {
-      // Neon itself isn't reachable/configured right now — still worth
-      // showing a real prior session over the seed demo data if one's
-      // sitting on this phone (see `LEGACY_LOCAL_STORAGE_KEY`'s doc
-      // comment), even though it can't be durably saved back yet.
-      const legacy = readLegacySkidmarksLocalStorageSession();
-      if (legacy) applyIfSafe(legacy);
+      // Neon itself isn't reachable/configured right now (this GET
+      // itself failed, same connection trouble a PUT can hit) — still
+      // worth showing a real prior session over the seed demo data if
+      // one's sitting on this phone. The ongoing local backup (see
+      // `LOCAL_BACKUP_KEY`'s doc comment) is preferred when it exists —
+      // it's this device's own current mirror; the legacy pre-#57 key is
+      // only a fallback for a session that predates that backup ever
+      // being written.
+      const recovered = readLocalBackup() ?? readLegacySkidmarksLocalStorageSession();
+      if (recovered) applyIfSafe(recovered);
       setSessionSync({
         status: "unconfigured",
         error: typeof body?.error === "string" ? body.error : `HTTP ${res.status}`,
@@ -1687,17 +1739,38 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     if (fetched && sessionHasSubstantiveContent(fetched)) {
       // Neon already has real content — the ordinary case, including
       // every load after the one-time recovery below has already run.
-      const applied = applyIfSafe(fetched);
+      //
+      // **Real, repeated live bug (2026-09-14)**: on a weak mobile
+      // connection, a Neon PUT can keep failing for longer than
+      // `pushSkidmarksSessionNow`'s one retry covers — Stuart generated
+      // real plates that looked fine on screen, the save genuinely never
+      // landed, and a refresh silently reverted him to Neon's last
+      // *successful* save, discarding everything since. `readLocalBackup`
+      // is this device's own ongoing mirror (`writeLocalBackup`, called
+      // from every `persist()`) of what was actually being edited — when
+      // it has strictly more real filled plates than what Neon just
+      // returned, that's a real save that never made it, not stale
+      // leftovers, so it wins and gets pushed immediately (same
+      // "recover, then push now" shape the legacy-localStorage recovery
+      // path below already uses for the same reason).
+      const localBackup = readLocalBackup();
+      const useLocalBackup = !!localBackup && countFilledPlates(localBackup) > countFilledPlates(fetched);
+      const toApply = useLocalBackup ? localBackup! : fetched;
+      const applied = applyIfSafe(toApply);
       setSessionSync({ status: "synced" });
       if (applied) {
+        writeLocalBackup(toApply);
         // Best-effort, non-blocking — never delays showing "synced" for
-        // what's usually a no-op. See `migrateInlineSessionImagesToBlob`'s
-        // own doc comment for the real 413 this closes for a session
-        // that predates the 2026-09-14 Blob fixes.
-        void migrateInlineSessionImagesToBlob(fetched).then(({ state: migrated, changed }) => {
-          if (!changed) return;
+        // what's usually a no-op. Also covers a recovered local backup
+        // that itself still has an inline `data:` still/photo (the same
+        // bad connection that lost the session save could just as
+        // easily have failed that still's own Blob upload) — see
+        // `migrateInlineSessionImagesToBlob`'s own doc comment.
+        void migrateInlineSessionImagesToBlob(toApply).then(({ state: migrated, changed }) => {
+          if (!useLocalBackup && !changed) return;
           if (!shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount)) return;
-          cachedState = migrated;
+          cachedState = changed ? migrated : toApply;
+          writeLocalBackup(cachedState);
           notify();
           void pushSkidmarksSessionNow();
         });
@@ -1907,6 +1980,7 @@ export function subscribeSkidmarks(listener: () => void): () => void {
 function persist(next: SkidmarksState) {
   cachedState = next;
   localEditCount += 1;
+  writeLocalBackup(next);
   notify();
   schedulePush();
 }
