@@ -4,13 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import {
   buildClipGenerationRequest,
   estimateClipRenderCostUsd,
+  estimateH3ClipRenderCostUsd,
   estimateLtxClipRenderCostUsd,
   generateSkidmarksClip,
   MAX_MOTION_PROMPT_LENGTH,
 } from "@/lib/clipGeneration";
 import { buildClipRenderFilename } from "@/lib/clipRenderBlob";
 import type { PersistedClipRender } from "@/lib/clipRenders";
-import type { SkidmarksMember } from "@/lib/skidmarks";
+import type { SkidmarksInstrumentalVideoModel, SkidmarksMember } from "@/lib/skidmarks";
 
 interface SkidmarksClipRenderProps {
   /** The clip's shared shot-prompt text — same field
@@ -39,6 +40,17 @@ interface SkidmarksClipRenderProps {
    * whether `mp3AudioUrl` is required before Render can even be
    * confirmed. See `lib/clipGeneration.ts`'s module doc comment. */
   vocal: boolean;
+  /** Only meaningful when `vocal` is `false` — this clip's own resolved
+   * H3/Grok choice (`lib/skidmarks.ts`'s `resolveInstrumentalVideoModel`,
+   * already defaulted to `"h3"` by the caller — this component never
+   * re-derives the default itself, it just renders whatever's given
+   * and reports a change). Ignored on the Vocal path; that path always
+   * means Comfy Cloud LTX, no switch. */
+  instrumentalVideoModel: SkidmarksInstrumentalVideoModel;
+  /** The H3/Grok switch inside the confirm step below — see this
+   * component's doc comment. No-ops visually on the Vocal path (the
+   * switch never renders there at all). */
+  onSetInstrumentalVideoModel: (model: SkidmarksInstrumentalVideoModel) => void;
   /** The resolved vocalist for this clip's band, if any — forwarded to
    * `buildClipGenerationRequest` on the Vocal path only, so a locked
    * character's (Jack Ash today) hallmarks carry into the video prompt
@@ -97,13 +109,22 @@ function Spinner() {
 /**
  * The real, opt-in per-plate clip *video* render control — see
  * `app/api/skidmarks/generate-clip/route.ts`'s module doc comment for
- * the full server-side contract of **both** backends this now calls:
- * xAI's Grok Imagine video API (`XAI_API_KEY`, Instrumental clips) or
- * Comfy Cloud's LTX-2.5 `AudioToVideo` node (`COMFY_CLOUD_API_KEY`,
- * Vocal clips) — chosen automatically by this component's own `vocal`
- * prop, never a picker here. Deliberately **not** the "Generate Clips"
- * button (`SkidmarksClipTimeline`) — that stays the honest whole-song
- * stub; this animates exactly one already-selected plate at a time.
+ * the full server-side contract of **all three** backends this now
+ * calls: Comfy Cloud's LTX-2.5 `AudioToVideo` node
+ * (`COMFY_CLOUD_API_KEY`, Vocal clips, unchanged, no switch), MiniMax
+ * H3 (`MINIMAX_API_KEY`, Instrumental clips, the new default), or
+ * xAI's Grok Imagine video API (`XAI_API_KEY`, Instrumental clips,
+ * still fully wired one tap away). Vocal vs. Instrumental is chosen
+ * automatically by this component's own `vocal` prop, same as before;
+ * **H3 vs. Grok, on an Instrumental clip, is the one real switch this
+ * component now exposes** — a small two-way toggle inside the existing
+ * two-tap confirm step below (never a persistent pill/badge on the
+ * plate tile, per AGENTS.md's "no model picker" lock — Stuart's own
+ * explicit ask named this exact shape: "a single H3 | Grok choice
+ * inside the existing two-tap Render confirm"). Deliberately **not**
+ * the "Generate Clips" button (`SkidmarksClipTimeline`) — that stays
+ * the honest whole-song stub; this animates exactly one already-
+ * selected plate at a time.
  *
  * **Vocal plates need real audio, not just a text prompt.** When
  * `vocal` is true, Render stays disabled (with an honest inline
@@ -155,6 +176,8 @@ export function SkidmarksClipRender({
   onSetMotionPrompt,
   durationSec,
   vocal,
+  instrumentalVideoModel,
+  onSetInstrumentalVideoModel,
   vocalist,
   mp3AudioUrl,
   locked,
@@ -192,7 +215,11 @@ export function SkidmarksClipRender({
 
   if (!plateStillDataUrl) return null;
 
-  const estimatedCost = vocal ? estimateLtxClipRenderCostUsd(durationSec) : estimateClipRenderCostUsd(durationSec, 1);
+  const estimatedCost = vocal
+    ? estimateLtxClipRenderCostUsd(durationSec)
+    : instrumentalVideoModel === "h3"
+      ? estimateH3ClipRenderCostUsd(durationSec)
+      : estimateClipRenderCostUsd(durationSec, 1);
   // Carried-forward directive: never let Render fire (even the
   // confirm step) on a Vocal plate with no real durable audio to
   // slice \u2014 an honest, disabled state instead of a request the
@@ -239,6 +266,7 @@ export function SkidmarksClipRender({
         motionPrompt,
         durationSec,
         vocal,
+        instrumentalVideoModel,
         vocalist,
         mp3AudioUrl,
         segmentId,
@@ -327,23 +355,54 @@ export function SkidmarksClipRender({
       )}
 
       {!generating && confirming && (
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleConfirm}
-            className="flex-1 rounded-full bg-rose-400 px-3.5 py-2.5 text-center text-[12px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/85"
-          >
-            {vocal
-              ? `Confirm — real Comfy Cloud LTX call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
-              : `Confirm — real xAI video call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`}
-          </button>
-          <button
-            type="button"
-            onClick={cancelConfirm}
-            className="rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-[12px] font-medium text-white/60 transition-colors hover:bg-white/[0.07] hover:text-white"
-          >
-            Cancel
-          </button>
+        <div className="flex flex-col gap-2">
+          {!vocal && (
+            // Two real, roomy tap targets (not a slim pill row) — each
+            // button's own padding keeps it comfortably past Apple's
+            // ~44pt HIG minimum, same "a thumb should never have to aim
+            // precisely" lesson this feature's other iOS-Safari-tuned
+            // controls already learned the hard way (see
+            // `components/SkidmarksClipStub.tsx`'s
+            // `SkidmarksPlateSelectControl` doc comment).
+            <div className="flex items-center gap-1.5 self-start rounded-full bg-white/[0.04] p-1 text-[12px] font-medium">
+              {(["h3", "grok"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => onSetInstrumentalVideoModel(option)}
+                  aria-pressed={instrumentalVideoModel === option}
+                  className={[
+                    "min-h-[36px] rounded-full px-4 py-2 transition-colors",
+                    instrumentalVideoModel === option
+                      ? "bg-rose-400 text-zinc-950"
+                      : "text-white/50 hover:text-white/80",
+                  ].join(" ")}
+                >
+                  {option === "h3" ? "H3" : "Grok"}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleConfirm}
+              className="flex-1 rounded-full bg-rose-400 px-3.5 py-2.5 text-center text-[12px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/85"
+            >
+              {vocal
+                ? `Confirm — real Comfy Cloud LTX call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
+                : instrumentalVideoModel === "h3"
+                  ? `Confirm — real MiniMax H3 call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
+                  : `Confirm — real xAI Grok video call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`}
+            </button>
+            <button
+              type="button"
+              onClick={cancelConfirm}
+              className="rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-[12px] font-medium text-white/60 transition-colors hover:bg-white/[0.07] hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 

@@ -5,11 +5,13 @@ import { createPortal } from "react-dom";
 import {
   MAX_PLATES_PER_CLIP,
   readImageFileAsDataUrl,
+  resolveInstrumentalVideoModel,
   resolveSelectedPlateId,
   SKIDMARKS_SEGMENT_LABEL_META,
   type SkidmarksBand,
   type SkidmarksClipPlateSlot,
   type SkidmarksClipSegment,
+  type SkidmarksInstrumentalVideoModel,
   type SkidmarksMember,
   type SkidmarksModelId,
   type SkidmarksPlateStill,
@@ -43,6 +45,11 @@ interface SkidmarksClipStubProps {
   /** This plate's own stored camera-motion text — per-plate now, see
    * `SkidmarksClipPlateSlot.motionPrompt`'s doc comment. */
   onSetPlateMotionPrompt: (plateId: string, motionPrompt: string) => void;
+  /** The H3/Grok switch inside `SkidmarksClipRender`'s Render confirm —
+   * see `lib/skidmarks.ts`'s `SkidmarksInstrumentalVideoModel`/
+   * `setSkidmarksSegmentInstrumentalVideoModel`. Only meaningful (and
+   * only rendered) on an Instrumental clip. */
+  onSetClipInstrumentalModel: (model: SkidmarksInstrumentalVideoModel) => void;
   /** Which of *this clip's* plates already have a persisted render —
    * drives each plate tile's tick and the Render control's "already
    * rendered" status line. Scoped to this one segment by the caller
@@ -895,7 +902,14 @@ function SkidmarksPlateBox({
  * Model choice (`segment.model`) still isn't rendered as a badge/pill
  * anywhere in this panel (Stuart's chrome lock stands) — it only steers
  * this same xAI call's prompt phrasing under the hood, see
- * `lib/plateGeneration.ts`'s `routingFramingHint`.
+ * `lib/plateGeneration.ts`'s `routingFramingHint`. **Separately**, an
+ * Instrumental clip's *video-render* backend (H3 vs. Grok — a genuinely
+ * different field, `segment.instrumentalVideoModel`, see
+ * `lib/skidmarks.ts`'s `SkidmarksInstrumentalVideoModel` for why it's
+ * not the same field as `model`) has exactly one real switch, added on
+ * Stuart's explicit ask: two small buttons *inside*
+ * `SkidmarksClipRender`'s own two-tap Render confirm step, not
+ * anywhere on this strip.
  *
  * **Per-plate select rework**: each filled plate tile now also carries
  * a small bottom-right corner control (`SkidmarksPlateSelectControl`) —
@@ -921,6 +935,7 @@ export function SkidmarksClipStub({
   onRemovePlate,
   onSelectPlate,
   onSetPlateMotionPrompt,
+  onSetClipInstrumentalModel,
   renderedPlateIds,
   renderLocked,
   onRenderStart,
@@ -948,6 +963,9 @@ export function SkidmarksClipStub({
   const selectedPlateIndex = segment.plates.findIndex((p) => p.id === selectedPlateId);
   const selectedPlate = selectedPlateIndex >= 0 ? segment.plates[selectedPlateIndex] : undefined;
   const plateCount = segment.plates.length;
+  // Only ever read on the Instrumental path — see
+  // `SkidmarksClipRender`'s own `instrumentalVideoModel` doc comment.
+  const instrumentalVideoModel = resolveInstrumentalVideoModel(segment.instrumentalVideoModel);
   // Vocal clips route to Comfy Cloud LTX (real [5, 20]s ceiling);
   // Instrumental ones keep Grok's real [5, 15]s ceiling — see
   // `lib/clipGeneration.ts`'s module doc comment for why these differ.
@@ -1018,6 +1036,8 @@ export function SkidmarksClipStub({
           onSetMotionPrompt={(value) => onSetPlateMotionPrompt(selectedPlate.id, value)}
           durationSec={durationSec}
           vocal={vocal}
+          instrumentalVideoModel={instrumentalVideoModel}
+          onSetInstrumentalVideoModel={onSetClipInstrumentalModel}
           vocalist={vocalist}
           mp3AudioUrl={mp3AudioUrl}
           locked={renderLocked}

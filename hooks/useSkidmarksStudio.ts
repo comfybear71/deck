@@ -34,10 +34,12 @@ import {
   setSkidmarksMemberAvatarImage,
   setSkidmarksMp3AudioUrl,
   setSkidmarksMp3Duration,
+  setSkidmarksSegmentInstrumentalVideoModel,
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
   subscribeSkidmarks,
   type SkidmarksBand,
+  type SkidmarksInstrumentalVideoModel,
   type SkidmarksLook,
   type SkidmarksMp3Attachment,
   type SkidmarksPlateStill,
@@ -244,6 +246,14 @@ export function useSkidmarksStudio() {
     []
   );
 
+  /** The H3/Grok switch inside `SkidmarksClipRender`'s Render confirm —
+   * see `setSkidmarksSegmentInstrumentalVideoModel`'s doc comment. */
+  const setClipInstrumentalModel = useCallback(
+    (segmentId: string, model: SkidmarksInstrumentalVideoModel) =>
+      setSkidmarksSegmentInstrumentalVideoModel(segmentId, model),
+    []
+  );
+
   /** "Open in editor" on an archived song row — restores its band + mp3
    * snapshot into the live top workspace. Invalidates any in-flight
    * analysis/transcription/audio-upload for whatever was live before
@@ -286,6 +296,7 @@ export function useSkidmarksStudio() {
     removeClipPlate,
     selectClipPlate,
     setClipPlateMotionPrompt,
+    setClipInstrumentalModel,
     restoreArchivedSession,
     clearSessionAfterArchive,
   };
