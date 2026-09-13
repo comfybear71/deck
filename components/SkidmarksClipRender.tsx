@@ -351,7 +351,7 @@ export function SkidmarksClipRender({
       )}
 
       {!generating && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-2">
           {vocal ? (
             // Vocal only ever has one real backend (Comfy Cloud LTX,
             // lip-sync) — a plain label, never a fake second option
