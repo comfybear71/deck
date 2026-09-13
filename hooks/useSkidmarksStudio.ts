@@ -14,9 +14,8 @@ import {
   clearSkidmarksMp3,
   createMp3Attachment,
   createSkidmarksBand,
-  getSkidmarksPersistFailure,
+  getSkidmarksSessionSyncSnapshot,
   getSkidmarksSnapshot,
-  getSkidmarksStorageWarning,
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
   markSkidmarksMp3AudioUnconfigured,
@@ -40,12 +39,14 @@ import {
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
   subscribeSkidmarks,
+  subscribeSkidmarksSessionSync,
   type SkidmarksBand,
   type SkidmarksInstrumentalVideoModel,
   type SkidmarksLook,
   type SkidmarksMp3Attachment,
   type SkidmarksPlateStill,
   type SkidmarksProjectKind,
+  type SkidmarksSessionSyncState,
   type SkidmarksState,
 } from "@/lib/skidmarks";
 
@@ -55,12 +56,17 @@ const EMPTY_STATE: SkidmarksState = {
   removedSeedBandIds: [],
 };
 
+const LOADING_SESSION_SYNC_STATE: SkidmarksSessionSyncState = { status: "loading" };
+
 /**
  * React binding for the Skidmarks Music-video studio store
  * (`lib/skidmarks.ts`) — same `useSyncExternalStore` shape as
  * `useDialModes`/the old `useSkidmarksProjects`, so SSR always sees the
- * empty state and the client re-renders with whatever's in
- * `localStorage` right after hydration.
+ * empty state and the client re-renders with whatever Neon's `GET /api/
+ * skidmarks/session` returns right after the store's one-time hydrate
+ * (see `lib/skidmarks.ts`'s "Neon-backed session persistence" doc
+ * comment — `localStorage` is gone outright as this feature's state of
+ * record now).
  *
  * Also owns the real side-effecting logic this flow needs: kicking off
  * both `analyzeVocalActivity` (`lib/audioAnalysis.ts`, the energy
@@ -75,6 +81,12 @@ const EMPTY_STATE: SkidmarksState = {
  * `attachMp3`/`removeMp3` bumps it, and any in-flight analysis or
  * transcription whose captured token no longer matches just gets
  * dropped.
+ *
+ * `sessionSync` is a second, independent `useSyncExternalStore` binding
+ * onto `lib/skidmarks.ts`'s ephemeral Neon round-trip status (never
+ * part of `state`, never persisted) — exposed so `SkidmarksDetailSheet`
+ * can show an honest "not saving here right now" line instead of
+ * silently implying every edit is durable.
  */
 export function useSkidmarksStudio() {
   const state = useSyncExternalStore(
@@ -82,28 +94,17 @@ export function useSkidmarksStudio() {
     getSkidmarksSnapshot,
     () => EMPTY_STATE
   );
-
-  /** Non-null only while the *most recent* `persist()` write to
-   * `localStorage` actually failed (e.g. quota exceeded) — see
-   * `getSkidmarksPersistFailure`'s doc comment. Shares the same
-   * `subscribeSkidmarks` notify cycle as `state` above, so this updates
-   * the instant a write fails or a later one recovers, no separate
-   * polling needed. */
-  const persistFailure = useSyncExternalStore(
-    subscribeSkidmarks,
-    getSkidmarksPersistFailure,
-    () => null
+  const sessionSync = useSyncExternalStore(
+    subscribeSkidmarksSessionSync,
+    getSkidmarksSessionSyncSnapshot,
+    () => LOADING_SESSION_SYNC_STATE
   );
 
-  /** Non-null once local storage is getting close to its real quota,
-   * even though every write is still actually succeeding — an earlier,
-   * softer heads-up than `persistFailure` above; see
-   * `getSkidmarksStorageWarning`'s doc comment. */
-  const storageWarning = useSyncExternalStore(
-    subscribeSkidmarks,
-    getSkidmarksStorageWarning,
-    () => null
-  );
+  /* The `persistFailure` and `storageWarning` subscriptions that used
+   * to sit here are gone — they reported on `localStorage` quota, and
+   * `persist()` no longer writes to `localStorage` (see
+   * `lib/skidmarks.ts`). `sessionSync` above covers the same need
+   * against the store that actually exists now. */
 
   const analysisTokenRef = useRef(0);
 
@@ -317,8 +318,9 @@ export function useSkidmarksStudio() {
     bands: state.bands,
     session: state.session,
     removedSeedBandIds: state.removedSeedBandIds,
-    persistFailure,
-    storageWarning,
+    /** The live Neon session round-trip status — see this hook's doc
+     * comment and `lib/skidmarks.ts`'s `SkidmarksSessionSyncState`. */
+    sessionSync,
     selectProjectKind,
     selectBand,
     createBand,

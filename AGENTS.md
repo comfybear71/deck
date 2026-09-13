@@ -79,7 +79,7 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Word-level transcription (lyrics timing) | **Real** — ElevenLabs Scribe only, no other provider | `app/api/skidmarks/transcribe/route.ts` |
 | Energy heuristic (vocal/instrumental fallback) | **Real**, client-side, no key needed | `lib/audioAnalysis.ts` |
 | Plate *still* generation | **Real** — xAI Grok Imagine *image* API | `app/api/skidmarks/generate-still/route.ts`, `lib/plateGeneration.ts` |
-| Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to `localStorage` (the existing session-state mirror — see the "no `localStorage`" note below for what's actually exempt from that) | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `components/SkidmarksClipStub.tsx` |
+| Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to **Neon** now (one session row per studio owner — see the "no `localStorage`" note below) | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `lib/skidmarksSession-server.ts`, `components/SkidmarksClipStub.tsx` |
 | Per-plate select + tick | **Real** — a small corner control on each filled plate tile (radio-style, one plate selected per clip at a time) plus a filled/empty tick for "already has a saved render"; see `lib/skidmarks.ts`'s `resolveSelectedPlateId` | `components/SkidmarksClipStub.tsx` |
 | Per-plate opt-in *video* render | **Real, three backends now, routed by Vocal vs. Instrumental, plus a real H3/Grok switch on Instrumental — no persistent picker.** Vocal clips → **Comfy Cloud running the full LTX 2.3 IA2V graph** (`workflow/LTX_2.3_IA2V_Cloud.json`, `COMFY_CLOUD_API_KEY`), driven by a real frame-sliced (`lib/mp3Slice.ts`) window of the attached song's own vocal audio (`mp3.audioUrl`), 5–30s — no switch. This path used to call Comfy's hosted `LtxApi25AudioToVideo` partner node; that never survived a real call (see `lib/comfyCloud.ts`'s module doc comment) and the graph the original Skidmarks repo actually renders with replaced it. Instrumental/B-roll clips → **MiniMax H3** (`MINIMAX_API_KEY`, optional `MINIMAX_GROUP_ID`) **by default** (Stuart's 2026-09-13 "H3 please, for this smoke" lock, superseding the older "never auto-assign H3" *still-image* cost lock below — the two are separate fields, see `SkidmarksInstrumentalVideoModel`'s doc comment), 5–15s, first-frame (optionally first+last-frame) image-to-video; **xAI Grok Imagine video** stays fully wired one tap away, same 5–15s range — a small H3/Grok switch lives *inside* the existing two-tap Render confirm, added on Stuart's own explicit ask ("a single H3 \| Grok choice inside the existing two-tap Render confirm"), persisted per clip (`SkidmarksClipSegment.instrumentalVideoModel`). Either way: animates **the one selected plate's own still only**, one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`). **Honesty note**: neither the Comfy/LTX nor the MiniMax H3 path is live-verified in this sandbox (no `COMFY_CLOUD_API_KEY`/`MINIMAX_API_KEY` available here) — see `lib/comfyCloud.ts`'s and `lib/minimaxH3.ts`'s own module doc comments. Both are ported from the original Skidmarks repo's own real clients rather than invented, but **a passing test suite is not proof either renders**: the only proof for LTX is Stuart tapping Vocal Render on his iPhone after a deploy and a shelf clip playing. | `app/api/skidmarks/generate-clip/route.ts`, `lib/comfyCloud.ts`, `lib/minimaxH3.ts`, `lib/mp3Slice.ts`, `lib/clipGeneration.ts`, `lib/skidmarks.ts`, `components/SkidmarksClipRender.tsx` |
 | Per-plate render duration | **Real, auto-computed** — `segmentLengthSec / plateCount`, clamped to `[5, 15]`s (Grok's documented ceiling), no UI picker | `lib/clipGeneration.ts`'s `computePlateDurationSec` |
@@ -140,50 +140,72 @@ was charged, and that it won't show up in the shelf or survive a
 refresh — never just a quiet "Rendered ✓" tick with nothing to actually
 show for it.
 
-**No `localStorage` for genuinely new durable state.** The existing
+**No `localStorage` anywhere for Skidmarks studio state — the whole
 `lib/skidmarks.ts` session mirror (bands/session/segments/plates,
-including plate stills as `data:` URLs) is still `localStorage`-backed
-— that's pre-existing debt this PR didn't create or fix, and adding a
-field to an existing plate/segment (`motionPrompt`, `selectedPlateId`)
-follows that same existing pattern, not a new one. But the **archive of
-record** for a finished song, and the MP3's own durable audio copy, are
-both genuinely new durable state added in this pass — both go straight
-to Vercel Blob (JSON metadata + JSON snapshot + media), never
-`localStorage`, per the hard lock. Neon is still not patterned anywhere
-in this repo (see Env vars) — when it lands, it should replace *all* of
-this `localStorage` session state, not just the archive.
+selections, prompts, motion text) now lives in Neon, not
+`localStorage`.** This is a hard, repeated Stuart lock ("never
+localStorage for studio state of record"), and the literal fix for a
+real bug: the old `localStorage` mirror raced with itself across phone
+storage/tab-suspend behavior and silently wiped tagged plates/prompts.
+`cachedState` is still the synchronous in-memory value every mutator
+reads/writes (`useSyncExternalStore` needs a synchronous snapshot, and
+a network call can't be one), but its *durable* copy is now a single
+Neon row (`lib/skidmarksSession-server.ts`, one fixed single-tenant
+`owner_id` — this app has no auth system), read via one `GET /api/
+skidmarks/session` per page load and written via a debounced,
+serialized `PUT` after every local mutation — see `lib/skidmarks.ts`'s
+"Neon-backed session persistence" doc comment for the exact hydrate/
+push implementation and its two race guards. `localStorage` is fully
+gone from this file; grep it and the only remaining `localStorage`
+matches in this whole file are comments describing what used to be
+there or unrelated field-shape docs. Media (MP3 audio, clip renders,
+archive snapshots — plate stills are still `data:` URLs inside the
+Neon row for now, not yet Blob-backed) still goes straight to Vercel
+Blob, unchanged by this migration; see Env vars below for
+`DATABASE_URL`.
 
-**A `localStorage` write failure (quota exceeded — real risk on iOS
-Safari's notably tight per-origin limit) must never be silently
-invisible either.** Real live-QA'd report: a clip's own timing stayed
-correct (small, persisted early) while its plates reverted to empty
-dashed placeholders — `persist()` (`lib/skidmarks.ts`) used to swallow
-a failed `localStorage.setItem` completely silently; the in-memory
-session still looked tagged, but nothing past the point the quota was
-hit had actually reached disk, so a later reload (or iOS backgrounding
-a tab hard enough to force one) came back showing exactly that. Two
-independent fixes, both real gaps, not just one: (1) an *uploaded*
-plate still already went through `readImageFileAsDataUrl`'s downscale-
-to-640px pass before this, but a *generated* still
-(`generatePlateStill`) was persisted straight off xAI's raw response
-with no size cap at all — now downscaled the same way via
-`downscaleDataUrlImage` (1024px ceiling, matching the lightbox/zip-
-export use case) right where `SkidmarksClipStub`'s Generate flow
-receives it. (2) `persist()` now records *any* write failure
-(`lastPersistFailure`/`getSkidmarksPersistFailure`, with
-`describeSkidmarksPersistFailure` giving quota errors their own
-specific message) and `SkidmarksDetailSheet` shows it as a persistent,
-distinctly-bordered banner the moment it happens — the same "must never
-look like a quiet success" principle as the paid-render alert above,
-just for local persistence instead of a paid API call. Downscaling
-closes the size gap that made hitting the quota this easy in the first
-place; the honest banner is the backstop for whatever residual risk
-remains (many clips, many plates, still adds up). Also hardened
-`SkidmarksAutoPlate`'s execution loop to re-check the *live* store
-(not its own stale, planned-up-front `segments` snapshot) immediately
-before writing each still back, so a plate Stuart fills manually
-mid-run can't be silently overwritten by that same run's now-stale
-plan for the same slot once its turn comes up.
+**The `localStorage` quota machinery is gone — Neon replaced it.**
+Historical context, because the bug it chased was real: a clip's own
+timing stayed correct (small, persisted early) while its plates
+reverted to empty dashed placeholders — `persist()` used to swallow a
+failed `localStorage.setItem` completely silently, so nothing past the
+point iOS Safari's tight per-origin quota was hit had actually reached
+disk. Two fixes landed for that, and **only one of them survives**:
+
+1. **Kept, and still load-bearing**: an *uploaded* plate still already
+   went through `readImageFileAsDataUrl`'s downscale pass, but a
+   *generated* still (`generatePlateStill`) was persisted straight off
+   xAI's raw response with no size cap at all — it's downscaled the
+   same way via `downscaleDataUrlImage` (1024px ceiling) right where
+   `SkidmarksClipStub`'s Generate flow receives it. Don't remove this
+   on the grounds that the quota is gone: plate stills still travel as
+   base64 `data:` URLs *inside* the Neon row, so the cap is what keeps
+   that row — and every `PUT` carrying it — a sane size over a phone
+   connection.
+2. **Deleted**: `describeSkidmarksPersistFailure`,
+   `getSkidmarksPersistFailure`, `getSkidmarksStorageWarning`,
+   `exceedsSkidmarksStorageWarningThreshold`, `lastPersistFailure`,
+   `lastPersistWarning`, `STORAGE_SIZE_WARNING_BYTES`,
+   `STORAGE_SIZE_WARNING_MESSAGE`, their two `useSyncExternalStore`
+   subscriptions in `useSkidmarksStudio`, and their four `describe`
+   blocks. `persist()` no longer writes to `localStorage` at all, so
+   none of that code could ever fire again — leaving it in would have
+   shipped UI structurally incapable of showing.
+
+The need it served is met by `SkidmarksSessionSyncState` instead:
+`"error"` carries Neon's own failure reason verbatim, `"unconfigured"`
+says plainly that edits won't survive a refresh. Same "a save that
+didn't happen must never look like a success" principle, reporting on
+the store that actually exists. **If the sheet shows "Session storage
+isn't connected here", `DATABASE_URL` is not reaching that deployment
+— that banner is the honest signal working, not a bug.**
+
+Also kept from that same pass, and neither one was `localStorage`-
+specific: the `setSkidmarksMp3Duration` clobber guard, and
+`SkidmarksAutoPlate`'s execution loop re-checking the *live* store (not
+its own stale, planned-up-front `segments` snapshot) immediately before
+writing each still back, so a plate Stuart fills manually mid-run can't
+be silently overwritten by that same run's now-stale plan.
 
 **Follow-up on that same report**: Stuart confirmed the wipe cleared
 `shotPrompt` (and the plate stills) together, not stills alone — i.e.
@@ -210,14 +232,12 @@ JSON blob, so a shot prompt typed and several stills generated after
 the last successful write are all lost together the moment a later
 reload rehydrates from that older, smaller snapshot — this is silent
 data loss from a failed write, not a rebuild function replacing
-anything. Added a **second, proactive** layer on top of the downscale
-+ hard-failure-banner fix above: `persist()` now also warns
-(`lastPersistWarning`/`getSkidmarksStorageWarning`,
-`exceedsSkidmarksStorageWarningThreshold`, a conservative 3MB
-threshold) the moment the serialized state crosses that size **while
-writes are still actually succeeding** — an amber, softer banner
-distinct from the red hard-failure one, giving Stuart a real chance to
-Archive before a future write ever actually fails.
+anything. **That whole failure mode is now structural history**: the
+state of record is one Neon row written by a debounced, serialized
+`PUT`, not a single `localStorage.setItem` blob, so there is no quota
+left to silently lose a write to. The proactive 3MB warning layer that
+was added on top of the downscale fix has been deleted with the rest of
+the quota machinery (see above).
 
 **A slow real API result must never silently overwrite already-tagged
 plates/prompts, or land on a different attach than the one it was for.**
@@ -627,13 +647,19 @@ the request, and validate length against `shotPrompt` only.
   feature and it could plausibly carry more than a few hundred KB,
   default to this same client-upload pattern rather than a normal JSON
   POST body.
-- **No Neon/Postgres anywhere in this repo yet** — `@neondatabase/
-  serverless`, `drizzle`, `prisma`, etc. are not dependencies, and no
-  connection string env var is read anywhere. The archive of record
-  (this pass) uses Vercel Blob JSON instead, explicitly as an interim
-  answer — see the README's Skidmarks follow-up note for the intended
-  eventual Neon migration, which should absorb the *entire*
-  `lib/skidmarks.ts` session mirror, not just the archive.
+- `DATABASE_URL` (falls back to `DATABASE_URL_UNPOOLED`) — **Neon is
+  now wired**, via `@neondatabase/serverless`'s HTTP driver
+  (`lib/db.ts`). Backs the Skidmarks studio session store
+  (`lib/skidmarksSession-server.ts`, `GET`/`PUT /api/skidmarks/
+  session`) — one row, keyed by a fixed single-tenant
+  `SKIDMARKS_STUDIO_OWNER_ID` (default `"stuart"`; this app has no auth
+  system). Missing it never crashes — every route returns the same
+  honest `configured: false` shape Blob routes already use, and
+  `lib/skidmarks.ts`'s session-sync indicator shows "not saving here"
+  instead of silently pretending edits are durable. The finished-song
+  **archive** (`lib/skidmarksArchive.ts`) still uses Vercel Blob JSON,
+  unchanged by this migration — only the live edit session moved to
+  Neon.
 - None of the above being unset should ever crash anything — every
   route returns an honest `missing_api_key`/`unconfigured` outcome
   instead. If you add a new real API call, match that shape.

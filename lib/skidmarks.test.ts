@@ -6,11 +6,8 @@ import {
   attachSkidmarksMp3,
   createMp3Attachment,
   defaultSegmentModel,
-  describeSkidmarksPersistFailure,
-  exceedsSkidmarksStorageWarningThreshold,
-  getSkidmarksPersistFailure,
+  getSkidmarksSessionSyncSnapshot,
   getSkidmarksSnapshot,
-  getSkidmarksStorageWarning,
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
   markSkidmarksMp3AudioUnconfigured,
@@ -21,6 +18,7 @@ import {
   resolveInstrumentalVideoModel,
   resolveSelectedPlateId,
   restoreSkidmarksArchivedSession,
+  shouldApplyHydratedSkidmarksSession,
   SKIDMARKS_MODELS,
   selectSkidmarksBand,
   setSkidmarksClipPlateMotionPrompt,
@@ -32,6 +30,7 @@ import {
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
   skidmarksChecklistState,
+  subscribeSkidmarksSessionSync,
   type SkidmarksBand,
   type SkidmarksClipPlateSlot,
   type SkidmarksClipSegment,
@@ -422,81 +421,23 @@ describe("setSkidmarksMp3Duration", () => {
   });
 });
 
-/**
- * `describeSkidmarksPersistFailure`/`getSkidmarksPersistFailure` —
- * the honest-failure half of the "plates wiped again" fix. Real
- * live-QA'd report: a segment's own timing stayed correct (small,
- * persisted early) while its plates reverted to empty dashed
- * placeholders (large `data:` URLs, persisted later, most likely to
- * actually hit `localStorage`'s quota on iOS Safari) — `persist()`
- * used to swallow that write failure completely silently, so nothing
- * ever told Stuart his most recent tagging was one reload away from
- * being lost. These tests only exercise the pure message-formatting
- * function directly, since `isBrowser()` is always `false` under
- * Vitest's `node` environment (see this file's own doc comment above)
- * — `persist()`'s own `try { localStorage.setItem(...) }` branch never
- * actually runs in this suite, the same pre-existing constraint that
- * already leaves `readImageFileAsDataUrl`/`downscaleDataUrlImage`
- * untested here (both need a real `Image`/`canvas`).
- */
-describe("describeSkidmarksPersistFailure", () => {
-  it("gives quota-exceeded failures their own specific, actionable message", () => {
-    const quotaError = new DOMException("The quota has been exceeded.", "QuotaExceededError");
-    const message = describeSkidmarksPersistFailure(quotaError);
-    expect(message).toContain("Storage is full");
-    expect(message).toContain("lost on a refresh");
-  });
+/* The four describe blocks that used to sit here —
+ * `describeSkidmarksPersistFailure`, `getSkidmarksPersistFailure`,
+ * `exceedsSkidmarksStorageWarningThreshold` and
+ * `getSkidmarksStorageWarning` — are gone along with the code they
+ * covered. All four tested the `localStorage` quota reporting, and
+ * `persist()` no longer writes to `localStorage`: the session's
+ * durable copy is one Neon row (see `lib/skidmarks.ts`). The
+ * session-sync snapshot below is what reports a storage problem now. */
 
-  it("recognizes the legacy Firefox quota-error name too, not just the DOMException code", () => {
-    const legacyQuotaError = new DOMException("quota reached", "NS_ERROR_DOM_QUOTA_REACHED");
-    expect(describeSkidmarksPersistFailure(legacyQuotaError)).toContain("Storage is full");
-  });
-
-  it("still gives an honest, non-quota message for any other storage failure (e.g. private-mode Safari)", () => {
-    const message = describeSkidmarksPersistFailure(new Error("The operation is not supported."));
-    expect(message).not.toContain("Storage is full");
-    expect(message).toContain("operation is not supported");
-    expect(message).toContain("lost on a refresh");
-  });
-
-  it("handles a non-Error thrown value without crashing", () => {
-    expect(() => describeSkidmarksPersistFailure("a plain string throw")).not.toThrow();
-    expect(describeSkidmarksPersistFailure("a plain string throw")).toContain("unknown storage error");
-  });
-});
-
-describe("getSkidmarksPersistFailure", () => {
-  it("reads null by default \u2014 under Vitest's node environment persist() never touches localStorage, so no failure is ever recorded", () => {
-    // Sanity check that the getter itself is wired up and doesn't throw
-    // even though this suite can never actually trigger a real write
-    // failure (see the describe block's own doc comment).
-    expect(getSkidmarksPersistFailure()).toBeNull();
-  });
-});
-
-/**
- * `exceedsSkidmarksStorageWarningThreshold` — the pure threshold check
- * behind the *proactive* storage-size warning (a second, independent
- * layer alongside downscaling generated stills and the hard-failure
- * banner above): a heads-up *before* a write ever actually fails,
- * giving Stuart a real chance to Archive while everything is still
- * succeeding.
- */
-describe("exceedsSkidmarksStorageWarningThreshold", () => {
-  it("stays false comfortably under the 3MB threshold", () => {
-    expect(exceedsSkidmarksStorageWarningThreshold(1024)).toBe(false);
-    expect(exceedsSkidmarksStorageWarningThreshold(1024 * 1024)).toBe(false);
-  });
-
-  it("flips true right at and past the 3MB threshold", () => {
-    expect(exceedsSkidmarksStorageWarningThreshold(3 * 1024 * 1024)).toBe(true);
-    expect(exceedsSkidmarksStorageWarningThreshold(5 * 1024 * 1024)).toBe(true);
-  });
-});
-
-describe("getSkidmarksStorageWarning", () => {
-  it("reads null by default, same environment constraint as getSkidmarksPersistFailure", () => {
-    expect(getSkidmarksStorageWarning()).toBeNull();
+describe("getSkidmarksSessionSyncSnapshot", () => {
+  it("starts out reporting a real status rather than pretending a save already succeeded", () => {
+    const snapshot = getSkidmarksSessionSyncSnapshot();
+    expect(snapshot).toBeTruthy();
+    expect(typeof snapshot.status).toBe("string");
+    // Whatever the status is, it must be one this app actually handles
+    // \u2014 the banner in `SkidmarksDetailSheet` keys off exactly these.
+    expect(["loading", "synced", "saving", "unconfigured", "error"]).toContain(snapshot.status);
   });
 });
 
@@ -1154,5 +1095,36 @@ describe("restoreSkidmarksArchivedSession / resetSkidmarksSessionAfterArchive", 
     expect(state.session.bandId).toBeNull();
     expect(state.session.mp3).toBeNull();
     expect(state.bands.length).toBe(bandsBefore);
+  });
+});
+
+/**
+ * `shouldApplyHydratedSkidmarksSession` is the server-backed successor
+ * to the same "a slow real result can't clobber real work already in
+ * progress" principle `SkidmarksMp3Attachment.attachId`/
+ * `hasSkidmarksUserContent` already enforce one layer down — see this
+ * module's "Neon-backed session persistence" doc comment. Under
+ * Vitest's `node` environment `isBrowser()` is always false, so the
+ * actual `fetch`-driven hydrate/push functions never run in this test
+ * file; these tests exercise the one pure decision function directly.
+ */
+describe("shouldApplyHydratedSkidmarksSession", () => {
+  it("applies the fetched session when no local edit happened while it was in flight", () => {
+    expect(shouldApplyHydratedSkidmarksSession(5, 5)).toBe(true);
+  });
+
+  it("discards the fetched session once any local edit landed while it was in flight", () => {
+    expect(shouldApplyHydratedSkidmarksSession(5, 6)).toBe(false);
+    expect(shouldApplyHydratedSkidmarksSession(0, 3)).toBe(false);
+  });
+});
+
+describe("Skidmarks session sync status store", () => {
+  it("exposes a live snapshot and lets a listener subscribe/unsubscribe without throwing", () => {
+    const snapshot = getSkidmarksSessionSyncSnapshot();
+    expect(snapshot.status).toBeDefined();
+    const unsubscribe = subscribeSkidmarksSessionSync(() => {});
+    expect(typeof unsubscribe).toBe("function");
+    unsubscribe();
   });
 });

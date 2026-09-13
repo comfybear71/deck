@@ -106,19 +106,26 @@
  * keyhole plate, and a Jack-seated plate without splitting the timeline
  * row itself into three separate clips.
  *
- * Persistence mirrors `lib/control-plane.ts` / `lib/graphLayout.ts`: an
- * in-memory cache is the synchronous source of truth the UI reads via
- * `useSyncExternalStore` (`hooks/useSkidmarksStudio.ts`), mirrored to
- * `localStorage` (key: `the-tab:skidmarks-studio`) so progress through
- * the wizard survives a refresh. **This is a placeholder store, not the
- * intended long-term one** — `localStorage` is per-browser (nothing here
- * is shared across devices) and has a small quota; Stuart wants Skidmarks
- * data (bands/members/looks/session/clip timeline) moved to real Neon
- * Postgres persistence so it survives across devices/browsers. That
- * migration is explicitly out of scope for this PR (see the README's
- * Skidmarks section, "Follow-up" note) — this file's `localStorage`
- * read/write/`useSyncExternalStore` shape is what a Neon-backed version
- * would replace. Note the attached audio `File` itself never persists
+ * Persistence: an in-memory cache (`cachedState`) is still the
+ * synchronous source of truth the UI reads via `useSyncExternalStore`
+ * (`hooks/useSkidmarksStudio.ts`) — that hasn't changed, and can't: a
+ * real network round trip can never be a synchronous `getSnapshot`.
+ * What *has* changed (the actual fix for Stuart's repeated "never
+ * localStorage for studio state of record" lock, and the literal cause
+ * of the plate/prompt wipes he was hitting): this state's *durable* copy
+ * now lives in **Neon Postgres**, one row keyed by a fixed single-tenant
+ * owner id (`lib/skidmarksSession-server.ts`'s `SKIDMARKS_STUDIO_OWNER_ID`
+ * — this app has no auth system, and there's exactly one real user),
+ * read via one `GET /api/skidmarks/session` on first use and written via
+ * a debounced, serialized `PUT` after every local mutation — see the
+ * "Neon-backed session persistence" section below `normalizeState` for
+ * the actual hydrate/push implementation and its race guards.
+ * `localStorage` is gone outright as this feature's state of record; the
+ * `the-tab:skidmarks-studio` key it used to write is simply never
+ * touched by this file anymore. This is what actually survives a hard
+ * refresh *and* a device switch now — the old `localStorage` mirror
+ * only ever survived the former. Note the attached audio `File` itself
+ * still never persists
  * (see `SkidmarksMp3Card`), so a completed analysis result persists fine
  * across a reload, but an *in-progress* one can't resume — `normalizeState`
  * below turns a stale `"analyzing"` status into an honest `"failed"` one
@@ -154,8 +161,6 @@ import {
   type SkidmarksTranscribedWord,
   type SkidmarksTranscriptionProvider,
 } from "./transcription";
-
-const STORAGE_KEY = "the-tab:skidmarks-studio";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -1325,21 +1330,301 @@ function normalizeState(parsed: unknown): SkidmarksState {
   };
 }
 
-function loadFromStorage(): SkidmarksState {
-  if (!isBrowser()) return emptyState();
+/* --------------------------------------------------------------------
+ * Neon-backed session persistence
+ *
+ * Replaces the old synchronous `localStorage.setItem`/`getItem` mirror
+ * outright (see this module's doc comment and AGENTS.md's "no
+ * localStorage for state of record" lock) with a real durable Neon row
+ * (`lib/skidmarksSession-server.ts`, via `GET`/`PUT /api/skidmarks/
+ * session`), while keeping `cachedState` as the synchronous in-memory
+ * value every mutator below still reads/writes through `persist()`/
+ * `getSkidmarksSnapshot()` — `useSyncExternalStore` needs a synchronous
+ * `getSnapshot`, and a network round trip can never be that, so the
+ * *shape* of this store doesn't change, only what backs it durably.
+ *
+ * Two independent async flows, each with its own non-clobber guard —
+ * per AGENTS.md's "strengthen, don't break, the #51 attachId/
+ * hasSkidmarksUserContent guards" note, both guards below are the same
+ * *kind* of fix at a different layer, not a replacement for either:
+ *
+ * 1. **Hydrate** (`hydrateSkidmarksSessionOnce`) — one `GET` per page
+ *    load, triggered off the store's very first subscriber (mirrors the
+ *    old `storage`-event listener's "first real listener wires up the
+ *    real side-effect" shape). Guarded by
+ *    `shouldApplyHydratedSkidmarksSession`: if Stuart already tapped
+ *    something (any `persist()`) while this load was still in flight,
+ *    the fetched snapshot is discarded rather than silently overwriting
+ *    whatever he just started on top of the honest empty state this
+ *    module boots with — the server-backed successor to the same
+ *    "a slow real result can't clobber real work already in progress"
+ *    principle `SkidmarksMp3Attachment.attachId`/
+ *    `hasSkidmarksUserContent` already enforce one layer down, at the
+ *    mp3/segment level. This module's version protects the *whole*
+ *    session (bands/project kind/band selection, not just mp3/segment
+ *    fields) against the one new race this migration itself introduces
+ *    — an async load existing at all, where before there was none.
+ * 2. **Push** (`schedulePush`/`pushSkidmarksSessionNow`) — every
+ *    `persist()` schedules a short debounced `PUT` of the *entire*
+ *    current `cachedState`; serialized (never two requests in flight at
+ *    once — a second `persist()` mid-request just marks one more push
+ *    queued, re-run against `cachedState` fresh once the first
+ *    completes) so two overlapping saves can never land out of order
+ *    and leave a stale write as Neon's final answer. `flushSkidmarksSessionNow`
+ *    (wired to `visibilitychange`/`pagehide`) bypasses the debounce so a
+ *    final edit made right before Stuart backgrounds/closes Safari on
+ *    his phone still ships — iOS aggressively suspends a backgrounded
+ *    tab, so a plain debounce timer alone can't be trusted to ever fire.
+ *
+ * `getSkidmarksSessionSyncSnapshot`/`subscribeSkidmarksSessionSync`
+ * expose the live, *ephemeral* status of this round trip (never
+ * persisted, never part of `SkidmarksState` itself) so the UI can show
+ * an honest "not saving right now" — `unconfigured` (no `DATABASE_URL`
+ * here, an expected outcome, not a bug) reads distinctly from `error`
+ * (a real save/load failure), same "distinguishable outcomes, not one
+ * flat message" shape `lib/skidmarksSession-server.ts`'s own
+ * `SaveSkidmarksSessionOutcome` already uses server-side.
+ * -------------------------------------------------------------------- */
+
+const SESSION_ENDPOINT = "/api/skidmarks/session";
+/** How long a burst of rapid edits (typing in the shot-prompt textarea,
+ * dragging through a few plate taps) waits before actually pushing to
+ * Neon — short enough that a genuine pause (switching fields, closing
+ * the sheet) always flushes promptly, long enough that a fast typist
+ * doesn't fire one request per keystroke. Not the real safety net for
+ * "Stuart closes the tab mid-debounce" — `flushSkidmarksSessionNow`
+ * (below, wired to `visibilitychange`/`pagehide`) is. */
+const SESSION_PUSH_DEBOUNCE_MS = 600;
+
+export type SkidmarksSessionSyncStatus = "loading" | "synced" | "saving" | "unconfigured" | "error";
+
+/** Live, ephemeral status of the Neon round trip — see this section's
+ * doc comment. Never persisted, never sent to or read from the server
+ * itself; purely for an honest UI indicator. */
+export interface SkidmarksSessionSyncState {
+  status: SkidmarksSessionSyncStatus;
+  /** Set for `"unconfigured"` and `"error"` — the real server-side
+   * message either way, shown verbatim rather than paraphrased. */
+  error?: string;
+  /** Wall-clock time of the most recent successful push, if any —
+   * purely informational. */
+  lastSavedAt?: number;
+}
+
+let sessionSync: SkidmarksSessionSyncState = { status: "loading" };
+const sessionSyncListeners = new Set<() => void>();
+
+function notifySessionSync() {
+  for (const listener of sessionSyncListeners) listener();
+}
+
+function setSessionSync(next: SkidmarksSessionSyncState) {
+  sessionSync = next;
+  notifySessionSync();
+}
+
+export function getSkidmarksSessionSyncSnapshot(): SkidmarksSessionSyncState {
+  return sessionSync;
+}
+
+export function subscribeSkidmarksSessionSync(listener: () => void): () => void {
+  sessionSyncListeners.add(listener);
+  return () => {
+    sessionSyncListeners.delete(listener);
+  };
+}
+
+/** Bumped by every real `persist()` call (a genuine local mutation) —
+ * never by hydration applying a fetched snapshot, and never reset. See
+ * `shouldApplyHydratedSkidmarksSession`. */
+let localEditCount = 0;
+
+/**
+ * Pure (so it's directly testable without mocking `fetch`/timers):
+ * given the local-edit counter's value right before an async session
+ * load started and its value once that load actually resolved, should
+ * the fetched snapshot be trusted and applied wholesale?
+ *
+ * `false` whenever *any* local mutation happened while the load was in
+ * flight — Stuart already started using the app (tapping a project
+ * tile, picking a band, anything that calls `persist()`) on top of the
+ * honest empty state this module starts with before hydration lands.
+ * Applying the fetched snapshot in that case would silently discard
+ * whatever he just did for a load that's now stale relative to his own
+ * actions — exactly the kind of "phone storage race" this migration
+ * exists to close, not reopen at a new layer. Skipping the stale apply
+ * here never loses anything beyond "this one load was wasted": the very
+ * next `persist()` (his own edit) pushes his real state to Neon as the
+ * new source of truth regardless.
+ */
+export function shouldApplyHydratedSkidmarksSession(editsAtFetchStart: number, editsAtFetchEnd: number): boolean {
+  return editsAtFetchStart === editsAtFetchEnd;
+}
+
+interface SessionGetRouteBody {
+  configured?: unknown;
+  state?: unknown;
+  error?: unknown;
+}
+
+let hydrationStarted = false;
+
+/**
+ * The one-time (per page load) `GET /api/skidmarks/session` —
+ * triggered off `subscribeSkidmarks`'s very first subscriber. Never
+ * re-triggered on a later re-subscribe (e.g. reopening the Skidmarks
+ * sheet within the same page load): once hydrated, `cachedState` is
+ * this page load's own authoritative in-memory copy, kept current in
+ * Neon by every `persist()`'s debounced push — re-fetching on every
+ * reopen would risk the same "unsaved-but-in-memory edit clobbered by a
+ * fetch that started before it and resolved after" race
+ * `shouldApplyHydratedSkidmarksSession` exists to prevent, for no real
+ * gain a fresh page load (the actual "switch device" moment) doesn't
+ * already cover.
+ */
+async function hydrateSkidmarksSessionOnce(): Promise<void> {
+  if (hydrationStarted || !isBrowser()) return;
+  hydrationStarted = true;
+  const editsAtStart = localEditCount;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return emptyState();
-    return normalizeState(JSON.parse(raw));
-  } catch {
-    return emptyState();
+    const res = await fetch(SESSION_ENDPOINT);
+    const body = (await res.json().catch(() => null)) as SessionGetRouteBody | null;
+    if (!res.ok || !body || body.configured !== true) {
+      setSessionSync({
+        status: "unconfigured",
+        error: typeof body?.error === "string" ? body.error : `HTTP ${res.status}`,
+      });
+      return;
+    }
+    if (body.state == null) {
+      // A real, honest "nothing saved to Neon yet" outcome — the
+      // in-memory `emptyState()` this module already started with is
+      // exactly right; nothing to apply.
+      setSessionSync({ status: "synced" });
+      return;
+    }
+    if (!shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount)) {
+      // Stuart already started editing the honest empty state before
+      // this load landed — keep his in-progress local session; see
+      // this function's and `shouldApplyHydratedSkidmarksSession`'s
+      // doc comments.
+      setSessionSync({ status: "synced" });
+      return;
+    }
+    cachedState = normalizeState(body.state);
+    notify();
+    setSessionSync({ status: "synced" });
+  } catch (err) {
+    setSessionSync({
+      status: "error",
+      error: err instanceof Error ? err.message : "Could not load the saved session.",
+    });
   }
+}
+
+interface SessionPutRouteBody {
+  ok?: unknown;
+  configured?: unknown;
+  error?: unknown;
+}
+
+let pushTimer: ReturnType<typeof setTimeout> | null = null;
+let pushInFlight = false;
+let pushQueued = false;
+
+/**
+ * The actual `PUT` — always sends whatever `cachedState` holds *at the
+ * moment this runs* (not whatever it was when scheduled), and never lets
+ * two pushes race each other: a push already in flight just marks
+ * `pushQueued` and lets that in-flight push's own completion kick off
+ * one more (capturing `cachedState` fresh at that later point too),
+ * rather than firing a second overlapping request whose response could
+ * land out of order and leave a stale write as Neon's final answer.
+ * `keepalive` lets a flush fired from `pagehide` finish even after the
+ * page has started unloading — iOS Safari otherwise cancels an
+ * in-flight `fetch` the instant the tab backgrounds/closes.
+ */
+async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
+  if (pushInFlight) {
+    pushQueued = true;
+    return;
+  }
+  pushInFlight = true;
+  const snapshot = cachedState;
+  setSessionSync({ status: "saving" });
+  try {
+    const res = await fetch(SESSION_ENDPOINT, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state: snapshot }),
+      keepalive,
+    });
+    const body = (await res.json().catch(() => ({}))) as SessionPutRouteBody;
+    if (!res.ok || body.ok !== true) {
+      setSessionSync({
+        status: body.configured === false ? "unconfigured" : "error",
+        error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`,
+      });
+    } else {
+      setSessionSync({ status: "synced", lastSavedAt: Date.now() });
+    }
+  } catch (err) {
+    setSessionSync({
+      status: "error",
+      error: err instanceof Error ? err.message : "Could not save the session.",
+    });
+  } finally {
+    pushInFlight = false;
+    if (pushQueued) {
+      pushQueued = false;
+      void pushSkidmarksSessionNow(keepalive);
+    }
+  }
+}
+
+function schedulePush(): void {
+  if (!isBrowser()) return;
+  if (pushTimer) clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    void pushSkidmarksSessionNow();
+  }, SESSION_PUSH_DEBOUNCE_MS);
+}
+
+/** Best-effort immediate flush, bypassing the debounce — wired to
+ * `visibilitychange`/`pagehide` below so a final edit made right before
+ * Stuart backgrounds/closes Safari on his phone doesn't just sit in the
+ * debounce queue and never actually ship. See `SESSION_PUSH_DEBOUNCE_MS`'s
+ * doc comment. */
+function flushSkidmarksSessionNow(): void {
+  if (!isBrowser()) return;
+  if (pushTimer) {
+    clearTimeout(pushTimer);
+    pushTimer = null;
+  }
+  void pushSkidmarksSessionNow(true);
+}
+
+let sessionLifecycleWired = false;
+
+/** Wires the one-time hydrate + the visibility/pagehide flush listeners
+ * — called once, off the store's first real subscriber (see
+ * `subscribeSkidmarks`), the same "first listener wires the real
+ * side-effect" shape the old `storage`-event listener used. */
+function ensureSessionPersistenceWired(): void {
+  if (sessionLifecycleWired || !isBrowser()) return;
+  sessionLifecycleWired = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushSkidmarksSessionNow();
+  });
+  window.addEventListener("pagehide", flushSkidmarksSessionNow);
+  void hydrateSkidmarksSessionOnce();
 }
 
 let cachedState: SkidmarksState | null = null;
 
 export function getSkidmarksSnapshot(): SkidmarksState {
-  if (!cachedState) cachedState = loadFromStorage();
+  if (!cachedState) cachedState = emptyState();
   return cachedState;
 }
 
@@ -1349,152 +1634,38 @@ function notify() {
   for (const listener of listeners) listener();
 }
 
-function onStorageEvent(e: StorageEvent) {
-  if (e.key !== STORAGE_KEY) return;
-  cachedState = null;
-  notify();
-}
-
 export function subscribeSkidmarks(listener: () => void): () => void {
   listeners.add(listener);
   if (isBrowser() && listeners.size === 1) {
-    window.addEventListener("storage", onStorageEvent);
+    ensureSessionPersistenceWired();
   }
   return () => {
     listeners.delete(listener);
-    if (isBrowser() && listeners.size === 0) {
-      window.removeEventListener("storage", onStorageEvent);
-    }
   };
 }
 
-/** One honest, human-readable line for why a `persist()` write to
- * `localStorage` just failed — pure and exported so it's directly unit
- * testable without needing a real (or quota-limited) `localStorage`.
- * `QuotaExceededError` (Safari's own `DOMException` name/code for this,
- * confirmed against MDN — code 22, or the legacy Firefox name
- * `"NS_ERROR_DOM_QUOTA_REACHED"`) gets its own specific, actionable
- * message; anything else (private-mode Safari throwing on `setItem`
- * itself, a disabled storage permission) gets a generic but still
- * honest one. */
-export function describeSkidmarksPersistFailure(err: unknown): string {
-  const isQuotaError =
-    err instanceof DOMException &&
-    (err.name === "QuotaExceededError" || err.code === 22 || err.name === "NS_ERROR_DOM_QUOTA_REACHED");
-  if (isQuotaError) {
-    return (
-      "Storage is full \u2014 this song's plate stills/renders no longer fit in this browser's local " +
-      "storage. Your most recent changes are only in memory right now and will be lost on a refresh or " +
-      "if this tab reloads. Archive this song (Blob storage, not local) or remove a few plate stills to " +
-      "free up room, then keep editing."
-    );
-  }
-  return (
-    "Couldn't save your latest changes locally " +
-    `(${err instanceof Error ? err.message : "unknown storage error"}). They're only in memory right ` +
-    "now and will be lost on a refresh or if this tab reloads."
-  );
-}
-
-/** Set the moment a `persist()` write to `localStorage` fails, cleared
- * the moment one next succeeds — **not** itself persisted (it's a
- * report *about* persistence failing, so it can only ever live in
- * memory). This is the fix for a real gap: before this, a failed write
- * was caught and silently dropped, with the in-memory `cachedState`
- * looking exactly as successful as a real one — Stuart had no way to
- * know his session was one refresh/reload away from losing whatever
- * hadn't actually made it to disk. iOS Safari's `localStorage` quota is
- * small (real-world reports put it well under desktop's, sometimes a
- * few MB) and this feature stores plate stills as raw base64 `data:`
- * URLs (see `SkidmarksPlateStill.dataUrl`'s doc comment) — a handful of
- * generated stills across a song's clip list is a real, plausible way
- * to hit it. See `getSkidmarksPersistFailure`/
- * `SkidmarksChecklistChips`'s consumer for how this actually reaches
- * Stuart. */
-let lastPersistFailure: { at: number; message: string } | null = null;
-
-/** Read-only snapshot of the current persist-failure state (or `null` if
- * the most recent write succeeded) — `useSkidmarksStudio` exposes this
- * via the same `subscribeSkidmarks` notify cycle every other store
- * change already uses, so the UI re-renders the moment a write fails or
- * recovers without any separate polling. */
-export function getSkidmarksPersistFailure(): { at: number; message: string } | null {
-  return lastPersistFailure;
-}
-
-/** Deliberately conservative early-warning line for how large the
- * serialized state can get before a `persist()` write is actually at
- * real risk of hitting `localStorage`'s quota — well under the real
- * ~5MB-ish per-origin ceiling most browsers (iOS Safari included)
- * enforce in practice, since the *exact* real ceiling varies by
- * browser/device and isn't reliably queryable ahead of time for
- * `localStorage` specifically (`navigator.storage.estimate()` reports a
- * different, usually much larger bucket shared with IndexedDB/Cache
- * Storage, not this one). This is a **second, independent** layer on
- * top of downscaling generated stills (`downscaleDataUrlImage`) and the
- * hard-failure banner (`lastPersistFailure`) above: downscaling reduces
- * how fast this grows, the hard-failure banner is the backstop for
- * *after* a write has already failed, and this is the honest heads-up
- * *before* one ever does — giving Stuart a real chance to Archive
- * (durable Vercel Blob storage, not local) while every write is still
- * actually succeeding, rather than only finding out once one doesn't. */
-const STORAGE_SIZE_WARNING_BYTES = 3 * 1024 * 1024;
-
-/** Pure threshold check, exported so it's directly unit testable
- * without needing a real (or quota-limited) `localStorage`. */
-export function exceedsSkidmarksStorageWarningThreshold(serializedByteLength: number): boolean {
-  return serializedByteLength >= STORAGE_SIZE_WARNING_BYTES;
-}
-
-/** Set once the *serialized* state crosses `STORAGE_SIZE_WARNING_BYTES`
- * on a write that itself still succeeded — cleared the moment a later
- * write drops back under it (e.g. Stuart removes a plate still, or
- * Archives and starts a fresh song). Like `lastPersistFailure`, never
- * itself persisted. */
-let lastPersistWarning: { at: number; message: string } | null = null;
-
-/** Read-only snapshot of the current storage-size warning (or `null`
- * if the most recent successful write was comfortably under the
- * threshold) — same `subscribeSkidmarks` notify-cycle exposure as
- * `getSkidmarksPersistFailure`. */
-export function getSkidmarksStorageWarning(): { at: number; message: string } | null {
-  return lastPersistWarning;
-}
-
-const STORAGE_SIZE_WARNING_MESSAGE =
-  "This song's local storage is getting full \u2014 plate stills add up fast. Archive it soon " +
-  "(saves to durable cloud storage, not this browser) so nothing's at risk if a future save doesn't fit.";
+/* The `localStorage` quota machinery that used to live here —
+ * `describeSkidmarksPersistFailure`, `getSkidmarksPersistFailure`,
+ * `getSkidmarksStorageWarning`, `exceedsSkidmarksStorageWarningThreshold`,
+ * `lastPersistFailure`, `lastPersistWarning`, `STORAGE_SIZE_WARNING_BYTES`
+ * and `STORAGE_SIZE_WARNING_MESSAGE` — is gone. It existed to make a
+ * failed or near-full `localStorage.setItem` visible instead of
+ * silent, and `persist()` no longer writes to `localStorage` at all:
+ * the session's durable copy is one Neon row now. With no write to
+ * fail on quota, none of that code could ever fire again, and leaving
+ * it in would ship UI structurally incapable of showing.
+ *
+ * The need it served is met by `SkidmarksSessionSyncState` instead:
+ * `"error"` carries Neon's own failure reason verbatim, and
+ * `"unconfigured"` says plainly that edits won't survive a refresh.
+ * Same "a save that didn't happen must never look like a success"
+ * principle, just reporting on the store that actually exists. */
 
 function persist(next: SkidmarksState) {
   cachedState = next;
-  if (isBrowser()) {
-    let serialized: string | null = null;
-    try {
-      serialized = JSON.stringify(next);
-    } catch (err) {
-      // Should never happen for this feature's own state shape (no
-      // circular references, no BigInt) \u2014 if it somehow ever does,
-      // treat it as honestly as a failed localStorage write below
-      // rather than letting a raw exception escape every caller.
-      lastPersistFailure = { at: Date.now(), message: describeSkidmarksPersistFailure(err) };
-      notify();
-      return;
-    }
-    try {
-      window.localStorage.setItem(STORAGE_KEY, serialized);
-      lastPersistFailure = null;
-      lastPersistWarning = exceedsSkidmarksStorageWarningThreshold(serialized.length)
-        ? { at: Date.now(), message: STORAGE_SIZE_WARNING_MESSAGE }
-        : null;
-    } catch (err) {
-      // Deliberately not "unavailable (e.g. private mode) — in-memory
-      // only for this session" as a silent comment anymore — see
-      // `lastPersistFailure`'s own doc comment for why that used to be
-      // a real, invisible data-loss risk.
-      lastPersistFailure = { at: Date.now(), message: describeSkidmarksPersistFailure(err) };
-    }
-  }
+  localEditCount += 1;
   notify();
+  schedulePush();
 }
 
 /** Landing tile tap — only `music-video` actually opens anything further;
@@ -2281,8 +2452,9 @@ export function coverGradientClass(coverSeed: number): string {
 
 /** Longest edge a picked cover/avatar image gets downscaled to before
  * being stored — real photos straight off a phone can be several MB;
- * this keeps `localStorage` (a few MB quota, shared with everything
- * else this app persists) from filling up after a handful of picks. */
+ * this keeps the Neon session row (`persist()`'s debounced push — see
+ * the "Neon-backed session persistence" section below) from ballooning
+ * after a handful of picks. */
 const MAX_PICKED_IMAGE_DIMENSION = 640;
 const PICKED_IMAGE_QUALITY = 0.85;
 
@@ -2321,11 +2493,11 @@ function scaleImageElementToDataUrl(
  * Reads a picked image file (jpg/png/webp), downscales it to fit within
  * `MAX_PICKED_IMAGE_DIMENSION` on its longest edge, and re-encodes it as
  * a JPEG data URL — a data URL (unlike a blob URL) round-trips through
- * `localStorage` just fine, so a real picked cover/avatar survives a
- * page reload. Used by the band cover picker, the member avatar picker,
- * and (with a larger `maxDimension`) an *uploaded* plate still. Rejects
- * if the browser can't decode the file (not an image, or a format it
- * doesn't support).
+ * the Neon session row just fine, so a real picked cover/avatar
+ * survives a page reload. Used by the band cover picker, the member
+ * avatar picker, and (with a larger `maxDimension`) an *uploaded* plate
+ * still. Rejects if the browser can't decode the file (not an image, or
+ * a format it doesn't support).
  */
 export function readImageFileAsDataUrl(
   file: File | Blob,
@@ -2356,21 +2528,24 @@ export function readImageFileAsDataUrl(
  * before this existed, but a *generated* still (`generatePlateStill`,
  * `lib/plateGeneration.ts`) was persisted straight off xAI's own raw
  * response — no size cap at all. A song with several tagged clips'
- * worth of full-resolution generated stills is a real, plausible way to
- * blow past `localStorage`'s quota (iOS Safari's is notably tight), and
+ * worth of full-resolution generated stills would blow past
+ * `localStorage`'s quota (iOS Safari's is notably tight), and
  * `persist()` used to swallow that failure completely silently — the
  * in-memory session still looked tagged, but nothing after the point
  * the quota was hit ever actually reached disk, so a later reload (or
- * iOS backgrounding a tab hard enough to force one) would come back
- * showing exactly what Stuart reported: the clip's own boundaries
- * intact (that data was small and had persisted long before), but its
- * plates back to empty dashed placeholders (the stills were the last,
- * largest thing written, and never made it). Downscaling every
- * generated still the same way an upload already was closes the size
- * gap that made hitting the quota this easy; `getSkidmarksPersistFailure`
- * (see its own doc comment) is the second, independent half of this
- * fix — surfacing it plainly the moment (if ever) it still happens,
- * rather than only after a reload has already discarded the work.
+ * iOS backgrounding a tab hard enough to force one) came back showing
+ * exactly what Stuart reported: the clip's own boundaries intact (that
+ * data was small and had persisted long before), but its plates back to
+ * empty dashed placeholders (the stills were the last, largest thing
+ * written, and never made it).
+ *
+ * **The quota itself is history** — the session's durable copy is one
+ * Neon row now, not a `localStorage` blob (see `persist()` and the note
+ * where that machinery used to live). This downscale stays anyway, and
+ * is not vestigial: plate stills still travel as base64 `data:` URLs
+ * *inside* that row, so capping them keeps the row, and every `PUT`
+ * carrying it, a sane size over a phone connection. Don't remove it on
+ * the grounds that the quota is gone.
  * Rejects if the browser can't decode the data URL (should not happen
  * for one this app itself just received from `generate-still`, but
  * mirrors `readImageFileAsDataUrl`'s own defensive handling either way).

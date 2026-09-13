@@ -41,8 +41,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const {
     bands,
     session,
-    persistFailure,
-    storageWarning,
+    sessionSync,
     selectProjectKind,
     selectBand,
     createBand,
@@ -221,20 +220,15 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
           </div>
         </div>
 
-        {persistFailure ? (
-          <div className="mx-4 mb-2 shrink-0 rounded-lg border border-rose-400/40 bg-rose-400/10 p-2.5">
-            <p role="alert" className="text-[11px] font-medium leading-snug text-rose-200">
-              {persistFailure.message}
-            </p>
-          </div>
-        ) : (
-          storageWarning && (
-            <div className="mx-4 mb-2 shrink-0 rounded-lg border border-amber-400/30 bg-amber-400/10 p-2.5">
-              <p role="status" className="text-[11px] font-medium leading-snug text-amber-200">
-                {storageWarning.message}
-              </p>
-            </div>
-          )
+        {(sessionSync.status === "unconfigured" || sessionSync.status === "error") && (
+          <p
+            role="status"
+            className="mx-4 mb-2 rounded-lg border border-amber-400/25 bg-amber-400/10 px-2.5 py-1.5 text-[10px] leading-snug text-amber-200/90"
+          >
+            {sessionSync.status === "unconfigured"
+              ? "Session storage isn\u2019t connected here \u2014 your edits won\u2019t survive a refresh this time."
+              : `Couldn\u2019t save your session just now \u2014 ${sessionSync.error ?? "unknown reason"}.`}
+          </p>
         )}
 
         <div className="flex-1 overflow-y-auto px-5 pb-5">
