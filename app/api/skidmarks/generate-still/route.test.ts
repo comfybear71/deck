@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildPlateGenerationRequest } from "../../../../lib/plateGeneration";
+import type { SkidmarksMember } from "../../../../lib/skidmarks";
 import { classifyXaiFailure, extractXaiErrorMessage, POST } from "./route";
 
 /**
@@ -137,6 +139,48 @@ describe("POST /api/skidmarks/generate-still", () => {
     // `shotPrompt`, the request itself is unaffected.
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(init.body as string).prompt).toBe(longMergedPrompt);
+  });
+
+  it("reproduces Stuart's exact bug report end-to-end: ~400 real chars for Jack Ash + 'Use last plate' no longer 501s as \"too long\"", async () => {
+    // The literal repro: Stuart cleared the shot-prompt box, pasted
+    // ~400 characters for a Jack Ash plate with "Use last plate"
+    // checked, and got "Prompt is too long \u2014 over 2000 characters."
+    // even though his own visible text was nowhere near 2000. Built via
+    // the *real* client-side `buildPlateGenerationRequest` (not a
+    // synthetic string) so this test fails honestly if the merge logic
+    // or the fix ever drift apart again.
+    const fourHundredCharShotPrompt = "Jack seated in a dim room, backlit, feet apart. ".repeat(9).slice(0, 400);
+    expect(fourHundredCharShotPrompt.length).toBe(400);
+
+    const jackAsh: SkidmarksMember = {
+      id: "jack-ash-frontman",
+      name: "Jack Ash",
+      emoji: "",
+      looks: [],
+      avatarImage: "data:image/jpeg;base64,jackAshPhotoBytes",
+    };
+    const request = buildPlateGenerationRequest({
+      shotPrompt: fourHundredCharShotPrompt,
+      vocal: false,
+      model: "grok",
+      bandName: "Jack Ash",
+      vocalist: jackAsh,
+      // "Use last plate" checked \u2014 this is what that toggle produces.
+      continuityStillDataUrl: "data:image/jpeg;base64,previousPlateBytes",
+    });
+
+    // Confirms the bug is real: this exact real-world request's merged
+    // `prompt` alone clears 2000 characters from only 400 real ones.
+    expect(request.prompt.length).toBeGreaterThan(2000);
+    expect(request.shotPrompt.length).toBe(400);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { data: [{ b64_json: "FFFF", mime_type: "image/jpeg" }] }));
+
+    const res = await POST(postRequest(request));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.dataUrl).toBe("data:image/jpeg;base64,FFFF");
   });
 
   it("still rejects a genuinely too-long shotPrompt, even with no reference images/lock involved", async () => {

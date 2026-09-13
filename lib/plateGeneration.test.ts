@@ -128,6 +128,36 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt.length).toBeGreaterThan(shotPrompt.length + 200);
   });
 
+  it("reproduces Stuart's exact bug report: a ~400-char shot prompt + Jack Ash lock + 'Use last plate' pushes the merged prompt past 2000 chars on its own \u2014 shotPrompt itself stays well under", () => {
+    // Stuart's literal report: cleared the shot-prompt box, pasted ~400
+    // characters for Jack Ash with "Use last plate" checked (continuity),
+    // and got "Prompt is too long \u2014 over 2000 characters" even though
+    // his own visible text was nowhere near 2000. This is the exact
+    // shape that triggers it: a real ~400-char shot prompt, Jack Ash as
+    // the resolved vocalist/cast member (his lock is real and lengthy),
+    // and `continuityStillDataUrl` set (what "Use last plate" produces).
+    const fourHundredCharShotPrompt = "Jack seated in a dim room, backlit, feet apart. ".repeat(9).slice(0, 400);
+    expect(fourHundredCharShotPrompt.length).toBe(400);
+
+    const { prompt, shotPrompt } = buildPlateGenerationRequest({
+      shotPrompt: fourHundredCharShotPrompt,
+      vocal: false,
+      model: "grok",
+      bandName: BAND_NAME,
+      vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
+      continuityStillDataUrl: "data:image/jpeg;base64,previousPlateBytes",
+    });
+
+    // The bug, confirmed: the merged prompt alone clears 2000 chars from
+    // *only* 400 real user characters \u2014 the old check (against
+    // `prompt.length`) would have rejected this outright.
+    expect(prompt.length).toBeGreaterThan(2000);
+    // The fix: `shotPrompt` \u2014 what the server now actually validates
+    // \u2014 is exactly Stuart's own text, comfortably under the cap.
+    expect(shotPrompt).toBe(fourHundredCharShotPrompt);
+    expect(shotPrompt.length).toBeLessThan(2000);
+  });
+
   it("an Instrumental/B-roll clip has no vocalist mention and no reference images at all", () => {
     const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
       shotPrompt: "a door creaks open in an empty hallway",
