@@ -49,6 +49,20 @@ function TrashIcon() {
   );
 }
 
+function DownloadIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3 w-3">
+      <path
+        d="M10 3.25v8M6.75 8.25L10 11.5l3.25-3.25M5 15.25h10"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /**
  * The page-bottom "Rendered clips" shelf — the declutter fix for
  * Stuart's live-QA rejection of a jammed panel under the pink Render
@@ -77,10 +91,11 @@ function TrashIcon() {
  * `touch-pan-x` per card (blocks vertical/pinch so a `<video>` tap
  * doesn't fight the scroll, but still lets a horizontal drag reach the
  * next card) plus `overscroll-x-contain` + `-webkit-overflow-scrolling:
- * touch` on the row itself. The download link + the "Download rendered
- * clips (N)" zip control both stay put underneath the strip — reading
- * order is: horizontal player strip, then the always-reachable download
- * controls, never buried behind a scroll a thumb might not find.
+ * touch` on the row itself. Each card's own Download pill + the
+ * "Download rendered clips (N)" zip control both stay put underneath
+ * the strip — reading order is: horizontal player strip, then the
+ * always-reachable download controls, never buried behind a scroll a
+ * thumb might not find.
  *
  * **Order lock**: the visible order is always `sortPersistedRenders`'s
  * timeline/plate-position sort (`lib/clipRenders.ts`), recomputed fresh
@@ -101,6 +116,20 @@ function TrashIcon() {
  * real success does this clear the card/tick via `onRemoved` — a
  * failed delete leaves the card and its tick exactly where they were,
  * with an honest error line, rather than pretending the render is gone.
+ *
+ * **Per-card Download pill**: each card already force-downloaded via
+ * Vercel Blob's `?download=1` (`buildForceDownloadUrl` — a real
+ * server-side `Content-Disposition: attachment`, not a plain
+ * `<a download>` attribute against a cross-origin Blob URL, which iOS
+ * Safari has a long history of ignoring) instead of the native
+ * `<video>` share/\u22ef menu, but it used to be a small inline text
+ * link squeezed next to Remove — easy to miss or mistake for metadata.
+ * It's now an explicit small pill, the same `rounded-full` shape/size
+ * as Remove plus a tiny download icon, so the card reads as two small,
+ * deliberate controls (Download | Remove) — not a pill farm. Same
+ * numeric/lettered `render.filename` the "download all" zip already
+ * uses; no new download mechanism, just an actual tappable control for
+ * the existing one.
  */
 export function SkidmarksRenderedClipsShelf({ renders, onRemoved }: SkidmarksRenderedClipsShelfProps) {
   const [open, setOpen] = useState(true);
@@ -200,16 +229,18 @@ export function SkidmarksRenderedClipsShelf({ renders, onRemoved }: SkidmarksRen
                 return (
                   <div key={key} className="flex w-44 shrink-0 touch-pan-x flex-col gap-1.5">
                     <video src={render.url} controls playsInline className="h-28 w-44 rounded-xl bg-black object-cover" />
-                    <div className="flex items-center justify-between gap-1.5">
+                    <div className="flex items-center justify-end gap-1.5">
                       <a
                         href={buildForceDownloadUrl(render.url)}
                         download={render.filename}
                         target="_blank"
                         rel="noreferrer"
-                        className="min-w-0 flex-1 truncate text-[10px] font-medium text-rose-300/90 underline-offset-2 hover:underline"
+                        aria-label={`Download this rendered clip (${render.filename})`}
                         title={`Download ${render.filename}`}
+                        className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-white/45 transition-colors hover:border-sky-400/30 hover:text-sky-300/90"
                       >
-                        Download {render.filename}
+                        <DownloadIcon />
+                        Download
                       </a>
                       <button
                         type="button"
