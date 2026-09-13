@@ -966,9 +966,10 @@ export function SkidmarksClipStub({
   // Only ever read on the Instrumental path — see
   // `SkidmarksClipRender`'s own `instrumentalVideoModel` doc comment.
   const instrumentalVideoModel = resolveInstrumentalVideoModel(segment.instrumentalVideoModel);
-  // Vocal clips route to Comfy Cloud LTX (real [5, 20]s ceiling);
-  // Instrumental ones keep Grok's real [5, 15]s ceiling — see
-  // `lib/clipGeneration.ts`'s module doc comment for why these differ.
+  // Vocal clips route to Comfy Cloud LTX (real [5, 30]s ceiling, per
+  // Stuart's own live Comfy Cloud usage — see `lib/clipGeneration.ts`'s
+  // module doc comment's "History of this ceiling" note); Instrumental
+  // ones keep Grok's real [5, 15]s ceiling.
   const durationSec = vocal
     ? computeLtxPlateDurationSec(segment.endSec - segment.startSec, plateCount, Math.max(0, selectedPlateIndex))
     : computePlateDurationSec(segment.endSec - segment.startSec, plateCount, Math.max(0, selectedPlateIndex));
