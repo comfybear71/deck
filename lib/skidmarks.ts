@@ -344,6 +344,32 @@ export const SKIDMARKS_MODELS: SkidmarksModelMeta[] = [
   { id: "seedance", label: "Seedance", badge: "Seedance", note: "Optional \u00b7 multi-angle" },
 ];
 
+/**
+ * **Product note for later plate-gen (Grok only, not implemented yet,
+ * no UI for this in this build)**: once plate stills are ever real,
+ * a Grok-generated still should support prompt-driven flexibility
+ * between two modes, chosen by what the shot prompt itself implies —
+ * never a dial Stuart has to set:
+ * - **Continuity** — generate the still as an image-to-image
+ *   continuation of the clip's previous plate (first/last-frame
+ *   continuity), for a prompt that reads as a continuous beat
+ *   ("...then find the face" following straight on from the shot
+ *   before it).
+ * - **New scene** — invent a fresh still with no tie to the previous
+ *   plate, for a prompt that reads as a hard cut/new idea.
+ *
+ * This mirrors `defaultSegmentModel`'s "Stuart writes the feeling, the
+ * pipeline makes the technical call" philosophy and
+ * `SKIDMARKS_SHOT_PROMPT_EXAMPLES`' story-beat-over-camera-jargon
+ * steer — the shot prompt is still the only input either way. **Not
+ * implemented in this build**: plate stills are still deterministic
+ * gradient stubs (`SKIDMARKS_LOCATION_PLATES`), Generate Clips is still
+ * a stub, and there is deliberately no continuity/new-scene toggle
+ * anywhere in the UI — this comment exists so a future real plate-gen
+ * pass has the product intent on record without this pass adding any
+ * new chrome for it.
+ */
+
 /** SIRAY isn't gone from the app, it's just no longer a general clip
  * `model` — it's a single, narrowly-scoped opt-in per segment
  * (`uncensoredPlateStills` on `SkidmarksClipSegment`, toggled via
