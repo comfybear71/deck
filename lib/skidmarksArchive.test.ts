@@ -187,11 +187,13 @@ describe("archiveSkidmarksSession", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uploads the snapshot, then adds the resulting song to the index, carrying forward the mp3's own audioUrl", async () => {
+  it("uploads the snapshot, resolves the mp3's audio URL fresh from Blob by audioId, then adds the resulting song to the index", async () => {
     uploadMock.mockResolvedValueOnce({ url: "https://x/skidmarks/archive/some-id/snapshot.json" });
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { ok: true, songs: [] }));
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { configured: true, url: "https://x/skidmarks/mp3-audio/a.mp3" }))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true, songs: [] }));
 
-    const mp3 = { ...createMp3Attachment("song.mp3", 60), audioUrl: "https://x/skidmarks/mp3-audio/a.mp3" };
+    const mp3 = createMp3Attachment("song.mp3", 60, "audio-abc");
     const outcome = await archiveSkidmarksSession(BAND, mp3, 2);
 
     expect(outcome.ok).toBe(true);
@@ -201,10 +203,39 @@ describe("archiveSkidmarksSession", () => {
     expect(outcome.song.renderedPlateCount).toBe(2);
     expect(outcome.song.snapshotUrl).toBe("https://x/skidmarks/archive/some-id/snapshot.json");
 
-    const [, init] = fetchMock.mock.calls[0];
+    const [audioLookupUrl] = fetchMock.mock.calls[0];
+    expect(audioLookupUrl).toBe("/api/skidmarks/mp3-audio?audioId=audio-abc");
+
+    const [, init] = fetchMock.mock.calls[1];
     const posted = JSON.parse(init.body as string);
     expect(posted.action).toBe("add");
     expect(posted.song.id).toBe(outcome.song.id);
+  });
+
+  it("archives with audioUrl left undefined \u2014 honestly \u2014 when the mp3 has no audioId at all", async () => {
+    uploadMock.mockResolvedValueOnce({ url: "https://x/skidmarks/archive/some-id/snapshot.json" });
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { ok: true, songs: [] }));
+
+    const outcome = await archiveSkidmarksSession(BAND, createMp3Attachment("song.mp3", 60), 0);
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("expected ok");
+    expect(outcome.song.audioUrl).toBeUndefined();
+    // Only the index POST fired — no mp3-audio lookup was ever attempted.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("archives with audioUrl left undefined when the audio simply hasn't finished uploading yet, rather than failing the archive", async () => {
+    uploadMock.mockResolvedValueOnce({ url: "https://x/skidmarks/archive/some-id/snapshot.json" });
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { configured: true, url: null }))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true, songs: [] }));
+
+    const outcome = await archiveSkidmarksSession(BAND, createMp3Attachment("song.mp3", 60, "audio-abc"), 0);
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("expected ok");
+    expect(outcome.song.audioUrl).toBeUndefined();
   });
 
   it("reports an honest failure without ever calling the index route when the snapshot upload itself fails", async () => {
@@ -228,8 +259,8 @@ describe("buildArchiveZip", () => {
   });
 
   it("bundles a manifest, every filled plate's still, and (when available) rendered clips + audio into a real zip", async () => {
-    const mp3 = createMp3Attachment("song.mp3", 40);
-    mp3.audioUrl = "https://x/skidmarks/mp3-audio/a.mp3";
+    const mp3 = createMp3Attachment("song.mp3", 40, "audio-abc");
+    const resolvedAudioUrl = "https://x/skidmarks/mp3-audio/a.mp3";
     mp3.segments = [
       {
         ...mp3.segments[0],
@@ -251,7 +282,7 @@ describe("buildArchiveZip", () => {
       clipCount: 1,
       renderedPlateCount: 0,
       snapshotUrl: "https://x/snapshot.json",
-      audioUrl: mp3.audioUrl,
+      audioUrl: resolvedAudioUrl,
     };
 
     fetchMock
