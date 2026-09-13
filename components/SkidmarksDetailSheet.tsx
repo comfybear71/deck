@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
 import { useSkidmarksClipRenders } from "@/hooks/useSkidmarksClipRenders";
-import { buildMockLook, skidmarksChecklistState } from "@/lib/skidmarks";
+import { buildMockLook } from "@/lib/skidmarks";
 import {
   archiveSkidmarksSession,
   fetchArchiveSnapshot,
@@ -15,7 +15,6 @@ import { SkidmarksBandPicker } from "./SkidmarksBandPicker";
 import { SkidmarksMembersModule } from "./SkidmarksMembersModule";
 import { SkidmarksGeneratePopup } from "./SkidmarksGeneratePopup";
 import { SkidmarksMp3Card } from "./SkidmarksMp3Card";
-import { SkidmarksChecklistChips } from "./SkidmarksChecklistChips";
 import { SkidmarksClipTimeline } from "./SkidmarksClipTimeline";
 import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksArchiveShelf } from "./SkidmarksArchiveShelf";
@@ -294,7 +293,6 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   onDurationResolved={setMp3Duration}
                   onRemove={removeMp3}
                 />
-                <SkidmarksChecklistChips checklist={skidmarksChecklistState(session.mp3)} />
                 {archiveError && (
                   <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
                     {archiveError}

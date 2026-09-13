@@ -67,7 +67,7 @@ total.
   timeline) and its `localStorage` store (pure mock builders,
   `useSyncExternalStore` React binding, and real client-side
   vocal/instrumental MP3 analysis — an FFT-based heuristic, no API key —
-  driving the clip timeline and the Lyrics/Timing/Ready chips). The
+  driving the clip timeline and the Lyrics popup). The
   analysis heuristic has its own `vitest` suite (`npm test`) against
   synthetic signals — see "Skidmarks node (vibe director)" below for the
   honest ceiling on what that suite can and can't prove without
@@ -106,7 +106,7 @@ total.
   Propfolio status node's face + detail sheet), `SkidmarksNodeCard` /
   `SkidmarksDetailSheet` (plus `SkidmarksLandingTiles` /
   `SkidmarksBandPicker` / `SkidmarksMembersModule` / `SkidmarksGeneratePopup`
-  / `SkidmarksMp3Card` / `SkidmarksChecklistChips` / `SkidmarksClipTimeline`
+  / `SkidmarksMp3Card` / `SkidmarksLyricsPopup` / `SkidmarksClipTimeline`
   / `SkidmarksClipStub` / `SkidmarksClipTimingHeaderEdit` / `SkidmarksClipRender` /
   `SkidmarksAutoPlate` /
   `SkidmarksRenderedClipsShelf` / `SkidmarksArchiveShelf`) — the Skidmarks vibe-director node's face
@@ -1144,44 +1144,45 @@ now (see "Explicitly out of scope" below).
      per Stuart's explicit ask to keep it as a real fallback rather than
      a maybe-it-works stub. Real, *useful* transcription (step 6) always
      outranks it once it lands, though — see `segmentsSource` below.
-  8. **Checklist chips** (`SkidmarksChecklistChips`) — three always-
-     present, equal-width chips under the MP3 card: **Lyrics · Timing ·
-     Ready**, each showing one of four *real* states
-     (`skidmarksChecklistState` in `lib/skidmarks.ts` — no staged timers
-     anymore): grey **pending** (nothing to report), blue spinning
-     **analyzing** (the duration probe, `transcribeAudio`, or
-     `analyzeVocalActivity` is actually running), green **done** (that
-     real signal resolved), or amber **stub** (never rendered green).
-     `Timing` flips real the moment the browser's own duration probe
-     resolves. **`Lyrics` now specifically means real, *useful*
-     transcription** — it only turns green once word-level
-     transcription actually lands *and* maps to enough real singing to
-     trust (`segmentsSource === "transcription"`, gated on
-     `hasUsefulVocalCoverage`); a *successful* energy heuristic alone (no
-     key configured, the transcription request failed, or a provider
-     responded but the result was too sparse to trust —
-     `transcriptionStatus === "sparse"`) keeps it amber, since that
-     heuristic answers "is this bit sung", not "what are the actual
-     lyrics/word timing" — this chip is about the latter, and never
-     claims more than it has. `Ready` is
-     green only once both `Timing` and `Lyrics` are real, amber if the
-     clip list is only usable via the heuristic or seed fallback. No
-     lyrics panel, no paste-lyrics box, no manual vocal-start pin — this
-     is the entire surface for that.
+  8. **Lyrics popup** (`SkidmarksLyricsPopup`, replacing the old green
+     Lyrics/Timing/Ready checklist chip row, removed 2026-09-14) — a
+     small "Lyrics" pill sits inside the MP3 card itself (next to the
+     filename), opening a compact sheet with whatever real word-level
+     transcription (`mp3.words`, `lib/transcription.ts`'s
+     `SkidmarksTranscribedWord[]`) has landed for this attach, plus a
+     copy-to-clipboard button (`navigator.clipboard.writeText`, with a
+     real "Copied" confirmation and an honest inline error if the copy
+     itself fails). Stuart's stated reasons for the removal: "Timing is
+     redundant, the waveform already shows time," and the old three-
+     chip row's *only* real payload worth surfacing was whether useful
+     lyric text actually existed — so that's now reachable directly
+     instead of behind a chip's color. The old chip logic
+     (`skidmarksChecklistState` in `lib/skidmarks.ts`, four real states:
+     grey **pending**, blue spinning **analyzing**, green **done**,
+     amber **stub** — never staged timers) still exists as *internal*
+     state (`skidmarksGlance` still reads its `ready` field for the
+     graph card's own terse one-line status), it just isn't rendered as
+     a standalone chip row under the MP3 card anymore. **Honest empty
+     state**: if no words have landed yet, the popup names why —
+     transcribing, not configured here, came back too sparse to trust,
+     or failed outright — rather than showing a blank sheet or a fake
+     placeholder. No lyrics-editing, no paste-lyrics box, no manual
+     vocal-start pin — this is read-only, same scope the old chip row
+     always had.
   9. **Clip / segment timeline** (`SkidmarksClipTimeline`) — appended
-     right under the checklist chips, as soon as an MP3 is attached (not
-     gated on the checklist reaching "Ready"): a collapsible **Clip /
-     segment list** section. **Per Stuart's explicit product-lock ask**
-     (now that ElevenLabs Scribe reliably works), the long paragraph-
-     length "honesty caption" that used to sit above the rows — naming
-     file paths (`lib/transcription.ts`, `lib/audioAnalysis.ts`), the
+     right under the MP3 card, as soon as an MP3 is attached (not gated
+     on any checklist reaching "Ready" — there's no checklist row
+     anymore, see step 8): a collapsible **Clip / segment list**
+     section. **Per Stuart's explicit product-lock ask** (now that
+     ElevenLabs Scribe reliably works), the long paragraph-length
+     "honesty caption" that used to sit above the rows — naming file
+     paths (`lib/transcription.ts`, `lib/audioAnalysis.ts`), the
      energy-heuristic mechanics, and the exact provider on every state
      change — is gone from this screen once real, *useful* transcription
-     lands (`segmentsSource === "transcription"`, the green-Lyrics case):
-     no caption, no note, nothing between the chips and the first
-     segment row. The Lyrics/Timing/Ready chips (step 8) already carry
-     that "is this real" signal, so the timeline doesn't repeat it as
-     prose. Short of that — transcription unconfigured, too sparse to
+     lands (`segmentsSource === "transcription"`, the case that used to
+     turn the old Lyrics chip green): no caption, no note, nothing
+     between the MP3 card and the first segment row. Short of that —
+     transcription unconfigured, too sparse to
      trust, or failed outright (`timelineNote` in
      `SkidmarksClipTimeline.tsx`) — a single plain-language line still
      shows (e.g. *"Lyrics timing failed — showing placeholder timing
@@ -1275,12 +1276,14 @@ now (see "Explicitly out of scope" below).
          in this sandbox (a text-to-image call and an image-edit call
          with a real reference photo both returned real `200`s — see
          `lib/plateGeneration.ts`'s module doc comment for exactly what
-         that does and doesn't prove) — **the *whole-song* "Generate
-         Clips" render past this one still stays a stub** (see "Generate
-         Clips" below); a real plate still is cheap, a real video render
-         is the expensive part, which is why that whole-song button
-         stays stubbed even though a single clip's own render is now
-         real and opt-in (see "Generate Clips" below for that control).
+         that does and doesn't prove) — **an *automatic*, whole-song
+         render past this one still stays out of scope, and there's no
+         longer even a stub button pretending otherwise** (removed
+         2026-09-14 — see "Wiring up the real per-clip video render"
+         below); a real plate still is cheap, a real video render is
+         the expensive part, which is exactly why each plate's own
+         render stays individually opt-in with its own explicit confirm
+         rather than firing for the whole song at once.
        - **Once a still exists**, Stuart's ask was gestures on the plate
          itself, not a button row: tapping the still reopens the same
          Upload/Generate popover (replace/regenerate — editing the shot
@@ -1434,8 +1437,8 @@ now (see "Explicitly out of scope" below).
          never touches `segmentsSource`** — a nudge only ever edits the
          already-resolved `startSec`/`endSec` values already sitting on
          `session.mp3.segments`, whichever real signal (or seed
-         fallback) originally produced them; the Lyrics/Timing/Ready
-         chips and the timeline's honesty caption keep reporting exactly
+         fallback) originally produced them; the internal checklist
+         state and the timeline's honesty caption keep reporting exactly
          what they did before a nudge. It also never touches a clip's
          `plates`, `shotPrompt`, or `model` — same "one field, one job"
          discipline as `setSkidmarksSegmentShotPrompt` never touching
@@ -1574,15 +1577,17 @@ now (see "Explicitly out of scope" below).
        entirely; `uncensoredPlateStills` stays exactly as unwired as
        described above.
 
-     A stub **Generate Clips** button closes the section — tapping it
-     never calls a real render for the *whole song*; it only shows a
-     "Stub only — no Comfy MCP / LTX render kicked off" message
-     (`SkidmarksClipTimeline`'s local `stubMessage` state, same pattern
-     as `PropfolioDetailSheet`'s chip feedback line, but always mounted
-     with `role="status"`/`aria-live="polite"` so it reaches the
-     accessibility tree/screen readers too, not just sighted users). This
-     stays a deliberate stub — a whole-song, no-confirm render is exactly
-     the auto-fire-everything cost risk Stuart ruled out.
+     **The whole-song "Generate Clips" stub button that used to close
+     this section is gone** (removed 2026-09-14, Stuart's explicit ask —
+     "It does nothing useful and confuses him"). It never called a real
+     render for the *whole song*; it only showed a "Stub only — no
+     Comfy MCP / LTX render kicked off" message, which was itself part
+     of the problem — a pink, primary-looking button that visibly did
+     nothing real reads as broken, not as an honest placeholder.
+     **This doesn't change the underlying cost lock at all** — a
+     whole-song, no-confirm render is still exactly the auto-fire-
+     everything cost risk Stuart ruled out; removing the stub button is
+     not the same ask as wiring one up, and nothing here builds that.
      **A single plate's own render is real now** — and, since the
      per-plate-select rework below, it's a *plate's* render, not a
      *clip's*: once a clip has at least one real plate still (generated
@@ -1893,7 +1898,8 @@ now (see "Explicitly out of scope" below).
   [xAI's current pricing](https://x.ai/api) before relying on this at
   volume, since rates can change; this matches Stuart's "plate stills
   are OK cost-wise" — a real *video* render (five to a few dozen times
-  pricier per tap, see "Generate Clips" below) is where the real spend
+  pricier per tap, see "Wiring up the real per-clip video render"
+  below) is where the real spend
   risk lives, which is exactly why that stays behind its own explicit
   confirm and fixed cost cap rather than living on this same "just
   tap Generate" flow. This build makes one generation/edit call per tap
@@ -1933,9 +1939,16 @@ now (see "Explicitly out of scope" below).
     Skidmarks repo's own real H3 client, see `lib/minimaxH3.ts`'s
     module doc comment. **xAI Grok Imagine video** (the same
     `XAI_API_KEY` plate stills already use, above) stays fully wired
-    as the one-tap-away alternative — a small H3/Grok switch lives
-    *inside* `SkidmarksClipRender`'s existing two-tap Render confirm
-    step, per Stuart's own "no model pill farm" ask; the choice
+    as the one-tap-away alternative — a small H3/Grok switch sits
+    **permanently beside `SkidmarksClipRender`'s Render button**
+    (relocated 2026-09-14 off Stuart's own follow-up — it originally
+    lived only inside the two-tap Render confirm step, which he
+    reported as buried; "prefer visible beside the button"), and that
+    same Render button is now about half width instead of edge-to-edge
+    so the switch has room next to it. On a **Vocal** clip, the same
+    spot shows a plain **LTX** label instead of a switch — there's only
+    one real Vocal backend, so this never invents a fake second option
+    just to mirror the Instrumental switch's shape. The choice
     persists per clip (`SkidmarksClipSegment.instrumentalVideoModel`,
     the existing session mirror — the Neon row as of #57, not
     `localStorage`, same as `motionPrompt`/`selectedPlateId`).
@@ -2045,8 +2058,11 @@ now (see "Explicitly out of scope" below).
   `SkidmarksState` (`bands`,
   `session: { projectKind, bandId, mp3 }`, `removedSeedBandIds` —
   hand-seeded band ids Stuart has deleted, so `normalizeState` doesn't
-  resurrect them). The Lyrics/Timing/Ready chip states aren't stored at
-  all — `skidmarksChecklistState` derives them on the fly from
+  resurrect them). The internal checklist states
+  (`skidmarksChecklistState`'s `lyrics`/`timing`/`ready`, no longer
+  rendered as a chip row — see step 8 above, kept only for
+  `skidmarksGlance`'s graph-card status line) aren't stored at all — it
+  derives them on the fly from
   `durationSec`/`segmentsSource`/`transcriptionStatus`/`analysisStatus`,
   so there's nothing to keep in sync.
 - **Persistence**: `localStorage` (key `the-tab:skidmarks-studio`),
@@ -2128,15 +2144,18 @@ now (see "Explicitly out of scope" below).
   any real Comfy MCP, Seedance, or LTX call, at all, ever (the only real
   ElevenLabs call this build makes is Scribe speech-to-text — see step 6
   above; ElevenLabs voice/generation features are still unwired); any
-  *automatic*/whole-song clip video render (the "Generate Clips" button
-  stays a stub); and real trained/validated singing detection (the
+  *automatic*/whole-song clip video render (the old "Generate Clips"
+  stub button that used to sit at the bottom of the clip timeline is
+  gone entirely as of 2026-09-14 — see step 9's note above — but the
+  underlying "never auto-fire a batch of paid video calls" lock is
+  unchanged); and real trained/validated singing detection (the
   energy heuristic is a real signal, not a trained model — see step
   7 above; the seed cadence is still a pure fallback whenever neither
   real signal produces anything usable). **Real plate-*still* image
   generation is no longer on this out-of-scope list** — see step 9's
   "Plate stills: upload or generate, real either way" note below, and
   **neither is a real, opt-in, one-plate-at-a-time video render** — see
-  the "Skidmarks node" section's "Generate Clips" note above and
+  the "Wiring up the real per-clip video render" note above and
   `components/SkidmarksClipRender.tsx`
   (`lib/plateGeneration.ts`, xAI's Grok Imagine API); it's the *video*
   render pass past that one still that remains a stub. A UI for per-word lyric

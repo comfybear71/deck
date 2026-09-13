@@ -6,6 +6,7 @@ import {
   waveformBars,
   type SkidmarksMp3Attachment,
 } from "@/lib/skidmarks";
+import { SkidmarksLyricsPopup } from "./SkidmarksLyricsPopup";
 
 interface SkidmarksMp3CardProps {
   mp3: SkidmarksMp3Attachment | null;
@@ -74,6 +75,21 @@ function PauseIcon() {
   );
 }
 
+/** Small lined-text glyph \u2014 reads as "lyrics/text", not a document/
+ * file icon (this never opens a file picker). */
+function LyricsIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3 w-3">
+      <path
+        d="M4 5.5h9M4 10h12M4 14.5h7"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function Waveform({ fileName, progress }: { fileName: string; progress: number }) {
   const bars = waveformBars(fileName, BAR_COUNT);
   const clipRight = Math.max(0, Math.min(100, (1 - progress) * 100));
@@ -124,6 +140,16 @@ function Waveform({ fileName, progress }: { fileName: string; progress: number }
  * refresh**: `resolveAudioSrc` below prefers this session's own local
  * object URL when it exists, and falls back to `mp3.audioUrl` (the
  * durable Blob URL) once the local `File`/object URL is gone.
+ *
+ * **Small "Lyrics" control** (2026-09-14, replacing the old green
+ * Lyrics/Timing/Ready chip row Stuart asked removed \u2014 "Timing is
+ * redundant, the waveform already shows time") \u2014 a small pill next
+ * to the filename, opening `SkidmarksLyricsPopup` with whatever real
+ * word-level transcription (`mp3.words`, `lib/transcription.ts`) has
+ * landed for this attach, plus a copy-to-clipboard button. This is the
+ * chip row's one real payload Stuart actually cared about (whether
+ * useful lyric text exists), reachable directly instead of behind a
+ * chip's color.
  */
 export function SkidmarksMp3Card({
   mp3,
@@ -137,6 +163,7 @@ export function SkidmarksMp3Card({
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -269,7 +296,17 @@ export function SkidmarksMp3Card({
         </button>
       </div>
 
-      <p className="mt-2 truncate text-[11px] text-white/40">{mp3.fileName}</p>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <p className="min-w-0 flex-1 truncate text-[11px] text-white/40">{mp3.fileName}</p>
+        <button
+          type="button"
+          onClick={() => setLyricsOpen(true)}
+          className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-white/50 transition-colors hover:bg-white/[0.07] hover:text-white/80"
+        >
+          <LyricsIcon />
+          Lyrics
+        </button>
+      </div>
       {!audioUrl && mp3.audioUrl && (
         <p className="mt-1 text-[10px] leading-snug text-white/30">Playing from a saved copy after a refresh.</p>
       )}
@@ -295,6 +332,15 @@ export function SkidmarksMp3Card({
             setCurrentTimeSec(0);
           }}
           className="hidden"
+        />
+      )}
+
+      {lyricsOpen && (
+        <SkidmarksLyricsPopup
+          words={mp3.words}
+          transcriptionStatus={mp3.transcriptionStatus}
+          transcriptionError={mp3.transcriptionError}
+          onClose={() => setLyricsOpen(false)}
         />
       )}
     </div>
