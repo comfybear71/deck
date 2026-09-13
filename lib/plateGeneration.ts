@@ -217,6 +217,24 @@ export interface PlateGenerationRequest {
    * module's model-routing framing, continuity/identity reference notes,
    * and (when applicable) a locked character's hallmarks/negative cues. */
   prompt: string;
+  /** **Client-side bookkeeping only \u2014 not read by `app/api/skidmarks/
+   * generate-still/route.ts`.** The exact `characterInFrame` fact this
+   * request resolved: whether *this* generation actually features a
+   * locked character (Jack Ash today). The caller (`SkidmarksClipStub`/
+   * `SkidmarksAutoPlate`) stores this straight onto the resulting
+   * still's own `featuresLockedCharacter` (`lib/skidmarks.ts`) so a
+   * *later* plate that continues from this one can correctly resolve
+   * `continuityFeaturesLockedCharacter` \u2014 the fix for the door \u2192
+   * keyhole \u2192 Jack chain (see `BuildPlateGenerationRequestParams`'s
+   * `continuityFeaturesLockedCharacter` doc comment). Harmless if sent
+   * to the server along with everything else (an unread extra field),
+   * but genuinely belongs to the client's own bookkeeping, not the
+   * wire contract the server actually validates against. Optional so a
+   * hand-rolled request built without going through
+   * `buildPlateGenerationRequest` (a test, a future caller) still
+   * satisfies this interface \u2014 `buildPlateGenerationRequest` itself
+   * always sets it. */
+  featuresLockedCharacter?: boolean;
   /** Stuart's own, unmodified shot-prompt text \u2014 the same string
    * `prompt` above leads with, sent separately so
    * `app/api/skidmarks/generate-still/route.ts` can length-validate
@@ -258,6 +276,19 @@ export interface BuildPlateGenerationRequestParams {
    * identity/continuity reference so a multi-clip story (door \u2192
    * keyhole \u2192 Jack seated) can hold the same scene across shots. */
   continuityStillDataUrl?: string;
+  /** Whether the still `continuityStillDataUrl` points at is *itself*
+   * already known to feature a locked character (`lib/skidmarks.ts`'s
+   * `SkidmarksPlateStill.featuresLockedCharacter`) \u2014 signal 2 of
+   * `characterInFrame`'s two triggers on an Instrumental clip (see this
+   * function's doc comment). Only meaningful when `continuityStillDataUrl`
+   * is also set; ignored otherwise. **Live-QA fix**: this must be the
+   * *source* still's own resolved fact, never inferred from "a
+   * continuity reference exists at all" \u2014 continuing from a plate
+   * that never featured the locked character (the door \u2192 keyhole
+   * case: keyhole continues from door, and neither shows anyone) must
+   * never inject his identity/lock just because *some* continuity image
+   * happens to be attached. */
+  continuityFeaturesLockedCharacter?: boolean;
 }
 
 /**
@@ -276,7 +307,8 @@ export interface BuildPlateGenerationRequestParams {
 export function buildPlateGenerationRequest(
   params: BuildPlateGenerationRequestParams
 ): PlateGenerationRequest {
-  const { shotPrompt, vocal, model, bandName, vocalist, continuityStillDataUrl } = params;
+  const { shotPrompt, vocal, model, bandName, vocalist, continuityStillDataUrl, continuityFeaturesLockedCharacter } =
+    params;
 
   // "In frame" for identity/lock purposes: a Vocal clip's auto-included
   // vocalist always counts (unchanged). An Instrumental/B-roll clip only
@@ -285,10 +317,18 @@ export function buildPlateGenerationRequest(
   //  1. Stuart's own shot prompt names them directly (the "door \u2192
   //     keyhole \u2192 Jack seated" case \u2014 see
   //     `shotPromptMentionsLockedCharacter`'s doc comment).
-  //  2. This plate continues from the plate right before it ("Use last
-  //     plate" checked \u2014 `continuityStillDataUrl` set) \u2014 a later
+  //  2. This plate continues from a plate that *itself* already featured
+  //     them ("Use last plate" checked \u2014 `continuityStillDataUrl` set
+  //     \u2014 *and* `continuityFeaturesLockedCharacter` true) \u2014 a later
   //     shot in the same story beat ("he stands, still in shadow") that
   //     never re-says the name shouldn't silently drop the lock either.
+  //     Live-QA fix: signal 2 used to fire on *any* continuity reference
+  //     at all, regardless of what it showed \u2014 the door \u2192 keyhole
+  //     case (keyhole continues from door; neither names or shows
+  //     anyone) wrongly inherited the lock purely because "Use last
+  //     plate" happened to be checked. It's now gated on the *source*
+  //     still's own resolved fact instead, so continuing from a
+  //     person-less shot stays person-less.
   // Both signals are gated on the character actually having a lock, so
   // a generic Instrumental clip for an un-locked member/band still never
   // auto-features/locks anyone \u2014 the lock text only *constrains* how
@@ -300,7 +340,8 @@ export function buildPlateGenerationRequest(
   const instrumentalCastMention =
     !vocal &&
     !!lockedVocalist &&
-    (shotPromptMentionsLockedCharacter(shotPrompt, lockedVocalist) || Boolean(continuityStillDataUrl));
+    (shotPromptMentionsLockedCharacter(shotPrompt, lockedVocalist) ||
+      (Boolean(continuityStillDataUrl) && Boolean(continuityFeaturesLockedCharacter)));
   const characterInFrame = (vocal && !!vocalist) || instrumentalCastMention;
 
   const references: { role: "continuity" | "identity"; dataUrl: string }[] = [];
@@ -358,6 +399,7 @@ export function buildPlateGenerationRequest(
       .join(" "),
     shotPrompt: shotPrompt.trim(),
     referenceImageDataUrls: references.map((r) => r.dataUrl),
+    featuresLockedCharacter: characterInFrame,
   };
 }
 
