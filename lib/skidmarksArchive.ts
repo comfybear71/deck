@@ -28,10 +28,15 @@
  *
  * **The archived song's audio is *referenced*, not re-uploaded** — by
  * the time Stuart taps Archive, the attached MP3's own audio already
- * has a durable Blob URL (`lib/mp3Blob.ts`, uploaded at attach time for
- * "play survives a refresh"). Archiving just carries that same URL
- * forward into the archived song's metadata; if it was never uploaded
- * (Blob unconfigured, or the upload itself failed), the archived song
+ * has a durable Blob copy (`lib/mp3Blob.ts`, uploaded at attach time
+ * for "play survives a refresh"). `archiveSkidmarksSession` resolves
+ * that copy's real URL *fresh* from Blob at archive time (via
+ * `fetchSkidmarksMp3AudioUrl`, keyed off the mp3's `audioId`) and
+ * carries that resolved URL forward into the archived song's own
+ * metadata record — which is fine to store there (that record already
+ * lives in Vercel Blob, not `localStorage`; see this module's own doc
+ * comment). If it was never uploaded (Blob unconfigured, the upload
+ * itself failed, or it simply hasn't finished yet), the archived song
  * honestly has no audio reference — surfaced plainly in the project
  * zip rather than silently omitted.
  */
@@ -39,6 +44,7 @@
 import { upload } from "@vercel/blob/client";
 import { buildStoreZip } from "./zipDownload";
 import { fetchPersistedClipRenders } from "./clipRenders";
+import { fetchSkidmarksMp3AudioUrl } from "./mp3Blob";
 import type { SkidmarksBand, SkidmarksMp3Attachment } from "./skidmarks";
 
 const ARCHIVE_PATH_PREFIX = "skidmarks/archive/";
@@ -225,15 +231,20 @@ export type ArchiveSessionOutcome = { ok: true; song: SkidmarksArchivedSong } | 
 
 /**
  * The whole "Archive" action, top to bottom: uploads the full band+mp3
- * snapshot, builds this song's metadata record off it (carrying forward
- * `mp3.audioUrl` — see this module's doc comment for why the audio
- * itself is never re-uploaded here), and appends it to the shared
- * index. `renderedPlateCount` is passed in by the caller
- * (`components/SkidmarksDetailSheet.tsx` already has the live "which
- * plates have a render" map from `hooks/useSkidmarksClipRenders.ts` —
- * no reason to re-derive or re-fetch it here). Never throws; a failure
- * at either step comes back as an honest `{ ok: false, message }`
- * rather than silently losing Stuart's finished song.
+ * snapshot, resolves the mp3's own audio URL *fresh from Blob* (via
+ * `fetchSkidmarksMp3AudioUrl`, keyed off `mp3.audioId` — never a value
+ * read out of `lib/skidmarks.ts`'s `localStorage`-mirrored session
+ * object, per Stuart's "no localStorage for the audio" lock; see this
+ * module's doc comment), builds this song's metadata record off both,
+ * and appends it to the shared index. `renderedPlateCount` is passed in
+ * by the caller (`components/SkidmarksDetailSheet.tsx` already has the
+ * live "which plates have a render" map from
+ * `hooks/useSkidmarksClipRenders.ts` — no reason to re-derive or
+ * re-fetch it here). Never throws; a failure at any step comes back as
+ * an honest `{ ok: false, message }` rather than silently losing
+ * Stuart's finished song. A missing/unresolved audio URL specifically
+ * never fails the whole archive — the song still archives with
+ * `audioUrl: undefined`, honestly reflected in the project zip.
  */
 export async function archiveSkidmarksSession(
   band: SkidmarksBand,
@@ -244,6 +255,12 @@ export async function archiveSkidmarksSession(
   const uploadOutcome = await uploadArchiveSnapshot(id, { band, mp3 });
   if (!uploadOutcome.ok) {
     return { ok: false, message: `Could not save this song's project data \u2014 ${uploadOutcome.message}` };
+  }
+
+  let audioUrl: string | undefined;
+  if (mp3.audioId) {
+    const audioOutcome = await fetchSkidmarksMp3AudioUrl(mp3.audioId);
+    if (audioOutcome.ok && audioOutcome.url) audioUrl = audioOutcome.url;
   }
 
   const song: SkidmarksArchivedSong = {
@@ -257,7 +274,7 @@ export async function archiveSkidmarksSession(
     clipCount: mp3.segments.length,
     renderedPlateCount,
     snapshotUrl: uploadOutcome.url,
-    audioUrl: mp3.audioUrl,
+    audioUrl,
   };
 
   const addOutcome = await addSkidmarksArchivedSong(song);
