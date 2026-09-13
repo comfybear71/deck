@@ -185,6 +185,40 @@ before writing each still back, so a plate Stuart fills manually
 mid-run can't be silently overwritten by that same run's now-stale
 plan for the same slot once its turn comes up.
 
+**Follow-up on that same report**: Stuart confirmed the wipe cleared
+`shotPrompt` (and the plate stills) together, not stills alone — i.e.
+a whole clip's tagged state, not one field. Re-verified directly
+against the merged code (not memory) that this doesn't point at a gap
+in `hasSkidmarksUserContent` itself — it does check
+`s.shotPrompt.trim().length > 0`, correctly, and all three real
+`buildDefaultSegment`-based rebuild call sites
+(`applySkidmarksAnalysisResult`, `applySkidmarksTranscriptionResult`,
+`setSkidmarksMp3Duration`) are already gated by it. Grepped the whole
+repo for every other write to `.plates`/`.shotPrompt` — every setter
+(`setSkidmarksClipPlateStill`, `setSkidmarksSegmentShotPrompt`,
+`addSkidmarksClipPlate`, `removeSkidmarksClipPlate`,
+`setSkidmarksClipPlateMotionPrompt`) goes through `updateSkidmarksSegment`,
+scoped to one matching segment id, never a sibling; the rendered-clips
+shelf's "Remove" only ever touches its own local render-tracking Map,
+never `lib/skidmarks.ts` state; archive restore only replaces the live
+session after an explicit "Open in editor" tap on one specific row.
+No fourth rebuild path was found. The actual "other path" that blanks
+a whole clip's tagged state as a unit **without** going through any
+`applySkidmarks*Result` function is exactly the `persist()` gap above:
+one `localStorage.setItem` call writes the *entire* state as a single
+JSON blob, so a shot prompt typed and several stills generated after
+the last successful write are all lost together the moment a later
+reload rehydrates from that older, smaller snapshot — this is silent
+data loss from a failed write, not a rebuild function replacing
+anything. Added a **second, proactive** layer on top of the downscale
++ hard-failure-banner fix above: `persist()` now also warns
+(`lastPersistWarning`/`getSkidmarksStorageWarning`,
+`exceedsSkidmarksStorageWarningThreshold`, a conservative 3MB
+threshold) the moment the serialized state crosses that size **while
+writes are still actually succeeding** — an amber, softer banner
+distinct from the red hard-failure one, giving Stuart a real chance to
+Archive before a future write ever actually fails.
+
 **A slow real API result must never silently overwrite already-tagged
 plates/prompts, or land on a different attach than the one it was for.**
 Real live-QA'd bug, reported right after #49 merged: "all Vocal plates
