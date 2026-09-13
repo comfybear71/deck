@@ -28,7 +28,9 @@ interface SkidmarksClipTimelineProps {
    * the band in a generated still's prompt. */
   band: SkidmarksBand;
   onSetSegmentShotPrompt: (segmentId: string, shotPrompt: string) => void;
-  onSetSegmentStill: (segmentId: string, still: SkidmarksPlateStill | null) => void;
+  onSetClipPlateStill: (segmentId: string, plateId: string, still: SkidmarksPlateStill | null) => void;
+  onAddClipPlate: (segmentId: string) => void;
+  onRemoveClipPlate: (segmentId: string, plateId: string) => void;
 }
 
 const STUB_FEEDBACK_TIMEOUT_MS = 3200;
@@ -59,20 +61,28 @@ function SegmentRow({
   expanded,
   onToggle,
   onSetShotPrompt,
-  onSetStill,
+  onSetPlateStill,
+  onAddPlate,
+  onRemovePlate,
 }: {
   segment: SkidmarksClipSegment;
   band: SkidmarksBand;
-  /** The clip immediately before this one's still, if it has one — the
-   * "continue from previous clip's plate" continuity reference (see
+  /** The clip immediately before this one's *last* plate's still, if it
+   * has one — the "continue from previous clip's plate" continuity
+   * reference for this clip's *first* plate slot only
+   * (`SkidmarksClipStub` uses the previous slot within its own strip for
+   * every later slot instead — see that component's doc comment). Feeds
    * `SkidmarksClipStub`'s "Use last plate" toggle and
-   * `lib/plateGeneration.ts`'s `buildPlateGenerationRequest`). `undefined`
-   * for the first clip, or whenever the previous clip has no still yet. */
+   * `lib/plateGeneration.ts`'s `buildPlateGenerationRequest`. `undefined`
+   * for the first clip, or whenever the previous clip's last plate has
+   * no still yet. */
   previousStill?: SkidmarksPlateStill;
   expanded: boolean;
   onToggle: () => void;
   onSetShotPrompt: (shotPrompt: string) => void;
-  onSetStill: (still: SkidmarksPlateStill | null) => void;
+  onSetPlateStill: (plateId: string, still: SkidmarksPlateStill | null) => void;
+  onAddPlate: () => void;
+  onRemovePlate: (plateId: string) => void;
 }) {
   const meta = SKIDMARKS_SEGMENT_LABEL_META[segment.label];
 
@@ -115,7 +125,9 @@ function SegmentRow({
             band={band}
             previousStill={previousStill}
             onSetShotPrompt={onSetShotPrompt}
-            onSetStill={onSetStill}
+            onSetPlateStill={onSetPlateStill}
+            onAddPlate={onAddPlate}
+            onRemovePlate={onRemovePlate}
           />
         </div>
       )}
@@ -176,17 +188,22 @@ function timelineNote(
  * Each row is individually collapsible (collapsed = time range + label
  * only, no model glance — per Stuart's live-QA chrome lock there is no
  * model UI anywhere in this build right now, see `SkidmarksClipStub`'s
- * doc comment; expanded = `SkidmarksClipStub`'s one plate placeholder
- * (upload/generate/replace/clear a real still, in place — see that
- * component's doc comment) + one multi-line shot-prompt field for that
- * clip, nothing else — the Camera Angles block, the five-card
- * location-plate picker, and the Model pill row from earlier passes are
- * all gone outright). This component threads `band` and each clip's
- * `previousStill` down to `SkidmarksClipStub` — the former resolves
- * which member auto-includes as the vocalist on a Vocal clip, the latter
- * is the "continue from the previous clip's plate" continuity reference
- * — but never touches either itself. The whole section can also
- * collapse, same pattern as `ControlPlaneDemo`.
+ * doc comment; expanded = `SkidmarksClipStub`'s horizontal **plate
+ * strip** — one or more independent still slots on this same clip,
+ * each upload/generate/replace/clear-able in place, plus a "+" to add
+ * another slot (see that component's doc comment for why one clip can
+ * hold several plates — the 40s-door problem) — + one multi-line
+ * shot-prompt field **shared across every plate on that clip**, nothing
+ * else — the Camera Angles block, the five-card location-plate picker,
+ * and the Model pill row from earlier passes are all gone outright).
+ * This component threads `band` and each clip's `previousStill` (that
+ * *previous clip's* **last** plate, specifically — only relevant to
+ * *this* clip's first plate slot; later slots continue from the plate
+ * before them in their own strip instead) down to `SkidmarksClipStub` —
+ * the former resolves which member auto-includes as the vocalist on a
+ * Vocal clip, the latter is the "continue from the previous plate"
+ * continuity reference — but never touches either itself. The whole
+ * section can also collapse, same pattern as `ControlPlaneDemo`.
  *
  * **Phase note**: this is the clip-stub UI only. The footer's
  * "Generate Clips" button is a **stub** — tapping it never calls a real
@@ -207,7 +224,9 @@ export function SkidmarksClipTimeline({
   transcriptionStatus,
   band,
   onSetSegmentShotPrompt,
-  onSetSegmentStill,
+  onSetClipPlateStill,
+  onAddClipPlate,
+  onRemoveClipPlate,
 }: SkidmarksClipTimelineProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -257,18 +276,24 @@ export function SkidmarksClipTimeline({
           {note && <p className="text-[11px] leading-relaxed text-amber-200/70">{note}</p>}
 
           <div className="flex flex-col gap-2">
-            {segments.map((segment, i) => (
-              <SegmentRow
-                key={segment.id}
-                segment={segment}
-                band={band}
-                previousStill={i > 0 ? segments[i - 1].still : undefined}
-                expanded={expandedIds.has(segment.id)}
-                onToggle={() => toggleExpanded(segment.id)}
-                onSetShotPrompt={(shotPrompt) => onSetSegmentShotPrompt(segment.id, shotPrompt)}
-                onSetStill={(still) => onSetSegmentStill(segment.id, still)}
-              />
-            ))}
+            {segments.map((segment, i) => {
+              const previousPlates = i > 0 ? segments[i - 1].plates : undefined;
+              const previousStill = previousPlates?.[previousPlates.length - 1]?.still;
+              return (
+                <SegmentRow
+                  key={segment.id}
+                  segment={segment}
+                  band={band}
+                  previousStill={previousStill}
+                  expanded={expandedIds.has(segment.id)}
+                  onToggle={() => toggleExpanded(segment.id)}
+                  onSetShotPrompt={(shotPrompt) => onSetSegmentShotPrompt(segment.id, shotPrompt)}
+                  onSetPlateStill={(plateId, still) => onSetClipPlateStill(segment.id, plateId, still)}
+                  onAddPlate={() => onAddClipPlate(segment.id)}
+                  onRemovePlate={(plateId) => onRemoveClipPlate(segment.id, plateId)}
+                />
+              );
+            })}
           </div>
 
           <button

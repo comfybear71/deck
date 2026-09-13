@@ -4,6 +4,7 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import { analyzeVocalActivity } from "@/lib/audioAnalysis";
 import { transcribeAudio } from "@/lib/transcription";
 import {
+  addSkidmarksClipPlate,
   addSkidmarksLook,
   addSkidmarksMember,
   applySkidmarksAnalysisResult,
@@ -17,15 +18,16 @@ import {
   markSkidmarksTranscriptionFailed,
   markSkidmarksTranscriptionUnconfigured,
   removeSkidmarksBand,
+  removeSkidmarksClipPlate,
   removeSkidmarksMember,
   renameSkidmarksMember,
   selectSkidmarksBand,
   selectSkidmarksProjectKind,
   setSkidmarksBandCoverImage,
+  setSkidmarksClipPlateStill,
   setSkidmarksMemberAvatarImage,
   setSkidmarksMp3Duration,
   setSkidmarksSegmentShotPrompt,
-  setSkidmarksSegmentStill,
   subscribeSkidmarks,
   type SkidmarksLook,
   type SkidmarksPlateStill,
@@ -177,14 +179,27 @@ export function useSkidmarksStudio() {
     []
   );
 
-  /** Sets/replaces (`still` non-null) or clears (`still: null`) a clip's
-   * plate still — see `setSkidmarksSegmentStill`'s doc comment. Actually
-   * calling xAI's Grok Imagine API (`lib/plateGeneration.ts`) happens in
-   * `SkidmarksClipStub` itself, not here — this store setter only ever
-   * commits whichever result (an uploaded photo, a generated still, or a
-   * clear) the component already resolved. */
-  const setSegmentStill = useCallback(
-    (segmentId: string, still: SkidmarksPlateStill | null) => setSkidmarksSegmentStill(segmentId, still),
+  /** Sets/replaces (`still` non-null) or clears (`still: null`) one plate
+   * slot's still — see `setSkidmarksClipPlateStill`'s doc comment.
+   * Actually calling xAI's Grok Imagine API (`lib/plateGeneration.ts`)
+   * happens in `SkidmarksClipStub` itself, not here — this store setter
+   * only ever commits whichever result (an uploaded photo, a generated
+   * still, or a clear) the component already resolved. */
+  const setClipPlateStill = useCallback(
+    (segmentId: string, plateId: string, still: SkidmarksPlateStill | null) =>
+      setSkidmarksClipPlateStill(segmentId, plateId, still),
+    []
+  );
+
+  /** The "+" control — appends one more empty plate slot to a clip's
+   * strip (`addSkidmarksClipPlate`'s doc comment covers the cap). */
+  const addClipPlate = useCallback((segmentId: string) => addSkidmarksClipPlate(segmentId), []);
+
+  /** Removes an empty plate slot outright — see
+   * `removeSkidmarksClipPlate`'s doc comment for the "empty slot only,
+   * never the last one" guard. */
+  const removeClipPlate = useCallback(
+    (segmentId: string, plateId: string) => removeSkidmarksClipPlate(segmentId, plateId),
     []
   );
 
@@ -206,6 +221,8 @@ export function useSkidmarksStudio() {
     removeMp3,
     setMp3Duration,
     setSegmentShotPrompt,
-    setSegmentStill,
+    setClipPlateStill,
+    addClipPlate,
+    removeClipPlate,
   };
 }

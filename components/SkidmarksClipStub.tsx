@@ -2,10 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  MAX_PLATES_PER_CLIP,
   readImageFileAsDataUrl,
   SKIDMARKS_SEGMENT_LABEL_META,
   type SkidmarksBand,
+  type SkidmarksClipPlateSlot,
   type SkidmarksClipSegment,
+  type SkidmarksMember,
+  type SkidmarksModelId,
   type SkidmarksPlateStill,
 } from "@/lib/skidmarks";
 import {
@@ -18,9 +22,15 @@ import {
 interface SkidmarksClipStubProps {
   segment: SkidmarksClipSegment;
   band: SkidmarksBand;
+  /** The previous *clip's* last plate's still, if any — the continuity
+   * reference for this clip's **first** plate slot only; every later
+   * slot in this clip's own strip continues from the plate right before
+   * it instead (see this component's doc comment). */
   previousStill?: SkidmarksPlateStill;
   onSetShotPrompt: (shotPrompt: string) => void;
-  onSetStill: (still: SkidmarksPlateStill | null) => void;
+  onSetPlateStill: (plateId: string, still: SkidmarksPlateStill | null) => void;
+  onAddPlate: () => void;
+  onRemovePlate: (plateId: string) => void;
 }
 
 const SHOT_PROMPT_MAX_LENGTH = 500;
@@ -51,6 +61,14 @@ function ClearIcon() {
   );
 }
 
+function PlusIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-5 w-5">
+      <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** Same spinner shape as `SkidmarksChecklistChips`' "analyzing" state —
  * one visual language for "real work in flight" across this feature. */
 function Spinner() {
@@ -62,56 +80,46 @@ function Spinner() {
   );
 }
 
+interface SkidmarksPlateBoxProps {
+  plate: SkidmarksClipPlateSlot;
+  previousStill?: SkidmarksPlateStill;
+  shotPrompt: string;
+  vocal: boolean;
+  model: SkidmarksModelId;
+  bandName: string;
+  vocalist?: SkidmarksMember;
+  /** Only true for an *empty* slot when the clip has more than one —
+   * removing a slot that already holds a real still is a separate,
+   * more deliberate two-step (clear it first via the existing ×/
+   * long-press, then remove the now-empty slot) rather than one tap
+   * that could discard a real image by mistake. */
+  canRemove: boolean;
+  onSetStill: (still: SkidmarksPlateStill | null) => void;
+  onRemove: () => void;
+}
+
 /**
- * A clip's expanded body — one dashed-border plate placeholder (empty
- * until a still exists) and one shot-prompt textarea, per Stuart's
- * live-QA chrome lock (see the doc comment on the earlier, since-deleted
- * `SkidmarksPlatesAndCamera`, and `SkidmarksClipTimeline`'s doc comment).
- * Two real things now live in that one placeholder box, per Stuart's
- * follow-up ask after the chrome-lock pass shipped:
- *
- * 1. **Upload** — tapping the empty box opens a tiny two-option popover
- *    (Upload / Generate, no other chrome); Upload opens a real native
- *    `accept="image/*"` file picker and, once a file's picked, resizes it
- *    the same way the band cover/member avatar pickers already do
- *    (`readImageFileAsDataUrl`) and stores it as this clip's `still`.
- * 2. **Generate** — calls the one real image backend this build wires up,
- *    xAI's Grok Imagine API, via `lib/plateGeneration.ts`'s
- *    `buildPlateGenerationRequest` + `generatePlateStill`
- *    (`app/api/skidmarks/generate-still/route.ts`). Requires a non-empty
- *    `shotPrompt` first (there's nothing to generate from otherwise) —
- *    everything else (model-routing framing, vocalist auto-include,
- *    character locks, continuity) is automatic, no extra fields to fill
- *    in beyond the one **"Use last plate"** checkbox that only appears
- *    when the previous clip already has a still (see
- *    `buildPlateGenerationRequest`'s doc comment for exactly what that
- *    wires in). While a request is in flight, the box shows a spinner
- *    overlay (over the existing still, if this is a regenerate) instead
- *    of any full-screen loading state.
- *
- * **Once a still exists**, Stuart's ask was gestures *on the plate
- * itself*, not a row of buttons: tapping the still image reopens the same
- * Upload/Generate popover (replace), a tiny always-visible "×" in the
- * plate's corner clears it back to the empty placeholder outright, and a
- * press-and-hold on the plate does the same clear (redundant with the ×,
- * not instead of it — Stuart's ask was "X on the plate (or long-press
- * clear)", so both ship rather than picking one over the other). Editing
- * the shot-prompt textarea never touches an existing still on its own —
- * regenerating (via the popover) is what applies an edited prompt to a
- * new still; there's no auto-invalidate-on-prompt-edit behavior here.
- *
- * Model choice (`segment.model`) still isn't rendered as a badge/pill
- * anywhere in this panel (Stuart's chrome lock stands) — it only steers
- * this same xAI call's prompt phrasing under the hood, see
- * `lib/plateGeneration.ts`'s `routingFramingHint`.
+ * One plate slot in a clip's horizontal strip — the same
+ * upload/generate/replace/clear box `SkidmarksClipStub` always had,
+ * just scoped to one slot instead of the whole clip so several can sit
+ * side by side (see that component's doc comment for why). All of this
+ * box's interaction logic (the tiny Upload/Generate popover, the
+ * press-and-hold clear, the spinner overlay) is unchanged from the
+ * single-plate build — only the props feeding it (which still, which
+ * continuity reference) now vary per slot instead of per clip.
  */
-export function SkidmarksClipStub({
-  segment,
-  band,
+function SkidmarksPlateBox({
+  plate,
   previousStill,
-  onSetShotPrompt,
+  shotPrompt,
+  vocal,
+  model,
+  bandName,
+  vocalist,
+  canRemove,
   onSetStill,
-}: SkidmarksClipStubProps) {
+  onRemove,
+}: SkidmarksPlateBoxProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [useLastPlate, setUseLastPlate] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -127,9 +135,7 @@ export function SkidmarksClipStub({
     };
   }, []);
 
-  const hasStill = !!segment.still;
-  const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label].vocal;
-  const vocalist = vocal ? resolveVocalistForPrompt(band.members) : undefined;
+  const hasStill = !!plate.still;
 
   const closeMenu = () => setMenuOpen(false);
 
@@ -185,8 +191,8 @@ export function SkidmarksClipStub({
   };
 
   const handleGenerate = async () => {
-    const shotPrompt = segment.shotPrompt.trim();
-    if (!shotPrompt) {
+    const trimmedPrompt = shotPrompt.trim();
+    if (!trimmedPrompt) {
       setError("Add a shot prompt first \u2014 Generate needs something to go on.");
       return;
     }
@@ -206,10 +212,10 @@ export function SkidmarksClipStub({
       }
 
       const request = buildPlateGenerationRequest({
-        shotPrompt,
+        shotPrompt: trimmedPrompt,
         vocal,
-        model: segment.model,
-        bandName: band.name,
+        model,
+        bandName,
         vocalist: resolvedVocalist,
         continuityStillDataUrl: useLastPlate ? previousStill?.dataUrl : undefined,
       });
@@ -229,7 +235,7 @@ export function SkidmarksClipStub({
   };
 
   return (
-    <div className="flex flex-col gap-2.5 border-t border-white/[0.06] pt-3">
+    <div className="flex w-32 shrink-0 flex-col gap-1">
       <div className="relative">
         <div
           role="button"
@@ -256,7 +262,7 @@ export function SkidmarksClipStub({
             // fire `pointercancel` before `LONG_PRESS_MS` elapses \u2014
             // disabling the browser's own touch gesture handling here is
             // what makes the hold reliable on a phone, not just a mouse.
-            "relative flex h-28 w-full touch-none select-none items-center justify-center overflow-hidden rounded-2xl",
+            "relative flex h-24 w-32 touch-none select-none items-center justify-center overflow-hidden rounded-2xl",
             hasStill
               ? "border border-white/10 bg-white/[0.02]"
               : "border border-dashed border-white/15 bg-white/[0.02] text-white/20",
@@ -271,7 +277,7 @@ export function SkidmarksClipStub({
             // should reach the parent `role="button"` div untouched.
             // eslint-disable-next-line @next/next/no-img-element -- data-URL still, next/image can't optimize it
             <img
-              src={segment.still!.dataUrl}
+              src={plate.still!.dataUrl}
               alt=""
               draggable={false}
               className="pointer-events-none absolute inset-0 h-full w-full object-cover"
@@ -295,6 +301,20 @@ export function SkidmarksClipStub({
               handleClear();
             }}
             className="absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white/80 ring-1 ring-white/15 transition-colors hover:bg-black/90 hover:text-white"
+          >
+            <ClearIcon />
+          </button>
+        )}
+
+        {!hasStill && !generating && canRemove && (
+          <button
+            type="button"
+            aria-label="Remove this empty plate"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            className="absolute left-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white/60 ring-1 ring-white/15 transition-colors hover:bg-black/90 hover:text-white"
           >
             <ClearIcon />
           </button>
@@ -339,7 +359,107 @@ export function SkidmarksClipStub({
 
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
 
-      {error && <p role="alert" className="text-[11px] leading-relaxed text-rose-300/90">{error}</p>}
+      {error && <p role="alert" className="text-[10px] leading-snug text-rose-300/90">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * A clip's expanded body — a **horizontal strip of plate slots** plus
+ * one shared shot-prompt textarea, per Stuart's live-QA chrome lock
+ * (see the doc comment on the earlier, since-deleted
+ * `SkidmarksPlatesAndCamera`, and `SkidmarksClipTimeline`'s doc
+ * comment). Originally this panel held exactly one plate; it's back to
+ * more than one **only** because a single 40-second Instrumental clip
+ * (Stuart's "door → keyhole → Jack seated" case) needs a different
+ * still per beat without splitting that clip into several separate
+ * timeline rows — the fix scoped as small as it could be: an
+ * independently expandable/plate-able *strip* on the same one clip,
+ * not a second timeline concept.
+ *
+ * **First use / empty state is unchanged**: a fresh clip still shows
+ * exactly one dashed empty plate, same style as before — nothing new
+ * to look at until Stuart taps "+". Each plate slot keeps every gesture
+ * the single-plate build already had (`SkidmarksPlateBox`, unchanged
+ * logic): tapping the empty box opens the tiny Upload/Generate popover;
+ * once a still exists, tapping it reopens that same popover (replace),
+ * a corner "×" clears it back to empty, and a press-and-hold does the
+ * same clear. **"+" appends one more empty slot** to the strip
+ * (`addSkidmarksClipPlate`, capped at `MAX_PLATES_PER_CLIP`) so Stuart
+ * can generate/upload a different still into it — a scroll strip, not a
+ * grid, keeps this from turning into a location-card layout. An empty
+ * slot beyond the first can also be removed outright (a small "×" in
+ * its *other* corner) to undo an accidental "+" — but only while it's
+ * still empty; removing a slot that already holds a real still means
+ * clearing it first, so one tap can never discard a generated/uploaded
+ * image by accident.
+ *
+ * **One shared shot prompt for the whole clip, not one per plate** —
+ * Stuart's explicit preference: editing the prompt before tapping
+ * Generate on whichever slot is enough to get different content per
+ * plate (each generated still already bakes in whatever the prompt said
+ * *at generation time*), so a second prompt field per slot would just
+ * repeat the same control for no real gain. See `lib/skidmarks.ts`'s
+ * `SkidmarksClipSegment` doc comment for the same reasoning in the data
+ * layer.
+ *
+ * **Continuity**: the "Use last plate" checkbox in each slot's Generate
+ * popover only appears when there's something to continue from — for
+ * any slot after the first *in this same clip's strip*, that's the
+ * still-slot right before it (so door → keyhole → Jack, all under one
+ * clip, can hold the same scene across shots); for the strip's very
+ * first slot, it's the previous *clip's* last plate instead (threaded
+ * down from `SkidmarksClipTimeline` as `previousStill`) — same
+ * cross-clip continuity the single-plate build already had.
+ *
+ * Model choice (`segment.model`) still isn't rendered as a badge/pill
+ * anywhere in this panel (Stuart's chrome lock stands) — it only steers
+ * this same xAI call's prompt phrasing under the hood, see
+ * `lib/plateGeneration.ts`'s `routingFramingHint`.
+ */
+export function SkidmarksClipStub({
+  segment,
+  band,
+  previousStill,
+  onSetShotPrompt,
+  onSetPlateStill,
+  onAddPlate,
+  onRemovePlate,
+}: SkidmarksClipStubProps) {
+  const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label].vocal;
+  const vocalist = vocal ? resolveVocalistForPrompt(band.members) : undefined;
+  const canAddPlate = segment.plates.length < MAX_PLATES_PER_CLIP;
+
+  return (
+    <div className="flex flex-col gap-2.5 border-t border-white/[0.06] pt-3">
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {segment.plates.map((plate, i) => (
+          <SkidmarksPlateBox
+            key={plate.id}
+            plate={plate}
+            previousStill={i > 0 ? segment.plates[i - 1].still : previousStill}
+            shotPrompt={segment.shotPrompt}
+            vocal={vocal}
+            model={segment.model}
+            bandName={band.name}
+            vocalist={vocalist}
+            canRemove={segment.plates.length > 1}
+            onSetStill={(still) => onSetPlateStill(plate.id, still)}
+            onRemove={() => onRemovePlate(plate.id)}
+          />
+        ))}
+
+        {canAddPlate && (
+          <button
+            type="button"
+            onClick={onAddPlate}
+            aria-label="Add another plate to this clip"
+            className="flex h-24 w-10 shrink-0 items-center justify-center rounded-2xl border border-dashed border-white/15 bg-white/[0.02] text-white/40 transition-colors hover:border-white/30 hover:text-white/70"
+          >
+            <PlusIcon />
+          </button>
+        )}
+      </div>
 
       <textarea
         value={segment.shotPrompt}
