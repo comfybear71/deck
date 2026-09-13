@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const putMock = vi.fn();
+const listMock = vi.fn();
+const delMock = vi.fn();
 vi.mock("@vercel/blob", () => ({
   put: (...args: unknown[]) => putMock(...args),
+  list: (...args: unknown[]) => listMock(...args),
+  del: (...args: unknown[]) => delMock(...args),
 }));
 
 import {
@@ -104,6 +108,11 @@ describe("POST /api/skidmarks/generate-clip", () => {
     vi.stubEnv("XAI_API_KEY", "test-key");
     vi.stubEnv("XAI_VIDEO_MODEL", "");
     putMock.mockReset();
+    listMock.mockReset();
+    delMock.mockReset();
+    // Default: nothing else already sitting under this plate's prefix —
+    // most tests don't care about the prune step at all.
+    listMock.mockResolvedValue({ blobs: [] });
   });
 
   afterEach(() => {
@@ -584,6 +593,94 @@ describe("POST /api/skidmarks/generate-clip", () => {
       expect(res.status).toBe(200);
       expect(body).toEqual({ videoUrl: "https://vidgen.x.ai/clip.mp4", durationSec: 5 });
       expect(putMock).not.toHaveBeenCalled();
+    });
+
+    it("prunes every other blob already sitting under this plate's own prefix after a successful save, keeping only the one just written", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+      fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      putMock.mockResolvedValueOnce({
+        url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/02_0040-0080_render.mp4",
+      });
+      // A stale take left under a *different* filename \u2014 the live-QA'd
+      // gap: the timeline reordered between two renders of "the same"
+      // plate, so `clipIndex` (and therefore the pathname) drifted.
+      listMock.mockResolvedValueOnce({
+        blobs: [
+          { pathname: "skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4", url: "https://x/stale.mp4" },
+          { pathname: "skidmarks/clip-renders/seg-1/plate-1/02_0040-0080_render.mp4", url: "https://x/fresh.mp4" },
+        ],
+      });
+
+      await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
+          plateId: "plate-1",
+          clipIndex: 2,
+          startSec: 40,
+          endSec: 80,
+        })
+      );
+
+      expect(listMock).toHaveBeenCalledWith({ prefix: "skidmarks/clip-renders/seg-1/plate-1/" });
+      expect(delMock).toHaveBeenCalledTimes(1);
+      expect(delMock).toHaveBeenCalledWith(["skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4"]);
+    });
+
+    it("never deletes the blob it just wrote, and skips del() entirely when nothing else is stale", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+      fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      putMock.mockResolvedValueOnce({
+        url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
+      });
+      listMock.mockResolvedValueOnce({
+        blobs: [
+          { pathname: "skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4", url: "https://x/fresh.mp4" },
+        ],
+      });
+
+      await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
+          plateId: "plate-1",
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+
+      expect(delMock).not.toHaveBeenCalled();
+    });
+
+    it("still returns the successfully persisted render even when the prune step itself fails", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+      fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      putMock.mockResolvedValueOnce({
+        url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
+      });
+      listMock.mockRejectedValueOnce(new Error("Vercel Blob: list() failed."));
+
+      const res = await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
+          plateId: "plate-1",
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.persisted).toBe(true);
+      expect(body.videoUrl).toBe(
+        "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4"
+      );
     });
 
     it("skips persistence when plateId is missing, even if segmentId/clipIndex/startSec/endSec are all valid", async () => {
