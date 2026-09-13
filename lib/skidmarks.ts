@@ -617,6 +617,17 @@ export interface SkidmarksClipPlateSlot {
  * anywhere — Stuart's chrome lock keeps this panel to the plate + prompt
  * only) but kept so a future tiny badge/label doesn't need a new field. */
 export interface SkidmarksPlateStill {
+  /** A real Vercel Blob `https://` URL as of 2026-09-14 (`lib/
+   * plateStillBlob.ts`'s `uploadSkidmarksPlateStill`), not a base64
+   * `data:` URL — a session with several real stills embedded inline
+   * pushed the whole Neon PUT past Vercel's ~4.5MB Function-body cap and
+   * stopped saving entirely (a bare `HTTP 413`). Every consumer that
+   * needs real bytes (xAI/Siray/Comfy Cloud references, the archive zip)
+   * resolves this via `lib/plateGeneration.ts`'s
+   * `resolvePlateReferenceDataUrl`, which is a no-op for an
+   * already-`data:` value — so a still saved *before* this fix (still a
+   * literal `data:` URL sitting in an existing session) keeps working
+   * unchanged, it just never gets re-inlined once regenerated/replaced. */
   dataUrl: string;
   source: "upload" | "generated";
   createdAt: number;
