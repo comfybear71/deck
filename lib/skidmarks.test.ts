@@ -12,6 +12,7 @@ import {
   selectSkidmarksBand,
   setSkidmarksSegmentModel,
   setSkidmarksSegmentShotPrompt,
+  setSkidmarksSegmentStill,
   skidmarksChecklistState,
   type SkidmarksClipSegment,
 } from "./skidmarks";
@@ -250,6 +251,63 @@ describe("setSkidmarksSegmentModel", () => {
   });
 });
 
+describe("SEED_BANDS", () => {
+  it("seeds Jack Ash's frontman with his locked reference photo, so an identity reference exists from a fresh session", () => {
+    const jackAsh = getSkidmarksSnapshot().bands.find((b) => b.id === "jack-ash");
+    const frontman = jackAsh?.members.find((m) => m.id === "jack-ash-frontman");
+    expect(frontman?.avatarImage).toBe("/skidmarks/jack-ash-reference.jpg");
+  });
+});
+
+describe("setSkidmarksSegmentStill", () => {
+  beforeEach(() => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("track.mp3", 120));
+  });
+
+  it("sets a still (upload or generated) and clears it back to no still at all with null", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+
+    setSkidmarksSegmentStill(segment.id, {
+      dataUrl: "data:image/jpeg;base64,AAAA",
+      source: "upload",
+      createdAt: 1000,
+    });
+    let updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.still).toEqual({ dataUrl: "data:image/jpeg;base64,AAAA", source: "upload", createdAt: 1000 });
+
+    setSkidmarksSegmentStill(segment.id, {
+      dataUrl: "data:image/jpeg;base64,BBBB",
+      source: "generated",
+      createdAt: 2000,
+    });
+    updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.still).toEqual({ dataUrl: "data:image/jpeg;base64,BBBB", source: "generated", createdAt: 2000 });
+
+    setSkidmarksSegmentStill(segment.id, null);
+    updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.still).toBeUndefined();
+    // Cleared outright, not just set to `undefined` — matches every
+    // other optional field's "unset" shape on this type.
+    expect(updated).not.toHaveProperty("still");
+  });
+
+  it("never touches shotPrompt or model when setting/clearing a still", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    setSkidmarksSegmentShotPrompt(segment.id, "a door creaks open");
+
+    setSkidmarksSegmentStill(segment.id, {
+      dataUrl: "data:image/jpeg;base64,AAAA",
+      source: "upload",
+      createdAt: 1000,
+    });
+
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.shotPrompt).toBe("a door creaks open");
+    expect(updated.model).toBe(segment.model);
+  });
+});
+
 describe("normalizeSkidmarksSegment", () => {
   it("remaps a legacy/removed model id (Kling) to the vocal/instrumental default", () => {
     const legacy = {
@@ -311,5 +369,79 @@ describe("normalizeSkidmarksSegment", () => {
     } as unknown as SkidmarksClipSegment;
 
     expect(normalizeSkidmarksSegment(seedanceLegacy).model).toBe("seedance");
+  });
+
+  it("has no `still` at all for a pre-plate-stills session, rather than a fabricated placeholder", () => {
+    const legacy = {
+      id: "seg-5",
+      startSec: 0,
+      endSec: 30,
+      label: "instrumental",
+      model: "grok",
+      shotPrompt: "",
+    } as unknown as SkidmarksClipSegment;
+
+    expect(normalizeSkidmarksSegment(legacy).still).toBeUndefined();
+    expect(normalizeSkidmarksSegment(legacy)).not.toHaveProperty("still");
+  });
+
+  it("preserves a real, valid still across a reload", () => {
+    const withStill = {
+      id: "seg-6",
+      startSec: 0,
+      endSec: 30,
+      label: "vocal",
+      model: "ltx-lipsync",
+      shotPrompt: "Jack sings under a neon sign",
+      still: { dataUrl: "data:image/jpeg;base64,AAAA", source: "generated", createdAt: 12345 },
+    } as unknown as SkidmarksClipSegment;
+
+    expect(normalizeSkidmarksSegment(withStill).still).toEqual({
+      dataUrl: "data:image/jpeg;base64,AAAA",
+      source: "generated",
+      createdAt: 12345,
+    });
+  });
+
+  it("drops a corrupt/malformed `still` rather than trusting it as-is", () => {
+    const base = {
+      id: "seg-7",
+      startSec: 0,
+      endSec: 30,
+      label: "instrumental",
+      model: "grok",
+      shotPrompt: "",
+    };
+
+    // Not a data: URL (e.g. a stale/expired remote URL that should never
+    // have been persisted in the first place).
+    expect(
+      normalizeSkidmarksSegment({
+        ...base,
+        still: { dataUrl: "https://example.com/temp.jpg", source: "upload", createdAt: 1 },
+      } as unknown as SkidmarksClipSegment).still
+    ).toBeUndefined();
+
+    // Unrecognized `source`.
+    expect(
+      normalizeSkidmarksSegment({
+        ...base,
+        still: { dataUrl: "data:image/jpeg;base64,AAAA", source: "ai", createdAt: 1 },
+      } as unknown as SkidmarksClipSegment).still
+    ).toBeUndefined();
+
+    // Missing `createdAt`.
+    expect(
+      normalizeSkidmarksSegment({
+        ...base,
+        still: { dataUrl: "data:image/jpeg;base64,AAAA", source: "upload" },
+      } as unknown as SkidmarksClipSegment).still
+    ).toBeUndefined();
+
+    // Not an object at all.
+    expect(
+      normalizeSkidmarksSegment({ ...base, still: "data:image/jpeg;base64,AAAA" } as unknown as SkidmarksClipSegment)
+        .still
+    ).toBeUndefined();
   });
 });

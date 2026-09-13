@@ -5,7 +5,9 @@ import {
   formatSegmentRange,
   SKIDMARKS_SEGMENT_LABEL_META,
   type SkidmarksAnalysisStatus,
+  type SkidmarksBand,
   type SkidmarksClipSegment,
+  type SkidmarksPlateStill,
   type SkidmarksSegmentsSource,
   type SkidmarksTranscriptionStatus,
 } from "@/lib/skidmarks";
@@ -20,7 +22,13 @@ interface SkidmarksClipTimelineProps {
   transcriptionStatus: SkidmarksTranscriptionStatus;
   transcriptionError?: string;
   transcriptionProvider?: SkidmarksTranscriptionProvider;
+  /** The active band — `SkidmarksClipStub` needs it to resolve which
+   * member auto-includes as the vocalist on a Vocal clip
+   * (`resolveVocalistForPrompt` in `lib/plateGeneration.ts`) and to name
+   * the band in a generated still's prompt. */
+  band: SkidmarksBand;
   onSetSegmentShotPrompt: (segmentId: string, shotPrompt: string) => void;
+  onSetSegmentStill: (segmentId: string, still: SkidmarksPlateStill | null) => void;
 }
 
 const STUB_FEEDBACK_TIMEOUT_MS = 3200;
@@ -46,14 +54,25 @@ function ChevronIcon({ open }: { open: boolean }) {
 
 function SegmentRow({
   segment,
+  band,
+  previousStill,
   expanded,
   onToggle,
   onSetShotPrompt,
+  onSetStill,
 }: {
   segment: SkidmarksClipSegment;
+  band: SkidmarksBand;
+  /** The clip immediately before this one's still, if it has one — the
+   * "continue from previous clip's plate" continuity reference (see
+   * `SkidmarksClipStub`'s "Use last plate" toggle and
+   * `lib/plateGeneration.ts`'s `buildPlateGenerationRequest`). `undefined`
+   * for the first clip, or whenever the previous clip has no still yet. */
+  previousStill?: SkidmarksPlateStill;
   expanded: boolean;
   onToggle: () => void;
   onSetShotPrompt: (shotPrompt: string) => void;
+  onSetStill: (still: SkidmarksPlateStill | null) => void;
 }) {
   const meta = SKIDMARKS_SEGMENT_LABEL_META[segment.label];
 
@@ -91,7 +110,13 @@ function SegmentRow({
 
       {expanded && (
         <div className="px-3 pb-3">
-          <SkidmarksClipStub segment={segment} onSetShotPrompt={onSetShotPrompt} />
+          <SkidmarksClipStub
+            segment={segment}
+            band={band}
+            previousStill={previousStill}
+            onSetShotPrompt={onSetShotPrompt}
+            onSetStill={onSetStill}
+          />
         </div>
       )}
     </div>
@@ -151,11 +176,17 @@ function timelineNote(
  * Each row is individually collapsible (collapsed = time range + label
  * only, no model glance — per Stuart's live-QA chrome lock there is no
  * model UI anywhere in this build right now, see `SkidmarksClipStub`'s
- * doc comment; expanded = `SkidmarksClipStub`'s one dashed empty-still
- * placeholder + one shot-prompt field for that clip, nothing else — the
- * Camera Angles block, the five-card location-plate picker, and the
- * Model pill row from earlier passes are all gone outright). The whole
- * section can also collapse, same pattern as `ControlPlaneDemo`.
+ * doc comment; expanded = `SkidmarksClipStub`'s one plate placeholder
+ * (upload/generate/replace/clear a real still, in place — see that
+ * component's doc comment) + one multi-line shot-prompt field for that
+ * clip, nothing else — the Camera Angles block, the five-card
+ * location-plate picker, and the Model pill row from earlier passes are
+ * all gone outright). This component threads `band` and each clip's
+ * `previousStill` down to `SkidmarksClipStub` — the former resolves
+ * which member auto-includes as the vocalist on a Vocal clip, the latter
+ * is the "continue from the previous clip's plate" continuity reference
+ * — but never touches either itself. The whole section can also
+ * collapse, same pattern as `ControlPlaneDemo`.
  *
  * **Phase note**: this is the clip-stub UI only. The footer's
  * "Generate Clips" button is a **stub** — tapping it never calls a real
@@ -174,7 +205,9 @@ export function SkidmarksClipTimeline({
   segmentsSource,
   analysisStatus,
   transcriptionStatus,
+  band,
   onSetSegmentShotPrompt,
+  onSetSegmentStill,
 }: SkidmarksClipTimelineProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -224,13 +257,16 @@ export function SkidmarksClipTimeline({
           {note && <p className="text-[11px] leading-relaxed text-amber-200/70">{note}</p>}
 
           <div className="flex flex-col gap-2">
-            {segments.map((segment) => (
+            {segments.map((segment, i) => (
               <SegmentRow
                 key={segment.id}
                 segment={segment}
+                band={band}
+                previousStill={i > 0 ? segments[i - 1].still : undefined}
                 expanded={expandedIds.has(segment.id)}
                 onToggle={() => toggleExpanded(segment.id)}
                 onSetShotPrompt={(shotPrompt) => onSetSegmentShotPrompt(segment.id, shotPrompt)}
+                onSetStill={(still) => onSetSegmentStill(segment.id, still)}
               />
             ))}
           </div>
