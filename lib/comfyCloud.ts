@@ -516,10 +516,20 @@ export interface LtxAudioToVideoWorkflowInputs {
  *   inputs match that node's own documented schema exactly (`audio`,
  *   `model`, `prompt`, `seed`, optional `image` — docs.comfy.org/
  *   built-in-nodes/LtxApi25AudioToVideo). Its own documented behavior:
- *   the **audio's length sets the output video's duration** (2-20s,
- *   raises an error outside that range) — this is why the plate's
- *   sliced audio window, not a separate duration field, is what
- *   actually controls how long the rendered clip runs.
+ *   the **audio's length sets the output video's duration** — this is
+ *   why the plate's sliced audio window, not a separate duration field,
+ *   is what actually controls how long the rendered clip runs. That
+ *   doc page's own text lists a `2-20s` range; Stuart's own real, live
+ *   usage on Comfy Cloud (many actual ~30s LTX renders already
+ *   produced there) shows the practical ceiling is higher than that
+ *   page states, so `app/api/skidmarks/generate-clip/route.ts` and
+ *   `lib/clipGeneration.ts` target `[5, 30]`s now, not `[5, 20]` — see
+ *   `lib/clipGeneration.ts`'s module doc comment's "History of this
+ *   ceiling" note. Still not independently re-verified against a real
+ *   Comfy Cloud account in this sandbox (no `COMFY_CLOUD_API_KEY`
+ *   available here) — if the real node's own error surfaces a stricter
+ *   ceiling than 30s in practice, that's a fresh signal from a live
+ *   call, not something guessed at here.
  * - `SaveVideo` (node `"4"`) — writes the node's `video` output so it
  *   shows up in the `executed` WebSocket message
  *   `waitForComfyCloudCompletion` reads. `SaveVideo`'s own exact input

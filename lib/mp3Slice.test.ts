@@ -135,4 +135,57 @@ describe("sliceMp3ToTimeRange", () => {
     if (outcome.ok) return;
     expect(outcome.error).toContain("No audio frames fall inside");
   });
+
+  describe("maxDurationSec \u2014 trims an over-long slice instead of erroring", () => {
+    it("trims a slice back to at most maxDurationSec when outward rounding would otherwise exceed it", () => {
+      const mp3 = encodeTestMp3(40, 22050, 64);
+      // Request a window whose outward-rounded natural length would sit
+      // right at (or a hair past) the ceiling \u2014 the real live-QA'd
+      // "audio slice is 20.0s" shape, generalized to any ceiling.
+      const withoutCap = sliceMp3ToTimeRange(mp3, 0, 30);
+      expect(withoutCap.ok).toBe(true);
+      if (!withoutCap.ok) return;
+
+      const withCap = sliceMp3ToTimeRange(mp3, 0, 30, 30);
+      expect(withCap.ok).toBe(true);
+      if (!withCap.ok) return;
+      const actualDurationSec = withCap.actualEndSec - withCap.actualStartSec;
+      expect(actualDurationSec).toBeLessThanOrEqual(30);
+      // Trimming only ever drops bytes from the end \u2014 the requested
+      // window's own start point is untouched.
+      expect(withCap.actualStartSec).toBe(withoutCap.actualStartSec);
+    });
+
+    it("never throws and never returns an empty slice, even when maxDurationSec is tiny", () => {
+      const mp3 = encodeTestMp3(5, 22050, 64);
+      const outcome = sliceMp3ToTimeRange(mp3, 0, 5, 0.001);
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) return;
+      expect(outcome.bytes.length).toBeGreaterThan(0);
+      // Can't trim below one real frame \u2014 that frame's own duration
+      // may still exceed the (pathologically tiny) cap; this is the
+      // documented "never produce an empty slice" floor, not a promise
+      // to satisfy an unreasonably small maxDurationSec exactly.
+      expect(outcome.actualEndSec).toBeGreaterThan(outcome.actualStartSec);
+    });
+
+    it("leaves a slice that's already within maxDurationSec untouched", () => {
+      const mp3 = encodeTestMp3(10, 22050, 64);
+      const withoutCap = sliceMp3ToTimeRange(mp3, 1, 3);
+      const withCap = sliceMp3ToTimeRange(mp3, 1, 3, 30);
+      expect(withCap).toEqual(withoutCap);
+    });
+
+    it("real-world regression: a plate clamped to exactly the LTX ceiling never fails after trimming", () => {
+      // Stuart's live-QA repro shape: a plate's requested window sits
+      // right at the product ceiling (previously 20s, now 30s) \u2014
+      // frame-aligned outward rounding must never push the *actual*
+      // slice back over that same ceiling once maxDurationSec is given.
+      const mp3 = encodeTestMp3(45, 44100, 128);
+      const outcome = sliceMp3ToTimeRange(mp3, 5, 35, 30);
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) return;
+      expect(outcome.actualEndSec - outcome.actualStartSec).toBeLessThanOrEqual(30);
+    });
+  });
 });

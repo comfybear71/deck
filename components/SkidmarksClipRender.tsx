@@ -148,8 +148,11 @@ function Spinner() {
  *
  * **Real, auto-computed duration** — `durationSec` (`segmentLengthSec /
  * plateCount`, clamped to Grok's real 5–15s ceiling on an Instrumental
- * clip via `computePlateDurationSec`, or Comfy/LTX's real 5–20s
- * ceiling on a Vocal one via `computeLtxPlateDurationSec`) is shown,
+ * clip via `computePlateDurationSec`, or Comfy/LTX's real 5–30s
+ * ceiling on a Vocal one via `computeLtxPlateDurationSec` — see
+ * `lib/clipGeneration.ts`'s module doc comment's "History of this
+ * ceiling" note for why 30s, not the 20s this shipped with originally)
+ * is shown,
  * alongside a real per-render dollar estimate for whichever backend
  * this render actually calls, in the confirm step; nothing here lets
  * Stuart type a duration in — it's derived, not a picker, per

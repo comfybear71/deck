@@ -45,13 +45,20 @@ describe("computePlateDurationSec", () => {
 });
 
 describe("computeLtxPlateDurationSec", () => {
-  it("clamps into LTX's real [5, 20] range \u2014 not Grok's [5, 15]", () => {
+  it("clamps into LTX's real [5, 30] range \u2014 not Grok's [5, 15]", () => {
     expect(computeLtxPlateDurationSec(60, 1, 0)).toBe(MAX_LTX_CLIP_DURATION_SEC);
     expect(computeLtxPlateDurationSec(2, 1, 0)).toBe(MIN_LTX_CLIP_DURATION_SEC);
   });
 
   it("gives an 18s share a real, unclamped pass-through (would have been clamped under Grok's 15s ceiling)", () => {
     expect(computeLtxPlateDurationSec(18, 1, 0)).toBe(18);
+  });
+
+  it("clamps a raw segment/plateCount well past the ceiling (Stuart's real 163s / 5 plates live-QA case) down to MAX_LTX_CLIP_DURATION_SEC, never throwing", () => {
+    // 163s / 5 plates \u2248 32-33s/plate raw \u2014 must clamp to 30, not error.
+    for (let plateIndex = 0; plateIndex < 5; plateIndex++) {
+      expect(computeLtxPlateDurationSec(163, 5, plateIndex)).toBe(MAX_LTX_CLIP_DURATION_SEC);
+    }
   });
 
   it("still splits evenly across multiple plates the same way as the Grok range", () => {
@@ -330,7 +337,7 @@ describe("buildClipGenerationRequest", () => {
       expect(request.vocal).toBe(true);
     });
 
-    it("clamps durationSec into LTX's [5, 20] range, not Grok's [5, 15]", () => {
+    it("clamps durationSec into LTX's [5, 30] range, not Grok's [5, 15]", () => {
       expect(
         buildClipGenerationRequest({
           vocal: true,

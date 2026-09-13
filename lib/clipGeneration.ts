@@ -73,23 +73,48 @@
  *   switches back, same duration range, same one-reference-image
  *   shape as before this pass.
  *
- * **The Vocal/Comfy-LTX path's own fuller story** (unchanged by this
- * pass): drives the generated video's motion (chiefly mouth movement)
- * off a real **slice of the attached song's own vocal performance**
- * for this exact plate (`lib/mp3Slice.ts`, frame-cut from
- * `mp3.audioUrl` — the durable Blob URL, never the ephemeral in-tab
- * `File`/object URL, since a server route has no access to a browser
- * `File` at all) instead of an automatic push-in/zoom. That node's own
- * documented duration range is 2-20s (its output duration is *set by*
- * the input audio's length, not a separate parameter) —
- * `MIN_LTX_CLIP_DURATION_SEC`/`MAX_LTX_CLIP_DURATION_SEC` below use a
- * 5-20s window instead (5s floor to match this feature's existing
- * floor everywhere else, 20s the node's real ceiling). **Note**:
- * Stuart's own initial ask was "clamp up to ~30s" — the real
- * `LtxApi25AudioToVideo` node caps hard at 20s and documents that it
- * errors outside `[2, 20]`, so this module honors the *real* technical
- * ceiling instead of quietly sending a request already known to fail
- * past it.
+ * **The Vocal/Comfy-LTX path's own fuller story** (revised twice now,
+ * both times live-QA-driven): drives the generated video's motion
+ * (chiefly mouth movement) off a real **slice of the attached song's
+ * own vocal performance** for this exact plate (`lib/mp3Slice.ts`,
+ * frame-cut from `mp3.audioUrl` — the durable Blob URL, never the
+ * ephemeral in-tab `File`/object URL, since a server route has no
+ * access to a browser `File` at all) instead of an automatic push-in/
+ * zoom. That node's own output duration is *set by* the input audio's
+ * length, not a separate parameter — `MIN_LTX_CLIP_DURATION_SEC`/
+ * `MAX_LTX_CLIP_DURATION_SEC` below bound how long that sliced audio
+ * (and so the rendered clip) is allowed to be.
+ *
+ * **History of this ceiling, both revisions real and live-QA'd, not
+ * guessed**: this shipped first at `[5, 20]` — a partner-node doc page
+ * listed `LtxApi25AudioToVideo`'s driving audio as `2-20s`, erroring
+ * outside that range, which read as the real hard ceiling at the time.
+ * Two real bugs followed from trusting that number too literally: (1)
+ * Stuart's live usage (many real ~30s LTX renders already produced on
+ * his own Comfy Cloud account) showed that documented `20s` figure was
+ * simply too conservative for his actual workflow — the real ceiling
+ * he can reach in practice is **~30s**, so `MAX_LTX_CLIP_DURATION_SEC`
+ * is `30` now, not `20`; (2) independent of that number, a plate
+ * requested at *exactly* the ceiling could still get rejected — xAI/
+ * Comfy audio must be frame-aligned, and `lib/mp3Slice.ts`'s
+ * `sliceMp3ToTimeRange` rounds **outward** to the nearest real MP3
+ * frame boundary to fully cover the requested window, so a request for
+ * exactly `20.0s` could round out to `~20.02s`, which displayed as
+ * `"20.0s"` (one-decimal rounding) in the error text but still failed
+ * a strict `> 20` check — a real "the number you see isn't the number
+ * that got checked" gap, not a one-off fluke tied to `20` specifically.
+ * Both fixes land in `app/api/skidmarks/generate-clip/route.ts`'s
+ * Vocal branch now: the real ceiling is `30`, and `sliceMp3ToTimeRange`
+ * itself trims whole frames off the *end* of an over-long slice down to
+ * that ceiling instead of erroring — so this class of "exact-boundary"
+ * rounding overshoot can't resurface at the new number either. **This
+ * app's own product duration floor/ceiling should never throw a hard
+ * error just because `segmentLengthSec / plateCount` computes something
+ * outside `[MIN_LTX_CLIP_DURATION_SEC, MAX_LTX_CLIP_DURATION_SEC]`** —
+ * `computePlateDurationSec`/`computeLtxPlateDurationSec` below always
+ * clamp into range instead, and the confirm step
+ * (`components/SkidmarksClipRender.tsx`) always shows that clamped
+ * number, never the raw pre-clamp one.
  *
  * **Neither Comfy/LTX nor MiniMax H3 is live-verified** the way the
  * Grok path is — see `lib/comfyCloud.ts`'s and `lib/minimaxH3.ts`'s
@@ -116,15 +141,15 @@ export const MIN_CLIP_DURATION_SEC = 5;
 export const MAX_CLIP_DURATION_SEC = 15;
 
 /** Vocal/Comfy-LTX duration range — see this module's doc comment's
- * "Vocal -> Comfy Cloud LTX" note for why this is `[5, 20]`, not the
- * `[5, 30]` Stuart initially asked for: `LtxApi25AudioToVideo`'s own
- * documented constraint is that its driving audio must be 2-20s long
- * (it raises an error outside that range), and that audio's length is
- * what sets the rendered video's duration — 20s is the real technical
- * ceiling this app can actually request, not a cost-lock choice like
- * Grok's 480p/15s. */
+ * "History of this ceiling" note: `30`, not the `20` this shipped with
+ * originally — a partner-node doc page's `2-20s` figure turned out to
+ * be more conservative than Stuart's own real, live Comfy Cloud usage
+ * (many real ~30s LTX renders already produced there), so this app's
+ * own product ceiling now matches his actual demonstrated workflow
+ * instead of that doc page's number. `5` stays the floor, matching this
+ * feature's existing floor everywhere else. */
 export const MIN_LTX_CLIP_DURATION_SEC = 5;
-export const MAX_LTX_CLIP_DURATION_SEC = 20;
+export const MAX_LTX_CLIP_DURATION_SEC = 30;
 
 /** Mirrors `app/api/skidmarks/generate-clip/route.ts`'s hardcoded
  * `CLIP_RESOLUTION` ("480p", $0.08/sec per xAI's published Grok Imagine

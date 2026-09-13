@@ -33,6 +33,12 @@
  * branch) surfaces that verbatim rather than sending Comfy Cloud a
  * bogus/empty audio file and pretending the request was fine.
  *
+ * **Never hard-errors over its own outward-rounding, either** — see
+ * `sliceMp3ToTimeRange`'s own doc comment for the optional
+ * `maxDurationSec` parameter, which trims an over-long slice back down
+ * to a hard technical ceiling instead of failing a request that was
+ * already correctly clamped by its caller.
+ *
  * Only MPEG-1/2/2.5 **Layer III** frames are recognized (this app only
  * ever produces/attaches MP3s — see `SkidmarksMp3Attachment`'s own
  * `.mp3`-only surface); a Layer I/II frame sync is treated the same as
@@ -186,8 +192,35 @@ export type Mp3SliceOutcome =
  * that need to report a real duration to Stuart (the confirm step's
  * dollar estimate, `durationSec` sent to Comfy Cloud) should use this
  * actual range, not the originally requested one.
+ *
+ * **`maxDurationSec` (optional) — trims, never errors, on overshoot.**
+ * A real live-QA'd bug: a caller that clamps its *requested* window to
+ * exactly a hard technical ceiling (e.g. Comfy Cloud LTX's driving-
+ * audio ceiling, `MAX_LTX_CLIP_DURATION_SEC` in
+ * `app/api/skidmarks/generate-clip/route.ts`/`lib/clipGeneration.ts`)
+ * could still get a slice back that's a hair *over* that ceiling —
+ * because this function always rounds **outward** to fully cover the
+ * request, a request for exactly the ceiling can round out to a few
+ * milliseconds past it. Stuart hit exactly this at the old 20s ceiling:
+ * the error text read `"This plate's audio slice is 20.0s"` (one-
+ * decimal display rounding) while the real, unrounded value had
+ * already failed a strict `> 20` check. Per this feature's "never a
+ * hard error over an arithmetic/rounding technicality — always clamp"
+ * rule, passing `maxDurationSec` here drops whole frames off the *end*
+ * of the selection (never the start — the requested window's own start
+ * point stays intact) until the actual range fits, instead of the
+ * caller having to reject an otherwise-valid, already-correctly-
+ * clamped request. Never trims below a single frame, so this can't
+ * produce an empty slice even if `maxDurationSec` itself is smaller
+ * than one frame's own duration (a pathological caller error, not a
+ * real scenario for this feature's own `[5, 30]`s range).
  */
-export function sliceMp3ToTimeRange(bytes: Uint8Array, startSec: number, endSec: number): Mp3SliceOutcome {
+export function sliceMp3ToTimeRange(
+  bytes: Uint8Array,
+  startSec: number,
+  endSec: number,
+  maxDurationSec?: number
+): Mp3SliceOutcome {
   const frames = parseMp3Frames(bytes);
   if (frames.length === 0) {
     return {
@@ -208,15 +241,25 @@ export function sliceMp3ToTimeRange(bytes: Uint8Array, startSec: number, endSec:
     };
   }
 
-  const totalLength = selected.reduce((sum, f) => sum + f.length, 0);
+  let trimmed = selected;
+  if (typeof maxDurationSec === "number" && Number.isFinite(maxDurationSec)) {
+    while (trimmed.length > 1) {
+      const first = trimmed[0];
+      const last = trimmed[trimmed.length - 1];
+      if (last.startSec + last.durationSec - first.startSec <= maxDurationSec) break;
+      trimmed = trimmed.slice(0, -1);
+    }
+  }
+
+  const totalLength = trimmed.reduce((sum, f) => sum + f.length, 0);
   const out = new Uint8Array(totalLength);
   let pos = 0;
-  for (const frame of selected) {
+  for (const frame of trimmed) {
     out.set(bytes.subarray(frame.offset, frame.offset + frame.length), pos);
     pos += frame.length;
   }
 
-  const first = selected[0];
-  const last = selected[selected.length - 1];
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
   return { ok: true, bytes: out, actualStartSec: first.startSec, actualEndSec: last.startSec + last.durationSec };
 }
