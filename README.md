@@ -1604,10 +1604,10 @@ now (see "Explicitly out of scope" below).
     plate strip already uses (`touch-pan-x` per card, not `touch-none`,
     so a horizontal drag that starts on top of a `<video>` still scrolls
     the strip instead of fighting it; `overscroll-x-contain` +
-    `-webkit-overflow-scrolling: touch` on the row). The per-clip
-    download link stays under each card, and the "download all" zip
-    control (falling back to sequential per-clip downloads if the zip
-    step fails) stays reachable underneath the whole strip.
+    `-webkit-overflow-scrolling: touch` on the row). Each card's own
+    **Download** pill (see below) stays under it, and the "download
+    all" zip control (falling back to sequential per-clip downloads if
+    the zip step fails) stays reachable underneath the whole strip.
     - **Order lock**: the shelf's visible order is always
       `sortPersistedRenders`'s (`lib/clipRenders.ts`) timeline/plate-
       position sort — clip index, then start/end time, then the
@@ -1628,6 +1628,22 @@ now (see "Explicitly out of scope" below).
       leaves the card and its tick exactly where they were, with an
       honest inline error, rather than pretending a render is gone when
       it might still be sitting in Blob.
+    - **Per-card Download**: one small explicit "Download" pill right
+      next to Remove — same `rounded-full` shape/size, so the two read
+      as one small pair of controls on the card, not a second style of
+      button. Deliberately *not* "tap the `<video>` and use its native
+      iOS Safari share/⋯ menu," which Stuart flagged as not something
+      he could rely on. Goes through `lib/clipRenders.ts`'s
+      `buildForceDownloadUrl` — Vercel Blob's own `?download=1` query
+      param, which serves the blob with a real
+      `Content-Disposition: attachment` header — rather than depending
+      on a plain `<a download>` attribute against a cross-origin Blob
+      URL, which iOS Safari has a long history of ignoring (it just
+      navigates/plays the video inline instead of saving it). Uses the
+      exact same numeric (lettered once a clip has >1 plate)
+      `render.filename` the "download all" zip already writes each
+      entry under, so a clip saved one-at-a-time from here lands in
+      Files/Downloads with the same name it would have inside the zip.
 
   - **MP3 audio → Vercel Blob ("play survives a refresh")**: the
     attached MP3's raw `File` never persisted (still true — a `File`

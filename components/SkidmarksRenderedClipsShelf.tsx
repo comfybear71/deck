@@ -49,6 +49,21 @@ function TrashIcon() {
   );
 }
 
+/** Small down-into-tray glyph for the per-card Download control. */
+function DownloadIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3 w-3">
+      <path
+        d="M10 3v9m0 0-3.25-3.25M10 12l3.25-3.25M4.5 14.5v1a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /**
  * The page-bottom "Rendered clips" shelf — the declutter fix for
  * Stuart's live-QA rejection of a jammed panel under the pink Render
@@ -101,6 +116,22 @@ function TrashIcon() {
  * real success does this clear the card/tick via `onRemoved` — a
  * failed delete leaves the card and its tick exactly where they were,
  * with an honest error line, rather than pretending the render is gone.
+ *
+ * **Per-card Download**: one small explicit pill next to Remove
+ * (same `rounded-full` shape/size, so the two read as one small pair of
+ * controls, not a second style of button) — deliberately *not* just
+ * "tap the `<video>` and use its native iOS Safari share/⋯ menu," which
+ * Stuart flagged as not a real control he could rely on. Goes through
+ * `buildForceDownloadUrl` (Vercel Blob's own `?download=1`, which sets
+ * a real `Content-Disposition: attachment` server-side) rather than
+ * depending on a plain `<a download>` attribute against a cross-origin
+ * Blob URL — iOS Safari has a long history of ignoring that attribute
+ * cross-origin and just navigating/playing the video inline instead of
+ * saving it. Same numeric (lettered once a clip has >1 plate)
+ * `render.filename` the "download all" zip already uses, so a clip
+ * downloaded one-at-a-time from here lands in Files/Downloads with the
+ * exact same name it would have inside the zip — Resolve doesn't care
+ * which path it came from.
  */
 export function SkidmarksRenderedClipsShelf({ renders, onRemoved }: SkidmarksRenderedClipsShelfProps) {
   const [open, setOpen] = useState(true);
@@ -206,10 +237,12 @@ export function SkidmarksRenderedClipsShelf({ renders, onRemoved }: SkidmarksRen
                         download={render.filename}
                         target="_blank"
                         rel="noreferrer"
-                        className="min-w-0 flex-1 truncate text-[10px] font-medium text-rose-300/90 underline-offset-2 hover:underline"
+                        aria-label={`Download this rendered clip (${render.filename})`}
                         title={`Download ${render.filename}`}
+                        className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-white/60 transition-colors hover:border-rose-400/30 hover:text-rose-300/90"
                       >
-                        Download {render.filename}
+                        <DownloadIcon />
+                        Download
                       </a>
                       <button
                         type="button"
