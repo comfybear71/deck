@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   formatSegmentRange,
   SKIDMARKS_SEGMENT_LABEL_META,
@@ -67,8 +67,6 @@ interface SkidmarksClipTimelineProps {
    * see `lib/skidmarks.ts`'s `SkidmarksInstrumentalVideoModel`. */
   onSetClipInstrumentalModel: (segmentId: string, model: SkidmarksInstrumentalVideoModel) => void;
 }
-
-const STUB_FEEDBACK_TIMEOUT_MS = 3200;
 
 function ChevronIcon({ open }: { open: boolean }) {
   return (
@@ -279,11 +277,18 @@ function renderKey(segmentId: string, plateId: string): string {
  * `previousStill`, and (new) the whole-song render map down to
  * `SkidmarksClipStub` — but never touches any of them itself.
  *
- * **Phase note**: the footer's **"Generate Clips" button below stays a
- * deliberate stub** — tapping it never calls a real render for the whole
- * song; it only shows a "stub, not wired" message. That's a different
- * thing from each individual plate's own render control — see
- * `SkidmarksClipStub`/`components/SkidmarksClipRender.tsx`.
+ * **The whole-song "Generate Clips" stub button is gone** (removed
+ * 2026-09-14, Stuart's explicit ask — "It does nothing useful and
+ * confuses him"). It never called a real render for the whole song; it
+ * only showed a "stub, not wired" message, which was itself the
+ * problem — a pink, primary-looking button that did nothing real reads
+ * as broken, not as an honest placeholder. **This does not change
+ * anything about whole-song auto-render staying explicitly out of
+ * scope** — per AGENTS.md's cost lock, that's still not something to
+ * build without its own explicit product sign-off; removing the stub
+ * button is not the same ask as wiring it up. Each individual plate's
+ * own opt-in Render control (`SkidmarksClipStub`/
+ * `components/SkidmarksClipRender.tsx`) is unaffected.
  *
  * **The "which plates already have a saved render" lookup, and the
  * rendered-clips player/download surface, both moved out of this
@@ -342,8 +347,6 @@ export function SkidmarksClipTimeline({
 }: SkidmarksClipTimelineProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [stubMessage, setStubMessage] = useState<string | null>(null);
-  const stubMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Which single (segmentId, plateId) pair, if any, is currently
   // mid-render — the literal enforcement of Stuart's "one render at a
   // time" cost lock across the *whole* timeline. See
@@ -357,14 +360,6 @@ export function SkidmarksClipTimeline({
       else next.add(id);
       return next;
     });
-  };
-
-  const handleGenerateClips = () => {
-    if (stubMessageTimer.current) clearTimeout(stubMessageTimer.current);
-    setStubMessage(
-      "Stub only \u2014 no Comfy MCP / LTX render kicked off. Wire-up comes once that pipeline lands."
-    );
-    stubMessageTimer.current = setTimeout(() => setStubMessage(null), STUB_FEEDBACK_TIMEOUT_MS);
   };
 
   if (segments.length === 0) return null;
@@ -441,30 +436,6 @@ export function SkidmarksClipTimeline({
               );
             })}
           </div>
-
-          <button
-            type="button"
-            onClick={handleGenerateClips}
-            className="mt-1 rounded-full bg-rose-400 px-4 py-3 text-center text-sm font-semibold text-zinc-950 shadow-[0_0_28px_-6px_rgba(251,113,133,0.85)] transition-colors hover:bg-rose-300 active:bg-rose-400/85"
-          >
-            Generate Clips
-          </button>
-          {/* Always mounted (not conditionally rendered) with role="status" +
-              aria-live so assistive tech reliably announces the stub
-              message on tap — some browsers/screen readers miss the first
-              update on a live region that only enters the DOM after the
-              click that changes it. Empty and visually collapsed
-              (h-0/opacity-0) until there's something to say. */}
-          <p
-            role="status"
-            aria-live="polite"
-            className={[
-              "text-center text-[11px] leading-relaxed text-white/45 transition-opacity",
-              stubMessage ? "opacity-100" : "h-0 overflow-hidden opacity-0",
-            ].join(" ")}
-          >
-            {stubMessage}
-          </p>
         </>
       )}
     </div>

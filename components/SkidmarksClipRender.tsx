@@ -117,14 +117,24 @@ function Spinner() {
  * still fully wired one tap away). Vocal vs. Instrumental is chosen
  * automatically by this component's own `vocal` prop, same as before;
  * **H3 vs. Grok, on an Instrumental clip, is the one real switch this
- * component now exposes** — a small two-way toggle inside the existing
- * two-tap confirm step below (never a persistent pill/badge on the
- * plate tile, per AGENTS.md's "no model picker" lock — Stuart's own
- * explicit ask named this exact shape: "a single H3 | Grok choice
- * inside the existing two-tap Render confirm"). Deliberately **not**
- * the "Generate Clips" button (`SkidmarksClipTimeline`) — that stays
- * the honest whole-song stub; this animates exactly one already-
- * selected plate at a time.
+ * component exposes** — a small two-way toggle rendered permanently
+ * *beside* the Render button (never a persistent pill/badge on the
+ * plate tile itself, per AGENTS.md's "no model picker" lock).
+ * **Relocated 2026-09-14** on Stuart's direct follow-up: it originally
+ * lived only inside the two-tap confirm step, which he reported as
+ * effectively buried — "not buried only in a hard-to-find confirm...
+ * prefer visible beside the button." It's the same field
+ * (`SkidmarksClipSegment.instrumentalVideoModel`), just moved so it's
+ * visible the moment the clip's expanded, not only after Render's
+ * already been tapped once. On a **Vocal** clip the equivalent left-
+ * hand control is a plain **LTX** label, not a switch — there's only
+ * ever one real Vocal backend (Comfy Cloud's LTX 2.3 IA2V graph), and
+ * this app never invents a fake second option just to mirror the
+ * Instrumental switch's shape. Deliberately **not** the old whole-song
+ * "Generate Clips" button (removed entirely, see
+ * `SkidmarksClipTimeline`'s doc comment) — this animates exactly one
+ * already-selected plate at a time, explicit two-tap confirm still
+ * required for the real spend.
  *
  * **Vocal plates need real audio, not just a text prompt.** When
  * `vocal` is true, Render stays disabled (with an honest inline
@@ -340,34 +350,37 @@ export function SkidmarksClipRender({
         />
       )}
 
-      {!generating && !confirming && (
-        <button
-          type="button"
-          onClick={startConfirm}
-          disabled={locked || missingAudio}
-          aria-disabled={locked || missingAudio}
-          className={[
-            "rounded-full px-4 py-2.5 text-center text-[13px] font-semibold transition-colors",
-            locked || missingAudio
-              ? "cursor-not-allowed bg-white/[0.04] text-white/30"
-              : "bg-rose-400 text-zinc-950 hover:bg-rose-300 active:bg-rose-400/85",
-          ].join(" ")}
-        >
-          {showsAsRendered ? "Render plate again" : "Render plate"}
-        </button>
-      )}
-
-      {!generating && confirming && (
-        <div className="flex flex-col gap-2">
-          {!vocal && (
+      {!generating && (
+        <div className="flex items-center gap-2">
+          {vocal ? (
+            // Vocal only ever has one real backend (Comfy Cloud LTX,
+            // lip-sync) — a plain label, never a fake second option
+            // just to mirror the Instrumental switch's shape. See this
+            // component's doc comment.
+            <span
+              aria-label="Vocal render backend: LTX lip-sync"
+              className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-center text-[12px] font-semibold text-white/70"
+            >
+              LTX
+            </span>
+          ) : (
             // Two real, roomy tap targets (not a slim pill row) — each
             // button's own padding keeps it comfortably past Apple's
             // ~44pt HIG minimum, same "a thumb should never have to aim
             // precisely" lesson this feature's other iOS-Safari-tuned
             // controls already learned the hard way (see
             // `components/SkidmarksClipStub.tsx`'s
-            // `SkidmarksPlateSelectControl` doc comment).
-            <div className="flex items-center gap-1.5 self-start rounded-full bg-white/[0.04] p-1 text-[12px] font-medium">
+            // `SkidmarksPlateSelectControl` doc comment). **Now
+            // permanently visible beside the Render button** (moved out
+            // of the confirm-only step 2026-09-14, Stuart's explicit
+            // ask — "not buried only in a hard-to-find confirm... prefer
+            // visible beside the button") rather than only appearing
+            // once Render's already been tapped once.
+            <div
+              role="group"
+              aria-label="Instrumental render backend"
+              className="flex shrink-0 items-center gap-1 rounded-full bg-white/[0.04] p-1 text-[12px] font-medium"
+            >
               {(["h3", "grok"] as const).map((option) => (
                 <button
                   key={option}
@@ -375,7 +388,7 @@ export function SkidmarksClipRender({
                   onClick={() => onSetInstrumentalVideoModel(option)}
                   aria-pressed={instrumentalVideoModel === option}
                   className={[
-                    "min-h-[36px] rounded-full px-4 py-2 transition-colors",
+                    "min-h-[36px] rounded-full px-3.5 py-2 transition-colors",
                     instrumentalVideoModel === option
                       ? "bg-rose-400 text-zinc-950"
                       : "text-white/50 hover:text-white/80",
@@ -386,26 +399,47 @@ export function SkidmarksClipRender({
               ))}
             </div>
           )}
-          <div className="flex items-center gap-2">
+
+          {!confirming ? (
+            // "About half width" per Stuart's explicit ask — the switch/
+            // pill to its left takes the rest of the row instead of this
+            // button spanning edge-to-edge the way it used to.
             <button
               type="button"
-              onClick={handleConfirm}
-              className="flex-1 rounded-full bg-rose-400 px-3.5 py-2.5 text-center text-[12px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/85"
+              onClick={startConfirm}
+              disabled={locked || missingAudio}
+              aria-disabled={locked || missingAudio}
+              className={[
+                "w-1/2 rounded-full px-4 py-2.5 text-center text-[13px] font-semibold transition-colors",
+                locked || missingAudio
+                  ? "cursor-not-allowed bg-white/[0.04] text-white/30"
+                  : "bg-rose-400 text-zinc-950 hover:bg-rose-300 active:bg-rose-400/85",
+              ].join(" ")}
             >
-              {vocal
-                ? `Confirm — real Comfy Cloud LTX call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
-                : instrumentalVideoModel === "h3"
-                  ? `Confirm — real MiniMax H3 call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
-                  : `Confirm — real xAI Grok video call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`}
+              {showsAsRendered ? "Render plate again" : "Render plate"}
             </button>
-            <button
-              type="button"
-              onClick={cancelConfirm}
-              className="rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-[12px] font-medium text-white/60 transition-colors hover:bg-white/[0.07] hover:text-white"
-            >
-              Cancel
-            </button>
-          </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={handleConfirm}
+                className="flex-1 rounded-full bg-rose-400 px-3.5 py-2.5 text-center text-[12px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/85"
+              >
+                {vocal
+                  ? `Confirm — real Comfy Cloud LTX call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
+                  : instrumentalVideoModel === "h3"
+                    ? `Confirm — real MiniMax H3 call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
+                    : `Confirm — real xAI Grok video call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`}
+              </button>
+              <button
+                type="button"
+                onClick={cancelConfirm}
+                className="shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-[12px] font-medium text-white/60 transition-colors hover:bg-white/[0.07] hover:text-white"
+              >
+                Cancel
+              </button>
+            </>
+          )}
         </div>
       )}
 

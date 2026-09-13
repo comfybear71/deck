@@ -114,8 +114,8 @@ function PlusIcon() {
   );
 }
 
-/** Same spinner shape as `SkidmarksChecklistChips`' "analyzing" state —
- * one visual language for "real work in flight" across this feature. */
+/** Same spinner shape used everywhere else in this feature for "real
+ * work in flight". */
 function Spinner() {
   return (
     <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4 animate-spin text-white/80">
