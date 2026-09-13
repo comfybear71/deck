@@ -1604,8 +1604,8 @@ now (see "Explicitly out of scope" below).
     plate strip already uses (`touch-pan-x` per card, not `touch-none`,
     so a horizontal drag that starts on top of a `<video>` still scrolls
     the strip instead of fighting it; `overscroll-x-contain` +
-    `-webkit-overflow-scrolling: touch` on the row). The per-clip
-    download link stays under each card, and the "download all" zip
+    `-webkit-overflow-scrolling: touch` on the row). Each card's own
+    **Download** pill stays underneath it, and the "download all" zip
     control (falling back to sequential per-clip downloads if the zip
     step fails) stays reachable underneath the whole strip.
     - **Order lock**: the shelf's visible order is always
@@ -1628,6 +1628,19 @@ now (see "Explicitly out of scope" below).
       leaves the card and its tick exactly where they were, with an
       honest inline error, rather than pretending a render is gone when
       it might still be sitting in Blob.
+    - **Per-card Download pill**: each card already force-downloaded
+      via Vercel Blob's `?download=1` (`buildForceDownloadUrl` — a real
+      server-side `Content-Disposition: attachment`, not a plain
+      `<a download>` attribute against a cross-origin Blob URL, which
+      iOS Safari has a long history of ignoring) instead of the native
+      `<video>` share/⋯ menu, but it used to be a small inline text link
+      squeezed next to Remove — easy to miss or mistake for metadata.
+      It's now an explicit small pill, the same `rounded-full` shape/
+      size as Remove plus a tiny download icon, so the card reads as
+      two small, deliberate controls (Download | Remove) — not a pill
+      farm. Same numeric/lettered `render.filename` the "download all"
+      zip already uses; no new download mechanism, just an actual
+      tappable control for the existing one.
 
   - **MP3 audio → Vercel Blob ("play survives a refresh")**: the
     attached MP3's raw `File` never persisted (still true — a `File`
