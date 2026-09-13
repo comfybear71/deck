@@ -767,7 +767,15 @@ function SkidmarksPlateBox({
               className="pointer-events-none absolute inset-0 h-full w-full object-cover"
             />
           )}
-          {!hasStill && !generating && <EmptyStillIcon />}
+          {!hasStill && !generating && (
+            // A bare icon read as decorative, not tappable — Stuart's own
+            // live-QA report: he didn't know tapping this opened the
+            // Upload/Generate popover below. One tiny label fixes that.
+            <div className="flex flex-col items-center gap-1">
+              <EmptyStillIcon />
+              <span className="text-[9px] font-medium uppercase tracking-wide text-white/25">Tap to add</span>
+            </div>
+          )}
           {generating && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/60 text-[11px] font-medium text-white/85">
               <Spinner />
