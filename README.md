@@ -94,7 +94,8 @@ total.
   / `SkidmarksMp3Card` / `SkidmarksChecklistChips` / `SkidmarksClipTimeline`
   / `SkidmarksClipStub`) — the Skidmarks vibe-director node's face
   and its locked, one-scroll Music-video flow through the clip timeline's
-  empty-still + shot-prompt tags — see "Skidmarks node (vibe director)" below),
+  real upload/generate plate-still + multi-line shot-prompt tags — see
+  "Skidmarks node (vibe director)" below),
   `ActionChips` /
   `AskGrokPanel` (generic detail-sheet primitives — see "Ask Grok (v0
   stub)" below).
@@ -1195,24 +1196,133 @@ now (see "Explicitly out of scope" below).
      to operate, and a prompt that visually "duplicated" into every box
      as he typed (even though it was really only one value underneath).
      `SkidmarksClipStub` replaces that whole panel with exactly two
-     things:
-     - **One empty-still placeholder** — a dashed-border box (same
+     things — and, in a later pass than the chrome-lock rewrite itself,
+     the first of the two now holds a **real** plate still, not just an
+     empty stand-in:
+     - **One plate placeholder/still** — a dashed-border box (same
        visual language as the other empty stubs already in Skidmarks,
        e.g. `SkidmarksGeneratePopup`'s `EmptySlot` and
-       `SkidmarksMembersModule`'s dashed avatar ring), no location, no
-       gradient, no duration label (Stuart doesn't know a clip's actual
-       rendered length until it's actually generated, so a number on an
-       empty placeholder would just be invented). When a real still
-       exists later this is the slot that would show it instead — not
-       implemented yet, no still field exists on `SkidmarksClipSegment`.
-     - **One shot-prompt text field** — "what happens in this shot",
-       deliberately short (no lyric dumps, no long captions, no helper
-       paragraph underneath, and never a hardcoded scene description —
-       this field is entirely Stuart-authored) and bound to a single
-       `shotPrompt` value per clip. Editing it only ever updates the
-       prompt text — it does **not** touch `model` (an earlier pass
-       re-derived the model from the prompt's language; that's gone per
-       the cost lock below).
+       `SkidmarksMembersModule`'s dashed avatar ring) while empty, no
+       location, no gradient, no duration label (Stuart doesn't know a
+       clip's actual rendered length until it's actually generated, so a
+       number on an empty placeholder would just be invented). **Plate
+       stills: upload or generate, real either way** — tapping the
+       empty box opens a tiny two-option popover (Upload / Generate, no
+       other chrome):
+       - **Upload** opens a real native `accept="image/*"` file picker;
+         the picked photo goes through the same
+         `readImageFileAsDataUrl` downscale-to-JPEG pass the band
+         cover/member avatar pickers already use, and is stored as this
+         clip's `still` (`SkidmarksClipSegment.still`, a `data:` URL —
+         round-trips through `localStorage` same as a picked avatar).
+       - **Generate** calls a real backend — **xAI's Grok Imagine API**
+         (`lib/plateGeneration.ts`'s `buildPlateGenerationRequest` +
+         `generatePlateStill`, via `app/api/skidmarks/generate-still/
+         route.ts`) — requiring only a non-empty shot prompt; everything
+         else is automatic (see "Model routing, vocalist auto-include,
+         and Jack Ash's character lock" and "Continuity: 'Use last
+         plate'" below). A spinner overlays the box while a request is
+         in flight (over the existing still, on a regenerate). This is
+         a **real, wired image call**, verified live against xAI's API
+         in this sandbox (a text-to-image call and an image-edit call
+         with a real reference photo both returned real `200`s — see
+         `lib/plateGeneration.ts`'s module doc comment for exactly what
+         that does and doesn't prove) — **the *video* render pass past
+         this one still stays a stub everywhere in this build** (see
+         "Generate Clips" below); a real plate still is cheap, a real
+         video render is the expensive part Stuart asked to keep
+         stubbed.
+       - **Once a still exists**, Stuart's ask was gestures on the plate
+         itself, not a button row: tapping the still reopens the same
+         Upload/Generate popover (replace/regenerate — editing the shot
+         prompt first, then regenerating, is how an edited prompt
+         actually updates the still; editing the prompt alone never
+         auto-invalidates an existing one), a tiny always-visible "×" in
+         its corner clears it back to the empty placeholder outright,
+         and a press-and-hold on the plate does the same clear
+         (redundant with the ×, not instead of it — both ship). Verified
+         manually in this build: upload, generate (with a real xAI call
+         and a real rendered image), tap-to-replace, the "×" clear, and
+         press-and-hold clear all worked in a real browser session; see
+         `lib/plateGeneration.ts`'s doc comment for why the plain `<img>`
+         needed `draggable={false}`/`pointer-events-none` for the
+         press-and-hold gesture to survive a real mouse-down (a native
+         browser image-drag was intercepting it before that fix).
+     - **One shot-prompt text field** — "what happens in this shot", a
+       **multi-line textarea** now (was a cramped single-line `<input>`
+       before this pass — Stuart's ask, so a real shot description has
+       room to read), still deliberately short overall (no lyric dumps,
+       no long captions, no helper paragraph underneath, and never a
+       hardcoded scene description — this field is entirely
+       Stuart-authored) and bound to a single `shotPrompt` value per
+       clip. Editing it only ever updates the prompt text — it does
+       **not** touch `model` (an earlier pass re-derived the model from
+       the prompt's language; that's gone per the cost lock below) and
+       does not touch an existing `still` either (see above).
+
+     **Model routing, vocalist auto-include, and Jack Ash's character
+     lock** (`lib/plateGeneration.ts`) — all automatic, no picker/toggle
+     UI added for any of this:
+     - **Model routing steers prompt phrasing, not which API gets
+       called** — there is exactly one real image backend in this build
+       (xAI, above); a clip's LTX/Grok/H3 tag (see the cost-lock section
+       below) only changes this same call's prompt framing
+       (`routingFramingHint`): Vocal clips tagged LTX Lip-sync get a
+       tight, camera-facing framing hint; H3-tagged clips ("simple
+       stills" per the product ask) get a plainer single-subject hint;
+       everything else (Grok, the instrumental/B-roll default, or a
+       manual Seedance pick) gets a wider, dynamic establishing-shot
+       hint.
+     - **A single vocalist/lead auto-includes on Vocal clips**
+       (`resolveVocalistForPrompt`) — if a band has exactly one named
+       member, it's them, unambiguously (both seed bands today: Jack
+       Ash's sole member *is* Jack Ash; Solar Rebel's sole member is
+       Nova); with more than one named member, whichever one's `role`
+       reads like the actual vocalist/lead, falling back to the first
+       named member. An Instrumental/B-roll clip (e.g. a door/keyhole
+       shot) can still omit the artist entirely, even for a band with an
+       obvious single vocalist — this only fires when the clip itself
+       is tagged Vocal.
+     - **Jack Ash's look is locked** (`SKIDMARKS_CHARACTER_LOCKS`,
+       keyed by member id) — per Stuart's reference photo (seeded as
+       `public/skidmarks/jack-ash-reference.jpg` and, so an identity
+       reference exists from a fresh session without an upload first,
+       as his frontman's `avatarImage` in `SEED_BANDS`): a noir
+       silhouette in a fedora and suit, desert-noir setting, his face
+       **always** fully hidden in deep shadow — no eyes/brow/nose/
+       cheeks/jawline ever lit or visible, even in close-up — with
+       glowing neon-blue lips as the one feature breaking through that
+       darkness. Whenever Jack Ash resolves as the vocalist on a Vocal
+       clip, this hallmark text (and an explicit "do not show" negative
+       cue — xAI's API has no dedicated negative-prompt field, so this
+       is woven into the same prompt string) is injected automatically;
+       his `avatarImage` is also passed as a real identity/likeness
+       reference to xAI's `/images/edits` endpoint. **Verified live, not
+       just written**: a real `/images/edits` call in this sandbox,
+       using Jack's actual reference photo and this exact prompt
+       strategy, returned a real render that held the look — fedora,
+       fully shadowed face, glowing neon-blue lips, desert-noir setting
+       — though (being a generative model, not a deterministic
+       renderer) that's evidence the approach works, not a guarantee
+       every future generation lands equally on-character. No new
+       character-sheet UI shipped for this — it reuses the existing
+       avatar-photo field/picker outright.
+     - **Continuity: "Use last plate"** — when generating, if the
+       *previous* clip in the timeline already has a still, a small
+       "Use last plate" checkbox appears in the Generate popover,
+       **checked by default** (Stuart's ask: prefer an automatic default
+       over heavy chrome); when checked, that previous still is passed
+       as a continuity reference so a multi-clip story (e.g. door →
+       keyhole → Jack seated) can hold the same scene across shots
+       instead of each clip generating in a vacuum. Continuity and the
+       vocalist identity reference above can combine in the same
+       request — xAI's `/images/edits` `images` array (up to a few
+       reference images, tagged `<IMAGE_0>`/`<IMAGE_1>` in the prompt)
+       carries both when both apply; this specific two-reference
+       combination was implemented from xAI's own documented request
+       shape but wasn't separately live-tested (each real call costs
+       real money) — see `lib/plateGeneration.ts`'s module doc comment
+       for exactly what was and wasn't verified live.
 
      **Auto-assignment is still cost-locked in code**
      (`defaultSegmentModel` in `lib/skidmarks.ts`) — Stuart: "be very
@@ -1244,9 +1354,10 @@ now (see "Explicitly out of scope" below).
      as `PropfolioDetailSheet`'s chip feedback line, but always mounted
      with `role="status"`/`aria-live="polite"` so it reaches the
      accessibility tree/screen readers too, not just sighted users).
-     **Phase note**: this whole step is UI/interaction only — typing a
-     shot prompt is real (persists to `localStorage`, see below), but
-     no plate still or clip ever actually renders.
+     **Phase note**: typing a shot prompt, uploading a photo, and
+     generating a real plate still (see above) are all real and persist
+     to `localStorage` — what stays a stub past that is the actual clip
+     *video* (this button never calls a real Comfy MCP / LTX render).
   - The sheet's backdrop is a darker/more opaque scrim
      (`bg-black/90 backdrop-blur-md`, vs. the generic `GraphNodeSheet`'s
      `bg-black/70`) — this sheet opens tall and near the top of the
@@ -1295,6 +1406,40 @@ now (see "Explicitly out of scope" below).
   reports the *audio itself* as invalid, never as a generic retry) — no
   second provider, no polling; re-attaching the same file re-transcribes
   it.
+- **Wiring up plate-still generation**: needs **`XAI_API_KEY`** — an xAI
+  API key from [console.x.ai](https://console.x.ai) — set server-side on
+  Vercel. xAI is already one of Stuart's "four lanes" accounts (see "The
+  four lanes" below), so this is very likely a key he already has
+  somewhere, but (unlike `ELEVENLABS_API_KEY` above) nothing in this
+  repo or its sibling project docs confirmed he's already added this
+  *specific* one to the "deck" Vercel project — check Vercel's
+  Environment Variables settings for this project first; if it's not
+  there, add it (Production and Preview, same as `ELEVENLABS_API_KEY`).
+  `app/api/skidmarks/generate-still/route.ts`'s `resolveXaiApiKey` checks
+  for it under this exact name only — there's no `XAI_KEY`/`X_AI_API_KEY`
+  fallback-name guessing the way the ElevenLabs route tries a second
+  name, since `XAI_API_KEY` is the one name xAI's own docs/SDKs use.
+  Leaving it unset (or a fresh deploy that hasn't picked up a
+  just-added value yet — Vercel only applies env var changes to *new*
+  deployments, redeploy after adding it) means Generate returns an
+  honest "unconfigured" message on tap instead of silently doing
+  nothing; Upload still works either way (no key needed for that path —
+  it's a local file read + resize, no network call). An optional
+  **`XAI_IMAGE_MODEL`** override picks a different xAI image model
+  without a code change (defaults to `grok-imagine-image-2.0`, the model
+  this feature's live verification calls used — see
+  `lib/plateGeneration.ts`'s module doc comment) — a config knob, not a
+  picker; there's still no per-request model choice in the UI. **Cost**:
+  per xAI's own published pricing, a `grok-imagine-image-2.0` still runs
+  roughly one to a few cents (higher for 2K resolution or the
+  higher-quality tier) — check
+  [xAI's current pricing](https://x.ai/api) before relying on this at
+  volume, since rates can change; this matches Stuart's "plate stills
+  are OK cost-wise" — the clip timeline's actual *video* render pass
+  stays a stub everywhere in this build regardless (see the "Skidmarks
+  node" section's "Generate Clips" note), which is where the real spend
+  risk would be. This build makes one generation/edit call per tap of
+  Generate — no polling, no automatic retry.
 - **Data shape** (`lib/skidmarks.ts`): `SkidmarksBand` (`id`, `name`,
   `tagline`, `coverSeed`, `editIcon`, `members: SkidmarksMember[]`);
   `SkidmarksMember` (`id`, `name`, optional `role`, `emoji`,
@@ -1316,8 +1461,13 @@ now (see "Explicitly out of scope" below).
   timestamps once some provider responds (kept even for a `"sparse"`
   result), even though only the merged `segments` render today);
   `SkidmarksClipSegment` (`id`, `startSec`, `endSec`, `label`, `model`,
-  `shotPrompt`, `uncensoredPlateStills` — no `plateId`/`cameraAngle`;
-  both were deleted outright along with their pickers); and
+  `shotPrompt`, `uncensoredPlateStills`, optional `still:
+  SkidmarksPlateStill` — no `plateId`/`cameraAngle`; both were deleted
+  outright along with their pickers); `SkidmarksPlateStill` (`dataUrl` —
+  always a `data:` URL, never a bare/temporary remote one, so it
+  round-trips through `localStorage`; `source: "upload" | "generated"`,
+  informational only, not rendered as a badge anywhere per the chrome
+  lock; `createdAt`); and
   `SkidmarksState` (`bands`,
   `session: { projectKind, bandId, mp3 }`, `removedSeedBandIds` —
   hand-seeded band ids Stuart has deleted, so `normalizeState` doesn't
@@ -1337,7 +1487,8 @@ now (see "Explicitly out of scope" below).
   band/member deletions (`removedSeedBandIds`), wizard progress, the
   finished transcription/analysis results (segments + `segmentsSource`/
   `transcriptionStatus`/`analysisStatus`, and `words` if transcription
-  succeeded), and each clip's plate + shot-prompt tags persist; the
+  succeeded), and each clip's shot-prompt tag and, now, its real plate
+  still (`still`, uploaded or generated) all persist; the
   attached audio `File` itself does not (see above) — which means a
   transcription or analysis request that's still in flight when the tab
   closes can never resume after a reload (no file left to re-send/
@@ -1364,8 +1515,12 @@ now (see "Explicitly out of scope" below).
   whenever transcription isn't available or landed too sparse to trust
   (`analyzeVocalActivity` in `lib/audioAnalysis.ts` — a real FFT-based
   heuristic against the real file, see step 7 above for its honest
-  ceiling). Mock — generated "looks" (`buildMockLook`, a color swatch
-  stand-in), and the clip timeline's seed cadence (`buildDemoSegments`)
+  ceiling), and — new in this pass — a clip's plate **still**: a
+  real uploaded photo, or a real image xAI's Grok Imagine API generated
+  (`lib/plateGeneration.ts`, `app/api/skidmarks/generate-still/route.ts`,
+  keyed via `XAI_API_KEY`). Mock — generated "looks" (`buildMockLook`, a
+  color swatch stand-in — distinct from a plate *still*, which is real),
+  and the clip timeline's seed cadence (`buildDemoSegments`)
   whenever it's showing (a deterministic verse/bridge/lead/instrumental
   scaffold — while both real signals are still resolving, or as the
   honestly-labeled fallback if both failed/were too sparse to trust).
@@ -1392,10 +1547,14 @@ now (see "Explicitly out of scope" below).
   tags); any real Comfy MCP, Seedance, or LTX call (the only real
   ElevenLabs call this build makes is Scribe speech-to-text — see step 6
   above; ElevenLabs voice/generation features are still unwired); any
-  real image/video generation, or real trained/validated singing detection
+  real *video* generation, or real trained/validated singing detection
   (the energy heuristic is a real signal, not a trained model — see step
   7 above; the seed cadence is still a pure fallback whenever neither
-  real signal produces anything usable); a UI for per-word lyric
+  real signal produces anything usable). **Real plate-*still* image
+  generation is no longer on this out-of-scope list** — see step 9's
+  "Plate stills: upload or generate, real either way" note below
+  (`lib/plateGeneration.ts`, xAI's Grok Imagine API); it's the *video*
+  render pass past that one still that remains a stub. A UI for per-word lyric
   emphasis during playback (`words` timing is stored, per Stuart's ask,
   but nothing renders it yet); creating/editing music (MP3 attach is
   existing-file-only); real plate photos or real camera coverage capture
@@ -1536,5 +1695,14 @@ npm run dev
   transcription. `OPENAI_API_KEY` has **no effect on this route at
   all** — it isn't read here; it's fine to leave it set (for other
   features, if any) or unset.
+- `XAI_API_KEY` (optional, but required for Skidmarks' real plate-still
+  image generation — Upload works without it) — an xAI API key from
+  [console.x.ai](https://console.x.ai), checked by
+  `app/api/skidmarks/generate-still/route.ts`. See the "Skidmarks node"
+  section's "Wiring up plate-still generation" note above for cost, the
+  exact env var name checked, and what leaving it unset does (an honest
+  "unconfigured" message, not a silent failure). Optional
+  `XAI_IMAGE_MODEL` overrides the default `grok-imagine-image-2.0` model
+  without a code change.
 - No other environment variables are required — the rest is static seed
   data plus whatever's been ingested into `data/overrides.json`.
