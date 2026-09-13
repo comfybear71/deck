@@ -1433,20 +1433,45 @@ now (see "Explicitly out of scope" below).
      xAI's image-to-video mode (animates that still). Two or three plates
      → reference-to-video mode, guided by the whole sequence in order —
      Stuart's "continuous zoom across the door → keyhole → Jack plates"
-     case. Fixed, hardcoded 5s/480p output (≈$0.40–$0.43 per render,
-     depending on plate count) — not a duration/resolution picker, and
-     not reachable from the whole-song button above. Always behind an
-     explicit two-tap confirm showing the real dollar estimate, and only
-     one clip across the whole timeline can render at a time
-     (`SkidmarksClipTimeline`'s `renderingSegmentId` lock) — Stuart's "one
-     render at a time or clear confirm" cost lock, enforced in code, not
-     just by convention. The result (xAI's own temporary video URL, shown
-     as a `<video>` player + a download link) is intentionally **not**
-     persisted to `localStorage` — a video is too big for that store's
-     small shared quota, unlike a plate still; a refresh loses the
-     preview, and the UI says so. Seedance/Comfy MCP/LTX remain entirely
-     unwired either way — this is xAI only, the same real backend plate
-     stills already use, not a new provider.
+     case. An optional short **camera-motion** text field (capped at
+     `MAX_MOTION_PROMPT_LENGTH`, `lib/clipGeneration.ts`) overrides the
+     automatic push-in/zoom motion phrasing when filled in — e.g. "slow
+     pan left, hold on the door" — added on Stuart's explicit ask so a
+     render isn't locked to push-in/zoom forever; left blank, the
+     original automatic motion hint still applies, and this is still a
+     single free-text field, not a camera-angle picker. Fixed, hardcoded
+     5s/480p output (≈$0.40–$0.43 per render, depending on plate count)
+     — not a duration/resolution picker, and not reachable from the
+     whole-song button above. Always behind an explicit two-tap confirm
+     showing the real dollar estimate, and only one clip across the
+     whole timeline can render at a time (`SkidmarksClipTimeline`'s
+     `renderingSegmentId` lock) — Stuart's "one render at a time or
+     clear confirm" cost lock, enforced in code, not just by convention.
+     **The result is now persisted to durable Vercel Blob storage, not
+     `localStorage` and not ephemeral React state** — a real fix after
+     Stuart rejected the originally-shipped ephemeral version (a
+     refresh lost the render). `app/api/skidmarks/generate-clip/
+     route.ts` re-uploads a successful render to Vercel Blob under a
+     stable, per-clip pathname (`lib/clipRenderBlob.ts`, overwritten by
+     each re-render — no accumulating history of past takes) and
+     returns that durable URL; `app/api/skidmarks/clip-renders/
+     route.ts` is the read side `SkidmarksClipTimeline` uses so a saved
+     render still shows up after a reload, even for a clip whose panel
+     hasn't been reopened yet. Download uses a numeric, Resolve-friendly
+     filename (`buildClipRenderFilename` — e.g. `01_0000-0040_render
+     .mp4`), and a **"Download rendered clips"** button appears on the
+     timeline once at least one clip has a saved render — bundles every
+     currently-known one into a single ZIP (built client-side,
+     `lib/zipDownload.ts`, no server round trip) for a phone → PC move
+     into Resolve, falling back to plain sequential per-clip downloads
+     if the zip step itself fails. If `BLOB_READ_WRITE_TOKEN` isn't
+     configured (no Blob store connected on Vercel — see "Wiring up
+     render persistence" below), the render Stuart already paid for is
+     still shown and downloadable via xAI's own temporary URL, just
+     honestly flagged as not saved rather than pretending it survived.
+     Seedance/Comfy MCP/LTX remain entirely unwired either way — this is
+     xAI only, the same real backend plate stills already use, not a
+     new provider.
   - The sheet's backdrop is a darker/more opaque scrim
      (`bg-black/90 backdrop-blur-md`, vs. the generic `GraphNodeSheet`'s
      `bg-black/70`) — this sheet opens tall and near the top of the
@@ -1535,6 +1560,22 @@ now (see "Explicitly out of scope" below).
   confirm and fixed cost cap rather than living on this same "just
   tap Generate" flow. This build makes one generation/edit call per tap
   of Generate — no polling, no automatic retry.
+- **Wiring up render persistence**: needs a **Vercel Blob store**
+  connected to this project (Vercel dashboard → Project → Storage →
+  create/connect a Blob store), which sets **`BLOB_READ_WRITE_TOKEN`**
+  automatically — no key to create or paste in by hand, unlike
+  `XAI_API_KEY`/`ELEVENLABS_API_KEY` above. `app/api/skidmarks/
+  generate-clip/route.ts` re-uploads a successful render to that store
+  via `@vercel/blob`'s `put()`; `app/api/skidmarks/clip-renders/
+  route.ts` reads it back via `list()`. **Never blocks or fails a
+  render** if the store isn't connected yet: the render Stuart already
+  paid for is still returned (xAI's own temporary URL) and playable,
+  just with `persisted: false` and a plain-language reason shown in the
+  UI instead of a saved state that didn't happen. **Cost**: negligible
+  — Vercel Blob's free tier easily covers a handful of few-megabyte MP4s,
+  and each clip only ever keeps its one latest render (overwritten by
+  the next one, not accumulated), so this never grows into its own
+  ongoing storage bill the way keeping every past take would.
 - **Data shape** (`lib/skidmarks.ts`): `SkidmarksBand` (`id`, `name`,
   `tagline`, `coverSeed`, `editIcon`, `members: SkidmarksMember[]`);
   `SkidmarksMember` (`id`, `name`, optional `role`, `emoji`,
