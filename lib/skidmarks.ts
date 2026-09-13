@@ -80,7 +80,15 @@
  * either is real. What's still mock: generated "looks" (`buildMockLook`
  * — a color swatch, not an image model call), and the seed fallback
  * cadence itself when it's showing (a deterministic
- * verse/bridge/lead/instrumental scaffold).
+ * verse/bridge/lead/instrumental scaffold). **Plate stills are real
+ * now, though** (a later pass than the one this module doc comment
+ * otherwise describes): a clip's `still` (`SkidmarksPlateStill`) is
+ * either a photo Stuart uploaded or a real image
+ * `lib/plateGeneration.ts` generated via xAI's Grok Imagine API
+ * (`app/api/skidmarks/generate-still/route.ts`) — see that module's doc
+ * comment for what's actually wired vs. still a stub (the *video*
+ * render pass stays a stub everywhere in this build; only the one-frame
+ * still is real).
  *
  * Persistence mirrors `lib/control-plane.ts` / `lib/graphLayout.ts`: an
  * in-memory cache is the synchronous source of truth the UI reads via
@@ -99,10 +107,12 @@
  * across a reload, but an *in-progress* one can't resume — `normalizeState`
  * below turns a stale `"analyzing"` status into an honest `"failed"` one
  * on load rather than hanging forever. Also explicitly out of scope for
- * this build: voice, animate, and stitch, and any actual clip rendering
- * ("Generate Clips" is a stub button — see `SkidmarksClipTimeline`) — the
- * flow stops dead after the clip timeline's single empty-still
- * placeholder + shot-prompt tag per clip (`SkidmarksClipStub`).
+ * this build: voice, animate, and stitch, and any actual clip *video*
+ * rendering ("Generate Clips" is a stub button — see
+ * `SkidmarksClipTimeline`) — the flow stops dead after the clip
+ * timeline's one still-or-empty-placeholder + shot-prompt tag per clip
+ * (`SkidmarksClipStub`; the still itself is real — upload or generate,
+ * see `lib/plateGeneration.ts` — the *video* pass past it is not).
  * Camera angle and the location-plate picker are both **gone outright**
  * — see the QA fix that removed the multi-card plate carousel — and the
  * model row went with them: `SKIDMARKS_MODELS` (LTX/Grok/H3/Seedance) and
@@ -451,6 +461,30 @@ export interface SkidmarksClipSegment {
    * `setSkidmarksSegmentUncensoredPlateStills`. Not wired into the main
    * clip UI in this pass — see that constant's doc comment. */
   uncensoredPlateStills: boolean;
+  /** The real plate still for this clip's placeholder, once one exists —
+   * either a photo Stuart uploaded or a real image `lib/plateGeneration.ts`
+   * generated via xAI's Grok Imagine API (`app/api/skidmarks/
+   * generate-still/route.ts`). `undefined` until then, matching every
+   * other optional field here — `SkidmarksClipStub` renders the dashed
+   * empty placeholder whenever this is unset. Set/replaced/cleared via
+   * `setSkidmarksSegmentStill`; a `null` call clears it back to empty. */
+  still?: SkidmarksPlateStill;
+}
+
+/** One clip's real plate still. `dataUrl` is always a `data:` URL (an
+ * uploaded photo goes through `readImageFileAsDataUrl`'s same
+ * downscale-to-JPEG pass the band cover/avatar pickers already use; a
+ * generated one is already returned as a `data:` URL by
+ * `app/api/skidmarks/generate-still/route.ts`) — never a bare/temporary
+ * remote URL, so it round-trips through `localStorage` and survives a
+ * reload the same way a picked cover/avatar photo already does.
+ * `source` is purely informational today (not rendered as a badge
+ * anywhere — Stuart's chrome lock keeps this panel to the plate + prompt
+ * only) but kept so a future tiny badge/label doesn't need a new field. */
+export interface SkidmarksPlateStill {
+  dataUrl: string;
+  source: "upload" | "generated";
+  createdAt: number;
 }
 
 /** Fallback total (3:30) used to seed segments before the browser's real
@@ -668,7 +702,26 @@ const SEED_BANDS: SkidmarksBand[] = [
     coverSeed: 1,
     editIcon: "pencil",
     members: [
-      { id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman", emoji: "\u{1F3B8}", looks: [] },
+      {
+        id: "jack-ash-frontman",
+        name: "Jack Ash",
+        role: "Frontman",
+        emoji: "\u{1F3B8}",
+        // Stuart's own reference photo for this locked character (noir
+        // silhouette, fedora, glowing neon-blue lips — see
+        // `lib/plateGeneration.ts`'s `SKIDMARKS_CHARACTER_LOCKS`) — seeded
+        // here so a fresh session already has an identity reference to
+        // pass into a generated Vocal still, without Stuart having to
+        // upload it first. A real static asset (`public/skidmarks/
+        // jack-ash-reference.jpg`), not a data URL, since it ships with
+        // the app rather than being picked at runtime; still resolves to a
+        // real `data:` URL before ever reaching xAI — see
+        // `resolvePlateReferenceDataUrl`. Stuart can still replace it via
+        // the existing avatar picker at any time, same as any other
+        // member's `avatarImage`.
+        avatarImage: "/skidmarks/jack-ash-reference.jpg",
+        looks: [],
+      },
     ],
   },
   {
@@ -800,11 +853,26 @@ export function createMp3Attachment(
  * dropped — this function builds a fresh object rather than spreading
  * `raw`, so they don't linger in the next `persist()` write.
  */
+/** Validates a rehydrated `still` — must be a real `data:` URL with a
+ * recognized `source` and a numeric `createdAt`, else it's dropped
+ * (`undefined`) rather than trusted as-is; a corrupt/partial value from a
+ * future field rename or a hand-edited `localStorage` blob should never
+ * render as a broken `<img>`. */
+function normalizeSkidmarksStill(value: unknown): SkidmarksPlateStill | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const v = value as Partial<SkidmarksPlateStill>;
+  if (typeof v.dataUrl !== "string" || !v.dataUrl.startsWith("data:")) return undefined;
+  if (v.source !== "upload" && v.source !== "generated") return undefined;
+  if (typeof v.createdAt !== "number") return undefined;
+  return { dataUrl: v.dataUrl, source: v.source, createdAt: v.createdAt };
+}
+
 export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksClipSegment {
   const r = raw as Partial<SkidmarksClipSegment> & Record<string, unknown>;
   const vocal = SKIDMARKS_SEGMENT_LABEL_META[raw.label]?.vocal ?? false;
   const shotPrompt = typeof r.shotPrompt === "string" ? r.shotPrompt : "";
   const uncensoredPlateStills = typeof r.uncensoredPlateStills === "boolean" ? r.uncensoredPlateStills : false;
+  const still = normalizeSkidmarksStill(r.still);
   return {
     id: raw.id,
     startSec: raw.startSec,
@@ -813,6 +881,7 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
     model: remapLegacySkidmarksModel(String(raw.model), vocal),
     shotPrompt,
     uncensoredPlateStills,
+    ...(still ? { still } : {}),
   };
 }
 
@@ -1457,6 +1526,25 @@ export function setSkidmarksSegmentShotPrompt(segmentId: string, shotPrompt: str
   updateSkidmarksSegment(segmentId, (s) => ({ ...s, shotPrompt }));
 }
 
+/** Sets, replaces, or clears a clip's plate still — the empty-placeholder
+ * slot's one piece of real state (`SkidmarksClipSegment.still`). Passing
+ * `null` clears it back to the empty dashed placeholder (Stuart's "small
+ * clear/X on the plate" ask) — this is the **only** way a still is ever
+ * removed; nothing here auto-clears a still on its own (e.g. editing the
+ * shot prompt afterward doesn't stale-invalidate it — regenerating is an
+ * explicit tap, same spirit as `setSkidmarksSegmentShotPrompt` never
+ * touching `model`). */
+export function setSkidmarksSegmentStill(segmentId: string, still: SkidmarksPlateStill | null): void {
+  updateSkidmarksSegment(segmentId, (s) => {
+    if (still === null) {
+      const next = { ...s };
+      delete next.still;
+      return next;
+    }
+    return { ...s, still };
+  });
+}
+
 /** SIRAY's one narrow toggle — **uncensored plate stills only**, never
  * read by `model`/Generate Clips (see `SKIDMARKS_UNCENSORED_STILLS_LABEL`).
  * Exists so the capability is one call away, but nothing in the main
@@ -1508,7 +1596,7 @@ const PICKED_IMAGE_QUALITY = 0.85;
  * or a format it doesn't support).
  */
 export function readImageFileAsDataUrl(
-  file: File,
+  file: File | Blob,
   maxDimension: number = MAX_PICKED_IMAGE_DIMENSION,
   quality: number = PICKED_IMAGE_QUALITY
 ): Promise<string> {
