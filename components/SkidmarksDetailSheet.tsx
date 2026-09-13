@@ -2,7 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
+import { useSkidmarksClipRenders } from "@/hooks/useSkidmarksClipRenders";
 import { buildMockLook, skidmarksChecklistState } from "@/lib/skidmarks";
+import {
+  archiveSkidmarksSession,
+  fetchArchiveSnapshot,
+  removeSkidmarksArchivedSong,
+  type SkidmarksArchivedSong,
+} from "@/lib/skidmarksArchive";
 import { SkidmarksLandingTiles } from "./SkidmarksLandingTiles";
 import { SkidmarksBandPicker } from "./SkidmarksBandPicker";
 import { SkidmarksMembersModule } from "./SkidmarksMembersModule";
@@ -10,6 +17,8 @@ import { SkidmarksGeneratePopup } from "./SkidmarksGeneratePopup";
 import { SkidmarksMp3Card } from "./SkidmarksMp3Card";
 import { SkidmarksChecklistChips } from "./SkidmarksChecklistChips";
 import { SkidmarksClipTimeline } from "./SkidmarksClipTimeline";
+import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
+import { SkidmarksArchiveShelf } from "./SkidmarksArchiveShelf";
 
 interface SkidmarksDetailSheetProps {
   onClose: () => void;
@@ -17,21 +26,16 @@ interface SkidmarksDetailSheetProps {
 
 /**
  * Skidmarks' detail sheet — the locked Music-video director flow,
- * through the clip/segment timeline's plate-strip + shot-prompt tags (voice,
- * animate, and stitch are explicitly out of scope for this build; see
- * `lib/skidmarks.ts`'s module doc comment). **One continuous scroll**:
- * the landing's three project-type tiles stay put at the top, and each
- * step (choose a band → cast members → attach MP3 → tag each clip)
- * appends underneath the previous one — there is no separate screen to
- * navigate to. See the README's "Skidmarks node (vibe director)" section
- * for exactly what's real (file pick, real audio duration/playback, real
- * word-level transcription when `ELEVENLABS_API_KEY` (or `OPENAI_API_KEY`
- * as a fallback) is configured — see `lib/transcription.ts` — and the
- * energy-heuristic vocal/instrumental analysis that runs alongside it
- * either way — see
- * `lib/audioAnalysis.ts`) vs. mocked/seed (bands, looks, and the seed
- * cadence the clip timeline falls back to if neither real signal
- * produces anything usable) in this build.
+ * through the clip/segment timeline's plate-strip + shot-prompt tags,
+ * the per-plate select/Render control, the page-bottom rendered-clips
+ * shelf, and the finished-song archive shelf. **One continuous
+ * scroll**: the landing's three project-type tiles stay put at the top,
+ * each wizard step appends underneath the previous one, and the two
+ * page-bottom shelves (rendered clips, then finished songs) sit at the
+ * very end of that same scroll — there is no separate screen to
+ * navigate to, and per AGENTS.md's "one live edit workspace on top"
+ * lock, there is never a second, doubled MP3/plates UI: only the *top*
+ * workspace is ever live-editable at once.
  */
 export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const {
@@ -54,11 +58,21 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     setClipPlateStill,
     addClipPlate,
     removeClipPlate,
+    selectClipPlate,
+    setClipPlateMotionPrompt,
+    restoreArchivedSession,
+    clearSessionAfterArchive,
   } = useSkidmarksStudio();
 
   const activeBand = bands.find((b) => b.id === session.bandId);
   const [openMemberId, setOpenMemberId] = useState<string | null>(null);
   const openMember = activeBand?.members.find((m) => m.id === openMemberId);
+
+  const { renders, addRender } = useSkidmarksClipRenders(session.mp3?.segments ?? []);
+
+  const [archiving, setArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [archiveRefreshToken, setArchiveRefreshToken] = useState(0);
 
   const bandSectionRef = useRef<HTMLDivElement | null>(null);
   const membersSectionRef = useRef<HTMLDivElement | null>(null);
@@ -99,6 +113,58 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const handleRemoveBand = (bandId: string) => {
     if (bandId === activeBand?.id) setOpenMemberId(null);
     removeBand(bandId);
+  };
+
+  /**
+   * "Archive" — the top workspace's own explicit "I'm done with this
+   * song" action. Uploads the full band+mp3 snapshot and this song's
+   * metadata (`lib/skidmarksArchive.ts`'s `archiveSkidmarksSession`,
+   * carrying forward `renders.size` — every plate already known to
+   * have a saved render, from the same map the shelf/tick marks above
+   * already use), then clears the live workspace so it's immediately
+   * ready for a new/different song. A failure leaves the live session
+   * completely untouched — nothing here ever clears the workspace
+   * before the snapshot is durably saved.
+   */
+  const handleArchive = async () => {
+    if (!activeBand || !session.mp3 || archiving) return;
+    setArchiving(true);
+    setArchiveError(null);
+    const outcome = await archiveSkidmarksSession(activeBand, session.mp3, renders.size);
+    setArchiving(false);
+    if (!outcome.ok) {
+      setArchiveError(outcome.message);
+      return;
+    }
+    clearSessionAfterArchive();
+    setArchiveRefreshToken((t) => t + 1);
+  };
+
+  /**
+   * "Open in editor" on an archived song row. Per the "one live
+   * workspace, never doubled" lock: if something's already live here,
+   * it gets archived first (silently, same real snapshot-then-clear
+   * path as a manual tap of Archive) so opening a different song can
+   * never quietly discard whatever Stuart was working on. Throws on any
+   * real failure — `SkidmarksArchiveShelf` catches it and shows the
+   * real message on that row rather than this function swallowing it.
+   */
+  const handleOpenInEditor = async (song: SkidmarksArchivedSong) => {
+    if (activeBand && session.mp3) {
+      const archiveOutcome = await archiveSkidmarksSession(activeBand, session.mp3, renders.size);
+      if (!archiveOutcome.ok) {
+        throw new Error(`Couldn't archive the current song first \u2014 ${archiveOutcome.message}`);
+      }
+      clearSessionAfterArchive();
+    }
+
+    const snapshotOutcome = await fetchArchiveSnapshot(song.snapshotUrl);
+    if (!snapshotOutcome.ok) {
+      throw new Error(snapshotOutcome.message);
+    }
+    restoreArchivedSession(snapshotOutcome.snapshot.band, snapshotOutcome.snapshot.mp3);
+    await removeSkidmarksArchivedSong(song.id);
+    setArchiveRefreshToken((t) => t + 1);
   };
 
   return (
@@ -191,9 +257,21 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
             {activeBand && (
               <div ref={mp3SectionRef} className="flex flex-col gap-3">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">
-                  MP3 audio
-                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">
+                    MP3 audio
+                  </p>
+                  {session.mp3 && (
+                    <button
+                      type="button"
+                      onClick={handleArchive}
+                      disabled={archiving}
+                      className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {archiving ? "Archiving\u2026" : "Archive"}
+                    </button>
+                  )}
+                </div>
                 <SkidmarksMp3Card
                   key={activeBand.id}
                   mp3={session.mp3}
@@ -202,6 +280,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   onRemove={removeMp3}
                 />
                 <SkidmarksChecklistChips checklist={skidmarksChecklistState(session.mp3)} />
+                {archiveError && (
+                  <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
+                    {archiveError}
+                  </p>
+                )}
               </div>
             )}
 
@@ -215,12 +298,21 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 transcriptionError={session.mp3.transcriptionError}
                 transcriptionProvider={session.mp3.transcriptionProvider}
                 band={activeBand}
+                mp3FileName={session.mp3.fileName}
+                renders={renders}
+                onPersisted={addRender}
                 onSetSegmentShotPrompt={setSegmentShotPrompt}
                 onSetClipPlateStill={setClipPlateStill}
                 onAddClipPlate={addClipPlate}
                 onRemoveClipPlate={removeClipPlate}
+                onSelectClipPlate={selectClipPlate}
+                onSetClipPlateMotionPrompt={setClipPlateMotionPrompt}
               />
             )}
+
+            {session.mp3 && activeBand && <SkidmarksRenderedClipsShelf renders={renders} />}
+
+            <SkidmarksArchiveShelf onOpenInEditor={handleOpenInEditor} refreshToken={archiveRefreshToken} />
           </div>
         </div>
       </div>
