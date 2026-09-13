@@ -43,6 +43,21 @@ function ChevronIcon({ open }: { open: boolean }) {
  * the shelf reads in the same order as the timeline above it. Keeps the
  * existing zip/"download all" behavior reachable from here, falling
  * back to sequential per-clip downloads if the zip step itself fails.
+ *
+ * **Horizontal strip, not a vertical stack** — a second live-QA report
+ * on top of the first: once a song had more than a couple of renders,
+ * this shelf's own vertically-stacked full-width players turned the
+ * whole page into one very long scroll on a phone. Each render is now a
+ * compact card (`w-44`, fixed-height video) in one `overflow-x-auto`
+ * row, the exact same iOS-Safari-friendly pattern
+ * `SkidmarksClipStub`'s own plate strip already uses one screen up:
+ * `touch-pan-x` per card (blocks vertical/pinch so a `<video>` tap
+ * doesn't fight the scroll, but still lets a horizontal drag reach the
+ * next card) plus `overscroll-x-contain` + `-webkit-overflow-scrolling:
+ * touch` on the row itself. The download link + the "Download rendered
+ * clips (N)" zip control both stay put underneath the strip — reading
+ * order is: horizontal player strip, then the always-reachable download
+ * controls, never buried behind a scroll a thumb might not find.
  */
 export function SkidmarksRenderedClipsShelf({ renders }: SkidmarksRenderedClipsShelfProps) {
   const [open, setOpen] = useState(true);
@@ -108,21 +123,27 @@ export function SkidmarksRenderedClipsShelf({ renders }: SkidmarksRenderedClipsS
           {list.length === 0 ? (
             <p className="text-[11px] leading-relaxed text-white/35">Nothing rendered yet.</p>
           ) : (
-            <div className="flex flex-col gap-3">
+            // Same horizontal-strip shape as `SkidmarksClipStub`'s plate
+            // strip: `touch-pan-x` on each card (not `touch-none`) keeps
+            // this scrollable by a horizontal drag on iOS Safari even
+            // when that drag starts on top of a `<video>` element.
+            <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch]">
               {list.map((render) => (
-                <div key={`${render.segmentId}:${render.plateId}`} className="flex flex-col gap-1.5">
-                  <video src={render.url} controls playsInline className="w-full rounded-xl bg-black" />
-                  <div className="flex items-center justify-between gap-2 text-[11px] text-white/45">
-                    <a
-                      href={buildForceDownloadUrl(render.url)}
-                      download={render.filename}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-medium text-rose-300/90 underline-offset-2 hover:underline"
-                    >
-                      Download {render.filename}
-                    </a>
-                  </div>
+                <div
+                  key={`${render.segmentId}:${render.plateId}`}
+                  className="flex w-44 shrink-0 touch-pan-x flex-col gap-1.5"
+                >
+                  <video src={render.url} controls playsInline className="h-28 w-44 rounded-xl bg-black object-cover" />
+                  <a
+                    href={buildForceDownloadUrl(render.url)}
+                    download={render.filename}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="truncate text-[10px] font-medium text-rose-300/90 underline-offset-2 hover:underline"
+                    title={`Download ${render.filename}`}
+                  >
+                    Download {render.filename}
+                  </a>
                 </div>
               ))}
             </div>
