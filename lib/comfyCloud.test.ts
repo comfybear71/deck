@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildLtxAudioToVideoWorkflow,
+  DEFAULT_LTX_MODEL,
   downloadComfyCloudOutput,
   resolveComfyCloudCredentials,
-  resolveComfyCloudLtxModel,
   submitComfyCloudWorkflow,
   uploadComfyCloudInput,
   waitForComfyCloudCompletion,
@@ -24,30 +24,22 @@ describe("resolveComfyCloudCredentials", () => {
     expect(resolveComfyCloudCredentials()).toBeNull();
   });
 
-  it("defaults baseUrl to Comfy's own hosted Cloud", () => {
+  it("defaults baseUrl to Comfy's own hosted Cloud when COMFY_URL is blank", () => {
     vi.stubEnv("COMFY_CLOUD_API_KEY", "abc");
-    vi.stubEnv("COMFY_CLOUD_BASE_URL", "");
+    vi.stubEnv("COMFY_URL", "");
     expect(resolveComfyCloudCredentials()).toEqual({ apiKey: "abc", baseUrl: "https://cloud.comfy.org" });
   });
 
-  it("honors a COMFY_CLOUD_BASE_URL override, stripping a trailing slash", () => {
+  it("honors a COMFY_URL override, stripping a trailing slash", () => {
     vi.stubEnv("COMFY_CLOUD_API_KEY", "abc");
-    vi.stubEnv("COMFY_CLOUD_BASE_URL", "https://my-comfy.example.com/");
+    vi.stubEnv("COMFY_URL", "https://my-comfy.example.com/");
     expect(resolveComfyCloudCredentials()).toEqual({ apiKey: "abc", baseUrl: "https://my-comfy.example.com" });
   });
 });
 
-describe("resolveComfyCloudLtxModel", () => {
-  afterEach(() => vi.unstubAllEnvs());
-
-  it("defaults to the cheaper LTX-2.5 (Fast) tier", () => {
-    vi.stubEnv("COMFY_CLOUD_LTX_MODEL", "");
-    expect(resolveComfyCloudLtxModel()).toBe("LTX-2.5 (Fast)");
-  });
-
-  it("honors a COMFY_CLOUD_LTX_MODEL override", () => {
-    vi.stubEnv("COMFY_CLOUD_LTX_MODEL", "LTX-2.5 (Pro)");
-    expect(resolveComfyCloudLtxModel()).toBe("LTX-2.5 (Pro)");
+describe("DEFAULT_LTX_MODEL", () => {
+  it("is the cheaper LTX-2.5 (Fast) tier, hardcoded (no env override \u2014 not a confirmed Comfy key name)", () => {
+    expect(DEFAULT_LTX_MODEL).toBe("LTX-2.5 (Fast)");
   });
 });
 

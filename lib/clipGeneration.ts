@@ -137,7 +137,8 @@ export function estimateClipRenderCostUsd(durationSec: number, referenceImageCou
  * published direct-API pricing (docs.ltx.io/pricing,
  * ltx.io/model/api/pricing, checked while building this feature):
  * $0.13/s for Fast at 1080p ($0.17/s for Pro — not used by default,
- * see `lib/comfyCloud.ts`'s `resolveComfyCloudLtxModel`). **Honesty
+ * see `lib/comfyCloud.ts`'s `DEFAULT_LTX_MODEL`; no env override for
+ * this, per the "don't invent other Comfy key names" lock). **Honesty
  * note**: this is the provider's own published *direct*-API rate, the
  * same basis `app/api/skidmarks/generate-clip/route.ts`'s existing
  * Grok cost estimate uses for xAI — Comfy Cloud's own account-level

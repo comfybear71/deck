@@ -332,13 +332,16 @@ the request, and validate length against `shotPrompt` only.
   `extra_data.api_key_comfy_org` (LTX-2.5 is a Comfy "Partner Node").
   Missing it never blocks Instrumental clips (still xAI Grok, above) —
   only Vocal renders get the honest `missing_api_key` outcome.
-- `COMFY_CLOUD_BASE_URL` (optional) — overrides the default
-  `https://cloud.comfy.org`.
-- `COMFY_CLOUD_LTX_MODEL` (optional) — overrides the default
-  `LTX-2.5 (Fast)` (cheapest tier) — e.g. `LTX-2.5 (Pro)` for higher
-  quality/cost. No separate "workflow id" env var — this app submits
-  the full workflow graph itself on each call (`POST /api/prompt`),
-  unlike a deployment-id-based API.
+- `COMFY_URL` (optional) — leave unset/blank to use Comfy Cloud's own
+  hosted endpoint (the common case); set it to point at a self-hosted/
+  serverless ComfyUI instance instead.
+- These are the **only two** Comfy-related env vars — confirmed
+  against the original Skidmarks repo's own `.env.example`, not
+  invented here. No model-override var (the LTX tier is hardcoded to
+  `LTX-2.5 (Fast)`, the cheaper of Comfy's two documented tiers) and no
+  "workflow id"/deployment id var — this app submits the full workflow
+  graph itself on each call (`POST /api/prompt`), unlike a deployment-
+  id-based API.
 - `ELEVENLABS_API_KEY` (or `ELEVEN_LABS_API_KEY` as a fallback name) —
   required for real word-level transcription
   (`app/api/skidmarks/transcribe/route.ts`); missing it falls back to

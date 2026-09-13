@@ -3,9 +3,9 @@ import { NextResponse } from "next/server";
 import { buildClipRenderPathname, buildClipRenderPlatePrefix, isSafeSegmentId } from "@/lib/clipRenderBlob";
 import {
   buildLtxAudioToVideoWorkflow,
+  DEFAULT_LTX_MODEL,
   downloadComfyCloudOutput,
   resolveComfyCloudCredentials,
-  resolveComfyCloudLtxModel,
   submitComfyCloudWorkflow,
   uploadComfyCloudInput,
   waitForComfyCloudCompletion,
@@ -960,7 +960,7 @@ async function handleVocalComfyLtxRender(
     imageFilename: imageUpload.name,
     audioFilename: audioUpload.name,
     prompt,
-    model: resolveComfyCloudLtxModel(),
+    model: DEFAULT_LTX_MODEL,
   });
 
   const submitResult = await submitComfyCloudWorkflow(workflow, creds);

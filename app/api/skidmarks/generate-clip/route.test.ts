@@ -921,8 +921,7 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
     vi.stubEnv("COMFY_CLOUD_API_KEY", "test-comfy-key");
-    vi.stubEnv("COMFY_CLOUD_BASE_URL", "");
-    vi.stubEnv("COMFY_CLOUD_LTX_MODEL", "");
+    vi.stubEnv("COMFY_URL", "");
     FakeWebSocket.instances = [];
     putMock.mockReset();
     listMock.mockReset();
@@ -1164,8 +1163,7 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
     expect(body.error).toContain("OOMError");
   });
 
-  it("honors a COMFY_CLOUD_LTX_MODEL override", async () => {
-    vi.stubEnv("COMFY_CLOUD_LTX_MODEL", "LTX-2.5 (Pro)");
+  it("always submits the hardcoded default LTX model \u2014 no env override (not a confirmed Comfy key name)", async () => {
     const mp3Bytes = encodeTestMp3(6);
     mockAudioFetch(mp3Bytes);
     mockUploads();
@@ -1183,6 +1181,6 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
 
     const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
     const submittedBody = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string);
-    expect(submittedBody.prompt["3"].inputs.model).toBe("LTX-2.5 (Pro)");
+    expect(submittedBody.prompt["3"].inputs.model).toBe("LTX-2.5 (Fast)");
   });
 });

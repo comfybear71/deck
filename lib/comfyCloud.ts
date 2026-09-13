@@ -42,14 +42,16 @@
  * in `app/api/skidmarks/generate-clip/route.ts` for how that's
  * surfaced to Stuart.
  *
- * **No "workflow id"/deployment id needed.** Unlike ComfyDeploy's
- * `deployment_id`-based `POST /run/deployment/queue` API (a different
- * third-party product, not used here per Stuart's explicit "Comfy
- * Cloud" lock), Comfy Cloud's own `/api/prompt` endpoint takes the
- * *entire* workflow graph in the request body — this app builds that
- * graph itself (`buildLtxAudioToVideoWorkflow`) rather than referencing
- * a pre-saved one by id, so there's no separate workflow/deployment id
- * env var to configure.
+ * **No "workflow id"/deployment id needed, no model-override env var
+ * either.** Unlike ComfyDeploy's `deployment_id`-based `POST /run/
+ * deployment/queue` API (a different third-party product, not used
+ * here per Stuart's explicit "Comfy Cloud" lock), Comfy Cloud's own
+ * `/api/prompt` endpoint takes the *entire* workflow graph in the
+ * request body — this app builds that graph itself
+ * (`buildLtxAudioToVideoWorkflow`) rather than referencing a pre-saved
+ * one by id. Only two env vars are real here, confirmed against the
+ * original Skidmarks repo's own `.env.example`: `COMFY_CLOUD_API_KEY`
+ * and `COMFY_URL` (blank = Comfy Cloud) — nothing else is invented.
  *
  * **LTX-2.5 is a Comfy "Partner Node"** (it calls out to Lightricks'
  * own hosted API, not a model Comfy itself runs) — Comfy's docs say a
@@ -59,9 +61,16 @@
  * both.
  */
 
+/** Confirmed against the original Skidmarks repo's own `.env.example`
+ * — these are the two real env var names, and the *only* two; nothing
+ * here invents a third (a model override, a workflow/deployment id,
+ * etc.) that repo doesn't already establish. */
 const API_KEY_ENV_VAR = "COMFY_CLOUD_API_KEY";
-const BASE_URL_ENV_VAR = "COMFY_CLOUD_BASE_URL";
-const LTX_MODEL_ENV_VAR = "COMFY_CLOUD_LTX_MODEL";
+/** Leave unset/blank to use Comfy Cloud's own hosted endpoint (the
+ * common case); set it to point at a self-hosted/serverless ComfyUI
+ * instance instead — same "blank means Cloud" convention the original
+ * `.env.example` documents. */
+const URL_ENV_VAR = "COMFY_URL";
 
 const DEFAULT_BASE_URL = "https://cloud.comfy.org";
 /** LTX-2.5 (Fast) is the cheaper of Comfy's two documented LTX-2.5
@@ -69,10 +78,11 @@ const DEFAULT_BASE_URL = "https://cloud.comfy.org";
  * Lightricks' own published API pricing, docs.ltx.io/pricing) — same
  * "cheapest documented tier by default" cost lock as
  * `app/api/skidmarks/generate-clip/route.ts`'s existing `CLIP_RESOLUTION
- * = "480p"` for the Grok path. `COMFY_CLOUD_LTX_MODEL` is a safe,
- * low-risk env override (a model *name* only, same shape as
- * `XAI_VIDEO_MODEL`) for switching to `"LTX-2.5 (Pro)"` later. */
-const DEFAULT_LTX_MODEL = "LTX-2.5 (Fast)";
+ * = "480p"` for the Grok path. Hardcoded, not an env override — unlike
+ * `XAI_VIDEO_MODEL`, the confirmed `.env.example` doesn't establish a
+ * model-override var for Comfy, and this repo's lock is "don't invent
+ * other Comfy key names." */
+export const DEFAULT_LTX_MODEL = "LTX-2.5 (Fast)";
 
 export interface ComfyCloudCredentials {
   apiKey: string;
@@ -81,18 +91,14 @@ export interface ComfyCloudCredentials {
 
 /** Reads `COMFY_CLOUD_API_KEY` (required — no key means this feature
  * isn't wired here, the honest `missing_api_key` outcome, never a fake
- * attempt) and `COMFY_CLOUD_BASE_URL` (optional, defaults to Comfy's
- * own hosted Cloud). Returns `null`, never throws, when the key is
+ * attempt) and `COMFY_URL` (optional; blank/unset means Comfy Cloud's
+ * own hosted endpoint). Returns `null`, never throws, when the key is
  * unset. */
 export function resolveComfyCloudCredentials(): ComfyCloudCredentials | null {
   const apiKey = process.env[API_KEY_ENV_VAR];
   if (!apiKey) return null;
-  const baseUrl = (process.env[BASE_URL_ENV_VAR] || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = (process.env[URL_ENV_VAR] || DEFAULT_BASE_URL).replace(/\/+$/, "");
   return { apiKey, baseUrl };
-}
-
-export function resolveComfyCloudLtxModel(): string {
-  return process.env[LTX_MODEL_ENV_VAR] || DEFAULT_LTX_MODEL;
 }
 
 function wsUrlFor(baseUrl: string, apiKey: string, clientId: string): string {
