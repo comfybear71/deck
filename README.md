@@ -1228,11 +1228,12 @@ now (see "Explicitly out of scope" below).
          in this sandbox (a text-to-image call and an image-edit call
          with a real reference photo both returned real `200`s — see
          `lib/plateGeneration.ts`'s module doc comment for exactly what
-         that does and doesn't prove) — **the *video* render pass past
-         this one still stays a stub everywhere in this build** (see
-         "Generate Clips" below); a real plate still is cheap, a real
-         video render is the expensive part Stuart asked to keep
-         stubbed.
+         that does and doesn't prove) — **the *whole-song* "Generate
+         Clips" render past this one still stays a stub** (see "Generate
+         Clips" below); a real plate still is cheap, a real video render
+         is the expensive part, which is why that whole-song button
+         stays stubbed even though a single clip's own render is now
+         real and opt-in (see "Generate Clips" below for that control).
        - **Once a still exists**, Stuart's ask was gestures on the plate
          itself, not a button row: tapping the still reopens the same
          Upload/Generate popover (replace/regenerate — editing the shot
@@ -1413,16 +1414,39 @@ now (see "Explicitly out of scope" below).
        carve-out and is removed outright (no subscription).
 
      A stub **Generate Clips** button closes the section — tapping it
-     never calls a real Comfy MCP / LTX pipeline; it only shows a
+     never calls a real render for the *whole song*; it only shows a
      "Stub only — no Comfy MCP / LTX render kicked off" message
      (`SkidmarksClipTimeline`'s local `stubMessage` state, same pattern
      as `PropfolioDetailSheet`'s chip feedback line, but always mounted
      with `role="status"`/`aria-live="polite"` so it reaches the
-     accessibility tree/screen readers too, not just sighted users).
-     **Phase note**: typing a shot prompt, uploading a photo, and
-     generating a real plate still (see above) are all real and persist
-     to `localStorage` — what stays a stub past that is the actual clip
-     *video* (this button never calls a real Comfy MCP / LTX render).
+     accessibility tree/screen readers too, not just sighted users). This
+     stays a deliberate stub — a whole-song, no-confirm render is exactly
+     the auto-fire-everything cost risk Stuart ruled out.
+     **A single clip's own render is real now, though**: once a clip has
+     at least one real plate still (generated or uploaded), its expanded
+     panel shows a small opt-in **"Animate plate"/"Render plates"**
+     control (`components/SkidmarksClipRender.tsx`, inside
+     `SkidmarksClipStub`) that calls a real xAI Grok Imagine *video*
+     endpoint (`app/api/skidmarks/generate-clip/route.ts`, same
+     `XAI_API_KEY` plate stills already use — see "Wiring up plate-still
+     generation" below) and returns a real, playable clip. One plate →
+     xAI's image-to-video mode (animates that still). Two or three plates
+     → reference-to-video mode, guided by the whole sequence in order —
+     Stuart's "continuous zoom across the door → keyhole → Jack plates"
+     case. Fixed, hardcoded 5s/480p output (≈$0.40–$0.43 per render,
+     depending on plate count) — not a duration/resolution picker, and
+     not reachable from the whole-song button above. Always behind an
+     explicit two-tap confirm showing the real dollar estimate, and only
+     one clip across the whole timeline can render at a time
+     (`SkidmarksClipTimeline`'s `renderingSegmentId` lock) — Stuart's "one
+     render at a time or clear confirm" cost lock, enforced in code, not
+     just by convention. The result (xAI's own temporary video URL, shown
+     as a `<video>` player + a download link) is intentionally **not**
+     persisted to `localStorage` — a video is too big for that store's
+     small shared quota, unlike a plate still; a refresh loses the
+     preview, and the UI says so. Seedance/Comfy MCP/LTX remain entirely
+     unwired either way — this is xAI only, the same real backend plate
+     stills already use, not a new provider.
   - The sheet's backdrop is a darker/more opaque scrim
      (`bg-black/90 backdrop-blur-md`, vs. the generic `GraphNodeSheet`'s
      `bg-black/70`) — this sheet opens tall and near the top of the
@@ -1505,11 +1529,12 @@ now (see "Explicitly out of scope" below).
   higher-quality tier) — check
   [xAI's current pricing](https://x.ai/api) before relying on this at
   volume, since rates can change; this matches Stuart's "plate stills
-  are OK cost-wise" — the clip timeline's actual *video* render pass
-  stays a stub everywhere in this build regardless (see the "Skidmarks
-  node" section's "Generate Clips" note), which is where the real spend
-  risk would be. This build makes one generation/edit call per tap of
-  Generate — no polling, no automatic retry.
+  are OK cost-wise" — a real *video* render (five to a few dozen times
+  pricier per tap, see "Generate Clips" below) is where the real spend
+  risk lives, which is exactly why that stays behind its own explicit
+  confirm and fixed cost cap rather than living on this same "just
+  tap Generate" flow. This build makes one generation/edit call per tap
+  of Generate — no polling, no automatic retry.
 - **Data shape** (`lib/skidmarks.ts`): `SkidmarksBand` (`id`, `name`,
   `tagline`, `coverSeed`, `editIcon`, `members: SkidmarksMember[]`);
   `SkidmarksMember` (`id`, `name`, optional `role`, `emoji`,
@@ -1615,17 +1640,20 @@ now (see "Explicitly out of scope" below).
   off the same `useSkidmarksStudio` store `GraphView` reads (one hook
   call, passed down as a prop, not a second independent subscription
   duplicating state).
-- **Explicitly out of scope for this build**: voice, animate, and stitch
-  (the flow stops dead after the clip timeline's plate + shot-prompt
-  tags); any real Comfy MCP, Seedance, or LTX call (the only real
+- **Explicitly out of scope for this build**: voice and in-app stitch;
+  any real Comfy MCP, Seedance, or LTX call, at all, ever (the only real
   ElevenLabs call this build makes is Scribe speech-to-text — see step 6
   above; ElevenLabs voice/generation features are still unwired); any
-  real *video* generation, or real trained/validated singing detection
-  (the energy heuristic is a real signal, not a trained model — see step
+  *automatic*/whole-song clip video render (the "Generate Clips" button
+  stays a stub); and real trained/validated singing detection (the
+  energy heuristic is a real signal, not a trained model — see step
   7 above; the seed cadence is still a pure fallback whenever neither
   real signal produces anything usable). **Real plate-*still* image
   generation is no longer on this out-of-scope list** — see step 9's
-  "Plate stills: upload or generate, real either way" note below
+  "Plate stills: upload or generate, real either way" note below, and
+  **neither is a real, opt-in, one-clip-at-a-time video render** — see
+  the "Skidmarks node" section's "Generate Clips" note above and
+  `components/SkidmarksClipRender.tsx`
   (`lib/plateGeneration.ts`, xAI's Grok Imagine API); it's the *video*
   render pass past that one still that remains a stub. A UI for per-word lyric
   emphasis during playback (`words` timing is stored, per Stuart's ask,
@@ -1776,6 +1804,16 @@ npm run dev
   exact env var name checked, and what leaving it unset does (an honest
   "unconfigured" message, not a silent failure). Optional
   `XAI_IMAGE_MODEL` overrides the default `grok-imagine-image-2.0` model
-  without a code change.
+  without a code change. **This same `XAI_API_KEY` also powers the new
+  per-clip real video render** (`app/api/skidmarks/generate-clip/
+  route.ts`, `components/SkidmarksClipRender.tsx`) — no second key to
+  add. A plate-still-only setup (no `XAI_API_KEY`, all plates uploaded
+  photos) still leaves the still flow working; only the "Animate
+  plate"/"Render plates" control returns the honest "unconfigured"
+  outcome instead. Optional `XAI_VIDEO_MODEL` overrides the default
+  `grok-imagine-video-1.5` model without a code change; the render's
+  fixed 5s/480p duration/resolution are **not** env-overridable by
+  design (a deliberate cost-lock choice — see that route's module doc
+  comment).
 - No other environment variables are required — the rest is static seed
   data plus whatever's been ingested into `data/overrides.json`.
