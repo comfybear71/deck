@@ -10,9 +10,14 @@
  * accounts (README, "The four lanes" — xAI API), it's the cheapest wired
  * option for this (per xAI's published pricing, a `grok-imagine-image-2.0`
  * still runs roughly one to a few cents, in line with Stuart's "plate
- * stills are OK cost-wise" — distinct from the *video* render pass, which
- * stays a stub everywhere in this build — see `SkidmarksClipTimeline`'s doc
- * comment), and its `/v1/images/edits` endpoint natively supports up to a
+ * stills are OK cost-wise" — distinct from an actual *video* render,
+ * which costs meaningfully more per tap. The whole-song "Generate Clips"
+ * button (`SkidmarksClipTimeline`) still stays a stub — but a clip's own
+ * plate strip now has a real, explicit, one-clip-at-a-time video render
+ * past it too, on this same xAI key: see
+ * `components/SkidmarksClipRender.tsx` and
+ * `app/api/skidmarks/generate-clip/route.ts`), and its `/v1/images/edits`
+ * endpoint natively supports up to a
  * few reference images per call, which is exactly the mechanism this file
  * uses for both "continue from the previous clip's plate" and "keep this
  * vocalist's likeness/hallmarks locked" below — no second provider needed
@@ -212,6 +217,17 @@ export interface PlateGenerationRequest {
    * module's model-routing framing, continuity/identity reference notes,
    * and (when applicable) a locked character's hallmarks/negative cues. */
   prompt: string;
+  /** Stuart's own, unmodified shot-prompt text \u2014 the same string
+   * `prompt` above leads with, sent separately so
+   * `app/api/skidmarks/generate-still/route.ts` can length-validate
+   * *only* what Stuart actually typed against its `MAX_PROMPT_LENGTH`,
+   * not the auto-injected routing/continuity/character-lock text this
+   * module appends on top. Without this, a legitimately-short shot
+   * prompt on a locked character (Jack Ash's hallmarks + negative cues
+   * alone run several hundred characters) could get rejected as "too
+   * long" for text Stuart never wrote a word of \u2014 see this module's
+   * `buildPlateGenerationRequest` for where the two diverge. */
+  shotPrompt: string;
   /** Ordered to match the tags used inside `prompt` when there are two or
    * more (`<IMAGE_0>`, `<IMAGE_1>`, \u2026 \u2014 xAI's own documented
    * convention for its `images` array) \u2014 empty for a plain
@@ -340,6 +356,7 @@ export function buildPlateGenerationRequest(
       .map((p) => p.trim())
       .filter((p) => p.length > 0)
       .join(" "),
+    shotPrompt: shotPrompt.trim(),
     referenceImageDataUrls: references.map((r) => r.dataUrl),
   };
 }

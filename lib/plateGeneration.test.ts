@@ -112,6 +112,22 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt.startsWith("a door creaks open in an empty hallway")).toBe(true);
   });
 
+  it("returns `shotPrompt` as just Stuart's own (trimmed) text, distinct from the longer merged `prompt`", () => {
+    const { prompt, shotPrompt } = buildPlateGenerationRequest({
+      shotPrompt: "  Jack seated in a dim room, feet apart, backlit.  ",
+      vocal: false,
+      model: "grok",
+      bandName: BAND_NAME,
+      vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
+    });
+    expect(shotPrompt).toBe("Jack seated in a dim room, feet apart, backlit.");
+    // The full merged prompt carries the character lock text on top \u2014
+    // meaningfully longer than the raw shot prompt alone (this is
+    // exactly why the server validates `shotPrompt`'s length, not
+    // `prompt`'s \u2014 see `app/api/skidmarks/generate-still/route.ts`).
+    expect(prompt.length).toBeGreaterThan(shotPrompt.length + 200);
+  });
+
   it("an Instrumental/B-roll clip has no vocalist mention and no reference images at all", () => {
     const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
       shotPrompt: "a door creaks open in an empty hallway",
@@ -396,7 +412,11 @@ describe("generatePlateStill", () => {
   it("returns a real success with the dataUrl the route reported", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { dataUrl: "data:image/jpeg;base64,AAAA" }));
 
-    const outcome = await generatePlateStill({ prompt: "a desert highway at night", referenceImageDataUrls: [] });
+    const outcome = await generatePlateStill({
+      prompt: "a desert highway at night",
+      shotPrompt: "a desert highway at night",
+      referenceImageDataUrls: [],
+    });
 
     expect(outcome).toEqual({ ok: true, dataUrl: "data:image/jpeg;base64,AAAA" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -404,6 +424,7 @@ describe("generatePlateStill", () => {
     expect(url).toBe("/api/skidmarks/generate-still");
     expect(JSON.parse(init.body as string)).toEqual({
       prompt: "a desert highway at night",
+      shotPrompt: "a desert highway at night",
       referenceImageDataUrls: [],
     });
   });
@@ -413,7 +434,7 @@ describe("generatePlateStill", () => {
       jsonResponse(501, { error: "XAI_API_KEY is not set on the server.", code: "missing_api_key" })
     );
 
-    const outcome = await generatePlateStill({ prompt: "x", referenceImageDataUrls: [] });
+    const outcome = await generatePlateStill({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: [] });
 
     expect(outcome).toEqual({
       ok: false,
@@ -427,7 +448,7 @@ describe("generatePlateStill", () => {
       jsonResponse(401, { error: "xAI Grok Imagine returned 401: Incorrect API key provided.", code: "auth_error" })
     );
 
-    const outcome = await generatePlateStill({ prompt: "x", referenceImageDataUrls: [] });
+    const outcome = await generatePlateStill({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: [] });
 
     expect(outcome).toEqual({
       ok: false,
@@ -439,7 +460,7 @@ describe("generatePlateStill", () => {
   it("reports a real network error honestly (no fetch success to parse)", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
 
-    const outcome = await generatePlateStill({ prompt: "x", referenceImageDataUrls: [] });
+    const outcome = await generatePlateStill({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: [] });
 
     expect(outcome).toEqual({ ok: false, unconfigured: false, message: "Failed to fetch" });
   });
@@ -447,7 +468,7 @@ describe("generatePlateStill", () => {
   it("reports a real failure if a 200 response is somehow missing dataUrl", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
 
-    const outcome = await generatePlateStill({ prompt: "x", referenceImageDataUrls: [] });
+    const outcome = await generatePlateStill({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: [] });
 
     expect(outcome).toEqual({
       ok: false,

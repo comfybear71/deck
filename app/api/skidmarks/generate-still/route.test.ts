@@ -113,6 +113,50 @@ describe("POST /api/skidmarks/generate-still", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("validates `shotPrompt`'s length, not the full merged `prompt` \u2014 a short shot prompt plus a long auto-injected character lock is not rejected", async () => {
+    // Simulates `lib/plateGeneration.ts`'s `buildPlateGenerationRequest`
+    // on a locked-character (Jack Ash) plate: a well-under-limit
+    // `shotPrompt` Stuart actually typed, but a much longer merged
+    // `prompt` once the hallmark/negative-cue lock text is appended \u2014
+    // comfortably over `MAX_PROMPT_LENGTH` on its own. This must NOT be
+    // rejected as "too long", since none of the extra length is
+    // Stuart's own text.
+    const shortShotPrompt = "Jack seated in a dim room, feet apart, backlit.";
+    const longMergedPrompt = shortShotPrompt + " " + "x".repeat(2500);
+    expect(longMergedPrompt.length).toBeGreaterThan(2000);
+    expect(shortShotPrompt.length).toBeLessThan(2000);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { data: [{ b64_json: "EEEE", mime_type: "image/jpeg" }] }));
+
+    const res = await POST(postRequest({ prompt: longMergedPrompt, shotPrompt: shortShotPrompt }));
+
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The full merged prompt (with the lock text) is still what's
+    // actually sent to xAI \u2014 only the *validation* is scoped to
+    // `shotPrompt`, the request itself is unaffected.
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body as string).prompt).toBe(longMergedPrompt);
+  });
+
+  it("still rejects a genuinely too-long shotPrompt, even with no reference images/lock involved", async () => {
+    const tooLong = "x".repeat(2001);
+    const res = await POST(postRequest({ prompt: tooLong, shotPrompt: tooLong }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.code).toBe("invalid_request");
+    expect(body.error.toLowerCase()).toContain("shot prompt is too long");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to validating `prompt` itself when a caller omits `shotPrompt`", async () => {
+    const tooLong = "x".repeat(2001);
+    const res = await POST(postRequest({ prompt: tooLong }));
+    expect(res.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rejects a reference image that isn't a data: URL", async () => {
     const res = await POST(
       postRequest({ prompt: "a desert highway at night", referenceImageDataUrls: ["https://example.com/a.jpg"] })
