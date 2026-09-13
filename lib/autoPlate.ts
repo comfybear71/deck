@@ -71,6 +71,14 @@
  * just because Siray isn't configured for a particular band yet. See
  * `pickSirayPosition`'s own doc comment for exactly which position a
  * given slot gets.
+ *
+ * **Backdrop variety (2026-09-14, Stuart's ask)**: every non-scripted
+ * fill on *either* path (xAI or Siray) also gets a real location prepended
+ * from `AUTO_PLATE_LOCATIONS` below — he's using Auto-plate specifically
+ * to avoid typing a per-clip prompt himself, and `SIRAY_17_POSITIONS` is
+ * camera framing only, so without this every Siray fill shared whatever
+ * backdrop the master still itself happened to show. See
+ * `AUTO_PLATE_LOCATIONS`'s own doc comment.
  */
 
 import {
@@ -176,22 +184,55 @@ const CONCRETE_OPENER_SHOTS = [
 // where a locked character's own camera-angle lock (`lib/plateGeneration
 // .ts`'s `SKIDMARKS_CHARACTER_LOCKS`) isn't reinforcing this on top —
 // the template text itself has to carry the off-axis instruction.
+// Dropped the old "stage lighting"/"on stage" wording (2026-09-14,
+// Stuart's ask below) \u2014 it assumed a concert setting that fights the
+// new location line prepended in front of these by `genericShotPrompt`.
 const VOCAL_SHOT_TEMPLATES = [
-  "Close, angled \u00be view of {band}'s vocalist mid-lyric, face turned away from the lens, dramatic stage lighting, music-video still.",
-  "Medium profile shot of the vocalist mid-performance, gaze off to the side rather than toward camera, moody colored stage lighting, cinematic music-video framing.",
-  "Wide over-the-shoulder shot of {band} on stage, vocalist facing away from camera into the crowd, atmospheric haze and colored lighting.",
+  "Close, angled \u00be view of {band}'s vocalist mid-lyric, face turned away from the lens, moody lighting, cinematic music-video still.",
+  "Medium profile shot of the vocalist mid-performance, gaze off to the side rather than toward camera, cinematic music-video framing.",
+  "Wide over-the-shoulder shot of the vocalist, facing away from camera into the scene, atmospheric haze and colored lighting.",
 ];
 
 const INSTRUMENTAL_SHOT_TEMPLATES = [
   "Wide atmospheric B-roll shot establishing the scene's mood, moody lighting, cinematic music-video still.",
   "Tight, textured close-up of an evocative detail setting the scene's tone \u2014 hands, an instrument, a shadow.",
-  "Establishing wide shot, dynamic camera angle, strong sense of place, cinematic music-video still.",
+  "Dynamic wide angle, strong sense of place, cinematic music-video still.",
 ];
+
+/** Hand-authored backdrop variety (2026-09-14, Stuart's ask: "just the
+ * variations... it's just a background and where is location... I don't
+ * have any of those prompts") \u2014 he's on Auto-plate to *avoid* having to
+ * type a location per clip, so this table exists so he never has to.
+ * Matches the seed "Jack Ash" band's own tagline ("Dirt roads & bad
+ * decisions") and the desert/neon/shadow look already established
+ * elsewhere (his reference photo, the door/keyhole opener) \u2014 same
+ * "small, hand-authored, not inferred" spirit as `SKIDMARKS_CHARACTER_
+ * LOCKS`/`SIRAY_17_POSITIONS`. Cycled the same deterministic way as
+ * everything else here (see `genericShotPrompt`/the Siray branch in
+ * `planAutoPlateFill`), so a song with many empty plates gets real
+ * variety, not the same backdrop on every fill. Generic enough to still
+ * suit a future non-desert band \u2014 nothing here names Jack Ash. */
+const AUTO_PLATE_LOCATIONS = [
+  "A lonely desert highway at night, red taillights fading into the dark, dust drifting through the headlights.",
+  "A rundown roadside motel, its neon sign flickering over an empty parking lot.",
+  "A dive bar's back alley, neon spill through a cracked door, empty bottles on the ground.",
+  "A gas station forecourt at 3am, one buzzing fluorescent light, not another car in sight.",
+  "An abandoned drive-in movie screen, cracked and dark, moonlit desert stretching out behind it.",
+  "A concrete underpass, spray-painted walls, a single flickering streetlight overhead.",
+  "The open bed of a pickup truck under a wide, starlit desert sky.",
+  "A dusty crossroads, a leaning stop sign, storm clouds building on the horizon.",
+];
+
+function pickAutoPlateLocation(rotationIndex: number): string {
+  const i =
+    ((rotationIndex % AUTO_PLATE_LOCATIONS.length) + AUTO_PLATE_LOCATIONS.length) % AUTO_PLATE_LOCATIONS.length;
+  return AUTO_PLATE_LOCATIONS[i];
+}
 
 function genericShotPrompt(vocal: boolean, bandName: string, rotationIndex: number): string {
   const templates = vocal ? VOCAL_SHOT_TEMPLATES : INSTRUMENTAL_SHOT_TEMPLATES;
   const template = templates[((rotationIndex % templates.length) + templates.length) % templates.length];
-  return template.replace("{band}", bandName);
+  return `${pickAutoPlateLocation(rotationIndex)} ${template.replace("{band}", bandName)}`;
 }
 
 /**
@@ -248,11 +289,17 @@ export function planAutoPlateFill(
           isFirstEmptySlotInClip,
           rotationIndex: sirayRotation,
         });
+        // Same `AUTO_PLATE_LOCATIONS` table the xAI path uses below —
+        // `SIRAY_17_POSITIONS` is camera framing only (see that module's
+        // own doc comment), so without this every Siray fill shared
+        // whatever backdrop happened to be in the master still itself,
+        // never a genuinely different place.
+        const location = pickAutoPlateLocation(sirayRotation);
         sirayRotation += 1;
         targets.push({
           segmentId: segment.id,
           plateId: plate.id,
-          shotPrompt: position.prompt,
+          shotPrompt: `${location} ${position.prompt}`,
           continueFromPreviousPlate: false,
           siray: { referenceImageDataUrl: masterStillDataUrl },
         });
