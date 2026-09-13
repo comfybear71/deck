@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { coverGradientClass, readImageFileAsDataUrl, type SkidmarksBand } from "@/lib/skidmarks";
+import { coverGradientClass, flushSkidmarksSessionNow, readImageFileAsDataUrl, type SkidmarksBand } from "@/lib/skidmarks";
+import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 
 interface SkidmarksBandPickerProps {
   bands: SkidmarksBand[];
@@ -95,7 +96,13 @@ function BandTile({
     setPicking(true);
     try {
       const dataUrl = await readImageFileAsDataUrl(file);
-      onSetCoverImage(dataUrl);
+      // Same 2026-09-14 fix as the member-avatar picker — see
+      // `lib/memberPhotoBlob.ts`'s module doc comment for the real
+      // session-save 413 this closes. Falls back to the inline `data:`
+      // URL on a Blob hiccup so the picked photo is never just dropped.
+      const uploadOutcome = await uploadSkidmarksMemberPhoto(dataUrl);
+      onSetCoverImage(uploadOutcome.ok ? uploadOutcome.url : dataUrl);
+      flushSkidmarksSessionNow();
     } catch {
       // Couldn't decode the picked file — leave the existing cover as-is.
     } finally {

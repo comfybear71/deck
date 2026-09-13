@@ -7,10 +7,11 @@ import { NextResponse } from "next/server";
  * the attached MP3's own audio bytes (`lib/mp3Blob.ts`, "play survives a
  * refresh"), a finished song's full archive snapshot
  * (`lib/skidmarksArchive.ts`, "Archive" → the bottom song shelf), and
- * (2026-09-14) a plate still's own image bytes (`lib/plateStillBlob.ts`
- * — the fix for the live session's Neon PUT 413'ing once a few real
- * stills pushed it past Vercel's Function-body cap; see that module's
- * own doc comment).
+ * (2026-09-14) a plate still's own image bytes (`lib/plateStillBlob.ts`)
+ * and a member/band's own avatar or cover photo (`lib/memberPhotoBlob.ts`)
+ * — the two-part fix for the live session's Neon PUT 413'ing once real
+ * images pushed it past Vercel's Function-body cap; see those modules'
+ * own doc comments.
  *
  * **Why client-side-direct, not a normal POST to a Next.js route
  * (the pattern every *other* Skidmarks upload in this app uses —
@@ -51,7 +52,12 @@ import { NextResponse } from "next/server";
  */
 export const runtime = "nodejs";
 
-const ALLOWED_PATHNAME_PREFIXES = ["skidmarks/mp3-audio/", "skidmarks/archive/", "skidmarks/plate-stills/"];
+const ALLOWED_PATHNAME_PREFIXES = [
+  "skidmarks/mp3-audio/",
+  "skidmarks/archive/",
+  "skidmarks/plate-stills/",
+  "skidmarks/member-photos/",
+];
 
 function isAllowedPathname(pathname: string): boolean {
   if (pathname.includes("..") || pathname.includes("\\")) return false;

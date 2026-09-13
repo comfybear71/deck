@@ -161,6 +161,8 @@ import {
   type SkidmarksTranscribedWord,
   type SkidmarksTranscriptionProvider,
 } from "./transcription";
+import { uploadSkidmarksMemberPhoto } from "./memberPhotoBlob";
+import { uploadSkidmarksPlateStill } from "./plateStillBlob";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -1560,6 +1562,80 @@ function readLegacySkidmarksLocalStorageSession(): SkidmarksState | null {
 
 
 /**
+ * One-time cleanup for a session hydrated from *before* the 2026-09-14
+ * Blob fixes (`lib/plateStillBlob.ts`/`lib/memberPhotoBlob.ts`) existed
+ * — a real live bug: Stuart kept hitting the session-save `HTTP 413`
+ * even *after* those fixes shipped, because they only stop *new* images
+ * from being embedded inline; every plate still/avatar/cover photo
+ * already sitting in his session as a base64 `data:` URL from before the
+ * fix stayed there, still bloating every single future save on its own.
+ * Walks a freshly-hydrated state for any remaining inline `data:` URL in
+ * a plate still, a member's `avatarImage`, or a band's `coverImage`,
+ * uploads each to Blob, and returns the shrunk state — `changed: false`
+ * (the state returned unchanged) when there was nothing to do, so a
+ * caller never pushes a no-op write. Every upload runs even if another
+ * one in the same pass fails (best-effort, same spirit as this file's
+ * other Blob calls) — a still that can't be migrated this pass just
+ * stays inline and gets tried again next hydrate.
+ */
+async function migrateInlineSessionImagesToBlob(
+  state: SkidmarksState
+): Promise<{ state: SkidmarksState; changed: boolean }> {
+  let changed = false;
+
+  const bands = await Promise.all(
+    state.bands.map(async (band) => {
+      let nextCoverImage = band.coverImage;
+      if (nextCoverImage?.startsWith("data:")) {
+        const outcome = await uploadSkidmarksMemberPhoto(nextCoverImage);
+        if (outcome.ok) {
+          nextCoverImage = outcome.url;
+          changed = true;
+        }
+      }
+      const members = await Promise.all(
+        band.members.map(async (member) => {
+          if (!member.avatarImage?.startsWith("data:")) return member;
+          const outcome = await uploadSkidmarksMemberPhoto(member.avatarImage);
+          if (!outcome.ok) return member;
+          changed = true;
+          return { ...member, avatarImage: outcome.url };
+        })
+      );
+      return { ...band, coverImage: nextCoverImage, members };
+    })
+  );
+
+  const mp3 = state.session.mp3;
+  const segments = mp3
+    ? await Promise.all(
+        mp3.segments.map(async (segment) => {
+          const plates = await Promise.all(
+            segment.plates.map(async (plate) => {
+              if (!plate.still?.dataUrl.startsWith("data:")) return plate;
+              const outcome = await uploadSkidmarksPlateStill(plate.still.dataUrl);
+              if (!outcome.ok) return plate;
+              changed = true;
+              return { ...plate, still: { ...plate.still, dataUrl: outcome.url } };
+            })
+          );
+          return { ...segment, plates };
+        })
+      )
+    : null;
+
+  if (!changed) return { state, changed: false };
+  return {
+    state: {
+      ...state,
+      bands,
+      session: mp3 && segments ? { ...state.session, mp3: { ...mp3, segments } } : state.session,
+    },
+    changed: true,
+  };
+}
+
+/**
  * The one-time (per page load) `GET /api/skidmarks/session` —
  * triggered off `subscribeSkidmarks`'s very first subscriber. Never
  * re-triggered on a later re-subscribe (e.g. reopening the Skidmarks
@@ -1611,8 +1687,21 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     if (fetched && sessionHasSubstantiveContent(fetched)) {
       // Neon already has real content — the ordinary case, including
       // every load after the one-time recovery below has already run.
-      applyIfSafe(fetched);
+      const applied = applyIfSafe(fetched);
       setSessionSync({ status: "synced" });
+      if (applied) {
+        // Best-effort, non-blocking — never delays showing "synced" for
+        // what's usually a no-op. See `migrateInlineSessionImagesToBlob`'s
+        // own doc comment for the real 413 this closes for a session
+        // that predates the 2026-09-14 Blob fixes.
+        void migrateInlineSessionImagesToBlob(fetched).then(({ state: migrated, changed }) => {
+          if (!changed) return;
+          if (!shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount)) return;
+          cachedState = migrated;
+          notify();
+          void pushSkidmarksSessionNow();
+        });
+      }
       return;
     }
 

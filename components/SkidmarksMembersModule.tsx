@@ -2,12 +2,14 @@
 
 import { useRef, useState } from "react";
 import {
+  flushSkidmarksSessionNow,
   MAX_MEMBERS_PER_BAND,
   lookGradientClass,
   readImageFileAsDataUrl,
   type SkidmarksBand,
   type SkidmarksMember,
 } from "@/lib/skidmarks";
+import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 
 interface SkidmarksMembersModuleProps {
   band: SkidmarksBand;
@@ -232,7 +234,20 @@ export function SkidmarksMembersModule({
   const handlePickPhoto = async (memberId: string, file: File) => {
     try {
       const dataUrl = await readImageFileAsDataUrl(file);
-      onSetMemberAvatarImage(memberId, dataUrl);
+      // Real live bug (2026-09-14): this used to write the resized
+      // `data:` URL straight into the session — and a member's avatar
+      // (the Auto-plate "master still" reference) is typically a real,
+      // sizeable photo, not a small generated still, so on its own it
+      // was often enough to push the whole session's Neon PUT past
+      // Vercel's ~4.5MB cap (`HTTP 413`), the same bug `lib/
+      // plateStillBlob.ts` fixed for plate stills but missed here.
+      // Uploads to Blob so the session only ever stores this photo's
+      // URL. Falls back to the inline `data:` URL on a Blob hiccup so
+      // the picked photo is never just dropped — usable this session
+      // either way.
+      const uploadOutcome = await uploadSkidmarksMemberPhoto(dataUrl);
+      onSetMemberAvatarImage(memberId, uploadOutcome.ok ? uploadOutcome.url : dataUrl);
+      flushSkidmarksSessionNow();
     } catch {
       // Couldn't decode the picked file — leave the existing avatar as-is.
     }
