@@ -50,7 +50,14 @@ export async function PUT(request: Request) {
 
   const outcome = await saveSkidmarksSession(body.state);
   if (!outcome.ok) {
-    return NextResponse.json({ ok: false, error: outcome.error }, { status: 502 });
+    // `configured: false` (Neon not connected here) is an honest,
+    // expected outcome, not a server error — 200, same as GET's own
+    // `configured: false` shape. A real query failure after the
+    // connection resolved (`configured: true`) is a genuine 502.
+    return NextResponse.json(
+      { ok: false, configured: outcome.configured, error: outcome.error },
+      { status: outcome.configured ? 502 : 200 }
+    );
   }
   return NextResponse.json({ ok: true, updatedAt: outcome.updatedAt });
 }

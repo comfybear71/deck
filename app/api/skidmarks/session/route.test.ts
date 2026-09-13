@@ -92,12 +92,21 @@ describe("PUT /api/skidmarks/session", () => {
     expect(body).toEqual({ ok: true, updatedAt: "2026-09-13T02:00:00.000Z" });
   });
 
-  it("returns an honest 502 failure, not a silent success, when the save itself fails", async () => {
-    saveMock.mockResolvedValueOnce({ ok: false, error: "write timeout" });
+  it("returns an honest 502 failure, not a silent success, when the save itself fails after Neon was reachable", async () => {
+    saveMock.mockResolvedValueOnce({ ok: false, configured: true, error: "write timeout" });
     const { PUT } = await importRoute();
     const res = await PUT(putRequest({ state: { bands: [] } }));
     const body = await res.json();
     expect(res.status).toBe(502);
-    expect(body).toEqual({ ok: false, error: "write timeout" });
+    expect(body).toEqual({ ok: false, configured: true, error: "write timeout" });
+  });
+
+  it("returns a plain 200 configured:false outcome, not a 502, when Neon isn't set up at all", async () => {
+    saveMock.mockResolvedValueOnce({ ok: false, configured: false, error: "DATABASE_URL is not set." });
+    const { PUT } = await importRoute();
+    const res = await PUT(putRequest({ state: { bands: [] } }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ ok: false, configured: false, error: "DATABASE_URL is not set." });
   });
 });

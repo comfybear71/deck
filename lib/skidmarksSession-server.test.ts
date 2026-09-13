@@ -84,12 +84,12 @@ describe("loadSkidmarksSession", () => {
 });
 
 describe("saveSkidmarksSession", () => {
-  it("returns ok: false, never throwing, when DATABASE_URL isn't set", async () => {
+  it("returns ok: false, configured: false, never throwing, when DATABASE_URL isn't set", async () => {
     delete process.env.DATABASE_URL;
     delete process.env.DATABASE_URL_UNPOOLED;
     const { saveSkidmarksSession } = await importModule();
     const outcome = await saveSkidmarksSession({ bands: [] });
-    expect(outcome).toEqual({ ok: false, error: expect.stringContaining("DATABASE_URL") });
+    expect(outcome).toEqual({ ok: false, configured: false, error: expect.stringContaining("DATABASE_URL") });
     expect(sqlMock).not.toHaveBeenCalled();
   });
 
@@ -102,13 +102,13 @@ describe("saveSkidmarksSession", () => {
     expect(outcome).toEqual({ ok: true, updatedAt: "2026-09-13T01:00:00.000Z" });
   });
 
-  it("returns an honest ok:false failure, not a throw, when the upsert itself errors", async () => {
+  it("returns an honest ok:false, configured:true failure, not a throw, when the upsert itself errors", async () => {
     process.env.DATABASE_URL = "postgres://user:pass@host/db";
     sqlMock.mockResolvedValueOnce([]); // CREATE TABLE
     sqlMock.mockRejectedValueOnce(new Error("write timeout"));
     const { saveSkidmarksSession } = await importModule();
     const outcome = await saveSkidmarksSession({ bands: [] });
-    expect(outcome).toEqual({ ok: false, error: "write timeout" });
+    expect(outcome).toEqual({ ok: false, configured: true, error: "write timeout" });
   });
 });
 

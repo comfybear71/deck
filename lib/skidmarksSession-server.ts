@@ -92,7 +92,16 @@ export async function loadSkidmarksSession(): Promise<LoadSkidmarksSessionOutcom
   }
 }
 
-export type SaveSkidmarksSessionOutcome = { ok: true; updatedAt: string } | { ok: false; error: string };
+export type SaveSkidmarksSessionOutcome =
+  | { ok: true; updatedAt: string }
+  /** `configured: false` — Neon isn't connected in this environment at
+   * all (honest, expected). `configured: true` — the connection itself
+   * resolved but the query/upsert genuinely failed (a real bug/outage).
+   * Kept as two distinguishable outcomes, not one flat `error` string,
+   * so `lib/skidmarks.ts`'s client-side sync-status indicator can show
+   * "not saving here" rather than "broken" for the former. */
+  | { ok: false; configured: false; error: string }
+  | { ok: false; configured: true; error: string };
 
 /**
  * Upserts Stuart's one durable session row with the *entire* current
@@ -111,7 +120,7 @@ export type SaveSkidmarksSessionOutcome = { ok: true; updatedAt: string } | { ok
 export async function saveSkidmarksSession(state: unknown): Promise<SaveSkidmarksSessionOutcome> {
   const sql = getSkidmarksSql();
   if (!sql) {
-    return { ok: false, error: DATABASE_UNCONFIGURED_MESSAGE };
+    return { ok: false, configured: false, error: DATABASE_UNCONFIGURED_MESSAGE };
   }
   try {
     await ensureSchema(sql);
@@ -123,6 +132,10 @@ export async function saveSkidmarksSession(state: unknown): Promise<SaveSkidmark
     `) as { updated_at: string }[];
     return { ok: true, updatedAt: rows[0]?.updated_at ?? new Date().toISOString() };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Could not save the Skidmarks session to Neon." };
+    return {
+      ok: false,
+      configured: true,
+      error: err instanceof Error ? err.message : "Could not save the Skidmarks session to Neon.",
+    };
   }
 }
