@@ -1422,12 +1422,70 @@ export function getSkidmarksPersistFailure(): { at: number; message: string } | 
   return lastPersistFailure;
 }
 
+/** Deliberately conservative early-warning line for how large the
+ * serialized state can get before a `persist()` write is actually at
+ * real risk of hitting `localStorage`'s quota — well under the real
+ * ~5MB-ish per-origin ceiling most browsers (iOS Safari included)
+ * enforce in practice, since the *exact* real ceiling varies by
+ * browser/device and isn't reliably queryable ahead of time for
+ * `localStorage` specifically (`navigator.storage.estimate()` reports a
+ * different, usually much larger bucket shared with IndexedDB/Cache
+ * Storage, not this one). This is a **second, independent** layer on
+ * top of downscaling generated stills (`downscaleDataUrlImage`) and the
+ * hard-failure banner (`lastPersistFailure`) above: downscaling reduces
+ * how fast this grows, the hard-failure banner is the backstop for
+ * *after* a write has already failed, and this is the honest heads-up
+ * *before* one ever does — giving Stuart a real chance to Archive
+ * (durable Vercel Blob storage, not local) while every write is still
+ * actually succeeding, rather than only finding out once one doesn't. */
+const STORAGE_SIZE_WARNING_BYTES = 3 * 1024 * 1024;
+
+/** Pure threshold check, exported so it's directly unit testable
+ * without needing a real (or quota-limited) `localStorage`. */
+export function exceedsSkidmarksStorageWarningThreshold(serializedByteLength: number): boolean {
+  return serializedByteLength >= STORAGE_SIZE_WARNING_BYTES;
+}
+
+/** Set once the *serialized* state crosses `STORAGE_SIZE_WARNING_BYTES`
+ * on a write that itself still succeeded — cleared the moment a later
+ * write drops back under it (e.g. Stuart removes a plate still, or
+ * Archives and starts a fresh song). Like `lastPersistFailure`, never
+ * itself persisted. */
+let lastPersistWarning: { at: number; message: string } | null = null;
+
+/** Read-only snapshot of the current storage-size warning (or `null`
+ * if the most recent successful write was comfortably under the
+ * threshold) — same `subscribeSkidmarks` notify-cycle exposure as
+ * `getSkidmarksPersistFailure`. */
+export function getSkidmarksStorageWarning(): { at: number; message: string } | null {
+  return lastPersistWarning;
+}
+
+const STORAGE_SIZE_WARNING_MESSAGE =
+  "This song's local storage is getting full \u2014 plate stills add up fast. Archive it soon " +
+  "(saves to durable cloud storage, not this browser) so nothing's at risk if a future save doesn't fit.";
+
 function persist(next: SkidmarksState) {
   cachedState = next;
   if (isBrowser()) {
+    let serialized: string | null = null;
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      serialized = JSON.stringify(next);
+    } catch (err) {
+      // Should never happen for this feature's own state shape (no
+      // circular references, no BigInt) \u2014 if it somehow ever does,
+      // treat it as honestly as a failed localStorage write below
+      // rather than letting a raw exception escape every caller.
+      lastPersistFailure = { at: Date.now(), message: describeSkidmarksPersistFailure(err) };
+      notify();
+      return;
+    }
+    try {
+      window.localStorage.setItem(STORAGE_KEY, serialized);
       lastPersistFailure = null;
+      lastPersistWarning = exceedsSkidmarksStorageWarningThreshold(serialized.length)
+        ? { at: Date.now(), message: STORAGE_SIZE_WARNING_MESSAGE }
+        : null;
     } catch (err) {
       // Deliberately not "unavailable (e.g. private mode) — in-memory
       // only for this session" as a silent comment anymore — see

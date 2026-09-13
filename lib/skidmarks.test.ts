@@ -7,8 +7,10 @@ import {
   createMp3Attachment,
   defaultSegmentModel,
   describeSkidmarksPersistFailure,
+  exceedsSkidmarksStorageWarningThreshold,
   getSkidmarksPersistFailure,
   getSkidmarksSnapshot,
+  getSkidmarksStorageWarning,
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
   markSkidmarksMp3AudioUnconfigured,
@@ -469,6 +471,32 @@ describe("getSkidmarksPersistFailure", () => {
     // even though this suite can never actually trigger a real write
     // failure (see the describe block's own doc comment).
     expect(getSkidmarksPersistFailure()).toBeNull();
+  });
+});
+
+/**
+ * `exceedsSkidmarksStorageWarningThreshold` — the pure threshold check
+ * behind the *proactive* storage-size warning (a second, independent
+ * layer alongside downscaling generated stills and the hard-failure
+ * banner above): a heads-up *before* a write ever actually fails,
+ * giving Stuart a real chance to Archive while everything is still
+ * succeeding.
+ */
+describe("exceedsSkidmarksStorageWarningThreshold", () => {
+  it("stays false comfortably under the 3MB threshold", () => {
+    expect(exceedsSkidmarksStorageWarningThreshold(1024)).toBe(false);
+    expect(exceedsSkidmarksStorageWarningThreshold(1024 * 1024)).toBe(false);
+  });
+
+  it("flips true right at and past the 3MB threshold", () => {
+    expect(exceedsSkidmarksStorageWarningThreshold(3 * 1024 * 1024)).toBe(true);
+    expect(exceedsSkidmarksStorageWarningThreshold(5 * 1024 * 1024)).toBe(true);
+  });
+});
+
+describe("getSkidmarksStorageWarning", () => {
+  it("reads null by default, same environment constraint as getSkidmarksPersistFailure", () => {
+    expect(getSkidmarksStorageWarning()).toBeNull();
   });
 });
 
