@@ -431,6 +431,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
     it("re-downloads the finished render and uploads it to Blob under this plate's stable pathname, returning the durable URL", async () => {
       mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
       fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
       putMock.mockResolvedValueOnce({
         url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
       });
@@ -473,6 +474,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
     it("letters the pathname's basename when the client reports more than one plate on this clip", async () => {
       mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
       fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
       putMock.mockResolvedValueOnce({
         url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-2/01b_0000-0040_render.mp4",
       });
@@ -598,6 +600,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
     it("prunes every other blob already sitting under this plate's own prefix after a successful save, keeping only the one just written", async () => {
       mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
       fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
       putMock.mockResolvedValueOnce({
         url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/02_0040-0080_render.mp4",
       });
@@ -631,6 +634,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
     it("never deletes the blob it just wrote, and skips del() entirely when nothing else is stale", async () => {
       mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
       fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
       putMock.mockResolvedValueOnce({
         url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
       });
@@ -658,6 +662,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
     it("still returns the successfully persisted render even when the prune step itself fails", async () => {
       mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
       fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
       putMock.mockResolvedValueOnce({
         url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
       });
@@ -681,6 +686,72 @@ describe("POST /api/skidmarks/generate-clip", () => {
       expect(body.videoUrl).toBe(
         "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4"
       );
+    });
+
+    it("reports an honest persistError \u2014 never a silently-broken URL \u2014 when the just-written Blob URL fails its post-put HEAD verify", async () => {
+      // The live-QA'd bug: `put()` resolved, but the returned URL wasn't
+      // actually reachable (a stale 404, a since-pruned path) \u2014 this
+      // must never come back as `persisted: true` with a dead URL wired
+      // into the shelf.
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+      fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 })); // HEAD verify fails
+      putMock.mockResolvedValueOnce({
+        url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-2/01b_0000-0040_render.mp4",
+      });
+
+      const res = await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
+          plateId: "plate-2",
+          plateIndex: 1,
+          plateCount: 3,
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      // Still the render Stuart already paid for (xAI's own temporary
+      // URL) \u2014 never discarded over a save-verification problem.
+      expect(body.videoUrl).toBe("https://vidgen.x.ai/clip.mp4");
+      expect(body.persisted).toBe(false);
+      expect(body.persistError).toContain("404");
+      // Never prunes/deletes anything on a failed verify \u2014 the write
+      // itself already happened; only the "was it a success" call is
+      // what failed.
+      expect(listMock).not.toHaveBeenCalled();
+      expect(delMock).not.toHaveBeenCalled();
+    });
+
+    it("reports an honest persistError when the post-put HEAD verify itself errors (network failure)", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+      fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch")); // HEAD verify network error
+      putMock.mockResolvedValueOnce({
+        url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
+      });
+
+      const res = await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
+          plateId: "plate-1",
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.persisted).toBe(false);
+      expect(body.persistError).toContain("Failed to fetch");
     });
 
     it("skips persistence when plateId is missing, even if segmentId/clipIndex/startSec/endSec are all valid", async () => {
