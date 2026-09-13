@@ -428,21 +428,29 @@ export function SkidmarksClipRender({
             </button>
           ) : (
             <>
+              {/* Streamlined 2026-09-14, Stuart's direct "looks horrible
+                  like a big balloon" report — the old wording ("Confirm
+                  — real Comfy Cloud LTX call, 27s, ~$3.51") wrapped to
+                  three lines at the previous padding/text size, which is
+                  what actually ballooned this button's height. Shorter
+                  wording plus the same slimmer sizing the H3/Grok switch
+                  and Render button already got keeps this to one or two
+                  lines instead. */}
               <button
                 type="button"
                 onClick={handleConfirm}
-                className="flex-1 rounded-full bg-rose-400 px-3.5 py-2.5 text-center text-[12px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/85"
+                className="flex-1 rounded-full bg-rose-400 px-3 py-2 text-center text-[11px] font-semibold leading-snug text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/85"
               >
                 {vocal
-                  ? `Confirm — real Comfy Cloud LTX call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
+                  ? `Confirm — Comfy Cloud LTX, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
                   : instrumentalVideoModel === "h3"
-                    ? `Confirm — real MiniMax H3 call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
-                    : `Confirm — real xAI Grok video call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`}
+                    ? `Confirm — MiniMax H3, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
+                    : `Confirm — xAI Grok video, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`}
               </button>
               <button
                 type="button"
                 onClick={cancelConfirm}
-                className="shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-[12px] font-medium text-white/60 transition-colors hover:bg-white/[0.07] hover:text-white"
+                className="shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] font-medium text-white/60 transition-colors hover:bg-white/[0.07] hover:text-white"
               >
                 Cancel
               </button>
