@@ -54,7 +54,13 @@ iOS Safari bug, not a hypothetical one — e.g. `touch-pan-x` vs.
 `touch-none` on the plate strip (blocking the wrong gesture broke
 horizontal scroll), portaling the plate lightbox to `document.body`
 (iOS Safari stacking-context bug), long-press-to-clear timing tuned
-against real thumb behavior. See `components/SkidmarksClipStub.tsx`'s
+against real thumb behavior, the per-plate select control's real hit
+target being widened to ~40px (a live-QA'd real gap: the ~20px visible
+dot alone was under Apple's ~44pt HIG touch-target minimum, sitting
+right at the tile's own extreme corner — a thumb that missed by a few
+px fell through to the tile underneath, opening the enlarge lightbox on
+a short miss or firing the tile's own press-and-hold-clear timer on a
+miss held a beat too long). See `components/SkidmarksClipStub.tsx`'s
 doc comments for specifics.
 
 **If you touch any Skidmarks UI, verify it in Safari on an iPhone (or
@@ -77,8 +83,8 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Per-plate select + tick | **Real** — a small corner control on each filled plate tile (radio-style, one plate selected per clip at a time) plus a filled/empty tick for "already has a saved render"; see `lib/skidmarks.ts`'s `resolveSelectedPlateId` | `components/SkidmarksClipStub.tsx` |
 | Per-plate opt-in *video* render | **Real** — xAI Grok Imagine *video* API, animates **the one selected plate's own still only** (not multi-reference continuity across the whole strip anymore), one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`) | `app/api/skidmarks/generate-clip/route.ts`, `components/SkidmarksClipRender.tsx` |
 | Per-plate render duration | **Real, auto-computed** — `segmentLengthSec / plateCount`, clamped to `[5, 15]`s (Grok's documented ceiling), no UI picker | `lib/clipGeneration.ts`'s `computePlateDurationSec` |
-| Render persistence | **Real**, per-**plate** now (not per-clip — see the pathname migration note below) — saved to durable Vercel Blob storage, survives a refresh; download uses a numeric (lettered once a clip has >1 plate) filename for Resolve | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
-| Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**, cards laid out in one `overflow-x-auto` horizontal strip (not a vertical stack) so a phone with several renders doesn't turn into one huge scroll; "download all" zip/sequential-fallback stays reachable underneath the strip | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts` |
+| Render persistence | **Real**, per-**plate** now (not per-clip — see the pathname migration note below) — saved to durable Vercel Blob storage, survives a refresh; download uses a numeric (lettered once a clip has >1 plate) filename for Resolve. **Exactly one render per `(segmentId, plateId)` is an enforced invariant, not just a convention** — see the "exactly-one-render" note below | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
+| Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**, cards laid out in one `overflow-x-auto` horizontal strip (not a vertical stack) so a phone with several renders doesn't turn into one huge scroll; "download all" zip/sequential-fallback stays reachable underneath the strip. Each card also has a **Remove** control — deletes that plate's persisted Blob render(s) and clears its tick, never touches the plate's still/shot/motion prompts (those are separate, `localStorage`-only state) | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts`, `lib/clipRenders.ts`'s `deletePersistedClipRender` |
 | MP3 audio → Vercel Blob | **Real** — the attached MP3's own audio bytes upload client-side-direct to Blob at attach time so **playback survives a refresh**, honestly labeled when unconfigured/failed | `lib/mp3Blob.ts`, `components/SkidmarksMp3Card.tsx` |
 | Auto-plate from a short brief | **Real** — fills *empty* plate slots across the whole clip list with real xAI-generated stills off a small heuristic planner (never an LLM call against the brief), **then stops**; never overwrites a filled plate, never renders video | `lib/autoPlate.ts`, `components/SkidmarksAutoPlate.tsx` |
 | Finished-song archive | **Real** — "Archive" snapshots the live band+mp3 (segments, plates, prompts, motion text) to Vercel Blob JSON + carries forward the mp3's own audio URL, lists in a page-bottom shelf, "Open in editor" restores it (auto-archiving whatever's currently live first), "Download project zip" bundles prompts/stills/renders/audio "as practical." No Neon — not patterned anywhere in this repo yet (see Env vars) | `lib/skidmarksArchive.ts`, `app/api/skidmarks/archive/route.ts`, `app/api/skidmarks/blob-upload/route.ts`, `components/SkidmarksArchiveShelf.tsx` |
@@ -103,6 +109,36 @@ clip," it's "one per plate" now. Any render already sitting in Blob
 under the old 2-level path is simply orphaned (not deleted, just no
 longer listed/linked) — flagging this explicitly rather than pretending
 it was seamless.
+
+**"Exactly one render per `(segmentId, plateId)`" is an enforced
+invariant, not just an `allowOverwrite: true` convention** — a real
+live-QA'd gap: `{filename}` bakes in `clipIndex`/`startSec`/`endSec`/a
+plate-count-dependent letter suffix (`buildClipRenderFilename`), none of
+which are guaranteed stable between two renders of what Stuart still
+considers "the same plate" (the timeline reordering, a plate added to/
+removed from the same clip's strip in between) — so `allowOverwrite`
+alone could leave a *second*, differently-named blob sitting under the
+same plate's own prefix instead of genuinely replacing the first,
+showing up as a ghost/duplicate entry in the shelf, or as "I paid for a
+re-render and the old clip is still there." Two layers now guard against
+this: (1) `app/api/skidmarks/generate-clip/route.ts`'s
+`pruneStaleRendersForPlate` deletes every *other* blob under
+`buildClipRenderPlatePrefix(segmentId, plateId)` right after a
+successful `put()` (best-effort — a failed prune doesn't fail the
+render Stuart already paid for); (2) `app/api/skidmarks/clip-renders/
+route.ts`'s `GET` defensively de-dupes by picking the blob with the
+latest `uploadedAt` per plate, in case a prune ever didn't run. If you
+touch either route or `lib/clipRenderBlob.ts`, keep both layers —
+neither alone is a hard guarantee.
+
+**A paid render's success must never be silently invisible.** If xAI's
+call itself succeeds (money spent) but the *save* step afterward fails,
+`components/SkidmarksClipRender.tsx` shows a distinctly bordered/
+backgrounded alert (not the same plain text line as an ordinary
+validation error) stating plainly that the render finished, that Stuart
+was charged, and that it won't show up in the shelf or survive a
+refresh — never just a quiet "Rendered ✓" tick with nothing to actually
+show for it.
 
 **No `localStorage` for genuinely new durable state.** The existing
 `lib/skidmarks.ts` session mirror (bands/session/segments/plates,
@@ -184,10 +220,23 @@ character in this build:
   is passed as an identity reference whenever he's actually in frame —
   on a **Vocal** clip (he auto-includes as the resolved vocalist), *and*
   on an **Instrumental/B-roll** clip when the shot prompt names him
-  directly or the plate continues from one that did ("Use last plate").
-  **Don't scope this to Vocal-only again** — an Instrumental-only gap
-  here was a real reported bug (see `lib/plateGeneration.ts`'s module
-  doc comment and git history for the exact repro).
+  directly or the plate continues from **a plate that itself already
+  featured him** ("Use last plate", gated on the *source* still's own
+  resolved fact — `lib/skidmarks.ts`'s `SkidmarksPlateStill
+  .featuresLockedCharacter` — not on "any continuity image exists at
+  all"). **Don't scope this to Vocal-only again** — an Instrumental-only
+  gap here was a real reported bug (see `lib/plateGeneration.ts`'s
+  module doc comment and git history for the exact repro).
+  **Don't widen the continuity signal back to "any continuity image"
+  either** — a second real reported bug: the door → keyhole → Jack
+  sequence's *keyhole* plate (empty of people, prompt never names him)
+  continued from the *door* plate (also empty of people) via "Use last
+  plate," and the old, cruder signal wrongly injected his silhouette/
+  neon lips into that person-less shot purely because the band happens
+  to be Jack Ash and *some* continuity reference was attached. The lock
+  only ever carries forward along a continuity chain that actually
+  featured him — never onto a door/keyhole/generic-B-roll plate just
+  because it continues from *something*.
 - This is a small, hand-authored allowlist, not inferred from anything.
   A new locked character needs the same explicit, hand-written
   hallmarks/negative-cues treatment — don't guess at a "look" for a
