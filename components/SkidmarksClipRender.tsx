@@ -366,27 +366,27 @@ export function SkidmarksClipRender({
             // component's doc comment.
             <span
               aria-label="Vocal render backend: LTX lip-sync"
-              className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-center text-[12px] font-semibold text-white/70"
+              className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-center text-[11px] font-semibold text-white/70"
             >
               LTX
             </span>
           ) : (
-            // Two real, roomy tap targets (not a slim pill row) — each
-            // button's own padding keeps it comfortably past Apple's
-            // ~44pt HIG minimum, same "a thumb should never have to aim
-            // precisely" lesson this feature's other iOS-Safari-tuned
-            // controls already learned the hard way (see
+            // Streamlined (2026-09-14, Stuart's direct "too big... nice
+            // streamline buttons" ask, after the roomier 36px version
+            // below) but deliberately stops at ~32px, not smaller — a
+            // *different* PR (Cursor's, rejected — see AGENTS.md/this
+            // file's git history) shrunk this same switch to 24px with a
+            // 2px gap and Stuart hated the result just as much, on a
+            // control that picks a paid video backend. `min-h-[32px]`
+            // plus a real `gap-1.5` between the two buttons is the
+            // narrower-but-still-safe middle Stuart actually wants — see
             // `components/SkidmarksClipStub.tsx`'s
-            // `SkidmarksPlateSelectControl` doc comment). **Now
-            // permanently visible beside the Render button** (moved out
-            // of the confirm-only step 2026-09-14, Stuart's explicit
-            // ask — "not buried only in a hard-to-find confirm... prefer
-            // visible beside the button") rather than only appearing
-            // once Render's already been tapped once.
+            // `SkidmarksPlateSelectControl` doc comment for the original
+            // ~40px touch-target lesson this is still respecting.
             <div
               role="group"
               aria-label="Instrumental render backend"
-              className="flex shrink-0 items-center gap-1 rounded-full bg-white/[0.04] p-1 text-[12px] font-medium"
+              className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/[0.04] p-1 text-[11px] font-medium"
             >
               {(["h3", "grok"] as const).map((option) => (
                 <button
@@ -395,7 +395,7 @@ export function SkidmarksClipRender({
                   onClick={() => onSetInstrumentalVideoModel(option)}
                   aria-pressed={instrumentalVideoModel === option}
                   className={[
-                    "min-h-[36px] rounded-full px-3.5 py-2 transition-colors",
+                    "min-h-[32px] rounded-full px-3 py-1.5 transition-colors",
                     instrumentalVideoModel === option
                       ? "bg-rose-400 text-zinc-950"
                       : "text-white/50 hover:text-white/80",
@@ -410,14 +410,15 @@ export function SkidmarksClipRender({
           {!confirming ? (
             // "About half width" per Stuart's explicit ask — the switch/
             // pill to its left takes the rest of the row instead of this
-            // button spanning edge-to-edge the way it used to.
+            // button spanning edge-to-edge the way it used to. Slimmed
+            // down alongside the switch above (2026-09-14).
             <button
               type="button"
               onClick={startConfirm}
               disabled={locked || missingAudio}
               aria-disabled={locked || missingAudio}
               className={[
-                "w-1/2 rounded-full px-4 py-2.5 text-center text-[13px] font-semibold transition-colors",
+                "w-1/2 rounded-full px-3.5 py-2 text-center text-[12px] font-semibold transition-colors",
                 locked || missingAudio
                   ? "cursor-not-allowed bg-white/[0.04] text-white/30"
                   : "bg-rose-400 text-zinc-950 hover:bg-rose-300 active:bg-rose-400/85",
