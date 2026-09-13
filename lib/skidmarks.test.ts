@@ -8,15 +8,25 @@ import {
   defaultSegmentModel,
   getSkidmarksSnapshot,
   markSkidmarksAnalysisFailed,
+  markSkidmarksMp3AudioFailed,
+  markSkidmarksMp3AudioUnconfigured,
   MAX_PLATES_PER_CLIP,
   normalizeSkidmarksSegment,
   removeSkidmarksClipPlate,
+  resetSkidmarksSessionAfterArchive,
+  resolveSelectedPlateId,
+  restoreSkidmarksArchivedSession,
   SKIDMARKS_MODELS,
   selectSkidmarksBand,
+  setSkidmarksClipPlateMotionPrompt,
   setSkidmarksClipPlateStill,
+  setSkidmarksMp3AudioUrl,
   setSkidmarksSegmentModel,
+  setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
   skidmarksChecklistState,
+  type SkidmarksBand,
+  type SkidmarksClipPlateSlot,
   type SkidmarksClipSegment,
 } from "./skidmarks";
 import type { SkidmarksTranscribedWord } from "./transcription";
@@ -616,5 +626,132 @@ describe("normalizeSkidmarksSegment", () => {
 
     const normalized = normalizeSkidmarksSegment(emptyPlates);
     expect(normalized.plates).toHaveLength(1);
+  });
+});
+
+describe("resolveSelectedPlateId", () => {
+  function plate(id: string, hasStill: boolean): SkidmarksClipPlateSlot {
+    return hasStill
+      ? { id, still: { dataUrl: "data:image/jpeg;base64,X", source: "generated", createdAt: 1 } }
+      : { id };
+  }
+
+  it("returns null when no plate is filled yet", () => {
+    expect(resolveSelectedPlateId([plate("a", false), plate("b", false)], null, new Set())).toBeNull();
+  });
+
+  it("honors an explicit selection that still points at a filled plate", () => {
+    const plates = [plate("a", true), plate("b", true)];
+    expect(resolveSelectedPlateId(plates, "b", new Set())).toBe("b");
+  });
+
+  it("falls back to the first unrendered filled plate when nothing is explicitly selected", () => {
+    const plates = [plate("a", true), plate("b", true)];
+    expect(resolveSelectedPlateId(plates, null, new Set(["a"]))).toBe("b");
+  });
+
+  it("falls back to the first filled plate when every filled plate already has a render", () => {
+    const plates = [plate("a", true), plate("b", true)];
+    expect(resolveSelectedPlateId(plates, null, new Set(["a", "b"]))).toBe("a");
+  });
+
+  it("ignores a stale selection that no longer points at a currently-filled plate", () => {
+    const plates = [plate("a", false), plate("b", true)];
+    expect(resolveSelectedPlateId(plates, "a", new Set())).toBe("b");
+  });
+});
+
+describe("setSkidmarksSegmentSelectedPlate / setSkidmarksClipPlateMotionPrompt", () => {
+  it("sets selectedPlateId on the segment", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    const plateId = segment.plates[0].id;
+    setSkidmarksSegmentSelectedPlate(segment.id, plateId);
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.selectedPlateId).toBe(plateId);
+  });
+
+  it("sets one specific plate's own motionPrompt without touching any other plate on the same clip", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    addSkidmarksClipPlate(segment.id);
+    const refreshed = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    const [first, second] = refreshed.plates;
+
+    setSkidmarksClipPlateMotionPrompt(segment.id, first.id, "slow zoom into keyhole");
+
+    const after = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(after.plates.find((p) => p.id === first.id)?.motionPrompt).toBe("slow zoom into keyhole");
+    expect(after.plates.find((p) => p.id === second.id)?.motionPrompt).toBeUndefined();
+  });
+});
+
+describe("setSkidmarksMp3AudioUrl / markSkidmarksMp3AudioUnconfigured / markSkidmarksMp3AudioFailed", () => {
+  it("records a successful audio upload as a distinct, durable outcome", () => {
+    setSkidmarksMp3AudioUrl("https://x.public.blob.vercel-storage.com/a.mp3");
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    expect(mp3.audioUrl).toBe("https://x.public.blob.vercel-storage.com/a.mp3");
+    expect(mp3.audioPersistStatus).toBe("done");
+    expect(mp3.audioPersistError).toBeUndefined();
+  });
+
+  it("records the honest unconfigured outcome distinctly from a real failure", () => {
+    markSkidmarksMp3AudioUnconfigured("No Blob store connected here.");
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    expect(mp3.audioPersistStatus).toBe("unconfigured");
+    expect(mp3.audioPersistError).toBe("No Blob store connected here.");
+    expect(mp3.audioUrl).toBeUndefined();
+  });
+
+  it("records a genuine upload failure", () => {
+    markSkidmarksMp3AudioFailed("Network error uploading the audio.");
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    expect(mp3.audioPersistStatus).toBe("failed");
+    expect(mp3.audioPersistError).toBe("Network error uploading the audio.");
+  });
+});
+
+describe("restoreSkidmarksArchivedSession / resetSkidmarksSessionAfterArchive", () => {
+  it("restores a band + mp3 snapshot into the live session, adding the band back if it's since been removed", () => {
+    const band: SkidmarksBand = {
+      id: "restored-band",
+      name: "Restored Band",
+      tagline: "",
+      coverSeed: 1,
+      editIcon: "pencil",
+      members: [],
+    };
+    const mp3 = createMp3Attachment("restored-song.mp3", 120);
+
+    restoreSkidmarksArchivedSession(band, mp3);
+
+    const state = getSkidmarksSnapshot();
+    expect(state.session.projectKind).toBe("music-video");
+    expect(state.session.bandId).toBe("restored-band");
+    expect(state.session.mp3?.fileName).toBe("restored-song.mp3");
+    expect(state.bands.some((b) => b.id === "restored-band")).toBe(true);
+  });
+
+  it("replaces an already-present band with the archived snapshot's own copy rather than duplicating it", () => {
+    const band: SkidmarksBand = {
+      id: "jack-ash",
+      name: "Jack Ash (archived copy)",
+      tagline: "from the archive",
+      coverSeed: 1,
+      editIcon: "pencil",
+      members: [],
+    };
+    restoreSkidmarksArchivedSession(band, createMp3Attachment("archived.mp3", 60));
+
+    const state = getSkidmarksSnapshot();
+    expect(state.bands.filter((b) => b.id === "jack-ash")).toHaveLength(1);
+    expect(state.bands.find((b) => b.id === "jack-ash")?.name).toBe("Jack Ash (archived copy)");
+  });
+
+  it("clears the session back to no band/mp3 after archiving, without touching the bands list", () => {
+    const bandsBefore = getSkidmarksSnapshot().bands.length;
+    resetSkidmarksSessionAfterArchive();
+    const state = getSkidmarksSnapshot();
+    expect(state.session.bandId).toBeNull();
+    expect(state.session.mp3).toBeNull();
+    expect(state.bands.length).toBe(bandsBefore);
   });
 });
