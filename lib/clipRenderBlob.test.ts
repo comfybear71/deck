@@ -46,35 +46,59 @@ describe("buildClipRenderFilename", () => {
   it("clamps a negative value to 0 rather than emitting a minus sign into a filename", () => {
     expect(buildClipRenderFilename(1, -1, 40)).toBe("01_0000-0040_render.mp4");
   });
+
+  it("letters the filename with a plate's 0-based index when given, for a clip with more than one plate", () => {
+    expect(buildClipRenderFilename(1, 0, 40, 0)).toBe("01a_0000-0040_render.mp4");
+    expect(buildClipRenderFilename(1, 0, 40, 1)).toBe("01b_0000-0040_render.mp4");
+    expect(buildClipRenderFilename(1, 0, 40, 2)).toBe("01c_0000-0040_render.mp4");
+  });
+
+  it("omits the letter suffix when plateLetterIndex is undefined — unchanged single-plate shape", () => {
+    expect(buildClipRenderFilename(1, 0, 40, undefined)).toBe("01_0000-0040_render.mp4");
+  });
 });
 
 describe("buildClipRenderPathname / parseClipRenderPathname", () => {
-  it("round-trips every field through build then parse", () => {
-    const pathname = buildClipRenderPathname("segment_abc123", 2, 40, 90);
-    expect(pathname).toBe(`${CLIP_RENDER_PATH_PREFIX}segment_abc123/02_0040-0090_render.mp4`);
+  it("round-trips every field through build then parse, nested by plateId", () => {
+    const pathname = buildClipRenderPathname("segment_abc123", "plate_xyz", 2, 40, 90);
+    expect(pathname).toBe(`${CLIP_RENDER_PATH_PREFIX}segment_abc123/plate_xyz/02_0040-0090_render.mp4`);
 
     expect(parseClipRenderPathname(pathname)).toEqual({
       segmentId: "segment_abc123",
+      plateId: "plate_xyz",
       clipIndex: 2,
       startSec: 40,
       endSec: 90,
+      filename: "02_0040-0090_render.mp4",
     });
   });
 
-  it("returns the same pathname for the same clip across repeated calls — this is what lets a re-render overwrite the last one", () => {
-    const first = buildClipRenderPathname("segment_abc123", 1, 0, 40);
-    const second = buildClipRenderPathname("segment_abc123", 1, 0, 40);
+  it("round-trips a lettered (multi-plate) filename too", () => {
+    const pathname = buildClipRenderPathname("segment_abc123", "plate_xyz", 1, 0, 40, 1);
+    expect(pathname).toBe(`${CLIP_RENDER_PATH_PREFIX}segment_abc123/plate_xyz/01b_0000-0040_render.mp4`);
+    expect(parseClipRenderPathname(pathname)?.filename).toBe("01b_0000-0040_render.mp4");
+  });
+
+  it("returns the same pathname for the same plate across repeated calls — this is what lets a re-render overwrite the last one", () => {
+    const first = buildClipRenderPathname("segment_abc123", "plate_xyz", 1, 0, 40);
+    const second = buildClipRenderPathname("segment_abc123", "plate_xyz", 1, 0, 40);
     expect(first).toBe(second);
   });
 
-  it("returns null for a pathname outside this prefix, missing a segment folder, or with a malformed basename", () => {
+  it("returns null for a pathname outside this prefix, missing a segment/plate folder, or with a malformed basename", () => {
     expect(parseClipRenderPathname("skidmarks/plate-stills/segment_abc/still.jpg")).toBeNull();
     expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}not-a-real-render.mp4`)).toBeNull();
-    expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}segment_abc/oops.mp4`)).toBeNull();
-    expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}segment_abc/01_0000-0040_render.mov`)).toBeNull();
+    expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}segment_abc/plate_xyz/oops.mp4`)).toBeNull();
+    expect(
+      parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}segment_abc/plate_xyz/01_0000-0040_render.mov`)
+    ).toBeNull();
+    // The pre-per-plate pathname scheme (no plate folder at all) no
+    // longer matches — see this module's doc comment's migration note.
+    expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}segment_abc/01_0000-0040_render.mp4`)).toBeNull();
   });
 
-  it("returns null when the parsed segment id would itself be unsafe (defensive — build never emits this today)", () => {
-    expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}bad;id/01_0000-0040_render.mp4`)).toBeNull();
+  it("returns null when the parsed segment or plate id would itself be unsafe (defensive — build never emits this today)", () => {
+    expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}bad;id/plate_xyz/01_0000-0040_render.mp4`)).toBeNull();
+    expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}segment_abc/bad;id/01_0000-0040_render.mp4`)).toBeNull();
   });
 });

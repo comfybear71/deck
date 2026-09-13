@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import {
   MAX_PLATES_PER_CLIP,
   readImageFileAsDataUrl,
+  resolveSelectedPlateId,
   SKIDMARKS_SEGMENT_LABEL_META,
   type SkidmarksBand,
   type SkidmarksClipPlateSlot,
@@ -19,6 +20,7 @@ import {
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
+import { computePlateDurationSec } from "@/lib/clipGeneration";
 import { SkidmarksClipRender } from "./SkidmarksClipRender";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 
@@ -34,22 +36,31 @@ interface SkidmarksClipStubProps {
   onSetPlateStill: (plateId: string, still: SkidmarksPlateStill | null) => void;
   onAddPlate: () => void;
   onRemovePlate: (plateId: string) => void;
+  /** The corner select control on a filled plate tile — radio-style,
+   * one plate selected at a time; see `lib/skidmarks.ts`'s
+   * `resolveSelectedPlateId`. */
+  onSelectPlate: (plateId: string) => void;
+  /** This plate's own stored camera-motion text — per-plate now, see
+   * `SkidmarksClipPlateSlot.motionPrompt`'s doc comment. */
+  onSetPlateMotionPrompt: (plateId: string, motionPrompt: string) => void;
+  /** Which of *this clip's* plates already have a persisted render —
+   * drives each plate tile's tick and the Render control's "already
+   * rendered" status line. Scoped to this one segment by the caller
+   * (`SkidmarksClipTimeline`), which tracks renders across the whole
+   * song. */
+  renderedPlateIds: ReadonlySet<string>;
   /** Threaded straight through to `SkidmarksClipRender` \u2014 see that
    * component's doc comment and `SkidmarksClipTimeline`'s "one render at
    * a time" state. */
   renderLocked: boolean;
-  onRenderStart: () => void;
-  onRenderEnd: () => void;
+  onRenderStart: (plateId: string) => void;
+  onRenderEnd: (plateId: string) => void;
   /** This clip's 1-based position in the timeline — passed straight
    * through to `SkidmarksClipRender` for its numeric download filename
    * and Blob pathname; everything else it needs (`segment.id`,
    * `segment.startSec`/`endSec`) is already on `segment`. */
   clipIndex: number;
-  /** Threaded straight through to `SkidmarksClipRender` — see that
-   * component's and `SkidmarksClipTimeline`'s doc comments for how
-   * "show it after refresh" works at the timeline level. */
-  persistedRender?: PersistedClipRender | null;
-  onPersisted?: (render: PersistedClipRender) => void;
+  onPersisted: (render: PersistedClipRender) => void;
 }
 
 const SHOT_PROMPT_MAX_LENGTH = 500;
@@ -389,13 +400,98 @@ interface SkidmarksPlateBoxProps {
   canRemove: boolean;
   onSetStill: (still: SkidmarksPlateStill | null) => void;
   onRemove: () => void;
+  /** Whether this plate is the one clip's Render control currently
+   * targets (radio-style — see `lib/skidmarks.ts`'s
+   * `resolveSelectedPlateId`), and whether it already has a saved
+   * render. Only meaningful once the plate is filled — the corner
+   * select control doesn't render on an empty plate. */
+  selected: boolean;
+  rendered: boolean;
+  onSelect: () => void;
+}
+
+/** Small filled dot — "this is the plate Render will use next." */
+function SelectDotIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="currentColor" className="h-2.5 w-2.5">
+      <circle cx="10" cy="10" r="6" />
+    </svg>
+  );
+}
+
+/** Small checkmark — "this plate already has a saved render." */
+function TickIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-2.5 w-2.5">
+      <path
+        d="M4.5 10.5 8 14l7.5-8"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * The one small corner control Stuart's per-plate select ask needed:
+ * bottom-right on a filled plate tile, radio-style (tapping any plate's
+ * dot selects *that* plate and implicitly deselects every other plate
+ * on the same clip — there's no separate "deselect" state). Doubles as
+ * the render tick: a plate that already has a saved render shows a
+ * filled emerald check instead of a plain dot, whether or not it's also
+ * the currently-selected one (selection and "already rendered" are
+ * independent facts about a plate) — an unrendered, unselected plate
+ * shows a faint empty ring, per Stuart's "empty mark = not rendered
+ * yet" ask.
+ */
+function SkidmarksPlateSelectControl({
+  selected,
+  rendered,
+  onSelect,
+}: {
+  selected: boolean;
+  rendered: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect();
+      }}
+      aria-pressed={selected}
+      aria-label={
+        rendered
+          ? selected
+            ? "Selected for Render — already has a saved render"
+            : "Already has a saved render — tap to select for Render"
+          : selected
+            ? "Selected for Render"
+            : "Tap to select this plate for Render"
+      }
+      className={[
+        "absolute bottom-1.5 right-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full ring-1 transition-colors",
+        rendered
+          ? "bg-emerald-400/90 text-zinc-950 ring-emerald-300/60"
+          : selected
+            ? "bg-rose-400 text-zinc-950 ring-rose-300/60"
+            : "bg-black/60 text-white/40 ring-white/20 hover:text-white/70",
+      ].join(" ")}
+    >
+      {rendered ? <TickIcon /> : selected ? <SelectDotIcon /> : null}
+    </button>
+  );
 }
 
 /**
  * One plate slot in a clip's horizontal strip. Empty plate: tap opens
  * the Upload/Generate popover (unchanged). Filled plate: tap opens
  * `SkidmarksPlateLightbox` instead; the corner "×" and press-and-hold
- * clear stay on the tile as before.
+ * clear stay on the tile as before, plus the new bottom-right select/
+ * tick control (see `SkidmarksPlateSelectControl`).
  */
 function SkidmarksPlateBox({
   plate,
@@ -408,6 +504,9 @@ function SkidmarksPlateBox({
   canRemove,
   onSetStill,
   onRemove,
+  selected,
+  rendered,
+  onSelect,
 }: SkidmarksPlateBoxProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -614,6 +713,10 @@ function SkidmarksPlateBox({
           </button>
         )}
 
+        {hasStill && !generating && (
+          <SkidmarksPlateSelectControl selected={selected} rendered={rendered} onSelect={onSelect} />
+        )}
+
         {!hasStill && !generating && canRemove && (
           <button
             type="button"
@@ -738,6 +841,20 @@ function SkidmarksPlateBox({
  * anywhere in this panel (Stuart's chrome lock stands) — it only steers
  * this same xAI call's prompt phrasing under the hood, see
  * `lib/plateGeneration.ts`'s `routingFramingHint`.
+ *
+ * **Per-plate select rework**: each filled plate tile now also carries
+ * a small bottom-right corner control (`SkidmarksPlateSelectControl`) —
+ * tap it to pick which single plate this clip's one Render control
+ * below the strip actually animates next (radio-style; a filled emerald
+ * check instead means that exact plate already has a saved render,
+ * independent of whether it's also currently selected). This clip's
+ * `SkidmarksClipRender` no longer receives every plate's still at
+ * once — just the resolved selection's own still, motion text, and
+ * auto-computed duration (`lib/clipGeneration.ts`'s
+ * `computePlateDurationSec`, `segmentLengthSec / plateCount` clamped
+ * 5–15s). See `lib/skidmarks.ts`'s `resolveSelectedPlateId` for exactly
+ * how "nothing explicitly selected yet" resolves (first unrendered
+ * filled plate, or first filled plate — never mysteriously nothing).
  */
 export function SkidmarksClipStub({
   segment,
@@ -747,11 +864,13 @@ export function SkidmarksClipStub({
   onSetPlateStill,
   onAddPlate,
   onRemovePlate,
+  onSelectPlate,
+  onSetPlateMotionPrompt,
+  renderedPlateIds,
   renderLocked,
   onRenderStart,
   onRenderEnd,
   clipIndex,
-  persistedRender,
   onPersisted,
 }: SkidmarksClipStubProps) {
   const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label].vocal;
@@ -763,6 +882,21 @@ export function SkidmarksClipStub({
   // auto-features/locks anyone, so resolving this here is harmless.
   const vocalist = resolveVocalistForPrompt(band.members);
   const canAddPlate = segment.plates.length < MAX_PLATES_PER_CLIP;
+
+  // The per-plate select rework's own resolution — see
+  // `resolveSelectedPlateId`'s doc comment for the fallback order
+  // ("first unrendered filled plate, or first filled" — never fails
+  // mysteriously with nothing selected as long as *something* is
+  // filled).
+  const selectedPlateId = resolveSelectedPlateId(segment.plates, segment.selectedPlateId, renderedPlateIds);
+  const selectedPlateIndex = segment.plates.findIndex((p) => p.id === selectedPlateId);
+  const selectedPlate = selectedPlateIndex >= 0 ? segment.plates[selectedPlateIndex] : undefined;
+  const plateCount = segment.plates.length;
+  const durationSec = computePlateDurationSec(
+    segment.endSec - segment.startSec,
+    plateCount,
+    Math.max(0, selectedPlateIndex)
+  );
 
   return (
     <div className="flex flex-col gap-2.5 border-t border-white/[0.06] pt-3">
@@ -782,6 +916,9 @@ export function SkidmarksClipStub({
             canRemove={segment.plates.length > 1}
             onSetStill={(still) => onSetPlateStill(plate.id, still)}
             onRemove={() => onRemovePlate(plate.id)}
+            selected={plate.id === selectedPlateId}
+            rendered={renderedPlateIds.has(plate.id)}
+            onSelect={() => onSelectPlate(plate.id)}
           />
         ))}
 
@@ -807,20 +944,36 @@ export function SkidmarksClipStub({
         className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] leading-relaxed text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
       />
 
-      <SkidmarksClipRender
-        shotPrompt={segment.shotPrompt}
-        bandName={band.name}
-        plateStillDataUrls={segment.plates.flatMap((p) => (p.still ? [p.still.dataUrl] : []))}
-        locked={renderLocked}
-        onRenderStart={onRenderStart}
-        onRenderEnd={onRenderEnd}
-        segmentId={segment.id}
-        clipIndex={clipIndex}
-        startSec={segment.startSec}
-        endSec={segment.endSec}
-        persistedRender={persistedRender}
-        onPersisted={onPersisted}
-      />
+      {selectedPlate && (
+        // `key={selectedPlate.id}` forces a full remount when Stuart
+        // switches which plate is selected — a stale "just rendered"
+        // flash, in-flight confirm step, or error message from the
+        // *previous* selected plate should never linger under a
+        // different plate's controls; a fresh mount is the simplest,
+        // most reliable way to guarantee that (React's own recommended
+        // "reset state on a meaningfully different identity" pattern).
+        <SkidmarksClipRender
+          key={selectedPlate.id}
+          shotPrompt={segment.shotPrompt}
+          bandName={band.name}
+          plateStillDataUrl={selectedPlate.still?.dataUrl ?? null}
+          motionPrompt={selectedPlate.motionPrompt ?? ""}
+          onSetMotionPrompt={(value) => onSetPlateMotionPrompt(selectedPlate.id, value)}
+          durationSec={durationSec}
+          locked={renderLocked}
+          onRenderStart={onRenderStart}
+          onRenderEnd={onRenderEnd}
+          segmentId={segment.id}
+          plateId={selectedPlate.id}
+          plateIndex={Math.max(0, selectedPlateIndex)}
+          plateCount={plateCount}
+          clipIndex={clipIndex}
+          startSec={segment.startSec}
+          endSec={segment.endSec}
+          alreadyRendered={renderedPlateIds.has(selectedPlate.id)}
+          onPersisted={onPersisted}
+        />
+      )}
     </div>
   );
 }

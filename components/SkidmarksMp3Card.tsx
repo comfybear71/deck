@@ -17,6 +17,19 @@ interface SkidmarksMp3CardProps {
   onRemove: () => void;
 }
 
+/** Picks the real audio source this card actually plays from: the
+ * local, in-tab object URL takes priority whenever it exists (this
+ * session's own picked `File`, no network round trip needed); once
+ * that's gone (a page reload dropped the `File` — it never persists,
+ * see this file's doc comment) but a durable Blob URL was uploaded at
+ * attach time (`mp3.audioUrl`, see `lib/mp3Blob.ts`), that becomes the
+ * fallback source instead of leaving playback dead after a refresh.
+ * `undefined` when neither is available (no Blob store connected, the
+ * upload failed, or this session hasn't attached anything real yet). */
+function resolveAudioSrc(localObjectUrl: string | null, mp3: SkidmarksMp3Attachment | null): string | undefined {
+  return localObjectUrl ?? mp3?.audioUrl ?? undefined;
+}
+
 const BAR_COUNT = 40;
 
 function UploadIcon() {
@@ -92,16 +105,20 @@ function Waveform({ fileName, progress }: { fileName: string; progress: number }
  * the members module box above it. Once attached: a compact decorative
  * waveform (still just a filename-seeded stand-in, not derived from the
  * real audio), a real play/pause over the actual picked file (via an
- * `<audio>` element + object URL — not persisted across reload, since a
- * `File` can't round-trip through `localStorage`), the filename, and a
- * real `elapsed / duration` readout (`currentTimeSec`, driven by the
+ * `<audio>` element + object URL — the picked `File` itself still can't
+ * round-trip through `localStorage`), the filename, and a real
+ * `elapsed / duration` readout (`currentTimeSec`, driven by the
  * `<audio>` element's own `timeupdate` event via `handleTimeUpdate`) so
  * Stuart can see where playback actually is, not just the track's total
  * length — the elapsed half counts up live while playing and holds its
  * last value when paused mid-track, only resetting on attach/remove/end.
  * `onAttach` hands the raw `File` up to `useSkidmarksStudio`, which is
  * what actually kicks off real vocal/instrumental analysis against it —
- * see `lib/audioAnalysis.ts`.
+ * see `lib/audioAnalysis.ts` — plus a real, durable upload of the audio
+ * itself to Vercel Blob (`lib/mp3Blob.ts`) so **playback now survives a
+ * refresh**: `resolveAudioSrc` below prefers this session's own local
+ * object URL when it exists, and falls back to `mp3.audioUrl` (the
+ * durable Blob URL) once the local `File`/object URL is gone.
  */
 export function SkidmarksMp3Card({
   mp3,
@@ -201,13 +218,15 @@ export function SkidmarksMp3Card({
     );
   }
 
+  const audioSrc = resolveAudioSrc(audioUrl, mp3);
+
   return (
     <div className="rounded-2xl border border-rose-400/30 bg-rose-400/[0.03] p-4">
       <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={togglePlay}
-          disabled={!audioUrl}
+          disabled={!audioSrc}
           aria-label={isPlaying ? "Pause" : "Play"}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-400 text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -245,11 +264,21 @@ export function SkidmarksMp3Card({
       </div>
 
       <p className="mt-2 truncate text-[11px] text-white/40">{mp3.fileName}</p>
+      {!audioUrl && mp3.audioUrl && (
+        <p className="mt-1 text-[10px] leading-snug text-white/30">Playing from a saved copy after a refresh.</p>
+      )}
+      {!audioUrl && !mp3.audioUrl && mp3.audioPersistStatus === "failed" && (
+        <p className="mt-1 text-[10px] leading-snug text-amber-200/70">
+          {"Audio wasn\u2019t saved this time \u2014 it won\u2019t play after a refresh ("}
+          {mp3.audioPersistError ?? "unknown reason"}
+          {")."}
+        </p>
+      )}
 
-      {audioUrl && (
+      {audioSrc && (
         <audio
           ref={audioRef}
-          src={audioUrl}
+          src={audioSrc}
           onLoadedMetadata={handleLoadedMetadata}
           onTimeUpdate={handleTimeUpdate}
           onPlay={() => setIsPlaying(true)}

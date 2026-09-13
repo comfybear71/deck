@@ -513,6 +513,16 @@ export interface SkidmarksClipSegment {
    * exactly one blank slot (the single dashed placeholder Stuart's
    * already used to). */
   plates: SkidmarksClipPlateSlot[];
+  /** Which single plate in `plates` the next Render uses (radio-style —
+   * exactly one plate "selected" per clip, never all of them). `null`/
+   * unset means "no explicit pick yet" — `resolveSelectedPlateId` below
+   * is the one place that turns that into an actual plate id (falling
+   * back to the first unrendered filled plate, or the first filled
+   * plate) so the UI never has to special-case "nothing selected" on
+   * its own. Set via `setSkidmarksSegmentSelectedPlate`, normally from
+   * tapping a plate's own corner select control
+   * (`components/SkidmarksClipStub.tsx`). */
+  selectedPlateId?: string | null;
 }
 
 /** One slot in a clip's plate strip — either the empty dashed
@@ -530,6 +540,19 @@ export interface SkidmarksClipPlateSlot {
    * route.ts`). `undefined` until then — `SkidmarksClipStub` renders
    * the dashed empty placeholder whenever this is unset. */
   still?: SkidmarksPlateStill;
+  /** This plate's own stored camera-motion direction (e.g. "slow zoom
+   * into keyhole, mild pulse on door cracks") — per-plate now that
+   * Render animates one selected plate at a time instead of every plate
+   * on the clip at once (see `resolveSelectedPlateId` and
+   * `components/SkidmarksClipRender.tsx`'s doc comment). Distinct from
+   * `SkidmarksClipSegment.shotPrompt`, which stays one shared field for
+   * the whole strip (Stuart's chrome lock — no per-plate prompt field);
+   * this is the one exception, added because motion direction, unlike
+   * the visual description, genuinely differs plate to plate (a door
+   * cracking open vs. a slow reveal through a keyhole). Defaults to
+   * `""`/unset; blank keeps `lib/clipGeneration.ts`'s automatic
+   * push-in/zoom behavior. */
+  motionPrompt?: string;
 }
 
 /** One clip's real plate still. `dataUrl` is always a `data:` URL (an
@@ -568,6 +591,38 @@ function buildBlankPlateSlot(): SkidmarksClipPlateSlot {
   return { id: generateId("plate") };
 }
 
+/**
+ * Resolves which plate a clip's Render control actually animates —
+ * pure, so the UI and any test can call it without touching the store.
+ * Per Stuart's ask: "if nothing selected, select the first unrendered
+ * filled plate by default (or first filled) — don't fail mysteriously."
+ *
+ * - An explicit `selectedPlateId` wins, as long as it still points at a
+ *   *filled* plate on this clip (a plate that's since been cleared, or a
+ *   stale id from a removed slot, doesn't count — falls through to the
+ *   default below instead of resolving to nothing).
+ * - Otherwise: the first filled plate that doesn't already have a
+ *   persisted render (`renderedPlateIds`), so re-opening a clip after
+ *   rendering its first plate naturally points Render at the *next*
+ *   one to do, not back at something already finished.
+ * - Otherwise (every filled plate already has a render, or
+ *   `renderedPlateIds` is empty and this is the first pass): the first
+ *   filled plate.
+ * - `null` only when the clip has no filled plate at all yet — nothing
+ *   for Render to animate.
+ */
+export function resolveSelectedPlateId(
+  plates: SkidmarksClipPlateSlot[],
+  selectedPlateId: string | null | undefined,
+  renderedPlateIds: ReadonlySet<string>
+): string | null {
+  const filled = plates.filter((p) => !!p.still);
+  if (filled.length === 0) return null;
+  if (selectedPlateId && filled.some((p) => p.id === selectedPlateId)) return selectedPlateId;
+  const firstUnrendered = filled.find((p) => !renderedPlateIds.has(p.id));
+  return (firstUnrendered ?? filled[0]).id;
+}
+
 /** Shared segment builder — mints a fresh `SkidmarksClipSegment` with
  * every default field (`model`/`shotPrompt`/`uncensoredPlateStills`/a
  * single blank `plates` slot) set per the locked cost-lock rules, off
@@ -589,6 +644,7 @@ function buildDefaultSegment(
     shotPrompt: "",
     uncensoredPlateStills: false,
     plates: [buildBlankPlateSlot()],
+    selectedPlateId: null,
   };
 }
 
@@ -735,6 +791,29 @@ export interface SkidmarksMp3Attachment {
    * case, which isn't a failure. Surfaced verbatim in the timeline's
    * honesty caption. */
   transcriptionError?: string;
+  /** A durable Vercel Blob URL for the attached MP3's own audio bytes,
+   * once uploaded — the fix for "play survives a refresh": the raw
+   * picked `File` never persists (see this module's doc comment and
+   * `SkidmarksMp3Card`), so before this field existed, a reload always
+   * lost real playback even though every other bit of session state
+   * survived. `useSkidmarksStudio.attachMp3` kicks off a real,
+   * client-side-direct-to-Blob upload (`lib/mp3Blob.ts`, via
+   * `@vercel/blob/client`'s `upload()` — bypasses this app's own
+   * serverless function entirely, so there's no risk of hitting
+   * Vercel's ~4.5MB function-body cap the way a normal API POST would
+   * for a real song-length file) the moment a file's attached; this
+   * field fills in once that upload resolves. `undefined` until then,
+   * or if it never configures/succeeds — see `audioPersistStatus`. */
+  audioUrl?: string;
+  /** Real upload lifecycle for `audioUrl`, mirroring
+   * `transcriptionStatus`'s honesty shape: `"uploading"` while in
+   * flight, `"done"` once `audioUrl` is set, `"unconfigured"` when no
+   * Blob store is connected here (expected, not an error), `"failed"`
+   * for a genuine upload failure. Never blocks anything — the MP3 card
+   * still plays fine from the local, in-tab object URL either way; this
+   * only governs whether playback also survives a refresh. */
+  audioPersistStatus?: "uploading" | "done" | "unconfigured" | "failed";
+  audioPersistError?: string;
 }
 
 /** The Music-video wizard's progress — which project type, which band,
@@ -962,7 +1041,11 @@ function normalizeSkidmarksPlateSlot(value: unknown): SkidmarksClipPlateSlot {
   const v = (value && typeof value === "object" ? value : {}) as Partial<SkidmarksClipPlateSlot>;
   const id = typeof v.id === "string" && v.id.length > 0 ? v.id : generateId("plate");
   const still = normalizeSkidmarksStill(v.still);
-  return still ? { id, still } : { id };
+  const motionPrompt = typeof v.motionPrompt === "string" && v.motionPrompt.length > 0 ? v.motionPrompt : undefined;
+  const slot: SkidmarksClipPlateSlot = { id };
+  if (still) slot.still = still;
+  if (motionPrompt) slot.motionPrompt = motionPrompt;
+  return slot;
 }
 
 /** Migration path for a pre-multi-plate session: its one top-level
@@ -983,6 +1066,14 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
     rawPlates && rawPlates.length > 0
       ? rawPlates.map(normalizeSkidmarksPlateSlot)
       : normalizeLegacyStillToPlates(r.still);
+  // A stale/removed-slot `selectedPlateId` isn't corrected here — that's
+  // `resolveSelectedPlateId`'s job at read time (it already falls
+  // through to the default whenever the stored id doesn't point at a
+  // currently-filled plate) — this just backfills the field's presence/
+  // type so a pre-this-feature session (no field at all) and a
+  // hand-edited `localStorage` blob (wrong type) both normalize to a
+  // clean `null` instead of `undefined` leaking through inconsistently.
+  const selectedPlateId = typeof r.selectedPlateId === "string" ? r.selectedPlateId : null;
   return {
     id: raw.id,
     startSec: raw.startSec,
@@ -992,6 +1083,7 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
     shotPrompt,
     uncensoredPlateStills,
     plates,
+    selectedPlateId,
   };
 }
 
@@ -1078,6 +1170,20 @@ function normalizeState(parsed: unknown): SkidmarksState {
       : undefined;
   const transcriptionProvider = hasTranscriptionStatus ? storedMp3?.transcriptionProvider : undefined;
 
+  // Same "can't resume after a reload" logic as analysis/transcription:
+  // an audio upload that was still `"uploading"` when the tab closed
+  // can't be resumed (the raw `File` never persists either), so it
+  // normalizes to an honest `"failed"` rather than hanging forever. A
+  // session saved before this field existed just has no status at all
+  // (`undefined`), which is fine as-is — there's nothing dishonest about
+  // "never attempted."
+  const audioPersistStatus =
+    storedMp3?.audioPersistStatus === "uploading" ? "failed" : storedMp3?.audioPersistStatus;
+  const audioPersistError =
+    storedMp3?.audioPersistStatus === "uploading"
+      ? "Audio upload doesn't survive a page reload (the audio file itself isn't kept) \u2014 re-attach the MP3 to re-try it."
+      : storedMp3?.audioPersistError;
+
   const mp3: SkidmarksMp3Attachment | null = storedMp3
     ? {
         ...storedMp3,
@@ -1088,6 +1194,8 @@ function normalizeState(parsed: unknown): SkidmarksState {
         transcriptionStatus,
         transcriptionError,
         transcriptionProvider,
+        audioPersistStatus,
+        audioPersistError,
       }
     : null;
 
@@ -1353,6 +1461,51 @@ export function setSkidmarksMp3Duration(durationSec: number): void {
       ...current.session,
       mp3: { ...mp3, durationSec, segments },
     },
+  });
+}
+
+/** Records a successful MP3-audio Blob upload — see
+ * `SkidmarksMp3Attachment.audioUrl`'s doc comment. No-ops if the mp3
+ * was removed/replaced before the upload finished (same "can't tell
+ * *this* file from a same-shaped new one" caveat as
+ * `applySkidmarksAnalysisResult` — callers should additionally guard
+ * against a stale/superseded result themselves). */
+export function setSkidmarksMp3AudioUrl(audioUrl: string): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  persist({
+    ...current,
+    session: {
+      ...current.session,
+      mp3: { ...mp3, audioUrl, audioPersistStatus: "done", audioPersistError: undefined },
+    },
+  });
+}
+
+/** Marks the MP3-audio Blob upload as unconfigured (no Blob store
+ * connected here) or genuinely failed — distinct outcomes, same honest
+ * split as `markSkidmarksTranscriptionUnconfigured`/
+ * `markSkidmarksTranscriptionFailed`. Playback from the local, in-tab
+ * object URL is completely unaffected either way — this only means
+ * playback won't survive a refresh this time. */
+export function markSkidmarksMp3AudioUnconfigured(reason: string): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  persist({
+    ...current,
+    session: { ...current.session, mp3: { ...mp3, audioPersistStatus: "unconfigured", audioPersistError: reason } },
+  });
+}
+
+export function markSkidmarksMp3AudioFailed(reason: string): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  persist({
+    ...current,
+    session: { ...current.session, mp3: { ...mp3, audioPersistStatus: "failed", audioPersistError: reason } },
   });
 }
 
@@ -1661,6 +1814,32 @@ export function setSkidmarksClipPlateStill(
   }));
 }
 
+/** The corner select control on a filled plate tile — sets which single
+ * plate this clip's Render uses next (radio-style; see
+ * `resolveSelectedPlateId`'s doc comment). No-ops if the segment doesn't
+ * exist; deliberately does **not** validate that `plateId` is currently
+ * filled here — `resolveSelectedPlateId` is what falls back honestly if
+ * the picked plate is later cleared, so this setter can stay a plain,
+ * unconditional write. */
+export function setSkidmarksSegmentSelectedPlate(segmentId: string, plateId: string): void {
+  updateSkidmarksSegment(segmentId, (s) => ({ ...s, selectedPlateId: plateId }));
+}
+
+/** This plate's own stored camera-motion direction — the one per-plate
+ * exception to the "one shared field per clip" plating lock (see
+ * `SkidmarksClipPlateSlot.motionPrompt`'s doc comment for why). No-ops
+ * if the segment or that specific plate slot doesn't exist. */
+export function setSkidmarksClipPlateMotionPrompt(
+  segmentId: string,
+  plateId: string,
+  motionPrompt: string
+): void {
+  updateSkidmarksSegment(segmentId, (s) => ({
+    ...s,
+    plates: s.plates.map((p) => (p.id === plateId ? { ...p, motionPrompt } : p)),
+  }));
+}
+
 /** The "+" control on a clip's plate strip — appends one more empty
  * slot so Stuart can generate/upload a different still for it (door →
  * keyhole → Jack, all under the same 0:00–0:40 clip). Capped at
@@ -1700,6 +1879,40 @@ export function setSkidmarksSegmentUncensoredPlateStills(
   uncensoredPlateStills: boolean
 ): void {
   updateSkidmarksSegment(segmentId, (s) => ({ ...s, uncensoredPlateStills }));
+}
+
+/**
+ * Restores an archived band + mp3 attachment into the live top
+ * workspace — the "Open in editor" action on an archived song row (see
+ * `lib/skidmarksArchive.ts`). Per AGENTS.md's "one live edit workspace
+ * on top, never stack a second full MP3/plates UI" lock, the caller is
+ * responsible for archiving whatever's currently live *first* if
+ * anything is — this function itself just replaces `session` outright.
+ * Adds the band back to `bands` if it isn't there anymore (deleted,
+ * or from a different browser/session originally), or replaces it in
+ * place if it is — either way, the restored band matches exactly what
+ * was archived, not whatever's since changed under the same id.
+ */
+export function restoreSkidmarksArchivedSession(band: SkidmarksBand, mp3: SkidmarksMp3Attachment): void {
+  const current = getSkidmarksSnapshot();
+  const bands = current.bands.some((b) => b.id === band.id)
+    ? current.bands.map((b) => (b.id === band.id ? band : b))
+    : [band, ...current.bands];
+  persist({
+    ...current,
+    bands,
+    session: { projectKind: "music-video", bandId: band.id, mp3 },
+  });
+}
+
+/** Clears the live workspace back to "choose a band" right after a
+ * successful Archive — the top workspace is immediately ready for a
+ * new/different song, per the "one live workspace, never doubled" lock.
+ * Never touches `bands` — archiving snapshots and clears the *session*,
+ * it doesn't delete the band itself. */
+export function resetSkidmarksSessionAfterArchive(): void {
+  const current = getSkidmarksSnapshot();
+  persist({ ...current, session: { projectKind: "music-video", bandId: null, mp3: null } });
 }
 
 export function getActiveSkidmarksBand(

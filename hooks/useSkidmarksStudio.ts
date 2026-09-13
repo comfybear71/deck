@@ -3,6 +3,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import { analyzeVocalActivity } from "@/lib/audioAnalysis";
 import { transcribeAudio } from "@/lib/transcription";
+import { uploadSkidmarksMp3Audio } from "@/lib/mp3Blob";
 import {
   addSkidmarksClipPlate,
   addSkidmarksLook,
@@ -15,21 +16,30 @@ import {
   createSkidmarksBand,
   getSkidmarksSnapshot,
   markSkidmarksAnalysisFailed,
+  markSkidmarksMp3AudioFailed,
+  markSkidmarksMp3AudioUnconfigured,
   markSkidmarksTranscriptionFailed,
   markSkidmarksTranscriptionUnconfigured,
   removeSkidmarksBand,
   removeSkidmarksClipPlate,
   removeSkidmarksMember,
   renameSkidmarksMember,
+  resetSkidmarksSessionAfterArchive,
+  restoreSkidmarksArchivedSession,
   selectSkidmarksBand,
   selectSkidmarksProjectKind,
   setSkidmarksBandCoverImage,
+  setSkidmarksClipPlateMotionPrompt,
   setSkidmarksClipPlateStill,
   setSkidmarksMemberAvatarImage,
+  setSkidmarksMp3AudioUrl,
   setSkidmarksMp3Duration,
+  setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
   subscribeSkidmarks,
+  type SkidmarksBand,
   type SkidmarksLook,
+  type SkidmarksMp3Attachment,
   type SkidmarksPlateStill,
   type SkidmarksProjectKind,
   type SkidmarksState,
@@ -136,6 +146,22 @@ export function useSkidmarksStudio() {
     const token = (analysisTokenRef.current += 1);
     attachSkidmarksMp3(createMp3Attachment(file.name, null));
 
+    // Real, client-side-direct-to-Blob upload of the audio itself (see
+    // `lib/mp3Blob.ts`'s doc comment) — the fix for "play survives a
+    // refresh." Runs in the background alongside analysis/
+    // transcription; a slow or failed upload never blocks anything else
+    // about this attach.
+    uploadSkidmarksMp3Audio(file).then((outcome) => {
+      if (analysisTokenRef.current !== token) return; // superseded — drop it
+      if (outcome.ok) {
+        setSkidmarksMp3AudioUrl(outcome.url);
+      } else if (outcome.unconfigured) {
+        markSkidmarksMp3AudioUnconfigured(outcome.message);
+      } else {
+        markSkidmarksMp3AudioFailed(outcome.message);
+      }
+    });
+
     analyzeVocalActivity(file).then(
       (result) => {
         if (analysisTokenRef.current !== token) return; // superseded — drop it
@@ -203,6 +229,40 @@ export function useSkidmarksStudio() {
     []
   );
 
+  /** The corner select control on a filled plate tile — see
+   * `setSkidmarksSegmentSelectedPlate`'s doc comment. */
+  const selectClipPlate = useCallback(
+    (segmentId: string, plateId: string) => setSkidmarksSegmentSelectedPlate(segmentId, plateId),
+    []
+  );
+
+  /** This plate's own stored camera-motion direction — see
+   * `setSkidmarksClipPlateMotionPrompt`'s doc comment. */
+  const setClipPlateMotionPrompt = useCallback(
+    (segmentId: string, plateId: string, motionPrompt: string) =>
+      setSkidmarksClipPlateMotionPrompt(segmentId, plateId, motionPrompt),
+    []
+  );
+
+  /** "Open in editor" on an archived song row — restores its band + mp3
+   * snapshot into the live top workspace. Invalidates any in-flight
+   * analysis/transcription/audio-upload for whatever was live before
+   * (same "a late result can't land on a session that no longer
+   * exists" guard `removeBand`/`removeMp3` already use). */
+  const restoreArchivedSession = useCallback((band: SkidmarksBand, mp3: SkidmarksMp3Attachment) => {
+    analysisTokenRef.current += 1;
+    restoreSkidmarksArchivedSession(band, mp3);
+  }, []);
+
+  /** Right after a successful Archive — clears the live workspace back
+   * to "choose a band," ready for a new/different song. Also
+   * invalidates any in-flight analysis/transcription/audio-upload for
+   * the just-archived session, same reasoning as `restoreArchivedSession`. */
+  const clearSessionAfterArchive = useCallback(() => {
+    analysisTokenRef.current += 1;
+    resetSkidmarksSessionAfterArchive();
+  }, []);
+
   return {
     bands: state.bands,
     session: state.session,
@@ -224,5 +284,9 @@ export function useSkidmarksStudio() {
     setClipPlateStill,
     addClipPlate,
     removeClipPlate,
+    selectClipPlate,
+    setClipPlateMotionPrompt,
+    restoreArchivedSession,
+    clearSessionAfterArchive,
   };
 }

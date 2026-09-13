@@ -7,13 +7,19 @@ import {
   buildForceDownloadUrl,
   buildRendersZip,
   fetchPersistedClipRenders,
-  toBundleEntries,
+  persistedRenderKey,
   type PersistedClipRender,
 } from "./clipRenders";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
+
+describe("persistedRenderKey", () => {
+  it("joins segmentId and plateId with a colon", () => {
+    expect(persistedRenderKey("seg-1", "plate-1")).toBe("seg-1:plate-1");
+  });
+});
 
 describe("fetchPersistedClipRenders", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -42,7 +48,15 @@ describe("fetchPersistedClipRenders", () => {
 
   it("returns the real persisted renders the route reports", async () => {
     const renders: PersistedClipRender[] = [
-      { segmentId: "seg-1", url: "https://x.public.blob.vercel-storage.com/a.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
+      {
+        segmentId: "seg-1",
+        plateId: "plate-1",
+        url: "https://x.public.blob.vercel-storage.com/a.mp4",
+        filename: "01_0000-0040_render.mp4",
+        clipIndex: 1,
+        startSec: 0,
+        endSec: 40,
+      },
     ];
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { configured: true, renders }));
 
@@ -55,7 +69,15 @@ describe("fetchPersistedClipRenders", () => {
       jsonResponse(200, {
         configured: true,
         renders: [
-          { segmentId: "seg-1", url: "https://x/a.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
+          {
+            segmentId: "seg-1",
+            plateId: "plate-1",
+            url: "https://x/a.mp4",
+            filename: "01_0000-0040_render.mp4",
+            clipIndex: 1,
+            startSec: 0,
+            endSec: 40,
+          },
           { segmentId: "seg-2" }, // missing fields
           "not even an object",
         ],
@@ -65,7 +87,17 @@ describe("fetchPersistedClipRenders", () => {
     const outcome = await fetchPersistedClipRenders(["seg-1", "seg-2"]);
     expect(outcome).toEqual({
       ok: true,
-      renders: [{ segmentId: "seg-1", url: "https://x/a.mp4", clipIndex: 1, startSec: 0, endSec: 40 }],
+      renders: [
+        {
+          segmentId: "seg-1",
+          plateId: "plate-1",
+          url: "https://x/a.mp4",
+          filename: "01_0000-0040_render.mp4",
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        },
+      ],
     });
   });
 
@@ -97,16 +129,6 @@ describe("buildForceDownloadUrl", () => {
   });
 });
 
-describe("toBundleEntries", () => {
-  it("names each entry with this feature's own zero-padded numeric filename convention", () => {
-    const entries = toBundleEntries([
-      { segmentId: "seg-1", url: "https://x/a.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
-      { segmentId: "seg-2", url: "https://x/b.mp4", clipIndex: 2, startSec: 40, endSec: 90 },
-    ]);
-    expect(entries.map((e) => e.filename)).toEqual(["01_0000-0040_render.mp4", "02_0040-0090_render.mp4"]);
-  });
-});
-
 describe("buildRendersZip", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -119,7 +141,7 @@ describe("buildRendersZip", () => {
     vi.unstubAllGlobals();
   });
 
-  it("fetches every render's bytes and bundles them into a real zip unzip can extract, named per this feature's numeric convention", async () => {
+  it("fetches every render's bytes and bundles them into a real zip unzip can extract, named per each render's own filename", async () => {
     const bodyA = new TextEncoder().encode("fake mp4 for clip one");
     const bodyB = new TextEncoder().encode("fake mp4 for clip two, a little longer this time");
     fetchMock
@@ -127,8 +149,8 @@ describe("buildRendersZip", () => {
       .mockResolvedValueOnce(new Response(bodyB));
 
     const outcome = await buildRendersZip([
-      { segmentId: "seg-1", url: "https://x/a.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
-      { segmentId: "seg-2", url: "https://x/b.mp4", clipIndex: 2, startSec: 40, endSec: 90 },
+      { segmentId: "seg-1", plateId: "plate-1", url: "https://x/a.mp4", filename: "01_0000-0040_render.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
+      { segmentId: "seg-2", plateId: "plate-1", url: "https://x/b.mp4", filename: "02_0040-0090_render.mp4", clipIndex: 2, startSec: 40, endSec: 90 },
     ]);
 
     expect(outcome.ok).toBe(true);
@@ -150,7 +172,7 @@ describe("buildRendersZip", () => {
   it("reports an honest failure (not a throw) when a render's fetch fails", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
     const outcome = await buildRendersZip([
-      { segmentId: "seg-1", url: "https://x/a.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
+      { segmentId: "seg-1", plateId: "plate-1", url: "https://x/a.mp4", filename: "01_0000-0040_render.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
     ]);
     expect(outcome).toEqual({ ok: false, message: "Downloading 01_0000-0040_render.mp4 returned HTTP 404." });
   });
@@ -158,7 +180,7 @@ describe("buildRendersZip", () => {
   it("reports an honest failure when the network itself fails, e.g. a CORS regression", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     const outcome = await buildRendersZip([
-      { segmentId: "seg-1", url: "https://x/a.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
+      { segmentId: "seg-1", plateId: "plate-1", url: "https://x/a.mp4", filename: "01_0000-0040_render.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
     ]);
     expect(outcome).toEqual({ ok: false, message: "Failed to fetch" });
   });

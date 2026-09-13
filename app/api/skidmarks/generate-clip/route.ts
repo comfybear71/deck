@@ -48,15 +48,19 @@ import { buildClipRenderPathname, isSafeSegmentId } from "@/lib/clipRenderBlob";
  * feature's still-generation route already made for its own
  * `images`/`<IMAGE_0>` array).
  *
- * **Fixed, cost-capped settings \u2014 not exposed to the client, not an
- * env-var knob.** Unlike `XAI_IMAGE_MODEL` (a deliberate low-risk
- * override for the still route, since image cost swings are small),
- * `CLIP_DURATION_SEC` and `CLIP_RESOLUTION` below are hardcoded: 5
- * seconds at 480p, the cheapest documented tier
- * ($0.08/sec \u2014 5s \u2248 $0.40, plus $0.01 per input image, so a
- * 3-plate door\u2192keyhole\u2192Jack render costs \u2248 $0.43 total). A
- * duration/resolution bump is real spend-per-tap creep (a 10s/1080p clip
- * is $2.50 \u2014 6x) \u2014 Stuart's cost lock says that's a deliberate
+ * **Cost-capped resolution, and a now-real, still bounded duration.**
+ * Unlike `XAI_IMAGE_MODEL` (a deliberate low-risk override for the still
+ * route, since image cost swings are small), `CLIP_RESOLUTION` below
+ * stays hardcoded at 480p, the cheapest documented tier ($0.08/sec).
+ * `duration`, per Stuart's per-plate auto-duration ask, is no longer a
+ * flat 5s for every render \u2014 it's `segmentLengthSec / plateCount`,
+ * clamped to `[MIN_CLIP_DURATION_SEC, MAX_CLIP_DURATION_SEC]` (5\u201315s,
+ * Grok's documented ceiling), computed client-side
+ * (`lib/clipGeneration.ts`'s `computePlateDurationSec`) and sent as
+ * `durationSec` \u2014 this route just clamps it again defensively and
+ * forwards it to xAI's own `duration` parameter, it doesn't invent the
+ * number. A resolution bump (1080p is 3x the per-second rate) is real
+ * spend-per-tap creep in a different way \u2014 Stuart's cost lock says that's a deliberate
  * code change with review, not something a stray env var should be able
  * to quietly dial up. `XAI_VIDEO_MODEL` *is* a safe env override (model
  * name only, same low-risk shape as `XAI_IMAGE_MODEL`), in case xAI
@@ -170,18 +174,39 @@ const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
 
 const MAX_PROMPT_LENGTH = 2000;
 /** xAI's own documented examples for `reference_images` never show more
- * than 3 \u2014 `components/SkidmarksClipRender.tsx` caps a clip's plate
- * strip to its first 3 real stills for the same reason
- * `app/api/skidmarks/generate-still/route.ts` caps identity/continuity
- * references at 3. */
+ * than 3 \u2014 this route keeps that general capability (any caller may
+ * still send 2\u20133 references), even though the current UI
+ * (`components/SkidmarksClipRender.tsx`, the per-plate-select rework)
+ * only ever sends exactly 1 (the selected plate's own still) now \u2014
+ * see `lib/clipGeneration.ts`'s module doc comment for why continuity
+ * across a clip's several plates moved to "render each separately, edit
+ * together in Resolve" instead of one multi-reference call. */
 const MAX_REFERENCE_IMAGES = 3;
 const MIN_REFERENCE_IMAGES = 1;
 
-/** Fixed, cost-capped output settings \u2014 see this file's module doc
- * comment for why these are a code change, not an env knob. 5s \u00d7
- * $0.08/s (480p) \u2248 $0.40 per render, plus $0.01 per reference image. */
-const CLIP_DURATION_SEC = 5;
+/** Cost-capped output resolution \u2014 see this file's module doc comment
+ * for why this stays a code change, not an env knob: 480p keeps the
+ * per-second rate at the cheapest documented tier ($0.08/s). */
 const CLIP_RESOLUTION = "480p";
+/** Default duration when a caller doesn't send `durationSec` (an older
+ * caller, or a hand-rolled request) \u2014 matches this route's original
+ * flat 5s behavior exactly, so nothing already calling this route
+ * without the new field changes. `MIN_CLIP_DURATION_SEC`/
+ * `MAX_CLIP_DURATION_SEC` are the real, now-honored range: Stuart's
+ * per-plate auto-duration ask (`segmentLengthSec / plateCount`, clamped
+ * 5\u201315s \u2014 see `lib/clipGeneration.ts`'s `computePlateDurationSec`)
+ * sends a real value inside that range, which this route now forwards
+ * to xAI's own documented `duration` parameter instead of hardcoding
+ * it. **Honesty note**: the original live-verification call this file's
+ * module doc comment describes used `duration: 3`, confirming xAI's API
+ * genuinely accepts a variable duration \u2014 the specific 5\u201315s range
+ * itself was not separately re-verified live against a real xAI
+ * response while building this rework (each such call costs Stuart real
+ * money); this is real, documented plumbing, not a fabricated "verified"
+ * claim for every value in the range. */
+const DEFAULT_CLIP_DURATION_SEC = 5;
+export const MIN_CLIP_DURATION_SEC = 5;
+export const MAX_CLIP_DURATION_SEC = 15;
 
 const START_TIMEOUT_MS = 20_000;
 const POLL_TIMEOUT_MS = 20_000;
@@ -268,12 +293,13 @@ async function startXaiVideoJob(
   prompt: string,
   referenceImageDataUrls: string[],
   apiKey: string,
-  model: string
+  model: string,
+  durationSec: number
 ): Promise<StartOutcome> {
   const body: Record<string, unknown> = {
     model,
     prompt,
-    duration: CLIP_DURATION_SEC,
+    duration: durationSec,
     resolution: CLIP_RESOLUTION,
   };
   // Exactly one of `image` (locks the first frame \u2014 xAI's
@@ -351,7 +377,7 @@ interface XaiVideoStatusBody {
   error?: { code?: unknown; message?: unknown };
 }
 
-async function pollXaiVideoJob(requestId: string, apiKey: string): Promise<PollOutcome> {
+async function pollXaiVideoJob(requestId: string, apiKey: string, requestedDurationSec: number): Promise<PollOutcome> {
   const deadline = Date.now() + POLL_DEADLINE_MS;
 
   while (true) {
@@ -402,7 +428,7 @@ async function pollXaiVideoJob(requestId: string, apiKey: string): Promise<PollO
         };
       }
       const durationSec =
-        typeof payload?.video?.duration === "number" ? payload.video.duration : CLIP_DURATION_SEC;
+        typeof payload?.video?.duration === "number" ? payload.video.duration : requestedDurationSec;
       return { ok: true, videoUrl, durationSec };
     }
 
@@ -457,16 +483,32 @@ interface GenerateClipRequestBody {
    * checking that instead). */
   shotPrompt?: unknown;
   referenceImageDataUrls?: unknown;
-  /** The four fields needed to persist a successful render to Vercel
-   * Blob under a stable, parseable pathname (see `lib/clipRenderBlob
-   * .ts`) instead of only returning xAI's temporary URL. All optional —
-   * a caller that omits any of them (or sends one that fails
-   * `resolvePersistenceTarget`'s validation) still gets the exact same
-   * response shape this route always returned; persistence is purely
-   * additive on top of the existing contract, never a new requirement
-   * to call this route at all. */
+  /** Real, per-plate render length in seconds — see this file's module
+   * doc comment and `lib/clipGeneration.ts`'s `computePlateDurationSec`.
+   * Optional; falls back to `DEFAULT_CLIP_DURATION_SEC` (5s, this
+   * route's original flat behavior) when omitted, then clamped into
+   * `[MIN_CLIP_DURATION_SEC, MAX_CLIP_DURATION_SEC]` either way. */
+  durationSec?: unknown;
+  /** The fields needed to persist a successful render to Vercel Blob
+   * under a stable, parseable, **per-plate** pathname (see
+   * `lib/clipRenderBlob.ts`) instead of only returning xAI's temporary
+   * URL. `segmentId`/`plateId`/`clipIndex`/`startSec`/`endSec` are all
+   * required together for persistence; a partial/malformed set is
+   * treated the same as none sent at all (see
+   * `resolvePersistenceTarget`) — persistence is purely additive on top
+   * of the existing contract, never a new requirement to call this
+   * route at all. `plateIndex`/`plateCount` are optional on top of
+   * that — only used to letter the filename when a clip has more than
+   * one plate. */
   segmentId?: unknown;
-  /** This clip's 1-based position in the timeline \u2014 only used to
+  plateId?: unknown;
+  /** This plate's 0-based position within its own clip's strip, and
+   * that strip's total slot count — see `lib/clipRenderBlob.ts`'s
+   * `buildClipRenderFilename` for exactly how these letter the
+   * filename. */
+  plateIndex?: unknown;
+  plateCount?: unknown;
+  /** This clip's 1-based position in the timeline — only used to
    * build a download-friendly numeric filename (e.g.
    * `01_0000-0040_render.mp4`), never anything else. */
   clipIndex?: unknown;
@@ -476,35 +518,50 @@ interface GenerateClipRequestBody {
 
 interface RenderPersistenceTarget {
   segmentId: string;
+  plateId: string;
   clipIndex: number;
   startSec: number;
   endSec: number;
+  /** 0-based index used to letter the filename (`01a_...`) — only set
+   * when the client reported more than one plate on this clip. */
+  plateLetterIndex?: number;
 }
 
 /**
- * Validates the four optional persistence fields together \u2014 all four
- * or none; a partial/malformed set is treated the same as none sent at
- * all (`null`, "skip persistence") rather than failing the whole
- * request. A render that already cost real xAI money should never be
- * thrown away over a metadata problem on the *save* step; the worst
- * case is the same "temporary URL, not saved" outcome this route always
- * had before this feature existed.
+ * Validates the persistence fields together — `segmentId`/`plateId`/
+ * `clipIndex`/`startSec`/`endSec` all or none; a partial/malformed set
+ * is treated the same as none sent at all (`null`, "skip persistence")
+ * rather than failing the whole request. A render that already cost
+ * real xAI money should never be thrown away over a metadata problem on
+ * the *save* step; the worst case is the same "temporary URL, not
+ * saved" outcome this route always had before this feature existed.
  */
 export function resolvePersistenceTarget(body: GenerateClipRequestBody): RenderPersistenceTarget | null {
   const segmentId = typeof body.segmentId === "string" ? body.segmentId.trim() : "";
+  const plateId = typeof body.plateId === "string" ? body.plateId.trim() : "";
   const clipIndex = typeof body.clipIndex === "number" ? body.clipIndex : NaN;
   const startSec = typeof body.startSec === "number" ? body.startSec : NaN;
   const endSec = typeof body.endSec === "number" ? body.endSec : NaN;
 
   if (!isSafeSegmentId(segmentId)) return null;
+  if (!isSafeSegmentId(plateId)) return null;
   if (!Number.isFinite(clipIndex) || clipIndex < 0) return null;
   if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || startSec < 0 || endSec < 0) return null;
 
+  const plateIndex = typeof body.plateIndex === "number" ? body.plateIndex : NaN;
+  const plateCount = typeof body.plateCount === "number" ? body.plateCount : NaN;
+  const plateLetterIndex =
+    Number.isFinite(plateIndex) && Number.isFinite(plateCount) && plateCount > 1
+      ? Math.max(0, Math.round(plateIndex))
+      : undefined;
+
   return {
     segmentId,
+    plateId,
     clipIndex: Math.round(clipIndex),
     startSec: Math.round(startSec),
     endSec: Math.round(endSec),
+    plateLetterIndex,
   };
 }
 
@@ -543,7 +600,14 @@ export async function persistClipRenderToBlob(
     return { ok: false, reason: "Could not read the finished render's bytes to save it." };
   }
 
-  const pathname = buildClipRenderPathname(target.segmentId, target.clipIndex, target.startSec, target.endSec);
+  const pathname = buildClipRenderPathname(
+    target.segmentId,
+    target.plateId,
+    target.clipIndex,
+    target.startSec,
+    target.endSec,
+    target.plateLetterIndex
+  );
   try {
     const blob = await put(pathname, Buffer.from(bytes), {
       access: "public",
@@ -641,12 +705,27 @@ export async function POST(request: Request) {
     );
   }
 
-  const startResult = await startXaiVideoJob(prompt, rawReferences, apiKey, resolveXaiVideoModel());
+  const requestedDurationSecRaw =
+    typeof body.durationSec === "number" && Number.isFinite(body.durationSec)
+      ? body.durationSec
+      : DEFAULT_CLIP_DURATION_SEC;
+  const requestedDurationSec = Math.min(
+    MAX_CLIP_DURATION_SEC,
+    Math.max(MIN_CLIP_DURATION_SEC, Math.round(requestedDurationSecRaw))
+  );
+
+  const startResult = await startXaiVideoJob(
+    prompt,
+    rawReferences,
+    apiKey,
+    resolveXaiVideoModel(),
+    requestedDurationSec
+  );
   if (!startResult.ok) {
     return NextResponse.json({ error: startResult.error, code: startResult.code }, { status: startResult.status });
   }
 
-  const pollResult = await pollXaiVideoJob(startResult.requestId, apiKey);
+  const pollResult = await pollXaiVideoJob(startResult.requestId, apiKey, requestedDurationSec);
   if (!pollResult.ok) {
     return NextResponse.json({ error: pollResult.error, code: pollResult.code }, { status: pollResult.status });
   }

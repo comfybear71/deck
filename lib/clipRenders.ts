@@ -6,20 +6,29 @@
  * outcome object) rather than inventing a new pattern for this one
  * feature.
  *
- * **Why this exists as its own module**: `SkidmarksClipTimeline` needs
- * to know, for *every* clip on the timeline (not just whichever one is
- * currently expanded), whether it already has a persisted render —
- * that's what lets "show it after refresh" work at the timeline level
- * too (the "Download all rendered clips" bundle button below), not
- * only inside a clip's own already-expanded panel.
+ * **Why this exists as its own module**: both `SkidmarksClipTimeline`
+ * (for each plate's rendered/not-rendered tick) and
+ * `SkidmarksRenderedClipsShelf` (the page-bottom "Rendered clips" shelf)
+ * need to know, for *every* plate across the whole song — not just
+ * whichever clip is currently expanded — whether it already has a
+ * persisted render. That's what lets "show it after refresh" work at
+ * both levels, not only inside a clip's own already-expanded panel.
+ *
+ * **Per-plate, not per-clip** (see `lib/clipRenderBlob.ts`'s module doc
+ * comment): a render is identified by the pair `(segmentId, plateId)`,
+ * and its `filename` is whatever basename it was actually stored under
+ * — already lettered (`01a_...`) when its clip had more than one plate
+ * — so nothing on the client has to re-derive the filename from
+ * `clipIndex` plus a guessed plate position.
  */
 
-import { buildClipRenderFilename } from "./clipRenderBlob";
 import { buildStoreZip } from "./zipDownload";
 
 export interface PersistedClipRender {
   segmentId: string;
+  plateId: string;
   url: string;
+  filename: string;
   clipIndex: number;
   startSec: number;
   endSec: number;
@@ -38,7 +47,9 @@ function isPersistedClipRenderShape(value: unknown): value is PersistedClipRende
   const v = value as Partial<PersistedClipRender>;
   return (
     typeof v.segmentId === "string" &&
+    typeof v.plateId === "string" &&
     typeof v.url === "string" &&
+    typeof v.filename === "string" &&
     typeof v.clipIndex === "number" &&
     typeof v.startSec === "number" &&
     typeof v.endSec === "number"
@@ -53,10 +64,10 @@ export type FetchPersistedClipRendersOutcome =
  * Looks up every currently-persisted render across the given clip ids
  * in one request — never throws; a network error, an unconfigured Blob
  * store, or any other failure all come back as the honest `{ ok: false,
- * renders: [] }` shape rather than blowing up the timeline that called
- * it. Returns `{ ok: true, renders: [] }` (not `ok: false`) when Blob
- * *is* configured but genuinely nothing has been rendered yet — that's
- * a real, successful "nothing to show" answer, not a failure.
+ * renders: [] }` shape rather than blowing up whatever called it.
+ * Returns `{ ok: true, renders: [] }` (not `ok: false`) when Blob *is*
+ * configured but genuinely nothing has been rendered yet — that's a
+ * real, successful "nothing to show" answer, not a failure.
  */
 export async function fetchPersistedClipRenders(segmentIds: string[]): Promise<FetchPersistedClipRendersOutcome> {
   if (segmentIds.length === 0) return { ok: true, renders: [] };
@@ -84,6 +95,15 @@ export async function fetchPersistedClipRenders(segmentIds: string[]): Promise<F
   return { ok: true, renders };
 }
 
+/** Builds the `${segmentId}:${plateId}` key every "which plates are
+ * already rendered" lookup in this feature uses — a plain string key
+ * rather than a nested `Map<string, Map<string, ...>>`, since a flat
+ * map is all either caller (`SkidmarksClipTimeline`'s per-plate tick,
+ * `SkidmarksRenderedClipsShelf`'s listing) needs. */
+export function persistedRenderKey(segmentId: string, plateId: string): string {
+  return `${segmentId}:${plateId}`;
+}
+
 /** Appends Vercel Blob's documented `?download=1` query param
  * (https://vercel.com/docs/vercel-blob/public-storage), which serves
  * the blob with `Content-Disposition: attachment` using this
@@ -93,19 +113,6 @@ export async function fetchPersistedClipRenders(segmentIds: string[]): Promise<F
  * HTML anchor's `download` attribute against a cross-origin URL. */
 export function buildForceDownloadUrl(blobUrl: string): string {
   return blobUrl.includes("?") ? `${blobUrl}&download=1` : `${blobUrl}?download=1`;
-}
-
-export { buildClipRenderFilename };
-
-export interface ClipRenderBundleEntry extends PersistedClipRender {
-  filename: string;
-}
-
-export function toBundleEntries(renders: PersistedClipRender[]): ClipRenderBundleEntry[] {
-  return renders.map((render) => ({
-    ...render,
-    filename: buildClipRenderFilename(render.clipIndex, render.startSec, render.endSec),
-  }));
 }
 
 export type BuildRendersZipOutcome =
@@ -118,17 +125,17 @@ export type BuildRendersZipOutcome =
  * successful blob reads with `Access-Control-Allow-Origin: *`, so this
  * works cross-origin from the browser without a server-side proxy) and
  * bundles them into one ZIP via `buildStoreZip`, each entry named with
- * this feature's own numeric convention. Never throws — a fetch failure
+ * its own already-resolved `filename`. Never throws — a fetch failure
  * (offline, a since-deleted blob, a real CORS regression on Vercel's
  * side) comes back as an honest `{ ok: false }` so the caller can fall
  * back to plain sequential downloads instead (see this module's doc
- * comment and `components/SkidmarksClipRender.tsx`'s "Download all" —
- * "sequential downloads with numeric names is OK for v1" is the task's
- * own explicit fallback for exactly this case).
+ * comment and `components/SkidmarksRenderedClipsShelf.tsx`'s "Download
+ * all" — "sequential downloads with numeric names is OK for v1" is the
+ * task's own explicit fallback for exactly this case).
  */
 export async function buildRendersZip(renders: PersistedClipRender[]): Promise<BuildRendersZipOutcome> {
   const entries: { name: string; data: Uint8Array }[] = [];
-  for (const render of toBundleEntries(renders)) {
+  for (const render of renders) {
     let res: Response;
     try {
       res = await fetch(render.url);

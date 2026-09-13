@@ -36,12 +36,14 @@ describe("GET /api/skidmarks/clip-renders", () => {
   it("lists the shared prefix once and filters to only the requested, well-formed segment ids", async () => {
     listMock.mockResolvedValueOnce({
       blobs: [
-        { pathname: `${CLIP_RENDER_PATH_PREFIX}seg-1/01_0000-0040_render.mp4`, url: "https://x/a.mp4" },
-        { pathname: `${CLIP_RENDER_PATH_PREFIX}seg-2/02_0040-0090_render.mp4`, url: "https://x/b.mp4" },
+        { pathname: `${CLIP_RENDER_PATH_PREFIX}seg-1/plate-1/01_0000-0040_render.mp4`, url: "https://x/a.mp4" },
+        { pathname: `${CLIP_RENDER_PATH_PREFIX}seg-2/plate-1/02_0040-0090_render.mp4`, url: "https://x/b.mp4" },
         // A clip nobody asked about this time \u2014 must not leak into the response.
-        { pathname: `${CLIP_RENDER_PATH_PREFIX}seg-3/03_0090-0120_render.mp4`, url: "https://x/c.mp4" },
+        { pathname: `${CLIP_RENDER_PATH_PREFIX}seg-3/plate-1/03_0090-0120_render.mp4`, url: "https://x/c.mp4" },
         // A stray blob under this prefix that doesn't match this feature's own naming \u2014 dropped, not guessed at.
-        { pathname: `${CLIP_RENDER_PATH_PREFIX}seg-1/not-a-render.txt`, url: "https://x/d.txt" },
+        { pathname: `${CLIP_RENDER_PATH_PREFIX}seg-1/plate-1/not-a-render.txt`, url: "https://x/d.txt" },
+        // The pre-per-plate pathname scheme (no plate folder) \u2014 also dropped, see the migration note.
+        { pathname: `${CLIP_RENDER_PATH_PREFIX}seg-1/01_0000-0040_render.mp4`, url: "https://x/legacy.mp4" },
       ],
     });
 
@@ -54,8 +56,24 @@ describe("GET /api/skidmarks/clip-renders", () => {
     expect(body).toEqual({
       configured: true,
       renders: [
-        { segmentId: "seg-1", url: "https://x/a.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
-        { segmentId: "seg-2", url: "https://x/b.mp4", clipIndex: 2, startSec: 40, endSec: 90 },
+        {
+          segmentId: "seg-1",
+          plateId: "plate-1",
+          url: "https://x/a.mp4",
+          filename: "01_0000-0040_render.mp4",
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        },
+        {
+          segmentId: "seg-2",
+          plateId: "plate-1",
+          url: "https://x/b.mp4",
+          filename: "02_0040-0090_render.mp4",
+          clipIndex: 2,
+          startSec: 40,
+          endSec: 90,
+        },
       ],
     });
   });

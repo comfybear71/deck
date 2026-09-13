@@ -73,9 +73,15 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Word-level transcription (lyrics timing) | **Real** — ElevenLabs Scribe only, no other provider | `app/api/skidmarks/transcribe/route.ts` |
 | Energy heuristic (vocal/instrumental fallback) | **Real**, client-side, no key needed | `lib/audioAnalysis.ts` |
 | Plate *still* generation | **Real** — xAI Grok Imagine *image* API | `app/api/skidmarks/generate-still/route.ts`, `lib/plateGeneration.ts` |
-| Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to `localStorage` | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `components/SkidmarksClipStub.tsx` |
-| Per-clip opt-in *video* render | **Real** — xAI Grok Imagine *video* API, one clip at a time, explicit two-tap confirm, fixed 5s/480p cost cap, optional multi-line camera-motion field as the primary motion instruction | `app/api/skidmarks/generate-clip/route.ts`, `components/SkidmarksClipRender.tsx` |
-| Render persistence | **Real** — a successful render is saved to durable Vercel Blob storage (not `localStorage`, not ephemeral React state), survives a refresh; download uses a numeric filename for Resolve, plus a "Download rendered clips" zip/sequential bundle across the whole timeline | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
+| Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to `localStorage` (the existing session-state mirror — see the "no `localStorage`" note below for what's actually exempt from that) | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `components/SkidmarksClipStub.tsx` |
+| Per-plate select + tick | **Real** — a small corner control on each filled plate tile (radio-style, one plate selected per clip at a time) plus a filled/empty tick for "already has a saved render"; see `lib/skidmarks.ts`'s `resolveSelectedPlateId` | `components/SkidmarksClipStub.tsx` |
+| Per-plate opt-in *video* render | **Real** — xAI Grok Imagine *video* API, animates **the one selected plate's own still only** (not multi-reference continuity across the whole strip anymore), one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`) | `app/api/skidmarks/generate-clip/route.ts`, `components/SkidmarksClipRender.tsx` |
+| Per-plate render duration | **Real, auto-computed** — `segmentLengthSec / plateCount`, clamped to `[5, 15]`s (Grok's documented ceiling), no UI picker | `lib/clipGeneration.ts`'s `computePlateDurationSec` |
+| Render persistence | **Real**, per-**plate** now (not per-clip — see the pathname migration note below) — saved to durable Vercel Blob storage, survives a refresh; download uses a numeric (lettered once a clip has >1 plate) filename for Resolve | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
+| Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**; "download all" zip/sequential-fallback lives here now | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts` |
+| MP3 audio → Vercel Blob | **Real** — the attached MP3's own audio bytes upload client-side-direct to Blob at attach time so **playback survives a refresh**, honestly labeled when unconfigured/failed | `lib/mp3Blob.ts`, `components/SkidmarksMp3Card.tsx` |
+| Auto-plate from a short brief | **Real** — fills *empty* plate slots across the whole clip list with real xAI-generated stills off a small heuristic planner (never an LLM call against the brief), **then stops**; never overwrites a filled plate, never renders video | `lib/autoPlate.ts`, `components/SkidmarksAutoPlate.tsx` |
+| Finished-song archive | **Real** — "Archive" snapshots the live band+mp3 (segments, plates, prompts, motion text) to Vercel Blob JSON + carries forward the mp3's own audio URL, lists in a page-bottom shelf, "Open in editor" restores it (auto-archiving whatever's currently live first), "Download project zip" bundles prompts/stills/renders/audio "as practical." No Neon — not patterned anywhere in this repo yet (see Env vars) | `lib/skidmarksArchive.ts`, `app/api/skidmarks/archive/route.ts`, `app/api/skidmarks/blob-upload/route.ts`, `components/SkidmarksArchiveShelf.tsx` |
 | Whole-song **"Generate Clips"** button | **Stub, deliberately** — never auto-renders every clip in the song | `components/SkidmarksClipTimeline.tsx` |
 | Voice, in-app stitch | Not built | — |
 | Comfy MCP / Seedance / LTX | Not built — no key, no endpoint, no request shape anywhere in this repo | — |
@@ -83,8 +89,33 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 **Never wire a whole-song / auto-fire-every-clip render.** That is the
 one thing Stuart has repeatedly, explicitly ruled out on cost grounds.
 If a future task asks for it, treat that as needing its own explicit
-product sign-off, not something to build by extending the per-clip
-render control.
+product sign-off, not something to build by extending the per-plate
+render control. Auto-plate is the one adjacent thing that *is* wired to
+fan out across the whole song — but only for cheap **stills**, and it
+still stops cold before video; don't blur that line when extending
+either feature.
+
+**Persisted-render pathname is a breaking, per-plate scheme now**
+(`lib/clipRenderBlob.ts`): `skidmarks/clip-renders/{segmentId}/{plateId}/
+{filename}`, not the old `{segmentId}/{filename}`. This was a deliberate
+migration for the per-plate-select rework — a render used to be "one per
+clip," it's "one per plate" now. Any render already sitting in Blob
+under the old 2-level path is simply orphaned (not deleted, just no
+longer listed/linked) — flagging this explicitly rather than pretending
+it was seamless.
+
+**No `localStorage` for genuinely new durable state.** The existing
+`lib/skidmarks.ts` session mirror (bands/session/segments/plates,
+including plate stills as `data:` URLs) is still `localStorage`-backed
+— that's pre-existing debt this PR didn't create or fix, and adding a
+field to an existing plate/segment (`motionPrompt`, `selectedPlateId`)
+follows that same existing pattern, not a new one. But the **archive of
+record** for a finished song, and the MP3's own durable audio copy, are
+both genuinely new durable state added in this pass — both go straight
+to Vercel Blob (JSON metadata + JSON snapshot + media), never
+`localStorage`, per the hard lock. Neon is still not patterned anywhere
+in this repo (see Env vars) — when it lands, it should replace *all* of
+this `localStorage` session state, not just the archive.
 
 ## Plating UX locks — don't reinvent these, don't add a picker
 
@@ -102,17 +133,38 @@ render control.
   `SkidmarksModelId` (LTX/Grok/H3/Seedance, `lib/skidmarks.ts`) still
   exists in the data layer and still steers prompt phrasing under the
   hood, but there is no tap surface for it today — don't add one
-  without an explicit ask. **One narrow exception, added on an
-  explicit ask**: `components/SkidmarksClipRender.tsx` has one small,
-  optional, multi-line camera-motion field (a 2-row `<textarea>`,
-  capped at `MAX_MOTION_PROMPT_LENGTH`, `lib/clipGeneration.ts`) that
-  becomes the *primary* motion instruction sent to xAI's video call
-  when filled in (`shotPrompt`/the plate stills stay the visual
-  description and reference images) — still a single free-text field,
-  not a camera-angle picker/menu; leaving it blank keeps the original
-  automatic push-in/zoom behavior. Stuart's stated reason for this one:
-  #42's Render control had *no* motion instruction at all, which he
-  found irrational enough not to press the button.
+  without an explicit ask. **Two narrow exceptions, both added on an
+  explicit ask**:
+  1. A small bottom-right corner control on each *filled* plate tile
+     (`components/SkidmarksClipStub.tsx`'s `SkidmarksPlateSelectControl`)
+     — radio-style, picks which single plate the clip's one Render
+     control animates next, and doubles as a filled/empty tick for
+     "already has a saved render." Not a model/style picker — it never
+     changes what gets generated, only which existing plate a render
+     targets.
+  2. `components/SkidmarksClipRender.tsx` has one small, optional,
+     multi-line camera-motion field (a 2-row `<textarea>`, capped at
+     `MAX_MOTION_PROMPT_LENGTH`, `lib/clipGeneration.ts`) that becomes
+     the *primary* motion instruction sent to xAI's video call when
+     filled in (`shotPrompt`/the plate still stay the visual
+     description and reference image) — **per-plate now**
+     (`SkidmarksClipPlateSlot.motionPrompt`, one stored value per
+     plate, not per clip and not local component state), but still a
+     single free-text field, not a camera-angle picker/menu; leaving it
+     blank keeps the automatic push-in/zoom behavior. Stuart's stated
+     reason for this one: #42's Render control had *no* motion
+     instruction at all, which he found irrational enough not to press
+     the button.
+- **Render animates exactly one plate's own still now, never every
+  plate on the strip at once.** The old build sent every filled plate as
+  multi-reference continuity in a single xAI call; per Stuart's
+  per-plate-select ask, continuity across a clip's several plates (door
+  → keyhole → Jack) now comes from rendering each plate separately with
+  its own motion, then editing them together in Resolve — not from one
+  bigger, pricier xAI call. Don't quietly bring multi-reference
+  continuity back into this control without an explicit ask; the
+  underlying xAI route still generically supports it (any other caller
+  could ask for 2–3 references), this feature's own UI just never does.
 - Any **new** control (the render button included) has to survive the
   same test: is this the smallest possible surface, or is it turning
   into a button farm? Prefer reusing an existing field/gesture over
@@ -163,34 +215,54 @@ the request, and validate length against `shotPrompt` only.
 
 - A plate *still* is cheap (roughly one to a few cents via xAI Grok
   Imagine) — fine to fire on a plain tap of "Generate," no confirm step
-  needed.
-- A clip *video* render is not cheap (xAI Grok Imagine video: $0.08/sec
+  needed. Auto-plate (below) fires several of these in a row, so it gets
+  its own single lightweight confirm (a real count + rough dollar
+  estimate) — not the two-tap video-grade confirm, but not a bare silent
+  tap either.
+- A plate *video* render is not cheap (xAI Grok Imagine video: $0.08/sec
   at 480p, $0.14 at 720p, $0.25 at 1080p, plus $0.01 per reference
   image) — **always** behind an explicit confirm that shows a real
-  dollar estimate, never a bare "tap and it fires" control.
-- **One render at a time, enforced in code**
-  (`SkidmarksClipTimeline`'s `renderingSegmentId` lock), not just a UI
-  suggestion or a same-clip re-tap guard.
-- Fixed/hardcoded settings for a paid render (duration, resolution) are
-  a deliberate, code-reviewed choice, not an env var and not a UI
-  picker — don't let a duration/resolution knob sneak into the UI or
-  into an env override without calling that out explicitly in the PR
-  that adds it.
-- **Never auto-fire a batch of paid calls** (a whole song's worth of
-  clips, a whole band's worth of looks, etc.) without an explicit,
-  single, informed tap per unit of spend.
+  dollar estimate **and the real duration** (now variable per plate, see
+  below — never a bare "tap and it fires" control, and never a vague
+  "this costs money" line without the actual number.
+- **Real, auto-computed per-plate duration** — `segmentLengthSec /
+  plateCount`, clamped to `[MIN_CLIP_DURATION_SEC, MAX_CLIP_DURATION_SEC]`
+  = `[5, 15]` seconds (Grok's documented ceiling), computed by
+  `lib/clipGeneration.ts`'s `computePlateDurationSec`. This replaced the
+  earlier flat, always-5s duration. **Still not a UI picker or an env
+  var** — Stuart never gets a duration field to type into; the number is
+  derived from the clip's own real length and plate count, shown to him
+  read-only in the confirm step. If a future task asks for a manual
+  override, that's a fresh, explicit, code-reviewed ask — this rework
+  didn't add one.
+- **Resolution stays hardcoded** at 480p (the cheapest documented tier)
+  — same "not an env var, not a picker" lock as before this rework, only
+  duration became real/variable.
+- **One render at a time, enforced in code, across the whole song, not
+  just the whole clip** (`SkidmarksClipTimeline`'s `renderingKey` lock,
+  keyed by `${segmentId}:${plateId}` — a plate-level key now, since a
+  render targets one specific plate). Not just a UI suggestion or a
+  same-plate re-tap guard.
+- **Never auto-fire a batch of paid *video* calls** (a whole song's worth
+  of clips, a whole band's worth of looks, etc.) without an explicit,
+  single, informed tap per unit of spend. Auto-plate is the one
+  intentional exception to "never batch" for **stills** specifically —
+  see the Auto-plate entry in "Wired vs. stub" — and it still never
+  batches video.
 - If you're not sure whether something costs money, treat it like it
   does — verify against the provider's real pricing before shipping,
   don't assume a "generate" button is free just because a sibling one
   (like the still-image one) happens to be cheap.
 - Persisting a render to Vercel Blob is a **storage** cost, not a
   per-tap xAI spend risk — a handful of few-megabyte MP4s is well
-  within Vercel Blob's free-tier storage, and each clip only ever keeps
-  its *one* latest render (overwritten on re-render, see
+  within Vercel Blob's free-tier storage, and each **plate** only ever
+  keeps its *one* latest render (overwritten on re-render, see
   `lib/clipRenderBlob.ts`), so this doesn't grow unbounded the way a
-  history of every past take would. Don't read this as a new cost lock
-  needing its own confirm step — the confirm step still gates the real
-  cost (the xAI render itself), not the save that follows it.
+  history of every past take would. The same "storage cost, not spend
+  risk" reasoning applies to the MP3 audio upload and the archive
+  snapshot/index — none of these need their own confirm step; the
+  confirm step still gates the real cost (the xAI call itself), not any
+  save that follows it.
 
 ## Env vars this feature actually reads
 
@@ -206,17 +278,46 @@ the request, and validate length against `shotPrompt` only.
   required for real word-level transcription
   (`app/api/skidmarks/transcribe/route.ts`); missing it falls back to
   the client-side energy heuristic, honestly labeled, never silently.
-- `BLOB_READ_WRITE_TOKEN` — required to persist a successful clip
-  render to durable Vercel Blob storage (`app/api/skidmarks/generate-
-  clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`). Set
-  automatically once a Blob store is connected to this Vercel project
-  (Project Settings → Storage → connect/create a Blob store) — no
-  manual value to paste in most cases. Missing/unconfigured never
-  blocks or fails a render: the render Stuart already paid for is
-  still returned and playable, just honestly flagged as not saved
-  (`persisted: false`) instead of implying durability that didn't
-  happen. This is the one env var this feature reads that isn't an AI
-  provider key.
+- `BLOB_READ_WRITE_TOKEN` — required for **every** durable Vercel Blob
+  write this feature makes, which as of this pass is more than just clip
+  renders:
+  - Persisting a successful clip render (`app/api/skidmarks/generate-
+    clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`) — one
+    per plate now, see the pathname migration note above.
+  - The attached MP3's own audio bytes, so playback survives a refresh
+    (`lib/mp3Blob.ts`, via the shared client-upload token route
+    `app/api/skidmarks/blob-upload/route.ts`).
+  - A finished song's full archive snapshot and the shared archive
+    index (`lib/skidmarksArchive.ts`, `app/api/skidmarks/archive/
+    route.ts`, also via `app/api/skidmarks/blob-upload/route.ts`).
+  Set automatically once a Blob store is connected to this Vercel
+  project (Project Settings → Storage → connect/create a Blob store) —
+  no manual value to paste in most cases. Missing/unconfigured never
+  blocks or fails the thing it was going to save: a render Stuart
+  already paid for is still returned and playable
+  (`persisted: false`), MP3 playback still works from the local object
+  URL for this session, and an unconfigured Archive tap fails with a
+  real, honest message rather than silently discarding the song. This
+  is the one env var this feature reads that isn't an AI provider key.
+- **Two of `app/api/skidmarks/blob-upload/route.ts`'s client uploads
+  (`lib/mp3Blob.ts`, `lib/skidmarksArchive.ts`) go straight from the
+  browser to Blob storage, bypassing this app's own serverless
+  function entirely** (`@vercel/blob/client`'s `upload()`) — deliberate,
+  not an oversight: both payloads (a real song-length MP3, an archive
+  snapshot with embedded plate stills) can exceed Vercel's hard
+  ~4.5MB Function request-body cap (the same cap
+  `lib/audioCompression.ts` already had to work around for the
+  transcription upload). If you add a *new* Blob write for this
+  feature and it could plausibly carry more than a few hundred KB,
+  default to this same client-upload pattern rather than a normal JSON
+  POST body.
+- **No Neon/Postgres anywhere in this repo yet** — `@neondatabase/
+  serverless`, `drizzle`, `prisma`, etc. are not dependencies, and no
+  connection string env var is read anywhere. The archive of record
+  (this pass) uses Vercel Blob JSON instead, explicitly as an interim
+  answer — see the README's Skidmarks follow-up note for the intended
+  eventual Neon migration, which should absorb the *entire*
+  `lib/skidmarks.ts` session mirror, not just the archive.
 - None of the above being unset should ever crash anything — every
   route returns an honest `missing_api_key`/`unconfigured` outcome
   instead. If you add a new real API call, match that shape.
