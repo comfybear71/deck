@@ -23,10 +23,13 @@ const SHOT_PROMPT_MAX_LENGTH = 160;
 
 /**
  * A clip's expanded body — kept ruthlessly minimal per Stuart's chrome
- * lock: **large location-plate cards** in a horizontal scroll (time
- * range overlaid top-left on the image, model badge top-right, no text
- * stacked underneath), **one shot-prompt box**, and a **compact model
- * pill row**. The old Camera Angles block is deleted outright — there's
+ * lock: an **auto summary line** (model + location, always derived
+ * from `segment`, never authored — a one-glance "what's picked right
+ * now" before scrolling), **large location-plate cards** in a
+ * horizontal scroll (time range overlaid top-left on the image, model
+ * badge top-right, no text stacked underneath), **one shot-prompt
+ * box**, and a **compact model pill row**. The old Camera Angles block
+ * is deleted outright — there's
  * no camera-angle concept left to pick. The Model row survives (Stuart
  * still wants H3/Seedance reachable) but per his cost lock ("be very
  * wary of spend") it's a plain one-tap pick, never something the app
@@ -65,9 +68,30 @@ export function SkidmarksPlatesAndCamera({
   const lipSync = isLipSyncModel(segment.model);
   const modelBadge = skidmarksModelBadge(segment.model);
   const promptPreview = segment.shotPrompt.trim();
+  const activePlateLabel =
+    SKIDMARKS_LOCATION_PLATES.find((p) => p.id === segment.plateId)?.label ?? segment.plateId;
 
   return (
     <div className="flex flex-col gap-2.5 border-t border-white/[0.06] pt-3">
+      {/* Auto summary line — a plain glance at the two things this clip
+          is currently set to (model, location), always derived straight
+          from `segment` rather than authored — never a stand-in for the
+          shot prompt itself, just "what's picked right now" before
+          scrolling the cards below. */}
+      <p
+        aria-hidden
+        className="text-[10px] font-medium text-white/45"
+      >
+        {modelBadge}
+        {lipSync && (
+          <span aria-hidden className="ml-1 text-[9px]">
+            {"\u{1F3A4}"}
+          </span>
+        )}
+        <span className="mx-1.5 text-white/25">{"\u00b7"}</span>
+        {activePlateLabel}
+      </p>
+
       {/* Big stub stills — the primary visual. Every card shares this
           clip's one shot prompt as its caption (never a hardcoded scene
           description), so scrolling between location options never loses
