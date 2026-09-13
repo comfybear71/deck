@@ -87,7 +87,7 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**, cards laid out in one `overflow-x-auto` horizontal strip (not a vertical stack) so a phone with several renders doesn't turn into one huge scroll; "download all" zip/sequential-fallback stays reachable underneath the strip. Each card has an explicit small **Download** pill (same `rounded-full` shape/size as Remove, tiny download icon — still the existing `buildForceDownloadUrl`/Blob `?download=1` mechanism and numeric/lettered filename, never the native `<video>` share/⋯ menu) plus a **Remove** control — deletes that plate's persisted Blob render(s) and clears its tick, never touches the plate's still/shot/motion prompts (those are separate, `localStorage`-only state) | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts`, `lib/clipRenders.ts`'s `deletePersistedClipRender`/`buildForceDownloadUrl` |
 | MP3 audio → Vercel Blob | **Real** — the attached MP3's own audio bytes upload client-side-direct to Blob at attach time so **playback survives a refresh**, honestly labeled when unconfigured/failed | `lib/mp3Blob.ts`, `components/SkidmarksMp3Card.tsx` |
 | Auto-plate from a short brief | **Real** — fills *empty* plate slots across the whole clip list with a real generated still, **then stops**; never overwrites a filled plate, never renders video. Its one scripted exception (the door → keyhole → Jack opener for *Talking to Concrete*'s 0:00–0:40) carries Stuart's own exact wording, recreated 2026-09-13 after the Neon-migration data-loss incident — see `CONCRETE_OPENER_SHOTS`'s own inline comments before touching that wording again. **Two real fill engines now**: a band with no master reference photo set still gets the small hand-authored xAI templates this always shipped with; a band whose resolved vocalist *does* have a real `avatarImage` set instead gets real angle variety off Stuart's own "17 positions" pack (`lib/sirayPositions.ts`, his pack pasted verbatim 2026-09-13) via Siray's Seedream 4.5 ref2i-spicy model (`lib/sirayClient.ts`, `SIRAY_API_KEY`) — one real camera position per empty slot, picked automatically by the same vocal/instrumental/first-clip signals the xAI templates already used, never a picker. The scripted door/keyhole/Jack opener always stays on the xAI path even when a master still is set — it's a specific, hand-authored sequence, not a position to auto-pick. **Honesty note**: this Siray path is ported from Stuart's own other proven repo, not live-verified from this sandbox (`SIRAY_API_KEY` lives on his real Vercel project, not here) — see `lib/sirayClient.ts`'s own module doc comment. | `lib/autoPlate.ts`, `lib/sirayPositions.ts`, `lib/sirayClient.ts`, `components/SkidmarksAutoPlate.tsx`, `app/api/skidmarks/generate-still-siray/route.ts` |
-| Clip start/end nudge | **Real** — a compact −1s/+1s stepper (`SkidmarksClipTimingNudge`) at the top of each clip's expanded panel lets Stuart slip that clip's `startSec`/`endSec` after transcription/analysis lands, since ElevenLabs Scribe timing is "mostly right but sometimes 3-4 seconds off." Segments are always contiguous, so a nudge moves the **shared cut point** with the neighboring clip — the previous clip's `endSec` (start-nudge) or next clip's `startSec` (end-nudge) shifts by the same amount, which is what keeps the whole timeline gap-free/overlap-free automatically; see `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary` doc comment for why that beat a clamp-only design. Clamped to `[0, durationSec]` and a `MIN_NUDGE_SEGMENT_SEC` (1s) floor on either side of the moved boundary; free-edit within those bounds, not a fixed ±few-seconds cap. **Never re-runs ElevenLabs Scribe or the energy heuristic** — only edits the already-resolved segment times already in `session.mp3.segments`, and never touches `segmentsSource`/plates/shot prompt/model. Persisted the same way every other segment field already is — which as of #57 means the Neon session row, not `localStorage`. | `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary`/`nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd`, `components/SkidmarksClipTimingNudge.tsx`, `components/SkidmarksClipTimeline.tsx`, `components/SkidmarksClipStub.tsx` |
+| Clip start/end edit | **Real** — double-tap either number in a clip row's own always-visible header ("0:00–0:32") to edit it in place, via `SkidmarksClipTimingHeaderEdit` (`lib/skidmarks.ts`'s `parseSkidmarksTimeInput` parses what's typed). Replaced a compact −1s/+1s button stepper (`SkidmarksClipTimingNudge`, deleted 2026-09-13, same day it shipped) on Stuart's direct "I hate seeing big buttons... wasting great real estate" follow-up. Segments are always contiguous, so an edit moves the **shared cut point** with the neighboring clip — the previous clip's `endSec` (start edit) or next clip's `startSec` (end edit) shifts by the same amount, which is what keeps the whole timeline gap-free/overlap-free automatically; see `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary` doc comment for why that beat a clamp-only design. Clamped to `[0, durationSec]` and a `MIN_NUDGE_SEGMENT_SEC` (1s) floor on either side of the moved boundary; free-edit within those bounds, not a fixed ±few-seconds cap — an unparseable typed value just cancels the edit. **Never re-runs ElevenLabs Scribe or the energy heuristic** — only edits the already-resolved segment times already in `session.mp3.segments`, and never touches `segmentsSource`/plates/shot prompt/model. Persisted the same way every other segment field already is — the Neon session row, not `localStorage`. | `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary`/`nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd`/`parseSkidmarksTimeInput`, `components/SkidmarksClipTimingHeaderEdit.tsx`, `components/SkidmarksClipTimeline.tsx` |
 | Finished-song archive | **Real** — "Archive" snapshots the live band+mp3 (segments, plates, prompts, motion text) to Vercel Blob JSON + carries forward the mp3's own audio URL, lists in a page-bottom shelf, "Open in editor" restores it (auto-archiving whatever's currently live first), "Download project zip" bundles prompts/stills/renders/audio "as practical," **plus a per-song `brief.txt`/`plan.txt`** (Stuart's own director-workflow templates, auto-filled with whatever the app already knows — Song/Band/Length/MP3, and a locked character's `directorNote` as the Artist line — everything else left blank for him to fill by hand; `docs/skidmarks/director-brain.txt` is the one persistent, cross-song counterpart to these two and is deliberately *not* bundled into any song's zip). Deliberately still Blob, not Neon, for this one piece — see `lib/skidmarksArchive.ts`'s own module doc comment for why (this is unrelated to Neon now being real for the session mirror itself, see the Neon section above) | `lib/skidmarksArchive.ts`, `app/api/skidmarks/archive/route.ts`, `app/api/skidmarks/blob-upload/route.ts`, `components/SkidmarksArchiveShelf.tsx`, `docs/skidmarks/director-brain.txt` |
 | Whole-song **"Generate Clips"** button | **Stub, deliberately** — never auto-renders every clip in the song | `components/SkidmarksClipTimeline.tsx` |
 | Voice, in-app stitch | Not built | — |
@@ -412,15 +412,31 @@ Stuart's explicit ask: ElevenLabs Scribe timing lands "mostly right but
 sometimes 3-4 seconds off," and he wants to slip a clip's cut earlier/
 later without a heavy NLE and without re-running Scribe.
 
-- **A compact −1s/+1s stepper, not editable `mm:ss` text fields.**
-  `SkidmarksClipTimingNudge` renders two small groups (Start, End) —
-  each a "−" button, the current time read-only in between, a "+"
-  button — at the very top of a clip's expanded panel, right above the
-  plate strip. No keyboard, no `mm:ss` parsing/validation to get wrong;
-  a handful of taps corrects a typical 3-4s miss. Per the "smallest
-  possible surface, no button farm" chrome lock above, don't upgrade
-  this to a draggable timeline/scrubber or a bigger step size without
-  a fresh explicit ask.
+- **Double-tap the clip row's own header time to edit it — not a
+  button stepper, and not an always-visible `mm:ss` text field
+  either.** Shipped first (2026-09-13) as a compact −1s/+1s stepper
+  (`SkidmarksClipTimingNudge`, deleted) opening a clip's expanded
+  panel; Stuart's same-day follow-up ("I hate seeing big buttons like
+  this and wasting great real estate... I'd rather be able to double
+  tap into the head[er] with the timing and change it") replaced it
+  with `SkidmarksClipTimingHeaderEdit` — the clip row's own always-
+  visible "0:00–0:32" header text (next to the label pill, visible
+  whether the row is expanded or not) *is* the control. Double-tapping
+  either number turns just that one number into a small inline input;
+  typing a new `m:ss` (or bare seconds) and pressing Enter/tapping away
+  commits it, `lib/skidmarks.ts`'s `parseSkidmarksTimeInput` parses
+  what was typed and hands the *delta* to the same
+  `nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd` setters the
+  old stepper called — an unparseable value cancels the edit instead of
+  committing anything. Double-tap, not single-tap, because a single tap
+  on the row already toggles it expanded/collapsed — entering edit mode
+  needs a different gesture, detected by hand (tap-timestamp
+  comparison) rather than trusting native `dblclick` on iOS Safari
+  touch, same "don't trust a browser touch-event assumption" discipline
+  as the plate select corner control (`SkidmarksClipStub.tsx`'s own doc
+  comment). Per the "smallest possible surface, no button farm" chrome
+  lock above, don't reintroduce a button-row stepper or a bigger
+  standing text-field UI without a fresh explicit ask.
 - **Segments are always contiguous** — every real segment source this
   store ever builds (`buildDemoSegments`, and
   `buildSegmentsFromVocalRanges` off either the energy heuristic or
@@ -440,10 +456,13 @@ later without a heavy NLE and without re-running Scribe.
   ripple mode** without a fresh explicit ask — only the *immediate*
   neighbor at the moved cut ever changes.
 - **Free edit within the song's own bounds, not a fixed ±few-seconds
-  cap.** Each tap is `SEGMENT_NUDGE_STEP_SEC` (1s); nothing stops
-  Stuart from tapping repeatedly to slip a clip by more than the
-  "typical 3-4s miss" if a cut is further off than that. Clamped only
-  by `MIN_NUDGE_SEGMENT_SEC` (1s — neither the nudged clip nor the
+  cap.** Typing a new time computes and sends whatever delta that
+  actually is — no per-tap step size limits it the way the old
+  stepper's `SEGMENT_NUDGE_STEP_SEC` (1s) once did (that constant now
+  only survives as a representative test value, see its own doc
+  comment); a cut further off than the "typical 3-4s miss" is one edit,
+  not several taps. Clamped only by `MIN_NUDGE_SEGMENT_SEC` (1s —
+  neither the nudged clip nor the
   neighbor it borrows from/lends to can be nudged below this) and the
   song's own real bounds (`0` at the very start, the mp3's own probed
   `durationSec` at the very end — unbounded above while that's still
