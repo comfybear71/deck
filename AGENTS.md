@@ -205,6 +205,23 @@ already-tagged content on the *same* attach, and
 `hasSkidmarksUserContent` alone doesn't protect against a stale
 promise for a *different*, since-replaced attach.
 
+**That fix missed one more `mp3`-scoped resolve callback:
+`setSkidmarksMp3Duration`** — real live-QA'd regression, reported after
+#51+#53 had already landed: "clip 1 lost again," same symptom as the
+bug above. This one's driven by the `<audio>` element's own
+`loadedmetadata` probe (`SkidmarksMp3Card`), not analysis/
+transcription, and it had neither guard — it unconditionally rebuilt
+`segments` via `buildDemoSegments(durationSec)` whenever
+`durationSec === null && segmentsSource === "seed-fallback"`. iOS
+Safari can defer `loadedmetadata` well past attach (its power-saving
+media policy can hold it until Stuart actually taps Play), leaving a
+real window to have already tagged a clip on the seed-fallback timeline
+before this fires. Now takes `attachId` and checks
+`hasSkidmarksUserContent` exactly like the other two. If you add a
+*fourth* `mp3`-scoped resolve path later, give it both guards too —
+this file's real bug history is now three-for-three on "the first
+fix's shape was right, a sibling callback just didn't get it yet."
+
 ## Plating UX locks — don't reinvent these, don't add a picker
 
 - An empty plate is **one dashed/dotted placeholder tile**. Never a
