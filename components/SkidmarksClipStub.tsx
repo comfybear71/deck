@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   MAX_PLATES_PER_CLIP,
   readImageFileAsDataUrl,
@@ -235,6 +236,26 @@ interface SkidmarksPlateLightboxProps {
  * "Replace" swaps that row for the same Upload/Generate mini-panel the
  * empty-plate popover uses; all state/handlers still live in
  * `SkidmarksPlateBox`, passed down as props.
+ *
+ * **Rendered via `createPortal` straight into `document.body`.** This
+ * component lives many levels deep inside `SkidmarksDetailSheet`'s own
+ * `overflow-y-auto` scroll container (`SkidmarksDetailSheet` ->
+ * `SkidmarksClipTimeline` -> `SkidmarksClipStub` -> `SkidmarksPlateBox`
+ * -> here). `fixed` positioning is supposed to escape all of that and
+ * pin to the real viewport, but on iOS Safari specifically, a `fixed`
+ * descendant nested inside a scrolling ancestor is a known quirk case —
+ * Safari mobile has repeatedly shipped bugs where it treats that nested
+ * `fixed` element as scoped to the nearest scroll container instead of
+ * the true viewport, so it paints clipped to (and stacked under) that
+ * container's own siblings — e.g. the sheet's header bar, which sits
+ * *outside* the scroll area and above it in paint order. That's exactly
+ * Stuart's live-device report after #39 (opaque backdrop, still behind
+ * the sheet chrome) — bumping backdrop opacity alone can't fix a
+ * stacking-context/containing-block bug. Portaling here to
+ * `document.body` makes this a top-level sibling of the sheet itself
+ * (same as `SkidmarksGeneratePopup`, which never nests anywhere near
+ * this deep and has never shown the bug), so there's no scrolling
+ * ancestor left to get scoped inside of.
  */
 function SkidmarksPlateLightbox({
   dataUrl,
@@ -258,12 +279,16 @@ function SkidmarksPlateLightbox({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+  return createPortal(
+    <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
       {/* Solid, fully opaque scrim — no alpha, no blur. The previous
           `bg-black/90 backdrop-blur-sm` still let the sheet/strip behind
           it show through as a ghosted, blurred strip (Stuart's report);
-          a flat `bg-black` covers it completely instead. */}
+          a flat `bg-black` covers it completely instead. `z-[999]` is
+          well above every other overlay in this app (sheets sit at
+          `z-50`, `SkidmarksGeneratePopup` at `z-[60]`) so this always
+          paints on top regardless of DOM order at the `document.body`
+          root this now portals into. */}
       <button
         type="button"
         aria-label="Close"
@@ -334,7 +359,8 @@ function SkidmarksPlateLightbox({
 
         {error && <p role="alert" className="text-[11px] leading-snug text-rose-300/90">{error}</p>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
