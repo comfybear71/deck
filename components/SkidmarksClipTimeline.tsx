@@ -4,14 +4,10 @@ import { useRef, useState } from "react";
 import {
   formatSegmentRange,
   isLipSyncModel,
-  SKIDMARKS_MODELS,
   SKIDMARKS_SEGMENT_LABEL_META,
   skidmarksModelBadge,
-  skidmarksModelLabel,
   type SkidmarksAnalysisStatus,
-  type SkidmarksCameraAngleId,
   type SkidmarksClipSegment,
-  type SkidmarksModelId,
   type SkidmarksPlateId,
   type SkidmarksSegmentsSource,
   type SkidmarksTranscriptionStatus,
@@ -27,9 +23,8 @@ interface SkidmarksClipTimelineProps {
   transcriptionStatus: SkidmarksTranscriptionStatus;
   transcriptionError?: string;
   transcriptionProvider?: SkidmarksTranscriptionProvider;
-  onSetSegmentModel: (segmentId: string, model: SkidmarksModelId) => void;
   onSetSegmentPlate: (segmentId: string, plateId: SkidmarksPlateId) => void;
-  onSetSegmentCameraAngle: (segmentId: string, cameraAngle: SkidmarksCameraAngleId) => void;
+  onSetSegmentShotPrompt: (segmentId: string, shotPrompt: string) => void;
 }
 
 const STUB_FEEDBACK_TIMEOUT_MS = 3200;
@@ -57,32 +52,20 @@ function SegmentRow({
   segment,
   expanded,
   onToggle,
-  onSetModel,
   onSetPlate,
-  onSetCameraAngle,
+  onSetShotPrompt,
 }: {
   segment: SkidmarksClipSegment;
   expanded: boolean;
   onToggle: () => void;
-  onSetModel: (model: SkidmarksModelId) => void;
   onSetPlate: (plateId: SkidmarksPlateId) => void;
-  onSetCameraAngle: (cameraAngle: SkidmarksCameraAngleId) => void;
+  onSetShotPrompt: (shotPrompt: string) => void;
 }) {
   const meta = SKIDMARKS_SEGMENT_LABEL_META[segment.label];
   const lipSync = isLipSyncModel(segment.model);
 
-  const cycleModel = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const idx = SKIDMARKS_MODELS.findIndex((m) => m.id === segment.model);
-    const next = SKIDMARKS_MODELS[(idx + 1) % SKIDMARKS_MODELS.length];
-    onSetModel(next.id);
-  };
-
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.02]">
-      {/* A `div` (not `button`) so the model pill's own real `<button>` can
-          nest inside it validly — see `SkidmarksMembersModule`'s `MemberRow`
-          for the same pattern. */}
       <div
         role="button"
         tabIndex={0}
@@ -112,12 +95,14 @@ function SegmentRow({
           {meta.label}
         </span>
         <span className="flex-1" />
-        <button
-          type="button"
-          onClick={cycleModel}
-          title="Tap to switch model"
-          aria-label={`Model: ${skidmarksModelLabel(segment.model)}${lipSync ? " (lip-sync)" : ""}. Tap to switch.`}
-          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/15 bg-white/[0.04] px-2.5 py-1 text-[10px] font-medium text-white/70 transition-colors hover:border-rose-400/40 hover:text-rose-200"
+        {/* Read-only now — `model` is fully automatic from the shot
+            prompt + clip type (see `lib/skidmarks.ts`'s
+            `defaultSegmentModel`), so there's nothing to tap here
+            anymore; this is just the current pick, for a glance without
+            expanding the row. */}
+        <span
+          aria-label={`Model: ${skidmarksModelBadge(segment.model)}${lipSync ? " (lip-sync)" : ""}`}
+          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] font-medium text-white/60"
         >
           {lipSync && (
             <span aria-hidden className="text-[9px] leading-none">
@@ -125,7 +110,7 @@ function SegmentRow({
             </span>
           )}
           {skidmarksModelBadge(segment.model)}
-        </button>
+        </span>
       </div>
 
       {expanded && (
@@ -133,8 +118,7 @@ function SegmentRow({
           <SkidmarksPlatesAndCamera
             segment={segment}
             onSetPlate={onSetPlate}
-            onSetCameraAngle={onSetCameraAngle}
-            onSetModel={onSetModel}
+            onSetShotPrompt={onSetShotPrompt}
           />
         </div>
       )}
@@ -188,21 +172,21 @@ function timelineNote(
  * Lyrics/Timing/Ready chips carry that signal instead. A short
  * one-line note (see `timelineNote` above, no file paths) still shows
  * when transcription is unconfigured, sparse, or failed, so a
- * fallback timing isn't presented as if it were real. This is
- * editable structure for Stuart to assign plates/camera/model to
+ * fallback timing isn't presented as if it were real. This is editable
+ * structure for Stuart to assign a location plate / shot prompt to
  * regardless of which source is showing.
  *
  * Each row is individually collapsible (collapsed = time range + label +
- * a compact model badge pill — a 🎤 glyph joins it when the current
- * model is LTX Lip-sync — that cycles to the next model on tap; expanded
- * = the full `SkidmarksPlatesAndCamera` panel for that clip, whose plate
- * cards repeat the same time/duration/model/lip-sync tags so they stay
- * self-describing while scrolled). The whole section can also collapse,
- * same pattern as `ControlPlaneDemo`.
+ * a read-only model badge — a 🎤 glyph joins it when the current model
+ * is LTX Lip-sync; expanded = `SkidmarksPlatesAndCamera`'s big plate-card
+ * row + shot-prompt box for that clip — Stuart's final chrome lock: no
+ * Camera Angles block, no manual Model pills, just plates + one prompt
+ * box). The whole section can also collapse, same pattern as
+ * `ControlPlaneDemo`.
  *
  * **Phase note**: this is the plates/clip UI only. The footer's
  * "Generate Clips" button is a **stub** — tapping it never calls a real
- * Comfy MCP / LTX / Seedance render anywhere in this file or
+ * Comfy MCP / LTX render anywhere in this file or
  * `SkidmarksPlatesAndCamera`; it only shows a "stub, not wired" message,
  * surfaced in an always-mounted `role="status"` + `aria-live` line so
  * assistive tech reaches it too, not just sighted users.
@@ -212,9 +196,8 @@ export function SkidmarksClipTimeline({
   segmentsSource,
   analysisStatus,
   transcriptionStatus,
-  onSetSegmentModel,
   onSetSegmentPlate,
-  onSetSegmentCameraAngle,
+  onSetSegmentShotPrompt,
 }: SkidmarksClipTimelineProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -270,11 +253,8 @@ export function SkidmarksClipTimeline({
                 segment={segment}
                 expanded={expandedIds.has(segment.id)}
                 onToggle={() => toggleExpanded(segment.id)}
-                onSetModel={(model) => onSetSegmentModel(segment.id, model)}
                 onSetPlate={(plateId) => onSetSegmentPlate(segment.id, plateId)}
-                onSetCameraAngle={(cameraAngle) =>
-                  onSetSegmentCameraAngle(segment.id, cameraAngle)
-                }
+                onSetShotPrompt={(shotPrompt) => onSetSegmentShotPrompt(segment.id, shotPrompt)}
               />
             ))}
           </div>

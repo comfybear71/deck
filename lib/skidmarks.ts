@@ -7,11 +7,11 @@
  * brief, get a scripted director-chat thread" build (PR #17/#18): the
  * locked mockups replace that with a concrete, appended-step wizard —
  * pick a project type, choose a band, cast its members, attach an MP3,
- * assign each clip a plate/camera/model — all on **one continuous
- * scroll**, not a chat thread and not separate screens. Nothing here
- * calls a real backend: no Comfy MCP, no Seedance/LTX/ElevenLabs, no
- * `skidmarks.aiglitch.app` Crash Lab, no actual AI image/video
- * generation.
+ * assign each clip a location plate and a plain-language shot prompt —
+ * all on **one continuous scroll**, not a chat thread and not separate
+ * screens. Nothing here calls a real backend: no Comfy MCP, no
+ * Seedance/LTX/ElevenLabs, no `skidmarks.aiglitch.app` Crash Lab, no
+ * actual AI image/video generation.
  *
  * **Mock vs. real, precisely**: band/member *identity* is real —
  * bands and members are hand-seeded or user-created with no invented
@@ -101,7 +101,10 @@
  * on load rather than hanging forever. Also explicitly out of scope for
  * this build: voice, animate, and stitch, and any actual clip rendering
  * ("Generate Clips" is a stub button — see `SkidmarksClipTimeline`) — the
- * flow stops dead after the clip timeline's plate/camera/model tags.
+ * flow stops dead after the clip timeline's plate/shot-prompt tags.
+ * Camera angle and model are **not** manual pills anymore — see
+ * `defaultSegmentModel`'s doc comment for the automatic-from-prompt
+ * rule that replaced them.
  */
 
 import type { VocalAnalysisResult } from "./audioAnalysis";
@@ -292,14 +295,20 @@ export const SKIDMARKS_SEGMENT_LABEL_META: Record<SkidmarksSegmentLabel, Skidmar
   vocal: { label: "Vocal", vocal: true },
 };
 
-/** Model options for a clip's one-tap pill — LTX Lip-sync, H3, Grok,
- * SIRAY Uncensored, Kling. No model here actually renders anything;
- * picking one just tags the segment for whenever a real Comfy MCP / LTX
- * pipeline lands. `badge` is the short form used on the plate cards'
- * compact chip and the timeline row's collapsed pill — `label` (the full
- * name) is only spelled out in the expanded panel's one-tap Model row,
- * where there's room for it. */
-export type SkidmarksModelId = "ltx-lipsync" | "h3" | "grok" | "siray-uncensored" | "kling";
+/** The three models a clip's `model` field can ever hold — Stuart's
+ * locked allowlist: **LTX** (vocal/singing lip-sync), **Grok**
+ * (instrumental clips that read as a "complicated" shot — an artist
+ * actually placed/posed in frame), and **H3** (simpler instrumental
+ * stills). Seedance isn't in this build (later pass, once needed);
+ * Kling is gone outright (no subscription). **There is no manual model
+ * pill anymore** — see `defaultSegmentModel`'s doc comment for the
+ * automatic-from-shot-prompt rule that replaced it; this type/list only
+ * exists now for the plate card overlay's badge/label lookup
+ * (`skidmarksModelBadge`/`skidmarksModelLabel`) and `isLipSyncModel`.
+ * SIRAY is *not* in this list — see `SKIDMARKS_UNCENSORED_STILLS_LABEL`
+ * below for why it still exists in the data layer, just nowhere near
+ * this one. */
+export type SkidmarksModelId = "ltx-lipsync" | "grok" | "h3";
 
 export interface SkidmarksModelMeta {
   id: SkidmarksModelId;
@@ -309,11 +318,25 @@ export interface SkidmarksModelMeta {
 
 export const SKIDMARKS_MODELS: SkidmarksModelMeta[] = [
   { id: "ltx-lipsync", label: "LTX Lip-sync", badge: "LTX" },
-  { id: "h3", label: "H3", badge: "H3" },
   { id: "grok", label: "Grok", badge: "Grok" },
-  { id: "siray-uncensored", label: "SIRAY Uncensored", badge: "SIRAY" },
-  { id: "kling", label: "Kling", badge: "Kling" },
+  { id: "h3", label: "H3", badge: "H3" },
 ];
+
+/** SIRAY isn't gone from the app, it's just no longer a general clip
+ * `model` — it's a single, narrowly-scoped opt-in per segment
+ * (`uncensoredPlateStills` on `SkidmarksClipSegment`, toggled via
+ * `setSkidmarksSegmentUncensoredPlateStills`): **uncensored plate stills
+ * only**. It's never offered for animation, never used by the stub
+ * "Generate Clips" button (that always reads a segment's `model`, which
+ * can only ever be LTX/Grok/H3 — see `SkidmarksModelId`), and never
+ * auto-assigned on a normal vocal/instrumental clip
+ * (`defaultSegmentModel` doesn't know it exists). Per Stuart's final
+ * chrome lock, this toggle isn't wired into the main plating UI at all
+ * in this pass ("only if somehow needed... not in main UI") — the data
+ * layer keeps the capability so it's one setter call away from being
+ * surfaced later, not a main-row pill today. Kling has no equivalent
+ * carve-out — it's removed outright (no subscription). */
+export const SKIDMARKS_UNCENSORED_STILLS_LABEL = "SIRAY \u2014 Uncensored plate stills";
 
 export function skidmarksModelLabel(id: SkidmarksModelId): string {
   return SKIDMARKS_MODELS.find((m) => m.id === id)?.label ?? id;
@@ -324,46 +347,80 @@ export function skidmarksModelBadge(id: SkidmarksModelId): string {
 }
 
 /** LTX is the only model in this lineup that actually does lip-sync —
- * driving the plate card's "Lip-sync" badge and vocalist-position marker
- * (see `SkidmarksPlatesAndCamera`). A vocal segment one-tap-switched to
- * a different model loses that badge, since the badge reflects the
- * *current* pick, not the segment's label. */
+ * drives the plate card overlay's 🎤 glyph (see
+ * `SkidmarksPlatesAndCamera`). Since `model` is now fully automatic
+ * (see `defaultSegmentModel`), this is only ever true for a vocal
+ * segment. */
 export function isLipSyncModel(id: SkidmarksModelId): boolean {
   return id === "ltx-lipsync";
 }
 
-/** Non-vocal segments cycle through these four so a multi-clip band
- * doesn't land every break/lead on the same model by default — still a
- * one-tap switch to anything else. */
-const NON_VOCAL_MODEL_CYCLE: SkidmarksModelId[] = ["h3", "grok", "siray-uncensored", "kling"];
-
-/** The one default-model rule this feature encodes in the UI: singing
- * (verse/bridge) → LTX Lip-sync; instrumental/lead/break → cycle the
- * other four. `nonVocalIndex` is this segment's position among *only*
- * the non-vocal segments so far, so the cycle doesn't skip on vocal runs. */
-export function defaultSegmentModel(
-  label: SkidmarksSegmentLabel,
-  nonVocalIndex: number
-): SkidmarksModelId {
-  if (SKIDMARKS_SEGMENT_LABEL_META[label].vocal) return "ltx-lipsync";
-  return NON_VOCAL_MODEL_CYCLE[nonVocalIndex % NON_VOCAL_MODEL_CYCLE.length];
-}
-
-/** Camera angle options for a clip's expanded plates+camera panel —
- * matches the locked plates mockup's row exactly. Picking one is just a
- * tag on the segment, same "structure for later" spirit as everything
- * else in this section. */
-export type SkidmarksCameraAngleId = "close-up" | "wide" | "low-angle" | "tracking" | "overhead";
-
-export const SKIDMARKS_CAMERA_ANGLES: { id: SkidmarksCameraAngleId; label: string }[] = [
-  { id: "close-up", label: "Close-up" },
-  { id: "wide", label: "Wide" },
-  { id: "low-angle", label: "Low Angle" },
-  { id: "tracking", label: "Tracking" },
-  { id: "overhead", label: "Overhead" },
+/** Words in a shot prompt that read as an artist actually placed/posed
+ * in frame — a plain keyword sniff (not NLP), just enough to tell
+ * "complicated" (Grok) apart from "simpler stills" (H3) per Stuart's
+ * final model-assignment lock. Deliberately short and literal; a false
+ * negative just means an instrumental clip defaults to H3 (the simpler-
+ * stills fallback) instead of Grok, never the reverse. */
+const COMPLEX_PLACEMENT_SHOT_PROMPT_KEYWORDS = [
+  "stand",
+  "standing",
+  "stands",
+  "sit",
+  "sitting",
+  "sits",
+  "pose",
+  "posing",
+  "poses",
+  "walk",
+  "walking",
+  "walks",
+  "dance",
+  "dancing",
+  "artist",
+  "singer",
+  "vocalist",
+  "band",
+  "frontman",
+  "performer",
+  "crowd",
+  "audience",
+  "face",
+  "close-up",
+  "closeup",
 ];
 
-/** Location plate options for a clip's expanded plates panel — matches
+/** Plain keyword check over a segment's `shotPrompt` — used only by
+ * `defaultSegmentModel` to pick Grok over H3 on an instrumental clip,
+ * never to touch a vocal clip's LTX assignment. Case-insensitive,
+ * substring match, nothing smarter. */
+export function shotPromptSuggestsComplexPlacement(shotPrompt: string): boolean {
+  const lower = shotPrompt.toLowerCase();
+  return COMPLEX_PLACEMENT_SHOT_PROMPT_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+/**
+ * Model assignment is fully automatic from the shot prompt + clip type
+ * — Stuart's final chrome lock removed the manual Model pill row
+ * entirely, so this is the *only* place a segment's `model` ever comes
+ * from (recomputed on every `setSkidmarksSegmentShotPrompt` call, not
+ * just at creation — see that function):
+ * - **Vocal** (verse/bridge, or either real path's Vocal) → **LTX
+ *   Lip-sync**, unconditionally.
+ * - **Instrumental** (lead/instrumental, any path) → **Grok** if the
+ *   shot prompt reads as a "complicated" shot — an artist actually
+ *   standing/sitting/posed in frame (see
+ *   `shotPromptSuggestsComplexPlacement`) — otherwise **H3**, the
+ *   simpler-stills default (including while the prompt is still blank).
+ */
+export function defaultSegmentModel(
+  label: SkidmarksSegmentLabel,
+  shotPrompt: string
+): SkidmarksModelId {
+  if (SKIDMARKS_SEGMENT_LABEL_META[label].vocal) return "ltx-lipsync";
+  return shotPromptSuggestsComplexPlacement(shotPrompt) ? "grok" : "h3";
+}
+
+/** Location plate options for a clip's expanded plate-card row — matches
  * the locked plates mockup's five seed plates exactly. There are no real
  * plate photos in this build; `gradient` is a deterministic swatch
  * stand-in, same trick as `coverGradientClass`/`lookGradientClass`. */
@@ -388,13 +445,29 @@ export const SKIDMARKS_LOCATION_PLATES: SkidmarksPlateMeta[] = [
   { id: "crowd-pit", label: "Crowd Pit", gradient: "from-rose-500/70 via-red-900/80 to-black" },
 ];
 
+/** Location-plate default, per the locked Plate Study rule: a clean
+ * stage location either way — **Neon Stage** for vocal clips,
+ * **Warehouse** for instrumental — and **never** Crowd Pit
+ * (`SKIDMARKS_LOCATION_PLATES`' one crowded/chaotic option) as an
+ * auto-pick. Stuart can still tap Crowd Pit himself on the plate-card
+ * row; this only governs what a clip starts on. */
+export function defaultSegmentPlateId(vocal: boolean): SkidmarksPlateId {
+  return vocal ? "neon-stage" : "warehouse";
+}
+
 /**
- * One clip/segment on the timeline: a time range, a label, and the three
- * one-tap tags (model / plate / camera angle) the expanded panel edits.
- * `plateId`/`cameraAngle` start `null` (no plate/angle picked yet);
- * `model` always starts assigned (via `defaultSegmentModel`) since the
- * whole point of the default rule is that Stuart never *has* to think
- * about it before one-tap switching to something else.
+ * One clip/segment on the timeline: a time range, a label, a plain-
+ * language `shotPrompt` ("what happens in this shot"), a location
+ * `plateId`, and an automatically-derived `model` (see
+ * `defaultSegmentModel` — there's no manual model pill anymore), plus
+ * the narrow `uncensoredPlateStills` opt-in (see
+ * `SKIDMARKS_UNCENSORED_STILLS_LABEL`). `model` and `plateId` both start
+ * **auto-assigned** (via `defaultSegmentModel`/`defaultSegmentPlateId`)
+ * — the whole point of the default rules is that Stuart never *has* to
+ * think about either before typing a shot prompt or tapping a different
+ * plate card. `model` keeps recomputing off `shotPrompt` on every edit
+ * (see `setSkidmarksSegmentShotPrompt`); `plateId` is the one field
+ * that's a plain manual pick once tapped (see `setSkidmarksSegmentPlate`).
  */
 export interface SkidmarksClipSegment {
   id: string;
@@ -402,8 +475,22 @@ export interface SkidmarksClipSegment {
   endSec: number;
   label: SkidmarksSegmentLabel;
   model: SkidmarksModelId;
-  plateId: SkidmarksPlateId | null;
-  cameraAngle: SkidmarksCameraAngleId | null;
+  plateId: SkidmarksPlateId;
+  /** Plain-language "what happens in this shot" — the one text field on
+   * the expanded panel (the only control surface besides the plate-card
+   * row), deliberately short (no lyric dumps, no long captions).
+   * Defaults to `""`; drives `defaultSegmentModel`'s Grok-vs-H3 read for
+   * instrumental clips, and is the only thing the plate card's preview
+   * ever reflects — never a hardcoded scene description. */
+  shotPrompt: string;
+  /** SIRAY's narrow carve-out: **uncensored plate stills only** — never
+   * read by anything animation-related (the stub "Generate Clips"
+   * button only ever looks at `model`, which can't be SIRAY — see
+   * `SKIDMARKS_UNCENSORED_STILLS_LABEL`) and never auto-assigned.
+   * Defaults `false`; toggled via
+   * `setSkidmarksSegmentUncensoredPlateStills`. Not wired into the main
+   * plating UI in this pass — see that constant's doc comment. */
+  uncensoredPlateStills: boolean;
 }
 
 /** Fallback total (3:30) used to seed segments before the browser's real
@@ -413,15 +500,41 @@ export interface SkidmarksClipSegment {
  * rebuilds off the real duration the first time it resolves. */
 const DEMO_SEGMENT_FALLBACK_DURATION_SEC = 210;
 
+/** Shared segment builder — mints a fresh `SkidmarksClipSegment` with
+ * every default field (`model`/`plateId`/`shotPrompt`/
+ * `uncensoredPlateStills`) set per the locked Plate Study rules, off
+ * just a time range + label. Used by both `buildDemoSegments` (the seed
+ * cadence) and `buildSegmentsFromVocalRanges` (real transcription/
+ * heuristic output) so neither path can drift from the other's
+ * defaults. */
+function buildDefaultSegment(
+  startSec: number,
+  endSec: number,
+  label: SkidmarksSegmentLabel
+): SkidmarksClipSegment {
+  const vocal = SKIDMARKS_SEGMENT_LABEL_META[label].vocal;
+  const shotPrompt = "";
+  return {
+    id: generateId("segment"),
+    startSec,
+    endSec,
+    label,
+    model: defaultSegmentModel(label, shotPrompt),
+    plateId: defaultSegmentPlateId(vocal),
+    shotPrompt,
+    uncensoredPlateStills: false,
+  };
+}
+
 /**
  * Deterministic verse/bridge/lead/instrumental cadence, scaled to
  * whatever total duration is passed in. **This is seed/demo structure,
  * not real lyrics timing or singing detection** — see the module doc
  * comment and the honesty note the timeline UI renders alongside it.
- * It exists so Stuart has an editable clip list to assign plates/camera/
- * model to *today*, in the same shape a future real STT + singing-detect
- * pass can populate once that lands (see the README's "Skidmarks node"
- * section).
+ * It exists so Stuart has an editable clip list to assign a plate/shot
+ * prompt to *today*, in the same shape a future real STT + singing-
+ * detect pass can populate once that lands (see the README's
+ * "Skidmarks node" section).
  */
 export function buildDemoSegments(totalSec: number): SkidmarksClipSegment[] {
   const pattern: { label: SkidmarksSegmentLabel; frac: number }[] = [
@@ -434,23 +547,11 @@ export function buildDemoSegments(totalSec: number): SkidmarksClipSegment[] {
     { label: "verse", frac: 0.1 },
   ];
   let cursor = 0;
-  let nonVocalIndex = 0;
   return pattern.map((step, i) => {
     const startSec = cursor;
     const endSec = i === pattern.length - 1 ? totalSec : cursor + step.frac * totalSec;
     cursor = endSec;
-    const vocal = SKIDMARKS_SEGMENT_LABEL_META[step.label].vocal;
-    const model = defaultSegmentModel(step.label, nonVocalIndex);
-    if (!vocal) nonVocalIndex += 1;
-    return {
-      id: generateId("segment"),
-      startSec,
-      endSec,
-      label: step.label,
-      model,
-      plateId: null,
-      cameraAngle: null,
-    };
+    return buildDefaultSegment(startSec, endSec, step.label);
   });
 }
 
@@ -725,6 +826,48 @@ export function createMp3Attachment(
   };
 }
 
+/**
+ * Cleans up one rehydrated segment from `localStorage` against the
+ * current `SkidmarksClipSegment` shape:
+ * - `model` — **always recomputed** via `defaultSegmentModel`, never
+ *   read from disk. There's no manual model pill anymore (Stuart's
+ *   final chrome lock), so there's nothing to preserve — this also
+ *   means a stored legacy id (SIRAY/Kling/Seedance/anything else long
+ *   dropped from `SKIDMARKS_MODELS`) can never leak back into the UI.
+ * - `plateId` — used to start `null` ("not picked yet"); now it's
+ *   always auto-assigned, so a stored `null` (or a missing field
+ *   entirely) backfills via `defaultSegmentPlateId`, and any id no
+ *   longer in `SKIDMARKS_LOCATION_PLATES` falls back the same way.
+ * - `shotPrompt` — missing/non-string backfills to `""`.
+ * - `uncensoredPlateStills` — missing/non-boolean backfills to `false`.
+ *
+ * Older stored fields this segment shape no longer has (a legacy
+ * `cameraAngle`/`cameraAngleAuto`/`plateSubject` from an earlier pass)
+ * are simply dropped — this function builds a fresh object rather than
+ * spreading `raw`, so they don't linger in the next `persist()` write.
+ */
+export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksClipSegment {
+  const r = raw as Partial<SkidmarksClipSegment> & Record<string, unknown>;
+  const vocal = SKIDMARKS_SEGMENT_LABEL_META[raw.label]?.vocal ?? false;
+  const shotPrompt = typeof r.shotPrompt === "string" ? r.shotPrompt : "";
+  const validPlate =
+    typeof r.plateId === "string" && SKIDMARKS_LOCATION_PLATES.some((p) => p.id === r.plateId);
+  const plateId: SkidmarksPlateId = validPlate
+    ? (r.plateId as SkidmarksPlateId)
+    : defaultSegmentPlateId(vocal);
+  const uncensoredPlateStills = typeof r.uncensoredPlateStills === "boolean" ? r.uncensoredPlateStills : false;
+  return {
+    id: raw.id,
+    startSec: raw.startSec,
+    endSec: raw.endSec,
+    label: raw.label,
+    model: defaultSegmentModel(raw.label, shotPrompt),
+    plateId,
+    shotPrompt,
+    uncensoredPlateStills,
+  };
+}
+
 function normalizeState(parsed: unknown): SkidmarksState {
   const p = (parsed ?? {}) as Partial<SkidmarksState>;
   const removedSeedBandIds = Array.isArray(p.removedSeedBandIds)
@@ -748,10 +891,17 @@ function normalizeState(parsed: unknown): SkidmarksState {
   // Sessions saved before the clip-timeline feature shipped won't have
   // `segments` yet — backfill once, off whatever duration is already known.
   const hasSegments = !!storedMp3 && Array.isArray(storedMp3.segments);
+  // Every rehydrated segment also runs through `normalizeSkidmarksSegment`
+  // — recomputes `model` fresh (there's no manual model pill to preserve
+  // anymore, so a legacy SIRAY/Kling/Seedance id can't leak back in) and
+  // backfills any field that didn't exist yet when this session was
+  // saved (`shotPrompt`, `uncensoredPlateStills`, or a still-`null`
+  // `plateId` from before it became always-assigned).
   const segments = storedMp3
-    ? hasSegments
-      ? storedMp3.segments
-      : buildDemoSegments(storedMp3.durationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC)
+    ? (hasSegments
+        ? storedMp3.segments
+        : buildDemoSegments(storedMp3.durationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC)
+      ).map(normalizeSkidmarksSegment)
     : [];
   const segmentsSource: SkidmarksSegmentsSource =
     storedMp3?.segmentsSource === "transcription"
@@ -1078,29 +1228,17 @@ export function setSkidmarksMp3Duration(durationSec: number): void {
   });
 }
 
-/** Builds the segment list + advancing non-vocal model cycle shared by
- * `applySkidmarksAnalysisResult` and `applySkidmarksTranscriptionResult`
- * — both turn a plain "is this vocal" time-range list into tagged
- * `SkidmarksClipSegment`s the same way, they just get that time-range
- * list from different real sources. */
+/** Builds the segment list shared by `applySkidmarksAnalysisResult` and
+ * `applySkidmarksTranscriptionResult` — both turn a plain "is this
+ * vocal" time-range list into tagged `SkidmarksClipSegment`s the same
+ * way (via `buildDefaultSegment`), they just get that time-range list
+ * from different real sources. */
 function buildSegmentsFromVocalRanges(
   ranges: { startSec: number; endSec: number; vocal: boolean }[]
 ): SkidmarksClipSegment[] {
-  let nonVocalIndex = 0;
-  return ranges.map((seg) => {
-    const label: SkidmarksSegmentLabel = seg.vocal ? "vocal" : "instrumental";
-    const model = defaultSegmentModel(label, nonVocalIndex);
-    if (!seg.vocal) nonVocalIndex += 1;
-    return {
-      id: generateId("segment"),
-      startSec: seg.startSec,
-      endSec: seg.endSec,
-      label,
-      model,
-      plateId: null,
-      cameraAngle: null,
-    };
-  });
+  return ranges.map((seg) =>
+    buildDefaultSegment(seg.startSec, seg.endSec, seg.vocal ? "vocal" : "instrumental")
+  );
 }
 
 /**
@@ -1345,29 +1483,39 @@ function updateSkidmarksSegment(
   });
 }
 
-/** One-tap model switch for a clip — no confirmation, no picker modal,
- * per the "easy one-tap switch, no heavy thinking" product rule. */
-export function setSkidmarksSegmentModel(segmentId: string, model: SkidmarksModelId): void {
-  updateSkidmarksSegment(segmentId, (s) => ({ ...s, model }));
-}
-
-/** Tapping an already-selected plate clears it (single-select with an
- * off state), same as re-tapping the active camera angle below. */
+/** Location plate pick — the one tap-to-select control on the expanded
+ * panel's plate-card row. Plates are always-assigned (never `null`,
+ * since a card is always showing *something*), so this is a plain
+ * single-select with no "tap again to clear" off state. */
 export function setSkidmarksSegmentPlate(segmentId: string, plateId: SkidmarksPlateId): void {
+  updateSkidmarksSegment(segmentId, (s) => ({ ...s, plateId }));
+}
+
+/** The one text field on the expanded panel — "what happens in this
+ * shot", deliberately plain-language and short (no lyric dumps, no long
+ * captions) — and, per Stuart's final chrome lock, the *only* input that
+ * drives `model`: every keystroke re-runs `defaultSegmentModel` against
+ * the segment's label and the new prompt text, so an instrumental clip
+ * can flip between Grok and H3 live as the prompt reads as more or less
+ * "complicated" (see `shotPromptSuggestsComplexPlacement`). There is no
+ * manual model pill to preserve/override — this is the whole mechanism. */
+export function setSkidmarksSegmentShotPrompt(segmentId: string, shotPrompt: string): void {
   updateSkidmarksSegment(segmentId, (s) => ({
     ...s,
-    plateId: s.plateId === plateId ? null : plateId,
+    shotPrompt,
+    model: defaultSegmentModel(s.label, shotPrompt),
   }));
 }
 
-export function setSkidmarksSegmentCameraAngle(
+/** SIRAY's one narrow toggle — **uncensored plate stills only**, never
+ * read by `model`/Generate Clips (see `SKIDMARKS_UNCENSORED_STILLS_LABEL`).
+ * Exists so the capability is one call away, but nothing in the main
+ * plating UI calls it in this pass — see that constant's doc comment. */
+export function setSkidmarksSegmentUncensoredPlateStills(
   segmentId: string,
-  cameraAngle: SkidmarksCameraAngleId
+  uncensoredPlateStills: boolean
 ): void {
-  updateSkidmarksSegment(segmentId, (s) => ({
-    ...s,
-    cameraAngle: s.cameraAngle === cameraAngle ? null : cameraAngle,
-  }));
+  updateSkidmarksSegment(segmentId, (s) => ({ ...s, uncensoredPlateStills }));
 }
 
 export function getActiveSkidmarksBand(

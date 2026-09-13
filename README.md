@@ -94,7 +94,7 @@ total.
   / `SkidmarksMp3Card` / `SkidmarksChecklistChips` / `SkidmarksClipTimeline`
   / `SkidmarksPlatesAndCamera`) — the Skidmarks vibe-director node's face
   and its locked, one-scroll Music-video flow through the clip timeline's
-  plate/camera/model tags — see "Skidmarks node (vibe director)" below),
+  plate + shot-prompt tags — see "Skidmarks node (vibe director)" below),
   `ActionChips` /
   `AskGrokPanel` (generic detail-sheet primitives — see "Ask Grok (v0
   stub)" below).
@@ -605,7 +605,7 @@ that — it's a **front hand for that convoluted backend**. This build
 replaces the earlier free-text "type a vibe brief, get a scripted
 director-chat thread" version with Stuart's **locked Music-video flow**:
 a concrete, appended-step wizard (pick a project type → choose a band →
-cast its members → attach an MP3 → tag each clip's plate/camera/model)
+cast its members → attach an MP3 → tag each clip's plate + shot prompt)
 rendered as **one continuous scroll**, never a chat thread and never a
 separate screen. It's locked through the clip timeline's plate/camera/
 model tags — voice, animate, and stitch are explicitly out of scope for
@@ -1180,50 +1180,59 @@ now (see "Explicitly out of scope" below).
      **Lead**/**Instrumental**) as a fallback, flagged by the short
      `timelineNote` line above whenever it's showing — see that
      function in `SkidmarksClipTimeline.tsx` for the exact priority
-     logic. Each clip is its own **collapsible row**: collapsed
-     shows the time range (e.g. "0:15–0:45"), its label
-     pill, and a compact **model badge pill** (e.g. "LTX", "H3" — a 🎤
-     glyph joins it when the current model is LTX Lip-sync) that cycles
-     to the next model on tap (no picker, no confirmation — "one tap, no
-     heavy thinking"); expanded appends that clip's
-     `SkidmarksPlatesAndCamera` panel:
-     - A horizontal scroll of five seed **location plates** (Neon Stage,
-       Rainy Alley, Desert Highway, Warehouse, Crowd Pit — deterministic
-       gradient swatches, no real plate photos). Each plate **card**
-       repeats the clip's own time range, duration ("30s"), and current
-       model badge in a footer strip, so scrolling through plates never
-       loses that context; a singing clip's cards also show a small
-       **"Lip-sync"** badge and a decorative vocalist-position dot on the
-       plate (a fixed seed placement — not real pose/vision detection).
-     - A wrapped row of five **camera angles** (Close-up, Wide, Low
-       Angle, Tracking, Overhead), captioned as intentionally light: one
-       angle per clip for now, with real Seedance/Framer-style
-       multi-camera coverage from a single still called out as a later
-       upgrade, not crammed in here.
-     - The full **Model** row — **LTX Lip-sync, H3, Grok, SIRAY
-       Uncensored, Kling** — for an explicit pick instead of cycling,
-       captioned with the same default rule below.
+     logic. Each clip is its own **collapsible row**: collapsed shows
+     the time range (e.g. "0:15–0:45"), its label pill, and a
+     **read-only** model badge (e.g. "LTX", "H3" — a 🎤 glyph joins it
+     when the current model is LTX Lip-sync); expanded appends that
+     clip's `SkidmarksPlatesAndCamera` panel. **Stuart's final chrome
+     lock** stripped this panel down to exactly two things — no Camera
+     Angles block, no manual Model pill row, nothing else:
+     - **Large location-plate cards** (Neon Stage, Rainy Alley, Desert
+       Highway, Warehouse, Crowd Pit — deterministic gradient swatches,
+       no real plate photos) in a horizontal scroll, sized like an
+       actual still rather than a thumbnail. Each card overlays the
+       clip's own **time range top-left** and **model badge top-right**
+       directly on the image (a 🎤 glyph joins the badge when the model
+       is LTX Lip-sync) — no metadata text stacked underneath. A card
+       also shows the clip's own shot prompt as its caption, so
+       scrolling between location options never loses "what's supposed
+       to be happening here." Tapping a card is a plain single-select
+       (no off state — a card is always showing *something*).
+     - **One shot-prompt text field** — "what happens in this shot",
+       deliberately short (no lyric dumps, no long captions, and never
+       a hardcoded scene description — this field is entirely
+       Stuart-authored). This is the *only* remaining control surface
+       besides the plate cards.
 
-     Plates and camera angles are single-select with an off state
-     (tapping the active one again clears it); the model is always
-     assigned to something (`defaultSegmentModel`) so there's nothing to
-     clear. **Default model rule**: vocal segments (verse/bridge, or
-     either real path's Vocal — transcription or the energy heuristic)
-     default to **LTX Lip-sync**; non-vocal ones (lead/instrumental, any
-     path) cycle through H3 / Grok / SIRAY Uncensored / Kling — still a
-     one-tap switch to anything else,
-     and switching a vocal clip *off* LTX drops its Lip-sync badge (the
-     badge reflects the current pick, not the label). A stub **Generate
-     Clips** button closes the section — tapping it never calls a real
-     Comfy MCP / LTX pipeline; it only shows a "Stub only — no Comfy MCP
-     / LTX render kicked off" message (`SkidmarksClipTimeline`'s local
-     `stubMessage` state, same pattern as `PropfolioDetailSheet`'s chip
-     feedback line, but always mounted with `role="status"`/
-     `aria-live="polite"` so it reaches the accessibility tree/screen
-     readers too, not just sighted users). **Phase note**: this whole
-     step is UI/interaction only — picking a plate/angle/model is real
-     (persists to `localStorage`, see below), but no clip ever actually
-     renders.
+     **Model assignment is fully automatic from the shot prompt + clip
+     type** (`defaultSegmentModel` in `lib/skidmarks.ts`) — there is no
+     manual model pill anywhere in this UI:
+     - **Vocal** (verse/bridge, or either real path's Vocal) →
+       **LTX Lip-sync**, unconditionally.
+     - **Instrumental** (lead/instrumental, any path) → **Grok** once
+       the shot prompt reads as a "complicated" shot — an artist
+       actually standing/sitting/posed in frame (a short keyword sniff,
+       see `shotPromptSuggestsComplexPlacement`) — otherwise **H3**, the
+       simpler-stills default (including while the prompt is still
+       blank). Recomputed live on every keystroke in the shot-prompt
+       field (`setSkidmarksSegmentShotPrompt`), not just at creation.
+     - **SIRAY** and **Kling** are not in this allowlist at all — SIRAY
+       survives only as a narrow, not-wired-into-this-UI data-layer
+       opt-in (`uncensoredPlateStills`, "uncensored plate stills only" —
+       never read by `model`/Generate Clips); Kling has no equivalent
+       carve-out and is removed outright (no subscription). Seedance
+       isn't in this build yet either (later pass).
+
+     A stub **Generate Clips** button closes the section — tapping it
+     never calls a real Comfy MCP / LTX pipeline; it only shows a
+     "Stub only — no Comfy MCP / LTX render kicked off" message
+     (`SkidmarksClipTimeline`'s local `stubMessage` state, same pattern
+     as `PropfolioDetailSheet`'s chip feedback line, but always mounted
+     with `role="status"`/`aria-live="polite"` so it reaches the
+     accessibility tree/screen readers too, not just sighted users).
+     **Phase note**: this whole step is UI/interaction only — picking a
+     plate or typing a shot prompt is real (persists to `localStorage`,
+     see below), but no plate still or clip ever actually renders.
   - The sheet's backdrop is a darker/more opaque scrim
      (`bg-black/90 backdrop-blur-md`, vs. the generic `GraphNodeSheet`'s
      `bg-black/70`) — this sheet opens tall and near the top of the
@@ -1312,7 +1321,7 @@ now (see "Explicitly out of scope" below).
   band/member deletions (`removedSeedBandIds`), wizard progress, the
   finished transcription/analysis results (segments + `segmentsSource`/
   `transcriptionStatus`/`analysisStatus`, and `words` if transcription
-  succeeded), and each clip's plate/camera/model tags persist; the
+  succeeded), and each clip's plate + shot-prompt tags persist; the
   attached audio `File` itself does not (see above) — which means a
   transcription or analysis request that's still in flight when the tab
   closes can never resume after a reload (no file left to re-send/
@@ -1363,7 +1372,7 @@ now (see "Explicitly out of scope" below).
   call, passed down as a prop, not a second independent subscription
   duplicating state).
 - **Explicitly out of scope for this build**: voice, animate, and stitch
-  (the flow stops dead after the clip timeline's plate/camera/model
+  (the flow stops dead after the clip timeline's plate + shot-prompt
   tags); any real Comfy MCP, Seedance, or LTX call (the only real
   ElevenLabs call this build makes is Scribe speech-to-text — see step 6
   above; ElevenLabs voice/generation features are still unwired); any

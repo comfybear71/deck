@@ -4,10 +4,18 @@ import {
   applySkidmarksTranscriptionResult,
   attachSkidmarksMp3,
   createMp3Attachment,
+  defaultSegmentModel,
   getSkidmarksSnapshot,
   markSkidmarksAnalysisFailed,
+  normalizeSkidmarksSegment,
+  SKIDMARKS_LOCATION_PLATES,
+  SKIDMARKS_MODELS,
   selectSkidmarksBand,
+  setSkidmarksSegmentPlate,
+  setSkidmarksSegmentShotPrompt,
+  shotPromptSuggestsComplexPlacement,
   skidmarksChecklistState,
+  type SkidmarksClipSegment,
 } from "./skidmarks";
 import type { SkidmarksTranscribedWord } from "./transcription";
 
@@ -161,5 +169,154 @@ describe("applySkidmarksTranscriptionResult", () => {
     const checklist = skidmarksChecklistState(mp3 ?? null);
     expect(checklist.lyrics).toBe("stub");
     expect(checklist.ready).not.toBe("done");
+  });
+});
+
+/**
+ * Model-allowlist + automatic-model-assignment tests — Stuart's final
+ * chrome lock: LTX/Grok/H3 only (no SIRAY/Kling/Seedance pill), and
+ * `model` is derived entirely from a segment's label + `shotPrompt`,
+ * never a manual pick.
+ */
+describe("Stuart's locked model allowlist", () => {
+  it("only ever exposes LTX Lip-sync, Grok, and H3 — no SIRAY, Kling, or Seedance", () => {
+    expect(SKIDMARKS_MODELS.map((m) => m.id).sort()).toEqual(["grok", "h3", "ltx-lipsync"]);
+  });
+});
+
+describe("defaultSegmentModel", () => {
+  it("always assigns LTX to a vocal segment, regardless of shot prompt content", () => {
+    expect(defaultSegmentModel("vocal", "")).toBe("ltx-lipsync");
+    expect(defaultSegmentModel("verse", "the artist standing centre stage, posing")).toBe("ltx-lipsync");
+    expect(defaultSegmentModel("bridge", "walking through a dancing crowd")).toBe("ltx-lipsync");
+  });
+
+  it("defaults an instrumental segment to H3 while the shot prompt is blank or a simple B-roll still", () => {
+    expect(defaultSegmentModel("instrumental", "")).toBe("h3");
+    expect(defaultSegmentModel("lead", "a red door in an empty hallway")).toBe("h3");
+  });
+
+  it("assigns Grok to an instrumental segment once the shot prompt reads as complex artist placement", () => {
+    expect(defaultSegmentModel("instrumental", "the singer standing centre stage")).toBe("grok");
+    expect(defaultSegmentModel("lead", "the band walking through the crowd")).toBe("grok");
+  });
+});
+
+describe("shotPromptSuggestsComplexPlacement", () => {
+  it("is a case-insensitive substring match against a short keyword list", () => {
+    expect(shotPromptSuggestsComplexPlacement("Artist SITTING on an amp")).toBe(true);
+    expect(shotPromptSuggestsComplexPlacement("a rusty door swings open in the wind")).toBe(false);
+  });
+});
+
+describe("setSkidmarksSegmentShotPrompt", () => {
+  beforeEach(() => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("track.mp3", 120));
+  });
+
+  it("keeps a vocal segment on LTX no matter what the shot prompt says", () => {
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    const vocalSegment = mp3.segments.find((s) => s.label === "verse" || s.label === "bridge")!;
+
+    setSkidmarksSegmentShotPrompt(vocalSegment.id, "walking through a crowd, dancing");
+
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === vocalSegment.id)!;
+    expect(updated.model).toBe("ltx-lipsync");
+    expect(updated.shotPrompt).toBe("walking through a crowd, dancing");
+  });
+
+  it("flips an instrumental segment between H3 and Grok live as the prompt gets more or less complicated", () => {
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    const instrumentalSegment = mp3.segments.find((s) => s.label === "instrumental" || s.label === "lead")!;
+    expect(instrumentalSegment.model).toBe("h3"); // blank shot prompt at creation
+
+    setSkidmarksSegmentShotPrompt(instrumentalSegment.id, "the artist standing alone under a spotlight");
+    let updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === instrumentalSegment.id)!;
+    expect(updated.model).toBe("grok");
+
+    setSkidmarksSegmentShotPrompt(instrumentalSegment.id, "an empty street at dawn");
+    updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === instrumentalSegment.id)!;
+    expect(updated.model).toBe("h3");
+  });
+});
+
+describe("setSkidmarksSegmentPlate", () => {
+  beforeEach(() => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("track.mp3", 120));
+  });
+
+  it("is a plain single-select — tapping the same plate again no longer clears it", () => {
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    const segment = mp3.segments[0];
+
+    setSkidmarksSegmentPlate(segment.id, "crowd-pit");
+    let updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.plateId).toBe("crowd-pit");
+
+    setSkidmarksSegmentPlate(segment.id, "crowd-pit");
+    updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.plateId).toBe("crowd-pit");
+  });
+});
+
+describe("normalizeSkidmarksSegment", () => {
+  it("never trusts a stored model — recomputes it, so a legacy SIRAY/Kling id can't leak back in", () => {
+    const legacy = {
+      id: "seg-1",
+      startSec: 0,
+      endSec: 30,
+      label: "instrumental",
+      model: "kling", // pre-lock id, no longer valid
+      plateId: "crowd-pit",
+      cameraAngle: "wide", // field removed entirely in this pass
+      cameraAngleAuto: false, // field removed entirely in this pass
+      plateSubject: "cast", // field removed entirely in this pass
+    } as unknown as SkidmarksClipSegment;
+
+    const normalized = normalizeSkidmarksSegment(legacy);
+
+    expect(normalized.model).toBe("h3"); // instrumental, blank shot prompt → H3
+    expect(normalized.plateId).toBe("crowd-pit"); // still a valid plate, passes through
+    expect(normalized.shotPrompt).toBe("");
+    expect(normalized.uncensoredPlateStills).toBe(false);
+    expect(normalized).not.toHaveProperty("cameraAngle");
+    expect(normalized).not.toHaveProperty("cameraAngleAuto");
+    expect(normalized).not.toHaveProperty("plateSubject");
+  });
+
+  it("falls back to the vocal/instrumental default plate when a stored plate id no longer exists", () => {
+    const legacy = {
+      id: "seg-2",
+      startSec: 0,
+      endSec: 30,
+      label: "vocal",
+      model: "siray-uncensored",
+      plateId: "some-removed-plate-id",
+    } as unknown as SkidmarksClipSegment;
+
+    const normalized = normalizeSkidmarksSegment(legacy);
+
+    expect(normalized.model).toBe("ltx-lipsync");
+    expect(normalized.plateId).toBe("neon-stage");
+    expect(SKIDMARKS_LOCATION_PLATES.some((p) => p.id === normalized.plateId)).toBe(true);
+  });
+
+  it("preserves a real shot prompt and re-derives model off it rather than trusting the stored model", () => {
+    const legacy = {
+      id: "seg-3",
+      startSec: 0,
+      endSec: 30,
+      label: "instrumental",
+      model: "h3",
+      plateId: "warehouse",
+      shotPrompt: "the band standing together, posing",
+    } as unknown as SkidmarksClipSegment;
+
+    const normalized = normalizeSkidmarksSegment(legacy);
+
+    expect(normalized.shotPrompt).toBe("the band standing together, posing");
+    expect(normalized.model).toBe("grok");
   });
 });
