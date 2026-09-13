@@ -1,18 +1,45 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildClipGenerationRequest,
+  computePlateDurationSec,
   estimateClipRenderCostUsd,
   generateSkidmarksClip,
-  MAX_CLIP_REFERENCE_IMAGES,
+  MAX_CLIP_DURATION_SEC,
+  MIN_CLIP_DURATION_SEC,
   MAX_MOTION_PROMPT_LENGTH,
 } from "./clipGeneration";
+
+describe("computePlateDurationSec", () => {
+  it("matches the task's own 40s / 3 plates \u2248 13 + 13 + 14 example exactly", () => {
+    expect(computePlateDurationSec(40, 3, 0)).toBe(13);
+    expect(computePlateDurationSec(40, 3, 1)).toBe(13);
+    expect(computePlateDurationSec(40, 3, 2)).toBe(14);
+  });
+
+  it("gives the whole clip's length to a single plate, clamped into range", () => {
+    expect(computePlateDurationSec(10, 1, 0)).toBe(10);
+  });
+
+  it("clamps a too-short per-plate share up to MIN_CLIP_DURATION_SEC", () => {
+    expect(computePlateDurationSec(6, 3, 0)).toBe(MIN_CLIP_DURATION_SEC);
+  });
+
+  it("clamps a too-long per-plate share down to MAX_CLIP_DURATION_SEC", () => {
+    expect(computePlateDurationSec(60, 1, 0)).toBe(MAX_CLIP_DURATION_SEC);
+  });
+
+  it("falls back to MIN_CLIP_DURATION_SEC for a zero/invalid plate count rather than dividing by zero", () => {
+    expect(computePlateDurationSec(40, 0, 0)).toBe(MIN_CLIP_DURATION_SEC);
+  });
+});
 
 describe("buildClipGenerationRequest", () => {
   it("always leads with the clip's own shot prompt, verbatim", () => {
     const { prompt } = buildClipGenerationRequest({
       shotPrompt: "a door creaks open in an empty hallway",
       bandName: "Jack Ash",
-      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      plateStillDataUrl: "data:image/jpeg;base64,door",
+      durationSec: 5,
     });
     expect(prompt.startsWith("a door creaks open in an empty hallway")).toBe(true);
   });
@@ -21,72 +48,30 @@ describe("buildClipGenerationRequest", () => {
     const { prompt, shotPrompt } = buildClipGenerationRequest({
       shotPrompt: "  door, then keyhole, then Jack seated  ",
       bandName: "Jack Ash",
-      plateStillDataUrls: [
-        "data:image/jpeg;base64,door",
-        "data:image/jpeg;base64,keyhole",
-        "data:image/jpeg;base64,jack",
-      ],
+      plateStillDataUrl: "data:image/jpeg;base64,door",
+      durationSec: 5,
     });
     expect(shotPrompt).toBe("door, then keyhole, then Jack seated");
     expect(prompt.length).toBeGreaterThan(shotPrompt.length);
     expect(prompt).not.toBe(shotPrompt);
   });
 
-  it("uses the single-image push-in motion hint for exactly one plate still", () => {
-    const { prompt, referenceImageDataUrls } = buildClipGenerationRequest({
+  it("always sends exactly the one selected plate's still as the reference image", () => {
+    const { referenceImageDataUrls } = buildClipGenerationRequest({
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
-      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      plateStillDataUrl: "data:image/jpeg;base64,door",
+      durationSec: 5,
     });
     expect(referenceImageDataUrls).toEqual(["data:image/jpeg;base64,door"]);
-    expect(prompt).toContain("Slow cinematic push-in zoom");
-    expect(prompt).not.toContain("Continuous, unbroken");
   });
 
-  it("uses the multi-plate continuity motion hint for two or more plate stills, in strip order", () => {
-    const { prompt, referenceImageDataUrls } = buildClipGenerationRequest({
-      shotPrompt: "door, then keyhole, then Jack seated",
-      bandName: "Jack Ash",
-      plateStillDataUrls: [
-        "data:image/jpeg;base64,door",
-        "data:image/jpeg;base64,keyhole",
-        "data:image/jpeg;base64,jack",
-      ],
-    });
-    expect(referenceImageDataUrls).toEqual([
-      "data:image/jpeg;base64,door",
-      "data:image/jpeg;base64,keyhole",
-      "data:image/jpeg;base64,jack",
-    ]);
-    expect(prompt).toContain("Continuous, unbroken slow cinematic push-in zoom");
-    expect(prompt).toContain("from the first reference image to the last, in order");
-  });
-
-  it("caps reference images at MAX_CLIP_REFERENCE_IMAGES, keeping the first ones in order", () => {
-    const { referenceImageDataUrls } = buildClipGenerationRequest({
-      shotPrompt: "a long sequence",
-      bandName: "Jack Ash",
-      plateStillDataUrls: [
-        "data:image/jpeg;base64,1",
-        "data:image/jpeg;base64,2",
-        "data:image/jpeg;base64,3",
-        "data:image/jpeg;base64,4",
-        "data:image/jpeg;base64,5",
-      ],
-    });
-    expect(referenceImageDataUrls).toHaveLength(MAX_CLIP_REFERENCE_IMAGES);
-    expect(referenceImageDataUrls).toEqual([
-      "data:image/jpeg;base64,1",
-      "data:image/jpeg;base64,2",
-      "data:image/jpeg;base64,3",
-    ]);
-  });
-
-  it("uses the automatic push-in/zoom motion hint when no motionPrompt is given (unchanged default behavior)", () => {
+  it("uses the automatic single-image push-in motion hint when no motionPrompt is given", () => {
     const { prompt } = buildClipGenerationRequest({
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
-      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      plateStillDataUrl: "data:image/jpeg;base64,door",
+      durationSec: 5,
     });
     expect(prompt).toContain("Slow cinematic push-in zoom");
   });
@@ -95,7 +80,8 @@ describe("buildClipGenerationRequest", () => {
     const { prompt } = buildClipGenerationRequest({
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
-      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      plateStillDataUrl: "data:image/jpeg;base64,door",
+      durationSec: 5,
       motionPrompt: "slow pan left, then hold on the door",
     });
     expect(prompt).toContain("slow pan left, then hold on the door");
@@ -106,7 +92,8 @@ describe("buildClipGenerationRequest", () => {
     const { prompt } = buildClipGenerationRequest({
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
-      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      plateStillDataUrl: "data:image/jpeg;base64,door",
+      durationSec: 5,
       motionPrompt: "slow zoom into keyhole,\nmild pulse on door cracks",
     });
     expect(prompt).toContain("slow zoom into keyhole,\nmild pulse on door cracks");
@@ -116,7 +103,8 @@ describe("buildClipGenerationRequest", () => {
     const { prompt } = buildClipGenerationRequest({
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
-      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      plateStillDataUrl: "data:image/jpeg;base64,door",
+      durationSec: 5,
       motionPrompt: "   ",
     });
     expect(prompt).toContain("Slow cinematic push-in zoom");
@@ -128,24 +116,51 @@ describe("buildClipGenerationRequest", () => {
     const { prompt } = buildClipGenerationRequest({
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
-      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      plateStillDataUrl: "data:image/jpeg;base64,door",
+      durationSec: 5,
       motionPrompt: long,
     });
     expect(prompt).toContain(long.slice(0, MAX_MOTION_PROMPT_LENGTH));
     expect(prompt).not.toContain(long);
   });
 
-  it("passes the persistence fields (segmentId/clipIndex/startSec/endSec) straight through when given", () => {
+  it("clamps durationSec into [MIN_CLIP_DURATION_SEC, MAX_CLIP_DURATION_SEC]", () => {
+    expect(
+      buildClipGenerationRequest({
+        shotPrompt: "x",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,x",
+        durationSec: 1,
+      }).durationSec
+    ).toBe(MIN_CLIP_DURATION_SEC);
+    expect(
+      buildClipGenerationRequest({
+        shotPrompt: "x",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,x",
+        durationSec: 99,
+      }).durationSec
+    ).toBe(MAX_CLIP_DURATION_SEC);
+  });
+
+  it("passes the persistence fields (segmentId/plateId/plateIndex/plateCount/clipIndex/startSec/endSec) straight through when given", () => {
     const request = buildClipGenerationRequest({
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
-      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      plateStillDataUrl: "data:image/jpeg;base64,door",
+      durationSec: 13,
       segmentId: "seg-1",
+      plateId: "plate-1",
+      plateIndex: 0,
+      plateCount: 3,
       clipIndex: 1,
       startSec: 0,
       endSec: 40,
     });
     expect(request.segmentId).toBe("seg-1");
+    expect(request.plateId).toBe("plate-1");
+    expect(request.plateIndex).toBe(0);
+    expect(request.plateCount).toBe(3);
     expect(request.clipIndex).toBe(1);
     expect(request.startSec).toBe(0);
     expect(request.endSec).toBe(40);
@@ -155,10 +170,11 @@ describe("buildClipGenerationRequest", () => {
     const request = buildClipGenerationRequest({
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
-      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      plateStillDataUrl: "data:image/jpeg;base64,door",
+      durationSec: 5,
     });
     expect(request.segmentId).toBeUndefined();
-    expect(request.clipIndex).toBeUndefined();
+    expect(request.plateId).toBeUndefined();
     expect(JSON.stringify(request)).not.toContain("segmentId");
   });
 
@@ -166,7 +182,8 @@ describe("buildClipGenerationRequest", () => {
     const { prompt } = buildClipGenerationRequest({
       shotPrompt: "a keyhole, lit from behind",
       bandName: "Solar Rebel",
-      plateStillDataUrls: ["data:image/jpeg;base64,keyhole"],
+      plateStillDataUrl: "data:image/jpeg;base64,keyhole",
+      durationSec: 5,
     });
     expect(prompt).toContain("Music video for Solar Rebel.");
     expect(prompt).toContain("no on-screen text, no watermark");
@@ -174,10 +191,14 @@ describe("buildClipGenerationRequest", () => {
 });
 
 describe("estimateClipRenderCostUsd", () => {
-  it("matches the fixed 5s/480p ($0.08/s) rate plus $0.01 per reference image", () => {
-    expect(estimateClipRenderCostUsd(1)).toBeCloseTo(0.41, 5);
-    expect(estimateClipRenderCostUsd(3)).toBeCloseTo(0.43, 5);
-    expect(estimateClipRenderCostUsd(0)).toBeCloseTo(0.4, 5);
+  it("scales with real duration at 480p's $0.08/s rate, plus $0.01 per reference image", () => {
+    expect(estimateClipRenderCostUsd(5, 1)).toBeCloseTo(0.41, 5);
+    expect(estimateClipRenderCostUsd(13, 1)).toBeCloseTo(1.05, 5);
+    expect(estimateClipRenderCostUsd(15, 1)).toBeCloseTo(1.21, 5);
+  });
+
+  it("defaults referenceImageCount to 1 \u2014 a render is always exactly one plate's still now", () => {
+    expect(estimateClipRenderCostUsd(5)).toBeCloseTo(estimateClipRenderCostUsd(5, 1), 5);
   });
 });
 
@@ -199,16 +220,17 @@ describe("generateSkidmarksClip", () => {
 
   it("returns a real success with the videoUrl/durationSec the route reported", async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse(200, { videoUrl: "https://vidgen.x.ai/clip.mp4", durationSec: 5 })
+      jsonResponse(200, { videoUrl: "https://vidgen.x.ai/clip.mp4", durationSec: 13 })
     );
 
     const outcome = await generateSkidmarksClip({
       prompt: "slow push-in zoom",
       shotPrompt: "slow push-in zoom",
       referenceImageDataUrls: ["data:image/jpeg;base64,door"],
+      durationSec: 13,
     });
 
-    expect(outcome).toEqual({ ok: true, videoUrl: "https://vidgen.x.ai/clip.mp4", durationSec: 5, persisted: false });
+    expect(outcome).toEqual({ ok: true, videoUrl: "https://vidgen.x.ai/clip.mp4", durationSec: 13, persisted: false });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/skidmarks/generate-clip");
@@ -216,6 +238,7 @@ describe("generateSkidmarksClip", () => {
       prompt: "slow push-in zoom",
       shotPrompt: "slow push-in zoom",
       referenceImageDataUrls: ["data:image/jpeg;base64,door"],
+      durationSec: 13,
     });
   });
 
@@ -224,7 +247,12 @@ describe("generateSkidmarksClip", () => {
       jsonResponse(501, { error: "XAI_API_KEY is not set on the server.", code: "missing_api_key" })
     );
 
-    const outcome = await generateSkidmarksClip({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: ["data:image/jpeg;base64,a"] });
+    const outcome = await generateSkidmarksClip({
+      prompt: "x",
+      shotPrompt: "x",
+      referenceImageDataUrls: ["data:image/jpeg;base64,a"],
+      durationSec: 5,
+    });
 
     expect(outcome).toEqual({ ok: false, unconfigured: true, message: "XAI_API_KEY is not set on the server." });
   });
@@ -234,7 +262,12 @@ describe("generateSkidmarksClip", () => {
       jsonResponse(504, { error: "xAI's video render was still processing after 240s.", code: "timeout" })
     );
 
-    const outcome = await generateSkidmarksClip({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: ["data:image/jpeg;base64,a"] });
+    const outcome = await generateSkidmarksClip({
+      prompt: "x",
+      shotPrompt: "x",
+      referenceImageDataUrls: ["data:image/jpeg;base64,a"],
+      durationSec: 5,
+    });
 
     expect(outcome).toEqual({
       ok: false,
@@ -246,7 +279,12 @@ describe("generateSkidmarksClip", () => {
   it("reports a real network error honestly (no fetch success to parse)", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
 
-    const outcome = await generateSkidmarksClip({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: ["data:image/jpeg;base64,a"] });
+    const outcome = await generateSkidmarksClip({
+      prompt: "x",
+      shotPrompt: "x",
+      referenceImageDataUrls: ["data:image/jpeg;base64,a"],
+      durationSec: 5,
+    });
 
     expect(outcome).toEqual({ ok: false, unconfigured: false, message: "Failed to fetch" });
   });
@@ -254,8 +292,8 @@ describe("generateSkidmarksClip", () => {
   it("reports persisted:true and the durable Blob URL when the route says the render was saved", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, {
-        videoUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/01_0000-0040_render.mp4",
-        durationSec: 5,
+        videoUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
+        durationSec: 13,
         persisted: true,
       })
     );
@@ -264,7 +302,9 @@ describe("generateSkidmarksClip", () => {
       prompt: "slow push-in zoom",
       shotPrompt: "slow push-in zoom",
       referenceImageDataUrls: ["data:image/jpeg;base64,door"],
+      durationSec: 13,
       segmentId: "seg-1",
+      plateId: "plate-1",
       clipIndex: 1,
       startSec: 0,
       endSec: 40,
@@ -272,8 +312,8 @@ describe("generateSkidmarksClip", () => {
 
     expect(outcome).toEqual({
       ok: true,
-      videoUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/01_0000-0040_render.mp4",
-      durationSec: 5,
+      videoUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
+      durationSec: 13,
       persisted: true,
     });
   });
@@ -292,7 +332,9 @@ describe("generateSkidmarksClip", () => {
       prompt: "x",
       shotPrompt: "x",
       referenceImageDataUrls: ["data:image/jpeg;base64,a"],
+      durationSec: 5,
       segmentId: "seg-1",
+      plateId: "plate-1",
       clipIndex: 1,
       startSec: 0,
       endSec: 40,
@@ -310,7 +352,12 @@ describe("generateSkidmarksClip", () => {
   it("reports a real failure if a 200 response is somehow missing videoUrl", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
 
-    const outcome = await generateSkidmarksClip({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: ["data:image/jpeg;base64,a"] });
+    const outcome = await generateSkidmarksClip({
+      prompt: "x",
+      shotPrompt: "x",
+      referenceImageDataUrls: ["data:image/jpeg;base64,a"],
+      durationSec: 5,
+    });
 
     expect(outcome).toEqual({
       ok: false,
