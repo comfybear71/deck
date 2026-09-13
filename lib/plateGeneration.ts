@@ -497,3 +497,58 @@ export async function resolvePlateReferenceDataUrl(src: string): Promise<string>
   const blob = await res.blob();
   return readImageFileAsDataUrl(blob);
 }
+
+const GENERATE_STILL_SIRAY_ENDPOINT = "/api/skidmarks/generate-still-siray";
+
+/**
+ * POSTs to `/api/skidmarks/generate-still-siray` — the Seedance/"17
+ * positions" sibling of `generatePlateStill` above, for the one case
+ * `lib/autoPlate.ts` routes there: a real camera-position prompt
+ * (`lib/sirayPositions.ts`) plus a character's master reference still.
+ * Same honest-outcome shape as `generatePlateStill` (never throws, a
+ * thrown `fetch` is caught and reported the same as any other real
+ * failure) so a caller doesn't need a second code path to handle it.
+ */
+export async function generatePlateStillViaSiray(
+  prompt: string,
+  referenceImageDataUrl: string
+): Promise<PlateGenerationOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(GENERATE_STILL_SIRAY_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, referenceImageDataUrls: [referenceImageDataUrl] }),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      unconfigured: false,
+      message: err instanceof Error ? err.message : "Network error reaching the Siray still-generation API.",
+    };
+  }
+
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    // Non-JSON response — the status-code fallback below still gives
+    // Stuart a real message.
+  }
+
+  if (!res.ok) {
+    const errBody = (body ?? {}) as GenerateStillRouteErrorBody;
+    return {
+      ok: false,
+      unconfigured: errBody.code === "missing_api_key",
+      message: errBody.error ?? `Siray still generation failed (HTTP ${res.status}).`,
+    };
+  }
+
+  const okBody = (body ?? {}) as GenerateStillRouteSuccessBody;
+  const dataUrl = typeof okBody.dataUrl === "string" ? okBody.dataUrl : "";
+  if (!dataUrl) {
+    return { ok: false, unconfigured: false, message: "Siray still generation succeeded but returned no image." };
+  }
+  return { ok: true, dataUrl };
+}

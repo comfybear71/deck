@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildDemoSegments, type SkidmarksClipSegment } from "./skidmarks";
-import { ESTIMATED_STILL_COST_USD, MAX_AUTO_PLATE_BRIEF_LENGTH, planAutoPlateFill } from "./autoPlate";
+import {
+  estimateAutoPlateCostUsd,
+  ESTIMATED_STILL_COST_USD,
+  MAX_AUTO_PLATE_BRIEF_LENGTH,
+  planAutoPlateFill,
+  SIRAY_STILL_COST_USD,
+} from "./autoPlate";
 
 function withPlateCount(segments: SkidmarksClipSegment[], counts: number[]): SkidmarksClipSegment[] {
   return segments.map((segment, i) => {
@@ -127,5 +133,91 @@ describe("ESTIMATED_STILL_COST_USD", () => {
   it("is a small, positive, rough per-still estimate", () => {
     expect(ESTIMATED_STILL_COST_USD).toBeGreaterThan(0);
     expect(ESTIMATED_STILL_COST_USD).toBeLessThan(0.1);
+  });
+});
+
+const MASTER_STILL = "data:image/jpeg;base64,MASTER";
+
+describe("planAutoPlateFill — master-still routing (Siray)", () => {
+  it("keeps every fill on the generic xAI templates when no master still is passed, unchanged from today", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [1]).slice(0, 1);
+    const targets = planAutoPlateFill(segments, "", "Jack Ash");
+    expect(targets[0].siray).toBeUndefined();
+  });
+
+  it("routes every non-scripted-opener fill to Siray once a master still is passed", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [2, 2]);
+    const targets = planAutoPlateFill(segments, "", "Jack Ash", "", MASTER_STILL);
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(target.siray).toEqual({ referenceImageDataUrl: MASTER_STILL });
+    }
+  });
+
+  it("the scripted door/keyhole/Jack opener still wins over master-still routing when the brief mentions it", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [3]).slice(0, 1);
+    const targets = planAutoPlateFill(segments, "door, keyhole, Jack", "Jack Ash", "", MASTER_STILL);
+    expect(targets[0].siray).toBeUndefined();
+    expect(targets[0].shotPrompt).toContain("door");
+  });
+
+  it("gives the first clip's first empty slot a wide-master position, not a mouth-on/off-mouth one", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [2]).slice(0, 1);
+    const targets = planAutoPlateFill(segments, "", "Jack Ash", "", MASTER_STILL);
+    // Wide positions are "Front wide"/"Front ¾" per lib/sirayPositions.ts.
+    expect(targets[0].shotPrompt).toMatch(/Front wide|Front ¾/);
+  });
+
+  it("routes a Vocal clip's later slots to mouth-on framing language", () => {
+    // buildDemoSegments' own seed cadence: index 0 is instrumental,
+    // index 1 ("verse") is vocal — used at array index 1 (not the
+    // "first clip" slot) so this exercises the plain vocal branch, not
+    // the first-clip wide-master override.
+    const segments = withPlateCount(buildDemoSegments(210), [1, 1]);
+    expect(segments[1].label).toBe("verse");
+    const targets = planAutoPlateFill(segments, "", "Jack Ash", "", MASTER_STILL);
+    const target = targets.find((t) => t.segmentId === segments[1].id);
+    expect(target).toBeDefined();
+    expect(target!.shotPrompt.toLowerCase()).toMatch(/mouth|cu|mcu|profile|low front/);
+  });
+
+  it("routes an Instrumental clip's slots to off-mouth framing language", () => {
+    // Index 2 ("instrumental") is the first *non-first-clip*
+    // instrumental segment in the seed cadence — keeps this clear of
+    // the first-clip wide-master override, which index 0 would trigger.
+    const segments = withPlateCount(buildDemoSegments(210), [1, 1, 1]);
+    expect(segments[2].label).toBe("instrumental");
+    const targets = planAutoPlateFill(segments, "", "Jack Ash", "", MASTER_STILL);
+    const target = targets.find((t) => t.segmentId === segments[2].id);
+    expect(target).toBeDefined();
+    expect(target!.shotPrompt.toLowerCase()).toMatch(/back|high front|overhead|over-shoulder/);
+  });
+});
+
+describe("estimateAutoPlateCostUsd", () => {
+  it("sums ESTIMATED_STILL_COST_USD for every xAI-routed target", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [3]).slice(0, 1);
+    const targets = planAutoPlateFill(segments, "", "Jack Ash");
+    expect(estimateAutoPlateCostUsd(targets)).toBeCloseTo(targets.length * ESTIMATED_STILL_COST_USD, 6);
+  });
+
+  it("sums SIRAY_STILL_COST_USD for every Siray-routed target", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [3]).slice(0, 1);
+    const targets = planAutoPlateFill(segments, "", "Jack Ash", "", MASTER_STILL);
+    expect(estimateAutoPlateCostUsd(targets)).toBeCloseTo(targets.length * SIRAY_STILL_COST_USD, 6);
+  });
+
+  it("sums a real mix correctly — the scripted opener stays xAI-priced even with a master still set", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [3]).slice(0, 1);
+    const targets = planAutoPlateFill(segments, "door, keyhole, Jack", "Jack Ash", "", MASTER_STILL);
+    const expected = targets.reduce(
+      (sum, t) => sum + (t.siray ? SIRAY_STILL_COST_USD : ESTIMATED_STILL_COST_USD),
+      0
+    );
+    expect(estimateAutoPlateCostUsd(targets)).toBeCloseTo(expected, 6);
+  });
+
+  it("returns 0 for an empty target list", () => {
+    expect(estimateAutoPlateCostUsd([])).toBe(0);
   });
 });

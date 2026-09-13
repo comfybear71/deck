@@ -1551,11 +1551,18 @@ now (see "Explicitly out of scope" below).
        single tiny model badge once a clip has a real still; with only
        an empty placeholder today, a badge would just be more chrome
        around nothing.
-     - **SIRAY** and **Kling** are not in this allowlist at all — SIRAY
-       survives only as a narrow, not-wired-into-this-UI data-layer
-       opt-in (`uncensoredPlateStills`, "uncensored plate stills only" —
-       never read by `model`/Generate Clips); Kling has no equivalent
-       carve-out and is removed outright (no subscription).
+     - **SIRAY** and **Kling** are not in this `SkidmarksModelId`
+       allowlist at all — SIRAY survives only as a narrow, not-wired-
+       into-this-UI data-layer opt-in (`uncensoredPlateStills`,
+       "uncensored plate stills only" — never read by `model`/Generate
+       Clips); Kling has no equivalent carve-out and is removed
+       outright (no subscription). **This is unrelated to the real
+       Siray integration Auto-plate uses** (`lib/sirayClient.ts`,
+       `SIRAY_API_KEY`, see this doc's "Auto-plate from a short brief"
+       entry below) — that's a genuine API client picking a generation
+       *engine*, orthogonal to this `model` still-prompt-phrasing tag
+       entirely; `uncensoredPlateStills` stays exactly as unwired as
+       described above.
 
      A stub **Generate Clips** button closes the section — tapping it
      never calls a real render for the *whole song*; it only shows a
@@ -1744,10 +1751,26 @@ now (see "Explicitly out of scope" below).
     door-in-a-cracked-concrete-wall → keyhole → Jack-seated sequence,
     continuing from the plate before it for visual continuity — never
     applied to a later clip, and never triggered by the band alone.
-    **Then it stops** — no auto video render, ever; every plate this
-    fills is still just a still Stuart can inspect/enlarge/reject/
-    regenerate like any other, and it never overwrites an already-filled
-    plate.
+    **Two real fill engines** (2026-09-13): every other empty slot
+    still defaults to the small hand-authored xAI templates above
+    (vocal clips lean performance/close-up phrasing, instrumental
+    clips lean B-roll/atmosphere) — *unless* the band's resolved
+    vocalist has a real master reference photo (`avatarImage`) set, in
+    which case those same slots instead get one real camera position
+    from Stuart's own "17 positions" pack (`lib/sirayPositions.ts`,
+    pasted verbatim), generated via Siray's Seedream 4.5 ref2i-spicy
+    model (`lib/sirayClient.ts`, `SIRAY_API_KEY`) using that photo as
+    the identity reference — real angle variety off one locked still,
+    picked automatically by the same vocal/instrumental/first-clip
+    signals, never a picker. The scripted door/keyhole/Jack opener
+    always stays on the xAI path regardless — it's a specific written
+    sequence, not a position to auto-pick from the 17. A band with no
+    master still (or no `SIRAY_API_KEY` configured) is completely
+    unaffected — same xAI-only behavior as before this existed.
+    **Then it stops** — no auto video render, ever, on either engine;
+    every plate this fills is still just a still Stuart can inspect/
+    enlarge/reject/regenerate like any other, and it never overwrites
+    an already-filled plate.
 
   - **Finished-song archive**: an **Archive** button (next to the MP3
     card, once a song's attached) snapshots the live band + mp3
