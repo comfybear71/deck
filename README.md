@@ -1409,22 +1409,27 @@ now (see "Explicitly out of scope" below).
 - **Wiring up plate-still generation**: needs **`XAI_API_KEY`** — an xAI
   API key from [console.x.ai](https://console.x.ai) — set server-side on
   Vercel. xAI is already one of Stuart's "four lanes" accounts (see "The
-  four lanes" below), so this is very likely a key he already has
-  somewhere, but (unlike `ELEVENLABS_API_KEY` above) nothing in this
-  repo or its sibling project docs confirmed he's already added this
-  *specific* one to the "deck" Vercel project — check Vercel's
-  Environment Variables settings for this project first; if it's not
-  there, add it (Production and Preview, same as `ELEVENLABS_API_KEY`).
-  `app/api/skidmarks/generate-still/route.ts`'s `resolveXaiApiKey` checks
-  for it under this exact name only — there's no `XAI_KEY`/`X_AI_API_KEY`
-  fallback-name guessing the way the ElevenLabs route tries a second
-  name, since `XAI_API_KEY` is the one name xAI's own docs/SDKs use.
-  Leaving it unset (or a fresh deploy that hasn't picked up a
-  just-added value yet — Vercel only applies env var changes to *new*
-  deployments, redeploy after adding it) means Generate returns an
-  honest "unconfigured" message on tap instead of silently doing
-  nothing; Upload still works either way (no key needed for that path —
-  it's a local file read + resize, no network call). An optional
+  four lanes" below). **Stuart confirmed `XAI_API_KEY` is now added on
+  the "deck" Vercel project** — this PR doesn't ask him to create or add
+  one. `app/api/skidmarks/generate-still/route.ts`'s `resolveXaiApiKey`
+  checks for it under this exact name only — there's no `XAI_KEY`/
+  `X_AI_API_KEY` fallback-name guessing the way the ElevenLabs route
+  tries a second name, since `XAI_API_KEY` is the one name xAI's own
+  docs/SDKs use. **A key that's added on Vercel doesn't mean a
+  currently-running Production function can see it yet** — same
+  documented Vercel behavior as `ELEVENLABS_API_KEY` above (
+  [Vercel docs](https://vercel.com/docs/environment-variables/managing-environment-variables):
+  env var changes only apply to *new* deployments) — so **Production
+  needs a redeploy after this PR merges** for `generate-still` to
+  actually see the key, unless merging itself already triggers a fresh
+  deployment on this project's Vercel setup. If Generate still returns
+  the honest "unconfigured" message after merge, that's the tell:
+  redeploy, don't debug the code (`missing_api_key`, same shape as
+  `ELEVENLABS_API_KEY`'s own missing-key case). Leaving the key unset
+  entirely means the same "unconfigured" message on tap instead of
+  silently doing nothing; Upload still works either way (no key needed
+  for that path — it's a local file read + resize, no network call). An
+  optional
   **`XAI_IMAGE_MODEL`** override picks a different xAI image model
   without a code change (defaults to `grok-imagine-image-2.0`, the model
   this feature's live verification calls used — see
