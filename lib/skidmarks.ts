@@ -1711,8 +1711,21 @@ function schedulePush(): void {
  * `visibilitychange`/`pagehide` below so a final edit made right before
  * Stuart backgrounds/closes Safari on his phone doesn't just sit in the
  * debounce queue and never actually ship. See `SESSION_PUSH_DEBOUNCE_MS`'s
- * doc comment. */
-function flushSkidmarksSessionNow(): void {
+ * doc comment.
+ *
+ * **Exported (2026-09-14) for exactly one more caller**: a plate still
+ * finishing generation/upload (`SkidmarksClipStub.tsx`'s `handleGenerate`/
+ * `handleFileChange`, `SkidmarksAutoPlate.tsx`'s `handleConfirm`). A real
+ * live bug — Stuart generated real plates, then did what he called a
+ * "cold restart" shortly after, and they were gone on reload — is
+ * consistent with those plates' `onSetClipPlateStill` write still
+ * sitting in the 600ms debounce queue (or an even-longer real network
+ * round trip to Neon) at the moment his phone/Safari actually died,
+ * which `visibilitychange`/`pagehide` can't help with if the process is
+ * killed outright rather than genuinely backgrounded first. Flushing
+ * right after a still is durably worth saving shrinks that window from
+ * "however long until he backgrounds the tab" to "immediately." */
+export function flushSkidmarksSessionNow(): void {
   if (!isBrowser()) return;
   if (pushTimer) {
     clearTimeout(pushTimer);
