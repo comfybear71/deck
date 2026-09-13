@@ -79,7 +79,7 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Word-level transcription (lyrics timing) | **Real** — ElevenLabs Scribe only, no other provider | `app/api/skidmarks/transcribe/route.ts` |
 | Energy heuristic (vocal/instrumental fallback) | **Real**, client-side, no key needed | `lib/audioAnalysis.ts` |
 | Plate *still* generation | **Real** — xAI Grok Imagine *image* API | `app/api/skidmarks/generate-still/route.ts`, `lib/plateGeneration.ts` |
-| Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to `localStorage` (the existing session-state mirror — see the "no `localStorage`" note below for what's actually exempt from that) | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `components/SkidmarksClipStub.tsx` |
+| Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to **Neon** now (one session row per studio owner — see the "no `localStorage`" note below) | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `lib/skidmarksSession-server.ts`, `components/SkidmarksClipStub.tsx` |
 | Per-plate select + tick | **Real** — a small corner control on each filled plate tile (radio-style, one plate selected per clip at a time) plus a filled/empty tick for "already has a saved render"; see `lib/skidmarks.ts`'s `resolveSelectedPlateId` | `components/SkidmarksClipStub.tsx` |
 | Per-plate opt-in *video* render | **Real, three backends now, routed by Vocal vs. Instrumental, plus a real H3/Grok switch on Instrumental — no persistent picker.** Vocal clips → **Comfy Cloud's LTX-2.5 `AudioToVideo` partner node** (`COMFY_CLOUD_API_KEY`), driven by a real frame-sliced (`lib/mp3Slice.ts`) window of the attached song's own vocal audio (`mp3.audioUrl`), 5–30s (raised from an initial 20s — see the "Real, auto-computed per-plate duration" cost-rule entry below for why, and for the frame-rounding trim fix that keeps a plate at exactly the ceiling from erroring) — no switch. Instrumental/B-roll clips → **MiniMax H3** (`MINIMAX_API_KEY`, optional `MINIMAX_GROUP_ID`) **by default** (Stuart's 2026-09-13 "H3 please, for this smoke" lock, superseding the older "never auto-assign H3" *still-image* cost lock below — the two are separate fields, see `SkidmarksInstrumentalVideoModel`'s doc comment), 5–15s, first-frame (optionally first+last-frame) image-to-video; **xAI Grok Imagine video** stays fully wired one tap away, same 5–15s range — a small H3/Grok switch lives *inside* the existing two-tap Render confirm, added on Stuart's own explicit ask ("a single H3 \| Grok choice inside the existing two-tap Render confirm"), persisted per clip (`SkidmarksClipSegment.instrumentalVideoModel`). Either way: animates **the one selected plate's own still only**, one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`). **Honesty note**: neither the Comfy/LTX nor the MiniMax H3 path is live-verified in this sandbox (no `COMFY_CLOUD_API_KEY`/`MINIMAX_API_KEY` available here) — see `lib/comfyCloud.ts`'s and `lib/minimaxH3.ts`'s own module doc comments; the H3 request/response shapes are mirrored from the original Skidmarks repo's own real H3 client, not invented. | `app/api/skidmarks/generate-clip/route.ts`, `lib/comfyCloud.ts`, `lib/minimaxH3.ts`, `lib/mp3Slice.ts`, `lib/clipGeneration.ts`, `lib/skidmarks.ts`, `components/SkidmarksClipRender.tsx` |
 | Per-plate render duration | **Real, auto-computed** — `segmentLengthSec / plateCount`, clamped to `[5, 15]`s (Grok's documented ceiling), no UI picker | `lib/clipGeneration.ts`'s `computePlateDurationSec` |
@@ -140,18 +140,29 @@ was charged, and that it won't show up in the shelf or survive a
 refresh — never just a quiet "Rendered ✓" tick with nothing to actually
 show for it.
 
-**No `localStorage` for genuinely new durable state.** The existing
+**No `localStorage` anywhere for Skidmarks studio state — the whole
 `lib/skidmarks.ts` session mirror (bands/session/segments/plates,
-including plate stills as `data:` URLs) is still `localStorage`-backed
-— that's pre-existing debt this PR didn't create or fix, and adding a
-field to an existing plate/segment (`motionPrompt`, `selectedPlateId`)
-follows that same existing pattern, not a new one. But the **archive of
-record** for a finished song, and the MP3's own durable audio copy, are
-both genuinely new durable state added in this pass — both go straight
-to Vercel Blob (JSON metadata + JSON snapshot + media), never
-`localStorage`, per the hard lock. Neon is still not patterned anywhere
-in this repo (see Env vars) — when it lands, it should replace *all* of
-this `localStorage` session state, not just the archive.
+selections, prompts, motion text) now lives in Neon, not
+`localStorage`.** This is a hard, repeated Stuart lock ("never
+localStorage for studio state of record"), and the literal fix for a
+real bug: the old `localStorage` mirror raced with itself across phone
+storage/tab-suspend behavior and silently wiped tagged plates/prompts.
+`cachedState` is still the synchronous in-memory value every mutator
+reads/writes (`useSyncExternalStore` needs a synchronous snapshot, and
+a network call can't be one), but its *durable* copy is now a single
+Neon row (`lib/skidmarksSession-server.ts`, one fixed single-tenant
+`owner_id` — this app has no auth system), read via one `GET /api/
+skidmarks/session` per page load and written via a debounced,
+serialized `PUT` after every local mutation — see `lib/skidmarks.ts`'s
+"Neon-backed session persistence" doc comment for the exact hydrate/
+push implementation and its two race guards. `localStorage` is fully
+gone from this file; grep it and the only remaining `localStorage`
+matches in this whole file are comments describing what used to be
+there or unrelated field-shape docs. Media (MP3 audio, clip renders,
+archive snapshots — plate stills are still `data:` URLs inside the
+Neon row for now, not yet Blob-backed) still goes straight to Vercel
+Blob, unchanged by this migration; see Env vars below for
+`DATABASE_URL`.
 
 **A slow real API result must never silently overwrite already-tagged
 plates/prompts, or land on a different attach than the one it was for.**
@@ -511,13 +522,19 @@ the request, and validate length against `shotPrompt` only.
   feature and it could plausibly carry more than a few hundred KB,
   default to this same client-upload pattern rather than a normal JSON
   POST body.
-- **No Neon/Postgres anywhere in this repo yet** — `@neondatabase/
-  serverless`, `drizzle`, `prisma`, etc. are not dependencies, and no
-  connection string env var is read anywhere. The archive of record
-  (this pass) uses Vercel Blob JSON instead, explicitly as an interim
-  answer — see the README's Skidmarks follow-up note for the intended
-  eventual Neon migration, which should absorb the *entire*
-  `lib/skidmarks.ts` session mirror, not just the archive.
+- `DATABASE_URL` (falls back to `DATABASE_URL_UNPOOLED`) — **Neon is
+  now wired**, via `@neondatabase/serverless`'s HTTP driver
+  (`lib/db.ts`). Backs the Skidmarks studio session store
+  (`lib/skidmarksSession-server.ts`, `GET`/`PUT /api/skidmarks/
+  session`) — one row, keyed by a fixed single-tenant
+  `SKIDMARKS_STUDIO_OWNER_ID` (default `"stuart"`; this app has no auth
+  system). Missing it never crashes — every route returns the same
+  honest `configured: false` shape Blob routes already use, and
+  `lib/skidmarks.ts`'s session-sync indicator shows "not saving here"
+  instead of silently pretending edits are durable. The finished-song
+  **archive** (`lib/skidmarksArchive.ts`) still uses Vercel Blob JSON,
+  unchanged by this migration — only the live edit session moved to
+  Neon.
 - None of the above being unset should ever crash anything — every
   route returns an honest `missing_api_key`/`unconfigured` outcome
   instead. If you add a new real API call, match that shape.

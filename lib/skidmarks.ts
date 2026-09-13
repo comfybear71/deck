@@ -2404,8 +2404,9 @@ export function coverGradientClass(coverSeed: number): string {
 
 /** Longest edge a picked cover/avatar image gets downscaled to before
  * being stored — real photos straight off a phone can be several MB;
- * this keeps `localStorage` (a few MB quota, shared with everything
- * else this app persists) from filling up after a handful of picks. */
+ * this keeps the Neon session row (`persist()`'s debounced push — see
+ * the "Neon-backed session persistence" section below) from ballooning
+ * after a handful of picks. */
 const MAX_PICKED_IMAGE_DIMENSION = 640;
 const PICKED_IMAGE_QUALITY = 0.85;
 
@@ -2413,10 +2414,10 @@ const PICKED_IMAGE_QUALITY = 0.85;
  * Reads a picked image file (jpg/png/webp), downscales it to fit within
  * `MAX_PICKED_IMAGE_DIMENSION` on its longest edge, and re-encodes it as
  * a JPEG data URL — a data URL (unlike a blob URL) round-trips through
- * `localStorage` just fine, so a real picked cover/avatar survives a
- * page reload. Used by both the band cover picker and the member avatar
- * picker. Rejects if the browser can't decode the file (not an image,
- * or a format it doesn't support).
+ * the Neon session row just fine, so a real picked cover/avatar
+ * survives a page reload. Used by both the band cover picker and the
+ * member avatar picker. Rejects if the browser can't decode the file
+ * (not an image, or a format it doesn't support).
  */
 export function readImageFileAsDataUrl(
   file: File | Blob,
