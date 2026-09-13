@@ -51,6 +51,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     removeMp3,
     setMp3Duration,
     setSegmentPlate,
+    setSegmentModel,
     setSegmentShotPrompt,
   } = useSkidmarksStudio();
 
@@ -213,6 +214,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 transcriptionError={session.mp3.transcriptionError}
                 transcriptionProvider={session.mp3.transcriptionProvider}
                 onSetSegmentPlate={setSegmentPlate}
+                onSetSegmentModel={setSegmentModel}
                 onSetSegmentShotPrompt={setSegmentShotPrompt}
               />
             )}

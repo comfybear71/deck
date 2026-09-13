@@ -5,31 +5,37 @@ import {
   isLipSyncModel,
   skidmarksModelBadge,
   SKIDMARKS_LOCATION_PLATES,
+  SKIDMARKS_MODELS,
   type SkidmarksClipSegment,
+  type SkidmarksModelId,
   type SkidmarksPlateId,
 } from "@/lib/skidmarks";
 
 interface SkidmarksPlatesAndCameraProps {
   segment: SkidmarksClipSegment;
   onSetPlate: (plateId: SkidmarksPlateId) => void;
+  onSetModel: (model: SkidmarksModelId) => void;
   onSetShotPrompt: (shotPrompt: string) => void;
 }
 
 const SHOT_PROMPT_MAX_LENGTH = 160;
 
 /**
- * A clip's expanded body — Stuart's final chrome lock, ruthlessly
- * minimal: **large location-plate cards** in a horizontal scroll (time
+ * A clip's expanded body — kept ruthlessly minimal per Stuart's chrome
+ * lock: **large location-plate cards** in a horizontal scroll (time
  * range overlaid top-left on the image, model badge top-right, no text
- * stacked underneath), and **one shot-prompt box**. That's the entire
- * control surface — the Camera Angles block and the manual Model row
- * (LTX/H3/Grok/SIRAY/Kling pills + their helper paragraphs) that used to
- * live here are gone outright, not just hidden: `model` is now fully
- * automatic from the shot prompt + clip type (see `lib/skidmarks.ts`'s
- * `defaultSegmentModel`), and there's no camera-angle concept left to
- * pick. SIRAY survives only as a data-layer opt-in
+ * stacked underneath), **one shot-prompt box**, and a **compact model
+ * pill row**. The old Camera Angles block is deleted outright — there's
+ * no camera-angle concept left to pick. The Model row survives (Stuart
+ * still wants H3/Seedance reachable) but per his cost lock ("be very
+ * wary of spend") it's a plain one-tap pick, never something the app
+ * assigns on its own: `defaultSegmentModel` in `lib/skidmarks.ts` only
+ * ever auto-picks LTX or Grok, and typing in the shot prompt no longer
+ * touches `model` at all (an earlier pass did — see
+ * `setSkidmarksSegmentShotPrompt`'s doc comment for why that got
+ * reverted). SIRAY survives only as a data-layer opt-in
  * (`uncensoredPlateStills`/`SKIDMARKS_UNCENSORED_STILLS_LABEL`) with no
- * control here; Kling and Seedance aren't in this build at all.
+ * pill here; Kling isn't in this build at all.
  *
  * Each plate card is a stub — no real plate photos, no real still
  * generation — but is deliberately sized like an actual still (bigger
@@ -44,6 +50,7 @@ const SHOT_PROMPT_MAX_LENGTH = 160;
 export function SkidmarksPlatesAndCamera({
   segment,
   onSetPlate,
+  onSetModel,
   onSetShotPrompt,
 }: SkidmarksPlatesAndCameraProps) {
   const timeRange = formatSegmentRange(segment.startSec, segment.endSec);
@@ -108,6 +115,37 @@ export function SkidmarksPlatesAndCamera({
         aria-label="Shot prompt"
         className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
       />
+
+      {/* Compact model row — a plain one-tap pick, never auto-assigned
+          (see this file's doc comment). One short line, not a helper
+          paragraph, flags that H3/Seedance are optional extras rather
+          than something that might get picked for Stuart. */}
+      <div className="flex flex-wrap gap-1.5">
+        {SKIDMARKS_MODELS.map((model) => {
+          const active = segment.model === model.id;
+          return (
+            <button
+              key={model.id}
+              type="button"
+              onClick={() => onSetModel(model.id)}
+              aria-pressed={active}
+              title={model.note}
+              className={[
+                "rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors",
+                active
+                  ? "border-rose-400/60 bg-rose-400/15 text-rose-200"
+                  : "border-white/10 bg-white/[0.02] text-white/55 hover:border-white/20 hover:text-white/80",
+              ].join(" ")}
+            >
+              {model.badge}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[9px] leading-relaxed text-white/30">
+        H3 and Seedance are optional {"\u2014"} tap to pick. Auto-assign only
+        ever chooses LTX (vocal) or Grok (instrumental).
+      </p>
     </div>
   );
 }

@@ -1183,10 +1183,11 @@ now (see "Explicitly out of scope" below).
      logic. Each clip is its own **collapsible row**: collapsed shows
      the time range (e.g. "0:15–0:45"), its label pill, and a
      **read-only** model badge (e.g. "LTX", "H3" — a 🎤 glyph joins it
-     when the current model is LTX Lip-sync); expanded appends that
-     clip's `SkidmarksPlatesAndCamera` panel. **Stuart's final chrome
-     lock** stripped this panel down to exactly two things — no Camera
-     Angles block, no manual Model pill row, nothing else:
+     when the current model is LTX Lip-sync — the real one-tap Model
+     row lives in the expanded panel, not here); expanded appends that
+     clip's `SkidmarksPlatesAndCamera` panel — the Camera Angles block
+     from an earlier pass is gone outright, leaving exactly three
+     things:
      - **Large location-plate cards** (Neon Stage, Rainy Alley, Desert
        Highway, Warehouse, Crowd Pit — deterministic gradient swatches,
        no real plate photos) in a horizontal scroll, sized like an
@@ -1201,27 +1202,33 @@ now (see "Explicitly out of scope" below).
      - **One shot-prompt text field** — "what happens in this shot",
        deliberately short (no lyric dumps, no long captions, and never
        a hardcoded scene description — this field is entirely
-       Stuart-authored). This is the *only* remaining control surface
-       besides the plate cards.
+       Stuart-authored). Editing it only ever updates the prompt text —
+       it does **not** touch `model` (an earlier pass re-derived the
+       model from the prompt's language; that's gone per the cost lock
+       below).
+     - **A compact Model pill row** — one short line, not a helper
+       paragraph.
 
-     **Model assignment is fully automatic from the shot prompt + clip
-     type** (`defaultSegmentModel` in `lib/skidmarks.ts`) — there is no
-     manual model pill anywhere in this UI:
+     **Auto-assignment is cost-locked** (`defaultSegmentModel` in
+     `lib/skidmarks.ts`) — Stuart: "be very wary of spend." It only ever
+     picks two of the four models, and never rotates/cycles between
+     them on its own:
      - **Vocal** (verse/bridge, or either real path's Vocal) →
        **LTX Lip-sync**, unconditionally.
-     - **Instrumental** (lead/instrumental, any path) → **Grok** once
-       the shot prompt reads as a "complicated" shot — an artist
-       actually standing/sitting/posed in frame (a short keyword sniff,
-       see `shotPromptSuggestsComplexPlacement`) — otherwise **H3**, the
-       simpler-stills default (including while the prompt is still
-       blank). Recomputed live on every keystroke in the shot-prompt
-       field (`setSkidmarksSegmentShotPrompt`), not just at creation.
+     - **Instrumental** (lead/instrumental, any path) → **Grok**,
+       unconditionally.
+     - **H3** and **Seedance** are real, selectable pills — Stuart
+       still wants them reachable — but `defaultSegmentModel` will
+       never return either, and nothing else in the codebase picks them
+       on the app's own initiative either; they only ever land on a
+       clip via an explicit tap (`setSkidmarksSegmentModel`). Seedance's
+       pill is captioned "Optional · multi-angle" and H3's "Optional —
+       never auto-assigned" so neither reads as a default in the UI.
      - **SIRAY** and **Kling** are not in this allowlist at all — SIRAY
        survives only as a narrow, not-wired-into-this-UI data-layer
        opt-in (`uncensoredPlateStills`, "uncensored plate stills only" —
        never read by `model`/Generate Clips); Kling has no equivalent
-       carve-out and is removed outright (no subscription). Seedance
-       isn't in this build yet either (later pass).
+       carve-out and is removed outright (no subscription).
 
      A stub **Generate Clips** button closes the section — tapping it
      never calls a real Comfy MCP / LTX pipeline; it only shows a
