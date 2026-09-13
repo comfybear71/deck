@@ -194,7 +194,12 @@ function timelineNote(
  * Comfy MCP / LTX render anywhere in this file or
  * `SkidmarksPlatesAndCamera`; it only shows a "stub, not wired" message,
  * surfaced in an always-mounted `role="status"` + `aria-live` line so
- * assistive tech reaches it too, not just sighted users.
+ * assistive tech reaches it too, not just sighted users. **This is
+ * where the real cost lives, per Stuart**: a real plate *still* image
+ * (one frame) is cheap; a real *video render/animate* pass (this
+ * button, or Seedance's multi-angle clip generation) is the expensive
+ * part, so this button — and any Seedance call — stays stubbed in this
+ * PR regardless of whether plate stills themselves ever become real.
  */
 export function SkidmarksClipTimeline({
   segments,

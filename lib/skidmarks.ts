@@ -314,7 +314,16 @@ export const SKIDMARKS_SEGMENT_LABEL_META: Record<SkidmarksSegmentLabel, Skidmar
  * camera" style) but explicitly optional, never a default. SIRAY is
  * *not* in this list — see `SKIDMARKS_UNCENSORED_STILLS_LABEL` below
  * for why it still exists in the data layer, just nowhere near this
- * one. */
+ * one.
+ *
+ * **Where the actual cost lives, per Stuart**: a real plate *still*
+ * (one static frame) is cheap — this lock isn't about stills. A real
+ * *video render/animate* pass is the expensive part — Seedance's
+ * multi-angle clip generation specifically, and the stub "Generate
+ * Clips" button generally (see `SkidmarksClipTimeline`'s doc comment).
+ * Both stay stubbed in this build regardless of whether plate stills
+ * themselves ever get a real generator; nothing here calls a real
+ * model of any kind yet. */
 export type SkidmarksModelId = "ltx-lipsync" | "grok" | "h3" | "seedance";
 
 export interface SkidmarksModelMeta {
