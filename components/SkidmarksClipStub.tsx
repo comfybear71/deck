@@ -80,6 +80,159 @@ function Spinner() {
   );
 }
 
+function CloseIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+      <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+interface SkidmarksPlateLightboxProps {
+  dataUrl: string;
+  previousStill?: SkidmarksPlateStill;
+  /** Whether the tiny inline Replace panel (Upload/Generate, same two
+   * options the empty-plate popover offers) is showing below the
+   * enlarged image right now. */
+  replaceOpen: boolean;
+  generating: boolean;
+  error: string | null;
+  useLastPlate: boolean;
+  onToggleReplace: () => void;
+  onSetUseLastPlate: (value: boolean) => void;
+  onUpload: () => void;
+  onGenerate: () => void;
+  onClear: () => void;
+  onClose: () => void;
+}
+
+/**
+ * Enlarge/lightbox view — a filled plate's primary tap opens this now
+ * instead of the Upload/Generate popover, so Stuart can actually
+ * inspect framing/light at real size. Just the enlarged still, a "×"
+ * to dismiss (backdrop tap does the same), and a Replace/Clear row.
+ * "Replace" swaps that row for the same Upload/Generate mini-panel the
+ * empty-plate popover uses; all state/handlers still live in
+ * `SkidmarksPlateBox`, passed down as props.
+ */
+function SkidmarksPlateLightbox({
+  dataUrl,
+  previousStill,
+  replaceOpen,
+  generating,
+  error,
+  useLastPlate,
+  onToggleReplace,
+  onSetUseLastPlate,
+  onUpload,
+  onGenerate,
+  onClear,
+  onClose,
+}: SkidmarksPlateLightboxProps) {
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/90 backdrop-blur-sm"
+      />
+
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Plate still, enlarged"
+        className="relative z-10 flex w-full max-w-sm flex-col items-center gap-3 animate-[sheet-in_0.18s_ease-out]"
+      >
+        <div className="relative w-full">
+          {/* eslint-disable-next-line @next/next/no-img-element -- data-URL still, next/image can't optimize it */}
+          <img
+            src={dataUrl}
+            alt="Plate still, enlarged"
+            className="max-h-[70vh] w-full rounded-2xl object-contain"
+          />
+
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="absolute -right-2 -top-2 flex h-8 w-8 items-center justify-center rounded-full bg-zinc-950 text-white/80 ring-1 ring-white/15 transition-colors hover:bg-zinc-900 hover:text-white"
+          >
+            <CloseIcon />
+          </button>
+
+          {generating && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-black/70 text-[12px] font-medium text-white/85">
+              <Spinner />
+              {"Generating\u2026"}
+            </div>
+          )}
+        </div>
+
+        {!generating &&
+          (replaceOpen ? (
+            <div className="flex w-full flex-col gap-1.5 rounded-xl bg-zinc-950/95 p-2.5 ring-1 ring-white/10">
+              {previousStill && (
+                <label className="flex items-center gap-1.5 px-1 text-[11px] text-white/60">
+                  <input
+                    type="checkbox"
+                    checked={useLastPlate}
+                    onChange={(e) => onSetUseLastPlate(e.target.checked)}
+                    className="h-3 w-3 accent-rose-400"
+                  />
+                  Use last plate
+                </label>
+              )}
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={onUpload}
+                  className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-[12px] font-medium text-white transition-colors hover:bg-white/15"
+                >
+                  Upload
+                </button>
+                <button
+                  type="button"
+                  onClick={onGenerate}
+                  className="flex-1 rounded-lg bg-rose-400 px-3 py-2 text-[12px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300"
+                >
+                  Generate
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex w-full gap-2">
+              <button
+                type="button"
+                onClick={onToggleReplace}
+                className="flex-1 rounded-full bg-white/10 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-white/15"
+              >
+                Replace
+              </button>
+              <button
+                type="button"
+                onClick={onClear}
+                className="flex-1 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-sm font-medium text-white/70 transition-colors hover:bg-white/[0.07] hover:text-white"
+              >
+                Clear
+              </button>
+            </div>
+          ))}
+
+        {error && <p role="alert" className="text-[11px] leading-snug text-rose-300/90">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
 interface SkidmarksPlateBoxProps {
   plate: SkidmarksClipPlateSlot;
   previousStill?: SkidmarksPlateStill;
@@ -99,14 +252,10 @@ interface SkidmarksPlateBoxProps {
 }
 
 /**
- * One plate slot in a clip's horizontal strip — the same
- * upload/generate/replace/clear box `SkidmarksClipStub` always had,
- * just scoped to one slot instead of the whole clip so several can sit
- * side by side (see that component's doc comment for why). All of this
- * box's interaction logic (the tiny Upload/Generate popover, the
- * press-and-hold clear, the spinner overlay) is unchanged from the
- * single-plate build — only the props feeding it (which still, which
- * continuity reference) now vary per slot instead of per clip.
+ * One plate slot in a clip's horizontal strip. Empty plate: tap opens
+ * the Upload/Generate popover (unchanged). Filled plate: tap opens
+ * `SkidmarksPlateLightbox` instead; the corner "×" and press-and-hold
+ * clear stay on the tile as before.
  */
 function SkidmarksPlateBox({
   plate,
@@ -121,6 +270,7 @@ function SkidmarksPlateBox({
   onRemove,
 }: SkidmarksPlateBoxProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   const [useLastPlate, setUseLastPlate] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,17 +289,30 @@ function SkidmarksPlateBox({
 
   const closeMenu = () => setMenuOpen(false);
 
+  const closeLightbox = () => {
+    setLightboxOpen(false);
+    setMenuOpen(false);
+    setError(null);
+  };
+
   const handleBoxClick = () => {
     if (generating) return;
     if (longPressFiredRef.current) {
       // The press-and-hold clear already fired for this gesture — the
-      // browser's own trailing click shouldn't also reopen the popover
-      // on an image that no longer exists.
+      // browser's own trailing click shouldn't also reopen anything on
+      // an image that no longer exists.
       longPressFiredRef.current = false;
       return;
     }
     setError(null);
-    setMenuOpen((v) => !v);
+    // Filled plate: primary tap enlarges (the lightbox owns Replace/
+    // Clear from there — see `SkidmarksPlateLightbox`). Empty plate:
+    // unchanged, tap opens the tiny Upload/Generate popover right here.
+    if (hasStill) {
+      setLightboxOpen(true);
+    } else {
+      setMenuOpen((v) => !v);
+    }
   };
 
   const clearLongPressTimer = () => {
@@ -162,6 +325,7 @@ function SkidmarksPlateBox({
   const handleClear = () => {
     onSetStill(null);
     setMenuOpen(false);
+    setLightboxOpen(false);
     setError(null);
   };
 
@@ -253,16 +417,17 @@ function SkidmarksPlateBox({
           onPointerCancel={hasStill ? clearLongPressTimer : undefined}
           aria-label={
             hasStill
-              ? "Plate still \u2014 tap to replace, press and hold to remove"
+              ? "Plate still \u2014 tap to enlarge, press and hold to remove"
               : "Empty plate \u2014 tap to upload or generate a still"
           }
           className={[
-            // `touch-none`: without it, a real touchscreen can interpret the
-            // start of a press-and-hold as the beginning of a scroll and
-            // fire `pointercancel` before `LONG_PRESS_MS` elapses \u2014
-            // disabling the browser's own touch gesture handling here is
-            // what makes the hold reliable on a phone, not just a mouse.
-            "relative flex h-24 w-32 touch-none select-none items-center justify-center overflow-hidden rounded-2xl",
+            // `touch-pan-x` (not `touch-none`): keeps vertical/pinch
+            // gestures suppressed for a reliable press-and-hold, but
+            // still lets a horizontal drag scroll the strip \u2014
+            // `touch-none` was blocking that scroll on iOS Safari
+            // whenever a drag started on a tile (the whole strip's
+            // touchable surface).
+            "relative flex h-24 w-32 touch-pan-x select-none items-center justify-center overflow-hidden rounded-2xl",
             hasStill
               ? "border border-white/10 bg-white/[0.02]"
               : "border border-dashed border-white/15 bg-white/[0.02] text-white/20",
@@ -320,7 +485,11 @@ function SkidmarksPlateBox({
           </button>
         )}
 
-        {menuOpen && !generating && (
+        {/* Anchored right on the strip — only for the *empty*-plate
+            popover. A filled plate's Upload/Generate now lives inside
+            the lightbox instead (`menuOpen` doubles as that panel's
+            open state there too — see the lightbox render below). */}
+        {!hasStill && menuOpen && !generating && (
           <div
             role="menu"
             onClick={(e) => e.stopPropagation()}
@@ -359,7 +528,31 @@ function SkidmarksPlateBox({
 
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
 
-      {error && <p role="alert" className="text-[10px] leading-snug text-rose-300/90">{error}</p>}
+      {error && !lightboxOpen && (
+        <p role="alert" className="text-[10px] leading-snug text-rose-300/90">
+          {error}
+        </p>
+      )}
+
+      {hasStill && lightboxOpen && (
+        <SkidmarksPlateLightbox
+          dataUrl={plate.still!.dataUrl}
+          previousStill={previousStill}
+          replaceOpen={menuOpen}
+          generating={generating}
+          error={error}
+          useLastPlate={useLastPlate}
+          onToggleReplace={() => {
+            setError(null);
+            setMenuOpen((v) => !v);
+          }}
+          onSetUseLastPlate={setUseLastPlate}
+          onUpload={handleUploadClick}
+          onGenerate={handleGenerate}
+          onClear={handleClear}
+          onClose={closeLightbox}
+        />
+      )}
     </div>
   );
 }
@@ -378,13 +571,13 @@ function SkidmarksPlateBox({
  * not a second timeline concept.
  *
  * **First use / empty state is unchanged**: a fresh clip still shows
- * exactly one dashed empty plate, same style as before — nothing new
- * to look at until Stuart taps "+". Each plate slot keeps every gesture
- * the single-plate build already had (`SkidmarksPlateBox`, unchanged
- * logic): tapping the empty box opens the tiny Upload/Generate popover;
- * once a still exists, tapping it reopens that same popover (replace),
- * a corner "×" clears it back to empty, and a press-and-hold does the
- * same clear. **"+" appends one more empty slot** to the strip
+ * exactly one dashed empty plate, and tapping it still opens the tiny
+ * Upload/Generate popover right there. **A filled plate's primary tap
+ * now opens `SkidmarksPlateLightbox`** (a fullscreen enlarge view) so
+ * Stuart can inspect the still at real size — Replace/Clear moved into
+ * the lightbox rather than being lost. The corner "×" and
+ * press-and-hold clear stay on the strip tile as before. **"+" appends
+ * one more empty slot** to the strip
  * (`addSkidmarksClipPlate`, capped at `MAX_PLATES_PER_CLIP`) so Stuart
  * can generate/upload a different still into it — a scroll strip, not a
  * grid, keeps this from turning into a location-card layout. An empty
@@ -393,6 +586,14 @@ function SkidmarksPlateBox({
  * still empty; removing a slot that already holds a real still means
  * clearing it first, so one tap can never discard a generated/uploaded
  * image by accident.
+ *
+ * **iOS Safari horizontal-scroll fix**: each tile had `touch-action:
+ * none` (Tailwind's `touch-none`), which blocks *all* native panning
+ * starting on that tile — including the horizontal drag needed to
+ * reach the 3rd plate/"+". Swapped to `touch-pan-x` (still blocks
+ * vertical/pinch so the press-and-hold stays reliable) plus
+ * `overscroll-x-contain` + `-webkit-overflow-scrolling: touch` on the
+ * strip container.
  *
  * **One shared shot prompt for the whole clip, not one per plate** —
  * Stuart's explicit preference: editing the prompt before tapping
@@ -432,7 +633,9 @@ export function SkidmarksClipStub({
 
   return (
     <div className="flex flex-col gap-2.5 border-t border-white/[0.06] pt-3">
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      {/* `-webkit-overflow-scrolling:touch` + `overscroll-x-contain`
+          for reliable iOS Safari momentum scroll on this strip. */}
+      <div className="flex gap-2 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch]">
         {segment.plates.map((plate, i) => (
           <SkidmarksPlateBox
             key={plate.id}
