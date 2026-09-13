@@ -81,7 +81,7 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Plate *still* generation | **Real** — xAI Grok Imagine *image* API | `app/api/skidmarks/generate-still/route.ts`, `lib/plateGeneration.ts` |
 | Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to `localStorage` (the existing session-state mirror — see the "no `localStorage`" note below for what's actually exempt from that) | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `components/SkidmarksClipStub.tsx` |
 | Per-plate select + tick | **Real** — a small corner control on each filled plate tile (radio-style, one plate selected per clip at a time) plus a filled/empty tick for "already has a saved render"; see `lib/skidmarks.ts`'s `resolveSelectedPlateId` | `components/SkidmarksClipStub.tsx` |
-| Per-plate opt-in *video* render | **Real, two backends, routed by Vocal vs. Instrumental — no picker.** Vocal clips → **Comfy Cloud's LTX-2.5 `AudioToVideo` partner node** (`COMFY_CLOUD_API_KEY`), driven by a real frame-sliced (`lib/mp3Slice.ts`) window of the attached song's own vocal audio (`mp3.audioUrl`), 5–20s. Instrumental/B-roll clips → unchanged xAI Grok Imagine *video* API, 5–15s. Either way: animates **the one selected plate's own still only**, one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`). **Honesty note**: the Comfy/LTX path is real and documented but not live-verified in this sandbox (no `COMFY_CLOUD_API_KEY` available here) — see `lib/comfyCloud.ts`'s module doc comment. | `app/api/skidmarks/generate-clip/route.ts`, `lib/comfyCloud.ts`, `lib/mp3Slice.ts`, `lib/clipGeneration.ts`, `components/SkidmarksClipRender.tsx` |
+| Per-plate opt-in *video* render | **Real, three backends now, routed by Vocal vs. Instrumental, plus a real H3/Grok switch on Instrumental — no persistent picker.** Vocal clips → **Comfy Cloud's LTX-2.5 `AudioToVideo` partner node** (`COMFY_CLOUD_API_KEY`), driven by a real frame-sliced (`lib/mp3Slice.ts`) window of the attached song's own vocal audio (`mp3.audioUrl`), 5–20s — unchanged, no switch. Instrumental/B-roll clips → **MiniMax H3** (`MINIMAX_API_KEY`, optional `MINIMAX_GROUP_ID`) **by default** (Stuart's 2026-09-13 "H3 please, for this smoke" lock, superseding the older "never auto-assign H3" *still-image* cost lock below — the two are separate fields, see `SkidmarksInstrumentalVideoModel`'s doc comment), 5–15s, first-frame (optionally first+last-frame) image-to-video; **xAI Grok Imagine video** stays fully wired one tap away, same 5–15s range — a small H3/Grok switch lives *inside* the existing two-tap Render confirm, added on Stuart's own explicit ask ("a single H3 \| Grok choice inside the existing two-tap Render confirm"), persisted per clip (`SkidmarksClipSegment.instrumentalVideoModel`). Either way: animates **the one selected plate's own still only**, one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`). **Honesty note**: neither the Comfy/LTX nor the MiniMax H3 path is live-verified in this sandbox (no `COMFY_CLOUD_API_KEY`/`MINIMAX_API_KEY` available here) — see `lib/comfyCloud.ts`'s and `lib/minimaxH3.ts`'s own module doc comments; the H3 request/response shapes are mirrored from the original Skidmarks repo's own real H3 client, not invented. | `app/api/skidmarks/generate-clip/route.ts`, `lib/comfyCloud.ts`, `lib/minimaxH3.ts`, `lib/mp3Slice.ts`, `lib/clipGeneration.ts`, `lib/skidmarks.ts`, `components/SkidmarksClipRender.tsx` |
 | Per-plate render duration | **Real, auto-computed** — `segmentLengthSec / plateCount`, clamped to `[5, 15]`s (Grok's documented ceiling), no UI picker | `lib/clipGeneration.ts`'s `computePlateDurationSec` |
 | Render persistence | **Real**, per-**plate** now (not per-clip — see the pathname migration note below) — saved to durable Vercel Blob storage, survives a refresh; download uses a numeric (lettered once a clip has >1 plate) filename for Resolve. **Exactly one render per `(segmentId, plateId)` is an enforced invariant, not just a convention** — see the "exactly-one-render" note below | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
 | Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**, cards laid out in one `overflow-x-auto` horizontal strip (not a vertical stack) so a phone with several renders doesn't turn into one huge scroll; "download all" zip/sequential-fallback stays reachable underneath the strip. Each card also has a **Remove** control — deletes that plate's persisted Blob render(s) and clears its tick, never touches the plate's still/shot/motion prompts (those are separate, `localStorage`-only state) | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts`, `lib/clipRenders.ts`'s `deletePersistedClipRender` |
@@ -167,10 +167,10 @@ this `localStorage` session state, not just the archive.
   the same idea; don't re-add it without a fresh explicit ask.
 - **No model picker, no pill/badge row** anywhere in the current UI.
   `SkidmarksModelId` (LTX/Grok/H3/Seedance, `lib/skidmarks.ts`) still
-  exists in the data layer and still steers prompt phrasing under the
-  hood, but there is no tap surface for it today — don't add one
-  without an explicit ask. **Two narrow exceptions, both added on an
-  explicit ask**:
+  exists in the data layer and still steers *still-image* prompt
+  phrasing under the hood, but there is no tap surface for it today —
+  don't add one without an explicit ask. **Three narrow exceptions, all
+  added on an explicit ask**:
   1. A small bottom-right corner control on each *filled* plate tile
      (`components/SkidmarksClipStub.tsx`'s `SkidmarksPlateSelectControl`)
      — radio-style, picks which single plate the clip's one Render
@@ -191,6 +191,25 @@ this `localStorage` session state, not just the archive.
      reason for this one: #42's Render control had *no* motion
      instruction at all, which he found irrational enough not to press
      the button.
+  3. **`components/SkidmarksClipRender.tsx`'s H3/Grok switch** (added
+     2026-09-13, Stuart's explicit ask, this exact shape: "a single H3
+     \| Grok choice inside the existing two-tap Render confirm") — two
+     small buttons that appear *only inside the confirm step*, only on
+     an Instrumental clip, picking which real video backend the *next*
+     tap of Confirm calls. Backed by its own dedicated field
+     (`SkidmarksClipSegment.instrumentalVideoModel`,
+     `lib/skidmarks.ts`'s `SkidmarksInstrumentalVideoModel`/
+     `resolveInstrumentalVideoModel`/
+     `setSkidmarksSegmentInstrumentalVideoModel`) — deliberately
+     **not** the still-image `SkidmarksModelId`/`model` field above;
+     reusing that field would have silently changed every fresh
+     Instrumental clip's still-image framing hint
+     (`lib/plateGeneration.ts`'s `routingFramingHint`) as a side effect
+     of a video-backend default. Don't widen this into a third/fourth
+     option (Seedance, LTX) or move it onto the plate tile itself
+     without a fresh explicit ask — it stays exactly the two real
+     backends this route actually calls for Instrumental, in exactly
+     this one spot.
 - **Render animates exactly one plate's own still now, never every
   plate on the strip at once.** The old build sent every filled plate as
   multi-reference continuity in a single xAI call; per Stuart's
@@ -268,25 +287,39 @@ the request, and validate length against `shotPrompt` only.
   its own single lightweight confirm (a real count + rough dollar
   estimate) — not the two-tap video-grade confirm, but not a bare silent
   tap either.
-- A plate *video* render is not cheap (xAI Grok Imagine video: $0.08/sec
-  at 480p, $0.14 at 720p, $0.25 at 1080p, plus $0.01 per reference
-  image) — **always** behind an explicit confirm that shows a real
-  dollar estimate **and the real duration** (now variable per plate, see
-  below — never a bare "tap and it fires" control, and never a vague
-  "this costs money" line without the actual number.
+- A plate *video* render is not cheap — **always** behind an explicit
+  confirm that shows a real dollar estimate **and the real duration**
+  (per-plate, see below) for *whichever backend the confirm actually
+  targets* — never a bare "tap and it fires" control, and never a vague
+  "this costs money" line without the actual number. Real published
+  per-second rates, by backend:
+  - **xAI Grok Imagine video** (Instrumental, the fallback/switch-to
+    option): $0.08/sec at 480p, $0.14 at 720p, $0.25 at 1080p, plus
+    $0.01 per reference image. This app only ever requests 480p.
+  - **MiniMax H3** (Instrumental, the default as of 2026-09-13):
+    $0.08/sec at 768P, $0.13/sec at 2K, first 5 reference images free
+    ($0.04 each past that — this feature never sends more than 2).
+    This app only ever requests 768P.
+  - **Comfy Cloud LTX-2.5 (Fast)** (Vocal, unchanged): $0.13/sec at
+    1080p (LTX-2.5's only documented output resolution), no
+    per-reference-image surcharge.
 - **Real, auto-computed per-plate duration** — `segmentLengthSec /
   plateCount`, clamped to `[MIN_CLIP_DURATION_SEC, MAX_CLIP_DURATION_SEC]`
-  = `[5, 15]` seconds (Grok's documented ceiling), computed by
-  `lib/clipGeneration.ts`'s `computePlateDurationSec`. This replaced the
-  earlier flat, always-5s duration. **Still not a UI picker or an env
+  = `[5, 15]` seconds for both Instrumental backends (Grok's documented
+  ceiling; MiniMax H3's own real ceiling is `[4, 15]`, looser, so this
+  app's existing Grok range already sits safely inside it — no separate
+  H3 duration bounds needed), or `[5, 20]` for Vocal/Comfy-LTX,
+  computed by `lib/clipGeneration.ts`'s `computePlateDurationSec`/
+  `computeLtxPlateDurationSec`. **Still not a UI picker or an env
   var** — Stuart never gets a duration field to type into; the number is
   derived from the clip's own real length and plate count, shown to him
   read-only in the confirm step. If a future task asks for a manual
   override, that's a fresh, explicit, code-reviewed ask — this rework
   didn't add one.
-- **Resolution stays hardcoded** at 480p (the cheapest documented tier)
-  — same "not an env var, not a picker" lock as before this rework, only
-  duration became real/variable.
+- **Resolution stays hardcoded** per backend (480p for Grok, 768P for
+  MiniMax H3, 1080p for LTX-2.5 — each backend's own cheapest
+  documented tier) — same "not an env var, not a picker" lock across
+  all three.
 - **One render at a time, enforced in code, across the whole song, not
   just the whole clip** (`SkidmarksClipTimeline`'s `renderingKey` lock,
   keyed by `${segmentId}:${plateId}` — a plate-level key now, since a
@@ -315,33 +348,55 @@ the request, and validate length against `shotPrompt` only.
 
 ## Env vars this feature actually reads
 
-- `XAI_API_KEY` — required for both plate-still generation
-  (`app/api/skidmarks/generate-still/route.ts`) and clip-video render
-  (`app/api/skidmarks/generate-clip/route.ts`). One key, two routes, no
-  separate key per feature.
+- `XAI_API_KEY` — required for plate-still generation
+  (`app/api/skidmarks/generate-still/route.ts`) and, on the
+  Instrumental/B-roll clip-video render path, whenever it's switched to
+  Grok (`app/api/skidmarks/generate-clip/route.ts`'s Grok branch). One
+  key, both uses — no separate key per feature. Missing it never
+  blocks a still-only session, and never blocks an Instrumental clip
+  left on H3 (the default, see `MINIMAX_API_KEY` below) or a Vocal
+  clip (Comfy LTX) — only an Instrumental render actually switched to
+  Grok gets this key's own honest `missing_api_key` outcome.
 - `XAI_IMAGE_MODEL` (optional) — overrides the default
   `grok-imagine-image-2.0` still-image model.
 - `XAI_VIDEO_MODEL` (optional) — overrides the default
-  `grok-imagine-video-1.5` video model. Only used for Instrumental/
-  B-roll clips now (see the next entry for Vocal clips).
+  `grok-imagine-video-1.5` video model. Only used for an Instrumental/
+  B-roll clip actually switched to Grok (see `MINIMAX_API_KEY`/
+  `COMFY_CLOUD_API_KEY` below for the other two backends).
+- `MINIMAX_API_KEY` — required for **Instrumental/B-roll** clip video
+  render on its *default* backend, MiniMax H3
+  (`app/api/skidmarks/generate-clip/route.ts`'s H3 branch,
+  `lib/minimaxH3.ts`). Pay-as-you-go, create at platform.minimax.io.
+  Missing it never blocks a Vocal render (Comfy LTX) or an Instrumental
+  clip switched to Grok (`XAI_API_KEY`, above) — only an Instrumental
+  render actually left on H3 gets this key's own honest
+  `missing_api_key` outcome, with the confirm-step switch right there
+  to fall back to Grok in the meantime.
+- `MINIMAX_GROUP_ID` (optional) — only some MiniMax accounts still ask
+  for a `Group-Id` header; sent only when this is set. Confirmed
+  against the original Skidmarks repo's own `.env.example`, not
+  invented here — `HAILUO_API_KEY` (that repo's own fallback key name)
+  is deliberately **not** reproduced in this app; `MINIMAX_API_KEY` is
+  the one name this app checks.
 - `COMFY_CLOUD_API_KEY` — required for **Vocal**/lip-sync clip video
   render only (`app/api/skidmarks/generate-clip/route.ts`'s Comfy/LTX
   branch, `lib/comfyCloud.ts`). Create at platform.comfy.org (an active
   Comfy Cloud subscription is required to run workflows via this API).
   Used both as the `X-API-Key` header and forwarded a second time in
   `extra_data.api_key_comfy_org` (LTX-2.5 is a Comfy "Partner Node").
-  Missing it never blocks Instrumental clips (still xAI Grok, above) —
-  only Vocal renders get the honest `missing_api_key` outcome.
+  Missing it never blocks an Instrumental clip on either backend
+  (H3/Grok, above) — only Vocal renders get this key's own honest
+  `missing_api_key` outcome.
 - `COMFY_URL` (optional) — leave unset/blank to use Comfy Cloud's own
   hosted endpoint (the common case); set it to point at a self-hosted/
   serverless ComfyUI instance instead.
-- These are the **only two** Comfy-related env vars — confirmed
-  against the original Skidmarks repo's own `.env.example`, not
-  invented here. No model-override var (the LTX tier is hardcoded to
-  `LTX-2.5 (Fast)`, the cheaper of Comfy's two documented tiers) and no
-  "workflow id"/deployment id var — this app submits the full workflow
-  graph itself on each call (`POST /api/prompt`), unlike a deployment-
-  id-based API.
+- `COMFY_CLOUD_API_KEY`/`COMFY_URL` are the **only two** Comfy-related
+  env vars — confirmed against the original Skidmarks repo's own
+  `.env.example`, not invented here. No model-override var (the LTX
+  tier is hardcoded to `LTX-2.5 (Fast)`, the cheaper of Comfy's two
+  documented tiers) and no "workflow id"/deployment id var — this app
+  submits the full workflow graph itself on each call (`POST /api/
+  prompt`), unlike a deployment-id-based API.
 - `ELEVENLABS_API_KEY` (or `ELEVEN_LABS_API_KEY` as a fallback name) —
   required for real word-level transcription
   (`app/api/skidmarks/transcribe/route.ts`); missing it falls back to
