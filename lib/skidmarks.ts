@@ -1751,18 +1751,20 @@ let pushQueued = false;
  */
 /** A thrown `fetch` (no HTTP response at all — Safari/WebKit's own
  * "Load failed" wording for a raw network-level blip, as opposed to a
- * real HTTP error response) gets one retry, after a short pause, before
+ * real HTTP error response) gets retried with backoff before
  * `pushSkidmarksSessionNow` gives up and shows the error banner. Real
- * live bug (2026-09-14): Stuart hit this exact "Load failed" mid-Auto-
- * plate-run, on a visibly weak signal, right as this feature started
- * flushing a real save after every plate a run fills (more concurrent
- * network traffic than before, on a connection that was already
- * struggling) — often just a transient blip that clears itself a moment
- * later, not a real, persistent failure worth alarming him over. A real
- * HTTP response (a genuine 413, a real 502) is never retried here — it
- * would only fail the exact same way again. */
-const SESSION_PUSH_MAX_ATTEMPTS = 2;
-const SESSION_PUSH_RETRY_DELAY_MS = 1500;
+ * live bug (2026-09-14): Stuart kept hitting "Load failed" on a visibly
+ * weak signal — a single 1.5s retry wasn't enough for a connection that
+ * stayed bad for several seconds. This schedule (1s, 2s, 4s, 8s, 15s —
+ * ~30s total before giving up) gives a real mobile dead spot (a tunnel,
+ * an elevator, a genuinely bad patch of signal) a real chance to clear
+ * before the save is actually abandoned. Only applies to a normal,
+ * non-`keepalive` push — a flush fired from `pagehide`/backgrounding
+ * gets exactly one attempt, since the page may already be gone by the
+ * time a retry would fire, and there's no user still watching it retry.
+ * A real HTTP response (a genuine 413, a real 502) is never retried
+ * here — it would only fail the exact same way again immediately. */
+const SESSION_PUSH_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
 
 async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   if (pushInFlight) {
@@ -1772,9 +1774,10 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   pushInFlight = true;
   const snapshot = cachedState;
   setSessionSync({ status: "saving" });
+  const maxAttempts = keepalive ? 1 : SESSION_PUSH_RETRY_DELAYS_MS.length + 1;
   try {
     let lastNetworkError: unknown = null;
-    for (let attempt = 0; attempt < SESSION_PUSH_MAX_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const res = await fetch(SESSION_ENDPOINT, {
           method: "PUT",
@@ -1794,8 +1797,8 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
         return;
       } catch (err) {
         lastNetworkError = err;
-        if (attempt < SESSION_PUSH_MAX_ATTEMPTS - 1) {
-          await new Promise((resolve) => setTimeout(resolve, SESSION_PUSH_RETRY_DELAY_MS));
+        if (attempt < maxAttempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, SESSION_PUSH_RETRY_DELAYS_MS[attempt]));
         }
       }
     }
@@ -1861,6 +1864,28 @@ function ensureSessionPersistenceWired(): void {
     if (document.visibilityState === "hidden") flushSkidmarksSessionNow();
   });
   window.addEventListener("pagehide", flushSkidmarksSessionNow);
+  // Real live bug (2026-09-14): Stuart tapped Safari's own reload button
+  // — visible right in his own screenshots — while a save had genuinely
+  // not landed yet (still "saving," or already showing the error
+  // banner), which wiped whatever hadn't made it to Neon. The browser's
+  // own native "leave site? changes may not be saved" prompt is the
+  // honest, no-storage-of-any-kind way to stop that: it only fires while
+  // `sessionSync` is actually unsettled, never once a save has
+  // succeeded, and it's the browser asking, not this app inventing its
+  // own dialog. **Real limit, stated plainly**: this only catches a
+  // reload/close *through the browser's own UI* — it can't fire at all
+  // for a force-quit via the app switcher or a phone restart, since the
+  // page never gets a chance to run any code in that case. Nothing
+  // (this included) can make a save land with zero network at the exact
+  // moment it's attempted; see `SESSION_PUSH_RETRY_DELAYS_MS` above for
+  // what actually extends how long this app keeps trying before that
+  // becomes a real, final failure.
+  window.addEventListener("beforeunload", (e) => {
+    if (sessionSync.status === "saving" || sessionSync.status === "error") {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
   void hydrateSkidmarksSessionOnce();
 }
 
