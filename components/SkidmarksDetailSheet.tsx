@@ -55,6 +55,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     removeMp3,
     setMp3Duration,
     setSegmentShotPrompt,
+    nudgeSegmentStart,
+    nudgeSegmentEnd,
     setClipPlateStill,
     addClipPlate,
     removeClipPlate,
@@ -301,9 +303,12 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 band={activeBand}
                 mp3FileName={session.mp3.fileName}
                 mp3AudioUrl={session.mp3.audioUrl}
+                mp3DurationSec={session.mp3.durationSec}
                 renders={renders}
                 onPersisted={addRender}
                 onSetSegmentShotPrompt={setSegmentShotPrompt}
+                onNudgeSegmentStart={nudgeSegmentStart}
+                onNudgeSegmentEnd={nudgeSegmentEnd}
                 onSetClipPlateStill={setClipPlateStill}
                 onAddClipPlate={addClipPlate}
                 onRemoveClipPlate={removeClipPlate}
