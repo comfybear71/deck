@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   MAX_PLATES_PER_CLIP,
   readImageFileAsDataUrl,
@@ -242,6 +243,18 @@ interface SkidmarksPlateLightboxProps {
  * "Replace" swaps that row for the same Upload/Generate mini-panel the
  * empty-plate popover uses; all state/handlers still live in
  * `SkidmarksPlateBox`, passed down as props.
+ *
+ * **Portaled to `document.body`** (not rendered in place). This plate
+ * lives deep inside `SkidmarksDetailSheet`'s `overflow-y-auto` scroll
+ * body; on iOS Safari, a `position: fixed` element nested inside a
+ * scrolling ancestor doesn't reliably escape it — the enlarged still
+ * kept rendering *behind* the sheet's own chrome (Stuart's report,
+ * after #39 only fixed the backdrop's opacity, not this). Portaling
+ * out to `document.body` sidesteps that scroll-container/stacking
+ * nesting entirely, and the `z-[999]` here only has to beat every
+ * sheet/modal's own z-index (the detail sheets are `z-50`, the
+ * artist-generate popup is `z-[60]`) since it's compared in the same
+ * root stacking context as a `body`-level sibling either way.
  */
 function SkidmarksPlateLightbox({
   dataUrl,
@@ -265,8 +278,11 @@ function SkidmarksPlateLightbox({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+  // `SkidmarksPlateBox` only ever mounts this once `lightboxOpen` flips
+  // true from a client-side click/keyboard handler — never during SSR —
+  // so `document.body` is always available here; no mount-guard needed.
+  return createPortal(
+    <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
       {/* Solid, fully opaque scrim — no alpha, no blur. The previous
           `bg-black/90 backdrop-blur-sm` still let the sheet/strip behind
           it show through as a ghosted, blurred strip (Stuart's report);
@@ -341,7 +357,8 @@ function SkidmarksPlateLightbox({
 
         {error && <p role="alert" className="text-[11px] leading-snug text-rose-300/90">{error}</p>}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
