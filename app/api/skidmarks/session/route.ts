@@ -1,0 +1,56 @@
+import { NextResponse } from "next/server";
+import { loadSkidmarksSession, saveSkidmarksSession } from "@/lib/skidmarksSession-server";
+
+/**
+ * GET/PUT /api/skidmarks/session — the live edit session's Neon-backed
+ * read/write endpoint (see `lib/skidmarksSession-server.ts`'s module
+ * doc comment for the full picture: one durable row, keyed by a fixed
+ * single-tenant owner id, full-replace on every write). Client side,
+ * `lib/skidmarks.ts` calls `GET` once per page load (hydration) and
+ * `PUT` on a short debounce after every local mutation (see that
+ * module's doc comment for the race guards on both directions) — this
+ * route itself is a thin, honest pass-through with no business logic
+ * of its own beyond request-shape validation.
+ *
+ * **Never claims to be configured when it isn't** — same
+ * `{ configured: false, error }` shape `app/api/skidmarks/archive/
+ * route.ts`/`app/api/skidmarks/clip-renders/route.ts` already use for
+ * an unconnected Vercel Blob store, not a bare 500. A `PUT` failure is
+ * `{ ok: false, error }` instead — distinct wording, same honesty.
+ */
+export const runtime = "nodejs";
+
+export async function GET() {
+  const outcome = await loadSkidmarksSession();
+  if (!outcome.configured) {
+    return NextResponse.json({ configured: false, state: null, error: outcome.error });
+  }
+  return NextResponse.json({ configured: true, state: outcome.state, updatedAt: outcome.updatedAt });
+}
+
+interface SessionPutBody {
+  state?: unknown;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+export async function PUT(request: Request) {
+  let body: SessionPutBody;
+  try {
+    body = (await request.json()) as SessionPutBody;
+  } catch {
+    return NextResponse.json({ ok: false, error: "Expected a JSON body." }, { status: 400 });
+  }
+
+  if (!isPlainObject(body) || !isPlainObject(body.state)) {
+    return NextResponse.json({ ok: false, error: "Missing or malformed `state`." }, { status: 400 });
+  }
+
+  const outcome = await saveSkidmarksSession(body.state);
+  if (!outcome.ok) {
+    return NextResponse.json({ ok: false, error: outcome.error }, { status: 502 });
+  }
+  return NextResponse.json({ ok: true, updatedAt: outcome.updatedAt });
+}
