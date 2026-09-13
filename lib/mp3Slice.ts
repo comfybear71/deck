@@ -3,10 +3,15 @@
  * Comfy Cloud Vocal-render path needs that nothing else in this repo
  * provides yet: cutting a `[startSec, endSec)` window out of the
  * attached song's **full, durable** MP3 (`SkidmarksMp3Attachment.audioUrl`
- * — see `lib/mp3Blob.ts`) to send as the driving audio track to
- * Comfy Cloud's `LtxApi25AudioToVideo` node (`lib/comfyCloud.ts`), which
- * only accepts a single audio input and derives its own output duration
- * from that input's length.
+ * — see `lib/mp3Blob.ts`) to send as the driving audio track for the
+ * LTX 2.3 IA2V graph this app submits to Comfy Cloud
+ * (`lib/comfyCloud.ts`, `workflow/LTX_2.3_IA2V_Cloud.json`), whose
+ * `LoadAudio` node (`276`) takes a single audio input. The rendered
+ * clip's length is set by that graph's own duration input (node
+ * `340:331`), which this route feeds the sliced window's real,
+ * frame-aligned length — so the slice still decides how long the
+ * render runs, just via an explicit graph input rather than implicitly
+ * from the audio's own length.
  *
  * **Frame-aligned cut, not a re-encode.** An MP3 file is a sequence of
  * independently-framed chunks (each with its own 4-byte header

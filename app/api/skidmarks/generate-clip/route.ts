@@ -2,13 +2,12 @@ import { del, list, put } from "@vercel/blob";
 import { NextResponse } from "next/server";
 import { buildClipRenderPathname, buildClipRenderPlatePrefix, isSafeSegmentId } from "@/lib/clipRenderBlob";
 import {
-  buildLtxAudioToVideoWorkflow,
-  DEFAULT_LTX_MODEL,
+  buildLtx23Ia2vWorkflow,
   downloadComfyCloudOutput,
+  pollComfyCloudJob,
   resolveComfyCloudCredentials,
   submitComfyCloudWorkflow,
   uploadComfyCloudInput,
-  waitForComfyCloudCompletion,
 } from "@/lib/comfyCloud";
 import {
   downloadMinimaxH3Video,
@@ -38,14 +37,18 @@ import { sliceMp3ToTimeRange } from "@/lib/mp3Slice";
  * side (Stuart lock, 2026-09-13, updated same day).** This route used
  * to call xAI's Grok Imagine video API for every render, full stop.
  * Then it split on `vocal` alone, no picker at all. As of this pass:
- * - `vocal: true` (Vocal/lip-sync performance) \u2014 unchanged: **Comfy
- *   Cloud's LTX-2.5 `AudioToVideo` partner node** (`lib/comfyCloud.ts`,
- *   `COMFY_CLOUD_API_KEY`), driven by a real slice of the attached
- *   song's own vocal audio (`lib/mp3Slice.ts`) instead of an automatic
- *   push-in/zoom \u2014 see `handleVocalComfyLtxRender` below and
- *   `lib/comfyCloud.ts`'s module doc comment for that path's own
- *   honesty story. No switch on this path \u2014 Stuart never asked for
- *   one here.
+ * - `vocal: true` (Vocal/lip-sync performance) \u2014 **Comfy Cloud
+ *   running the full LTX 2.3 IA2V graph** (`lib/comfyCloud.ts`,
+ *   `workflow/LTX_2.3_IA2V_Cloud.json`, `COMFY_CLOUD_API_KEY`), driven
+ *   by a real slice of the attached song's own vocal audio
+ *   (`lib/mp3Slice.ts`) instead of an automatic push-in/zoom \u2014 see
+ *   `handleVocalComfyLtxRender` below and `lib/comfyCloud.ts`'s module
+ *   doc comment for that path's own honesty story. This used to call
+ *   Comfy's hosted `LtxApi25AudioToVideo` partner node, written off doc
+ *   pages; that never survived a real call (see `lib/comfyCloud.ts`)
+ *   and has been replaced by the graph the original Skidmarks repo
+ *   actually renders with. No switch on this path \u2014 Stuart never
+ *   asked for one here.
  * - `vocal: false` (Instrumental/B-roll/opener) \u2014 now **two** real
  *   backends, chosen by the request's own `videoBackend` field (never
  *   trusted blindly \u2014 anything other than the literal `"h3"` falls
@@ -264,22 +267,23 @@ export const MAX_CLIP_DURATION_SEC = 15;
  * `MAX_LTX_CLIP_DURATION_SEC` (duplicated here on purpose, same "each
  * Skidmarks API route stays self-contained" convention as the Grok
  * constants above \u2014 nothing enforces the two staying in sync
- * automatically). `30`, not the `20` this shipped with originally \u2014
- * see `lib/clipGeneration.ts`'s module doc comment's "History of this
- * ceiling" note: a partner-node doc page's `2-20s` figure turned out to
- * be more conservative than Stuart's own real, live Comfy Cloud usage
- * (many actual ~30s LTX renders already produced there), so this app's
- * product ceiling now matches that real demonstrated workflow. */
+ * automatically). `30`, not the `20` this shipped with originally.
+ * That `20` came from the hosted `LtxApi25AudioToVideo` partner node,
+ * which really does hard-reject driving audio outside 2\u201320s in its
+ * own `execute()` \u2014 but this route doesn't use that node any more.
+ * On the LTX 2.3 graph duration is an ordinary graph input (node
+ * `340:331`) with no such cap, and 30s matches Stuart's own real, live
+ * Comfy Cloud usage. */
 export const MIN_LTX_CLIP_DURATION_SEC = 5;
 export const MAX_LTX_CLIP_DURATION_SEC = 30;
-/** `LtxApi25AudioToVideo`'s own documented technical floor for its
- * driving audio (2s) \u2014 looser than `MIN_LTX_CLIP_DURATION_SEC` (this
+/** A floor on the *actual* driving audio (2s) \u2014 looser than
+ * `MIN_LTX_CLIP_DURATION_SEC` (this
  * app's own product floor, which nothing normally sends below); this
  * sanity-checks the *actual*, frame-aligned sliced-audio length
  * (`lib/mp3Slice.ts`'s `sliceMp3ToTimeRange` rounds outward to frame
  * boundaries, so it can land slightly outside the requested range)
- * before spending a real Comfy Cloud submit call on something the node
- * would just reject anyway. **There is no matching upper-bound error
+ * before spending a real Comfy Cloud submit call on a sliver of audio
+ * too short to animate anything from. **There is no matching upper-bound error
  * here** \u2014 `sliceMp3ToTimeRange` is called with `MAX_LTX_CLIP_DURATION_SEC`
  * as its own `maxDurationSec`, which trims an over-long slice back down
  * to that ceiling instead of this route ever having to reject a
@@ -304,8 +308,8 @@ export const POLL_INTERVAL_MS = 4_000;
  * resume-after-timeout" note. */
 export const POLL_DEADLINE_MS = 240_000;
 /** Same shape/reasoning as `POLL_DEADLINE_MS`, for the Comfy Cloud
- * WebSocket wait (`lib/comfyCloud.ts`'s `waitForComfyCloudCompletion`)
- * instead of xAI's REST poll loop. */
+ * job poll (`lib/comfyCloud.ts`'s `pollComfyCloudJob`, `GET /api/jobs/
+ * {promptId}`) instead of xAI's own REST poll loop. */
 export const COMFY_POLL_DEADLINE_MS = 240_000;
 const COMFY_AUDIO_FETCH_TIMEOUT_MS = 30_000;
 /** Same shape/reasoning as `POLL_DEADLINE_MS`/`COMFY_POLL_DEADLINE_MS`,
@@ -904,9 +908,9 @@ async function fetchMp3AudioBytes(url: string): Promise<{ ok: true; bytes: Uint8
  * `COMFY_CLOUD_API_KEY` \u2192 validate `mp3AudioUrl`/`audioStartSec`/
  * `audioEndSec` \u2192 fetch the full song's bytes \u2192 frame-slice this
  * plate's own window (`lib/mp3Slice.ts`) \u2192 decode the plate still's
- * data URL \u2192 upload both to Comfy Cloud \u2192 submit the
- * `LtxApi25AudioToVideo` workflow \u2192 wait for completion over its
- * WebSocket \u2192 download the finished video \u2192 persist to Vercel Blob
+ * data URL \u2192 upload both to Comfy Cloud \u2192 submit the LTX 2.3
+ * IA2V graph \u2192 poll `GET /api/jobs/{promptId}` to completion \u2192
+ * download the finished video \u2192 persist to Vercel Blob
  * (or fall back to a `data:` URL when no persistence target was given
  * \u2014 unlike the Grok path, Comfy's own signed download URL is a
  * one-shot, so there's no second "temporary hosted URL" to hand back
@@ -1032,11 +1036,17 @@ async function handleVocalComfyLtxRender(
     return NextResponse.json({ error: audioUpload.error, code: audioUpload.code }, { status: audioUpload.status });
   }
 
-  const workflow = buildLtxAudioToVideoWorkflow({
+  // `durationSec` is the real, frame-aligned length of the audio slice
+  // this render is actually driven by \u2014 an ordinary graph input on
+  // the LTX 2.3 template (node `340:331`), not a hosted node's capped
+  // parameter. Everything else in the graph (checkpoint, the
+  // `talkvid-3k` ID LoRA, samplers, VAE chain) is left exactly as the
+  // verified template has it.
+  const workflow = buildLtx23Ia2vWorkflow({
     imageFilename: imageUpload.name,
     audioFilename: audioUpload.name,
     prompt,
-    model: DEFAULT_LTX_MODEL,
+    durationSec: actualDurationSec,
   });
 
   const submitResult = await submitComfyCloudWorkflow(workflow, creds);
@@ -1044,7 +1054,7 @@ async function handleVocalComfyLtxRender(
     return NextResponse.json({ error: submitResult.error, code: submitResult.code }, { status: submitResult.status });
   }
 
-  const completionResult = await waitForComfyCloudCompletion(submitResult.promptId, creds, COMFY_POLL_DEADLINE_MS);
+  const completionResult = await pollComfyCloudJob(submitResult.promptId, creds, COMFY_POLL_DEADLINE_MS);
   if (!completionResult.ok) {
     return NextResponse.json({ error: completionResult.error, code: completionResult.code }, { status: completionResult.status });
   }
@@ -1278,15 +1288,15 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  // Comfy Cloud's `LtxApi25AudioToVideo` node only ever accepts a
-  // single optional `image` \u2014 no multi-reference continuity mode like
+  // The LTX 2.3 IA2V graph's `LoadImage` node (`269`) only ever takes
+  // one `image` \u2014 no multi-reference continuity mode like
   // xAI's `reference_images` (this feature's own UI never sends more
   // than one plate still anyway; see `lib/clipGeneration.ts`'s module
   // doc comment).
   if (vocal && rawReferences.length !== 1) {
     return NextResponse.json(
       {
-        error: "Comfy Cloud's LTX node accepts exactly one plate still to animate \u2014 not more, not fewer.",
+        error: "Comfy Cloud's LTX graph accepts exactly one plate still to animate \u2014 not more, not fewer.",
         code: "invalid_request",
       },
       { status: 400 }
