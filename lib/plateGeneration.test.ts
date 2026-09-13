@@ -56,6 +56,13 @@ describe("getSkidmarksCharacterLock", () => {
     expect(lock?.promptHallmarks.toLowerCase()).toContain("hidden in deep shadow at all times");
     expect(lock?.negativeCues?.toLowerCase()).toContain("face lit or visible");
     expect(lock?.negativeCues?.toLowerCase()).toContain("normal skin tone");
+    // Strengthened negatives from the live bug report (fully lit face, no
+    // fedora, wrong person entirely — see plateGeneration.test.ts's
+    // "live bug report" test below for the exact repro).
+    expect(lock?.negativeCues?.toLowerCase()).toContain("fully lit face");
+    expect(lock?.negativeCues?.toLowerCase()).toContain("bare head with no fedora");
+    expect(lock?.negativeCues?.toLowerCase()).toContain("recognizable facial features visible in light");
+    expect(lock?.negativeCues?.toLowerCase()).toContain("generic-looking person");
   });
 
   it("returns undefined for any member without an explicit lock", () => {
@@ -142,6 +149,65 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt.toLowerCase()).toContain("neon blue");
     expect(prompt.toLowerCase()).toContain("hidden in deep shadow at all times");
     expect(prompt).toContain("exact likeness/identity reference for Jack Ash");
+  });
+
+  it("live bug repro: the exact reported Instrumental prompt now carries Jack Ash's identity ref + strengthened lock", () => {
+    // Stuart's literal report: generated plate 3 on the Instrumental
+    // opener with this shot prompt and got back a fully-lit, fedora-less,
+    // wrong-looking face. This is the exact text from that report.
+    const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
+      shotPrompt:
+        "Looking through the keyhole of the last image we can see Jack Ash sitting in a dim room with his " +
+        "legs spread a bit apart his feet on the floor",
+      vocal: false,
+      model: "grok",
+      bandName: BAND_NAME,
+      vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
+    });
+    expect(referenceImageDataUrls).toEqual([JACK_ASH_AVATAR]);
+    expect(prompt).toContain("exact likeness/identity reference for Jack Ash");
+    expect(prompt.toLowerCase()).toContain("not a generic stand-in");
+    expect(prompt.toLowerCase()).toContain("fedora");
+    expect(prompt.toLowerCase()).toContain("hidden in deep shadow at all times");
+    expect(prompt.toLowerCase()).toContain("neon blue");
+    expect(prompt).toContain("Do not show:");
+    expect(prompt.toLowerCase()).toContain("fully lit face");
+    expect(prompt.toLowerCase()).toContain("bare head with no fedora");
+    expect(prompt.toLowerCase()).toContain("generic-looking person");
+  });
+
+  it("follow-up fix, signal 2: an Instrumental plate that continues from the plate before it locks the character even without re-naming him", () => {
+    // A later beat in the same story ("he stands, still in shadow") that
+    // never re-says "Jack" but is chained via "Use last plate" shouldn't
+    // silently drop the lock either.
+    const previousPlate = "data:image/jpeg;base64,previousPlateBytes";
+    const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
+      shotPrompt: "he rises slowly from the chair and turns toward the window",
+      vocal: false,
+      model: "grok",
+      bandName: BAND_NAME,
+      vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
+      continuityStillDataUrl: previousPlate,
+    });
+    expect(referenceImageDataUrls).toEqual([previousPlate, JACK_ASH_AVATAR]);
+    expect(prompt).toContain("Do not show:");
+    expect(prompt.toLowerCase()).toContain("neon blue");
+  });
+
+  it("signal 2 does not apply to an un-locked member — plain continuity alone never invents a lock", () => {
+    const previousPlate = "data:image/jpeg;base64,previousPlateBytes";
+    const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
+      shotPrompt: "the alley stretches on, neon signs flickering",
+      vocal: false,
+      model: "grok",
+      bandName: "Solar Rebel",
+      vocalist: member({ id: "solar-rebel-vocals", name: "Nova", avatarImage: "data:image/jpeg;base64,novaBytes" }),
+      continuityStillDataUrl: previousPlate,
+    });
+    // Only the continuity reference, never an identity one, for a member
+    // with no explicit character lock.
+    expect(referenceImageDataUrls).toEqual([previousPlate]);
+    expect(prompt).not.toContain("Do not show:");
   });
 
   it("an Instrumental clip naming an un-locked member still doesn't feature or reference them", () => {
