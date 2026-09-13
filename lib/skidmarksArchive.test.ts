@@ -13,6 +13,8 @@ import {
   addSkidmarksArchivedSong,
   archiveSkidmarksSession,
   buildArchiveZip,
+  buildSongBriefText,
+  buildSongPlanText,
   fetchArchiveSnapshot,
   fetchSkidmarksArchiveIndex,
   generateArchiveId,
@@ -215,6 +217,77 @@ describe("archiveSkidmarksSession", () => {
   });
 });
 
+describe("buildSongBriefText", () => {
+  const song: SkidmarksArchivedSong = {
+    id: "song-1",
+    bandId: "jack-ash",
+    bandName: "Jack Ash",
+    fileName: "talking-to-concrete.mp3",
+    archivedAt: Date.now(),
+    durationSec: 245,
+    clipCount: 1,
+    renderedPlateCount: 0,
+    snapshotUrl: "https://x/snapshot.json",
+  };
+
+  it("auto-fills Song/Band/Length/MP3 from what the app already knows, and leaves Lyrics/Brief blank as real template fields", () => {
+    const mp3 = createMp3Attachment(song.fileName, song.durationSec);
+    const text = buildSongBriefText(song, { band: BAND, mp3 });
+
+    expect(text).toContain("Song: talking-to-concrete");
+    expect(text).toContain("Band: Jack Ash");
+    expect(text).toContain("Length: 4:05");
+    expect(text).toContain("MP3: talking-to-concrete.mp3");
+    expect(text).toContain("Lyrics:\n");
+    expect(text).toContain("Brief:\n");
+  });
+
+  it("leaves Length blank rather than a placeholder when duration hasn't resolved yet", () => {
+    const mp3 = createMp3Attachment(song.fileName, null);
+    const text = buildSongBriefText({ ...song, durationSec: null }, { band: BAND, mp3 });
+    expect(text).toContain("Length: \n");
+  });
+
+  it("leaves the Artist line blank for a band with no locked character", () => {
+    const mp3 = createMp3Attachment(song.fileName, song.durationSec);
+    const text = buildSongBriefText(song, { band: BAND, mp3 });
+    expect(text).toContain("Artist: \n");
+  });
+
+  it("auto-fills the Artist line from Jack Ash's directorNote when he resolves as the vocalist", () => {
+    const jackBand: SkidmarksBand = {
+      ...BAND,
+      members: [{ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman", emoji: "\u{1F3A4}", looks: [] }],
+    };
+    const mp3 = createMp3Attachment(song.fileName, song.durationSec);
+    const text = buildSongBriefText(song, { band: jackBand, mp3 });
+    expect(text).toContain("Artist: fedora, face in brim shadow, neon lips only when mouth is in frame, never a lens stare");
+  });
+});
+
+describe("buildSongPlanText", () => {
+  it("matches Stuart's exact beat/cut/frame table shape, Song filled in, table left blank to fill per song", () => {
+    const song: SkidmarksArchivedSong = {
+      id: "song-1",
+      bandId: "jack-ash",
+      bandName: "Jack Ash",
+      fileName: "talking-to-concrete.mp3",
+      archivedAt: Date.now(),
+      durationSec: 245,
+      clipCount: 1,
+      renderedPlateCount: 0,
+      snapshotUrl: "https://x/snapshot.json",
+    };
+    const text = buildSongPlanText(song);
+
+    expect(text).toContain("Song: talking-to-concrete");
+    expect(text).toContain("Beat | Cut (Music Video Study) | Frame (Plate Study)");
+    expect(text).toContain("Open | linger / ease push |");
+    expect(text).toContain("Chorus | denser punches + one Wide |");
+    expect(text).toContain("Notes:");
+  });
+});
+
 describe("buildArchiveZip", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -271,6 +344,8 @@ describe("buildArchiveZip", () => {
       execFileSync("unzip", ["-t", zipPath], { stdio: "pipe" });
       const listing = execFileSync("unzip", ["-l", zipPath], { encoding: "utf8" });
       expect(listing).toContain("manifest.txt");
+      expect(listing).toContain("brief.txt");
+      expect(listing).toContain("plan.txt");
       expect(listing).toContain("plates/01a_instrumental.jpg");
       expect(listing).toContain("audio/song.mp3");
     } finally {

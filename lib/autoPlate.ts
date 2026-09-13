@@ -23,22 +23,61 @@
  * invented model call" spirit as `defaultSegmentModel`/
  * `routingFramingHint` elsewhere in this feature.
  *
- * **The one scripted exception**: Stuart's own concrete opener idea —
- * a weathered door in a cracked concrete wall with neon-blue light
- * bleeding through → a look through its keyhole → Jack Ash seated in
- * shadow beyond it — only fires when the brief (or the attached
- * filename, as a fallback hint) actually mentions it (`door`,
- * `concrete`, or `keyhole`), and only onto the *first* clip's own empty
- * plate slots, in strip order. It's never applied just because the
- * active band happens to be Jack Ash — Stuart has other Jack Ash songs
- * that aren't this one, and this opener is a specific creative choice
- * for a specific brief, not a band-wide default.
+ * **The one scripted exception**: Stuart's own concrete opener idea for
+ * *Talking to Concrete*'s 0:00–0:40 opener — a front-on dark door
+ * with a centered keyhole → the same shot, closer, on the keyhole
+ * itself → Jack Ash seen through that hole — only fires when the
+ * brief (or the attached filename, as a fallback hint) actually
+ * mentions it (`door`, `concrete`, or `keyhole`), and only onto the
+ * *first* clip's own empty plate slots, in strip order. It's never
+ * applied just because the active band happens to be Jack Ash —
+ * Stuart has other Jack Ash songs that aren't this one, and this
+ * opener is a specific creative choice for a specific brief, not a
+ * band-wide default.
+ *
+ * **All three shots are locked-off ("dead-on the whole way", Stuart's
+ * words) — same angle throughout, only the framing tightens.** They
+ * are Instrumental/B-roll, not Vocal — the door and keyhole have no
+ * one in frame, and even plate 3's Jack is seen through a keyhole, not
+ * performing to camera. That's not something this module has to
+ * enforce: Auto-plate never renders video at all (see this module's own
+ * doc comment above), so "don't LTX these" is already structurally true
+ * for every shot it plans, this opener included.
+ *
+ * **Plate 3's own failure mode, live-QA'd and already fixed one layer
+ * down**: an earlier pass generated this exact shot and got back a
+ * fully-lit stranger's face, not Jack. `lib/plateGeneration.ts`'s
+ * `shotPromptMentionsLockedCharacter` is the fix — it matches "Jack"
+ * as a whole word in the shot prompt and attaches his hallmarks/
+ * negative cues + his reference photo automatically, on an Instrumental
+ * clip same as a Vocal one. `CONCRETE_OPENER_SHOTS[2]` below names him
+ * by name specifically so that lock keeps firing; don't reword it to
+ * something like "the mysterious figure" that drops his name out of
+ * the sentence.
+ *
+ * **Master-still routing (2026-09-13, Stuart's "17 positions" ask)**:
+ * every fill this planner produces *outside* the scripted opener above
+ * still defaults to the small generic xAI templates below — unless the
+ * caller passes `masterStillDataUrl` (the resolved vocalist's own real
+ * `avatarImage`, per `lib/skidmarks.ts`), in which case those same
+ * empty slots instead draw a real camera position from
+ * `lib/sirayPositions.ts`'s `SIRAY_17_POSITIONS` (Stuart's own pack,
+ * pasted verbatim there) and are marked to generate via Siray's
+ * Seedream ref2i model (`lib/sirayClient.ts`,
+ * `generatePlateStillViaSiray` in `lib/plateGeneration.ts`) instead of
+ * xAI — real angle variety off one locked reference photo, instead of
+ * a handful of generic sentences. A band with no master still set keeps
+ * using the xAI templates, unchanged; this never fails or blocks a fill
+ * just because Siray isn't configured for a particular band yet. See
+ * `pickSirayPosition`'s own doc comment for exactly which position a
+ * given slot gets.
  */
 
 import {
   SKIDMARKS_SEGMENT_LABEL_META,
   type SkidmarksClipSegment,
 } from "./skidmarks";
+import { pickSirayPosition } from "./sirayPositions";
 
 /** Short by design — a couple of words to a short sentence ("door,
  * keyhole, Jack, neon-blue"), not a paragraph brief. Enforced both as
@@ -53,6 +92,16 @@ export const MAX_AUTO_PLATE_BRIEF_LENGTH = 240;
  * a real xAI pricing call, just enough for Stuart to see "this taps N
  * times" before committing. */
 export const ESTIMATED_STILL_COST_USD = 0.02;
+
+/** Siray's real, published Seedream 4.5 ref2i-spicy flat rate — see
+ * `lib/sirayClient.ts`'s own `SIRAY_SEEDREAM_45_COST_USD` (duplicated
+ * here on purpose rather than imported: that module is server-only,
+ * this one is bundled into `components/SkidmarksAutoPlate.tsx`'s
+ * client code, same "each self-contained module restates its own
+ * constant" convention `MIN_LTX_CLIP_DURATION_SEC` etc. already use
+ * across this feature). Used only for a master-still target's own
+ * share of the confirm step's estimate — see `estimateAutoPlateCostUsd`. */
+export const SIRAY_STILL_COST_USD = 0.04;
 
 export interface AutoPlateTarget {
   segmentId: string;
@@ -74,6 +123,14 @@ export interface AutoPlateTarget {
    * defaults to `false`: two unrelated empty plates on two different
    * clips have no reason to look continuous. */
   continueFromPreviousPlate: boolean;
+  /** Set only for a master-still-routed target (see this module's doc
+   * comment) — `components/SkidmarksAutoPlate.tsx` calls
+   * `generatePlateStillViaSiray` instead of the default xAI
+   * `generatePlateStill` when this is present, sending exactly this one
+   * reference image (the character's master still). Undefined for
+   * every xAI-routed target: the scripted concrete opener, and any
+   * generic fill for a band with no master still set. */
+  siray?: { referenceImageDataUrl: string };
 }
 
 const CONCRETE_OPENER_KEYWORDS = ["door", "concrete", "keyhole"];
@@ -87,9 +144,21 @@ function mentionsConcreteOpener(text: string): boolean {
  * ever applied to the first clip's own plate slots (index 0/1/2 within
  * that one strip), and only into whichever of those are still empty. */
 const CONCRETE_OPENER_SHOTS = [
-  "A weathered wooden door set into a crumbling concrete wall, a jagged crack across it glowing with neon-blue light bleeding through.",
-  "Looking through the door's keyhole into a dim room beyond, neon-blue light spilling around the edges of the frame.",
-  "Jack seated in shadow just beyond the keyhole, glowing neon-blue lips the only thing visible in the dark.",
+  // 1 — door. Front-on, locked-off; only the cracks carry any neon,
+  // the hole itself stays unlit — nothing to see through it yet.
+  "Front-on dark door, keyhole centered, mild blue neon only in the cracks around the frame, no light from the hole.",
+  // 2 — keyhole. Same door, same angle, just closer — the keyhole
+  // itself now carries a mild, half-strength blue seep (no beam, no
+  // angle change) as the one hint of what's on the other side.
+  "Same door, same angle, closer — keyhole centered and large, mild half-strength blue seep inside the hole only, no beam, no angle.",
+  // 3 — Jack through the hole. Names him explicitly (keeps
+  // `shotPromptMentionsLockedCharacter` firing — see this module's doc
+  // comment) and states the fedora/shadow/neon-lips lock hard, since
+  // this exact shot has come back as a random, fully-lit stranger
+  // before. If that happens again, strengthen this wording further
+  // before anything else — the character-lock machinery already
+  // attaches Jack's reference photo whenever his name appears here.
+  "Same keyhole as the frame. Jack Ash, black brim fedora, sitting in a dim room, legs slightly apart, feet on the floor, hands on knees, face in deep shadow under the brim, neon blue lips only, no other face light. Not a new man, no lit portrait, no bare head.",
 ];
 
 /** Small, varied, hand-authored templates for a *generic* empty plate —
@@ -117,15 +186,21 @@ function genericShotPrompt(vocal: boolean, bandName: string, rotationIndex: numb
 /**
  * Plans which empty plate slots get which shot prompt — pure, so
  * `components/SkidmarksAutoPlate.tsx` (or a test) can call this without
- * a real xAI key or network access. Returns an empty array when there's
- * nothing to fill (every plate already has a still) — a genuinely
- * successful "nothing to do" answer, not a failure.
+ * a real xAI/Siray key or network access. Returns an empty array when
+ * there's nothing to fill (every plate already has a still) — a
+ * genuinely successful "nothing to do" answer, not a failure.
+ *
+ * `masterStillDataUrl`, when passed, routes every non-scripted-opener
+ * fill through Siray's real position pack instead of the generic xAI
+ * templates — see this module's doc comment's "Master-still routing"
+ * note.
  */
 export function planAutoPlateFill(
   segments: SkidmarksClipSegment[],
   brief: string,
   bandName: string,
-  songTitleHint: string = ""
+  songTitleHint: string = "",
+  masterStillDataUrl?: string
 ): AutoPlateTarget[] {
   const trimmedBrief = brief.trim().slice(0, MAX_AUTO_PLATE_BRIEF_LENGTH);
   const applyConcreteOpener =
@@ -133,13 +208,17 @@ export function planAutoPlateFill(
 
   const targets: AutoPlateTarget[] = [];
   let rotation = 0;
+  let sirayRotation = 0;
 
   segments.forEach((segment, segmentIndex) => {
     const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label]?.vocal ?? false;
     const isFirstClip = segmentIndex === 0;
+    let emptySlotsSeenInSegment = 0;
 
     segment.plates.forEach((plate, plateIndex) => {
       if (plate.still) return; // never overwrite a filled plate
+      const isFirstEmptySlotInClip = emptySlotsSeenInSegment === 0;
+      emptySlotsSeenInSegment += 1;
 
       if (isFirstClip && applyConcreteOpener && plateIndex < CONCRETE_OPENER_SHOTS.length) {
         targets.push({
@@ -147,6 +226,24 @@ export function planAutoPlateFill(
           plateId: plate.id,
           shotPrompt: CONCRETE_OPENER_SHOTS[plateIndex],
           continueFromPreviousPlate: plateIndex > 0,
+        });
+        return;
+      }
+
+      if (masterStillDataUrl) {
+        const position = pickSirayPosition({
+          vocal,
+          isFirstClip,
+          isFirstEmptySlotInClip,
+          rotationIndex: sirayRotation,
+        });
+        sirayRotation += 1;
+        targets.push({
+          segmentId: segment.id,
+          plateId: plate.id,
+          shotPrompt: position.prompt,
+          continueFromPreviousPlate: false,
+          siray: { referenceImageDataUrl: masterStillDataUrl },
         });
         return;
       }
@@ -162,4 +259,15 @@ export function planAutoPlateFill(
   });
 
   return targets;
+}
+
+/** Sums the confirm step's real dollar estimate across a mix of xAI-
+ * and Siray-routed targets — `ESTIMATED_STILL_COST_USD` per xAI target,
+ * `SIRAY_STILL_COST_USD` per Siray one, never a single flat multiply
+ * once a fill can span both engines. */
+export function estimateAutoPlateCostUsd(targets: AutoPlateTarget[]): number {
+  return targets.reduce(
+    (sum, target) => sum + (target.siray ? SIRAY_STILL_COST_USD : ESTIMATED_STILL_COST_USD),
+    0
+  );
 }

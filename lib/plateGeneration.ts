@@ -117,10 +117,20 @@ export interface SkidmarksCharacterLock {
    * prompt string as an explicit "do not show" clause rather than a
    * separate request field. */
   negativeCues?: string;
+  /** A short, human-facing one-liner for this character's look — the
+   * director's-shorthand version of `promptHallmarks`, not phrased for
+   * a model. Used by `lib/skidmarksArchive.ts`'s per-song `brief.txt`
+   * export (the "Artist:" line) so a locked character's own look ships
+   * with every archived song's project zip, not just this feature's
+   * internal prompt-building. Optional — a member with a lock but no
+   * `directorNote` yet just leaves that line blank for Stuart to fill
+   * in by hand, same as an unlocked member always has. */
+  directorNote?: string;
 }
 
 export const SKIDMARKS_CHARACTER_LOCKS: Record<string, SkidmarksCharacterLock> = {
   "jack-ash-frontman": {
+    directorNote: "fedora, face in brim shadow, neon lips only when mouth is in frame, never a lens stare",
     promptHallmarks:
       "Jack Ash's signature look, locked, non-negotiable: a mysterious noir silhouette wearing a wide-brim " +
       "black fedora and a suit, desert-noir atmosphere. His face stays entirely hidden in deep shadow at all " +
@@ -486,4 +496,59 @@ export async function resolvePlateReferenceDataUrl(src: string): Promise<string>
   if (!res.ok) throw new Error(`Could not load reference image (HTTP ${res.status}).`);
   const blob = await res.blob();
   return readImageFileAsDataUrl(blob);
+}
+
+const GENERATE_STILL_SIRAY_ENDPOINT = "/api/skidmarks/generate-still-siray";
+
+/**
+ * POSTs to `/api/skidmarks/generate-still-siray` — the Seedance/"17
+ * positions" sibling of `generatePlateStill` above, for the one case
+ * `lib/autoPlate.ts` routes there: a real camera-position prompt
+ * (`lib/sirayPositions.ts`) plus a character's master reference still.
+ * Same honest-outcome shape as `generatePlateStill` (never throws, a
+ * thrown `fetch` is caught and reported the same as any other real
+ * failure) so a caller doesn't need a second code path to handle it.
+ */
+export async function generatePlateStillViaSiray(
+  prompt: string,
+  referenceImageDataUrl: string
+): Promise<PlateGenerationOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(GENERATE_STILL_SIRAY_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, referenceImageDataUrls: [referenceImageDataUrl] }),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      unconfigured: false,
+      message: err instanceof Error ? err.message : "Network error reaching the Siray still-generation API.",
+    };
+  }
+
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    // Non-JSON response — the status-code fallback below still gives
+    // Stuart a real message.
+  }
+
+  if (!res.ok) {
+    const errBody = (body ?? {}) as GenerateStillRouteErrorBody;
+    return {
+      ok: false,
+      unconfigured: errBody.code === "missing_api_key",
+      message: errBody.error ?? `Siray still generation failed (HTTP ${res.status}).`,
+    };
+  }
+
+  const okBody = (body ?? {}) as GenerateStillRouteSuccessBody;
+  const dataUrl = typeof okBody.dataUrl === "string" ? okBody.dataUrl : "";
+  if (!dataUrl) {
+    return { ok: false, unconfigured: false, message: "Siray still generation succeeded but returned no image." };
+  }
+  return { ok: true, dataUrl };
 }

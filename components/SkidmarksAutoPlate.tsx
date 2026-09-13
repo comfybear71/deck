@@ -3,12 +3,13 @@
 import { useState } from "react";
 import {
   MAX_AUTO_PLATE_BRIEF_LENGTH,
-  ESTIMATED_STILL_COST_USD,
+  estimateAutoPlateCostUsd,
   planAutoPlateFill,
 } from "@/lib/autoPlate";
 import {
   buildPlateGenerationRequest,
   generatePlateStill,
+  generatePlateStillViaSiray,
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
@@ -67,8 +68,16 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
 
-  const targets = planAutoPlateFill(segments, brief, band.name, songTitleHint ?? "");
-  const estimatedCost = targets.length * ESTIMATED_STILL_COST_USD;
+  // Raw (possibly unresolved — a `data:` URL if Stuart uploaded a
+  // photo, or a seeded relative path like Jack Ash's reference.jpg)
+  // — only ever used here as a "does this band have a master still at
+  // all" planning signal. `handleConfirm` below resolves it to a real
+  // `data:` URL once, the same way it already resolves the xAI
+  // identity reference, and that resolved value — not this raw one —
+  // is what actually gets sent to Siray.
+  const masterStillHint = resolveVocalistForPrompt(band.members)?.avatarImage;
+  const targets = planAutoPlateFill(segments, brief, band.name, songTitleHint ?? "", masterStillHint);
+  const estimatedCost = estimateAutoPlateCostUsd(targets);
 
   const handleTap = () => {
     if (running) return;
@@ -85,11 +94,42 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
     setRunning(true);
     setProgress({ done: 0, total: targets.length });
 
+    // Resolved once, up front, rather than per-target inside the loop
+    // below — the same reference photo backs every target in one run
+    // (xAI's identity reference *and* Siray's ref2i reference are the
+    // same underlying still), so there's nothing to gain re-resolving
+    // it target by target. An already-`data:` avatarImage resolves
+    // instantly; a seeded relative path (Jack Ash's reference.jpg)
+    // fetches once here.
+    let vocalist = resolveVocalistForPrompt(band.members);
+    if (vocalist?.avatarImage) {
+      try {
+        const identityDataUrl = await resolvePlateReferenceDataUrl(vocalist.avatarImage);
+        vocalist = { ...vocalist, avatarImage: identityDataUrl };
+      } catch {
+        // Best-effort identity reference — a failure here shouldn't
+        // block the still generation call itself, just drop the ref
+        // (and, for a Siray target, fall through to the missing-ref
+        // handling below, which no-ops that target honestly).
+      }
+    }
+
     const generatedStills = new Map<string, { dataUrl: string; featuresLockedCharacter?: boolean }>();
     let successCount = 0;
-    let stoppedEarly: string | null = null;
+    // Tracked per engine, not globally: a run can mix the scripted
+    // xAI-only opener with Siray-routed fills for everything else, and
+    // one engine being unconfigured (or otherwise persistently broken)
+    // says nothing about whether the other one would work.
+    const stoppedEngines = new Set<"xai" | "siray">();
+    const stopMessages: Partial<Record<"xai" | "siray", string>> = {};
 
     for (const target of targets) {
+      const engine: "xai" | "siray" = target.siray ? "siray" : "xai";
+      if (stoppedEngines.has(engine)) {
+        setProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
+        continue;
+      }
+
       const segment = segments.find((s) => s.id === target.segmentId);
       const plateIndex = segment?.plates.findIndex((p) => p.id === target.plateId) ?? -1;
       if (!segment || plateIndex < 0) {
@@ -113,77 +153,94 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
         continue;
       }
 
-      const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label]?.vocal ?? false;
-      let vocalist = resolveVocalistForPrompt(band.members);
-      if (vocalist?.avatarImage) {
-        try {
-          const identityDataUrl = await resolvePlateReferenceDataUrl(vocalist.avatarImage);
-          vocalist = { ...vocalist, avatarImage: identityDataUrl };
-        } catch {
-          // Best-effort identity reference — a failure here shouldn't
-          // block the still generation call itself, just drop the ref.
+      let outcome: Awaited<ReturnType<typeof generatePlateStill>>;
+      let featuresLockedCharacter: boolean | undefined;
+
+      if (target.siray) {
+        // Siray's ref2i model keeps the reference subject on its own —
+        // no injected framing/character-lock text needed the way xAI's
+        // plain text-to-image call does. A missing/failed identity
+        // reference here means there's genuinely nothing to send.
+        if (!vocalist?.avatarImage) {
+          setProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
+          continue;
         }
+        outcome = await generatePlateStillViaSiray(target.shotPrompt, vocalist.avatarImage);
+      } else {
+        const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label]?.vocal ?? false;
+        const previousPlateId = plateIndex > 0 ? segment.plates[plateIndex - 1].id : undefined;
+        const previousGeneratedThisRun = previousPlateId ? generatedStills.get(previousPlateId) : undefined;
+        const previousPersistedStill = previousPlateId ? segment.plates[plateIndex - 1].still : undefined;
+        const continuityStillDataUrl = target.continueFromPreviousPlate
+          ? (previousGeneratedThisRun?.dataUrl ?? previousPersistedStill?.dataUrl)
+          : undefined;
+        // Live-QA fix: only carries the locked-character lock forward
+        // when the plate actually continued from *itself* already
+        // featured him — see `lib/skidmarks.ts`'s `SkidmarksPlateStill
+        // .featuresLockedCharacter` doc comment. Prefers this same
+        // run's freshly-generated fact over a persisted still's (a
+        // target this run just filled in strip order, e.g. the
+        // scripted opener's door plate feeding its keyhole plate) so
+        // the chain stays correct within one Auto-plate pass, not just
+        // across separate sessions.
+        const continuityFeaturesLockedCharacter = target.continueFromPreviousPlate
+          ? (previousGeneratedThisRun?.featuresLockedCharacter ?? previousPersistedStill?.featuresLockedCharacter)
+          : undefined;
+
+        const request = buildPlateGenerationRequest({
+          shotPrompt: target.shotPrompt,
+          vocal,
+          model: segment.model,
+          bandName: band.name,
+          vocalist,
+          continuityStillDataUrl,
+          continuityFeaturesLockedCharacter,
+        });
+        featuresLockedCharacter = request.featuresLockedCharacter;
+        outcome = await generatePlateStill(request);
       }
 
-      const previousPlateId = plateIndex > 0 ? segment.plates[plateIndex - 1].id : undefined;
-      const previousGeneratedThisRun = previousPlateId ? generatedStills.get(previousPlateId) : undefined;
-      const previousPersistedStill = previousPlateId ? segment.plates[plateIndex - 1].still : undefined;
-      const continuityStillDataUrl = target.continueFromPreviousPlate
-        ? (previousGeneratedThisRun?.dataUrl ?? previousPersistedStill?.dataUrl)
-        : undefined;
-      // Live-QA fix: only carries the locked-character lock forward when
-      // the plate actually continued from *itself* already featured him
-      // — see `lib/skidmarks.ts`'s `SkidmarksPlateStill
-      // .featuresLockedCharacter` doc comment. Prefers this same run's
-      // freshly-generated fact over a persisted still's (a target this
-      // run just filled in strip order, e.g. the scripted opener's door
-      // plate feeding its keyhole plate) so the chain stays correct
-      // within one Auto-plate pass, not just across separate sessions.
-      const continuityFeaturesLockedCharacter = target.continueFromPreviousPlate
-        ? (previousGeneratedThisRun?.featuresLockedCharacter ?? previousPersistedStill?.featuresLockedCharacter)
-        : undefined;
-
-      const request = buildPlateGenerationRequest({
-        shotPrompt: target.shotPrompt,
-        vocal,
-        model: segment.model,
-        bandName: band.name,
-        vocalist,
-        continuityStillDataUrl,
-        continuityFeaturesLockedCharacter,
-      });
-
-      const outcome = await generatePlateStill(request);
       if (outcome.ok) {
-        generatedStills.set(target.plateId, {
-          dataUrl: outcome.dataUrl,
-          featuresLockedCharacter: request.featuresLockedCharacter,
-        });
+        // handleConfirm only ever runs from the Confirm button's onClick
+        // (see this file's bottom), never during render; this timestamps
+        // a still this exact tap just generated, same as the
+        // pre-existing Date.now() calls elsewhere in this feature (e.g.
+        // SkidmarksClipStub.tsx) that this same rule doesn't flag on a
+        // simpler call shape.
+        // eslint-disable-next-line react-hooks/purity
+        const createdAt = Date.now();
+        generatedStills.set(target.plateId, { dataUrl: outcome.dataUrl, featuresLockedCharacter });
         onSetClipPlateStill(target.segmentId, target.plateId, {
           dataUrl: outcome.dataUrl,
           source: "generated",
-          createdAt: Date.now(),
-          featuresLockedCharacter: request.featuresLockedCharacter,
+          createdAt,
+          featuresLockedCharacter,
         });
         successCount += 1;
       } else if (outcome.unconfigured) {
-        // Every remaining target would fail the exact same way — stop
-        // honestly now instead of looping through the rest for nothing.
-        stoppedEarly = outcome.message;
-        setProgress((prev) => (prev ? { ...prev, done: prev.total } : prev));
-        break;
+        // Every remaining target on *this* engine would fail the same
+        // way — stop calling it honestly, but a target on the other
+        // engine (the scripted opener alongside Siray fills, say)
+        // still gets its own real attempt.
+        stoppedEngines.add(engine);
+        stopMessages[engine] = outcome.message;
       }
-      // A real (non-unconfigured) failure for one still doesn't stop the
-      // rest — a transient/upstream error on one shot shouldn't block
-      // every other empty plate from getting filled.
+      // A real (non-unconfigured) failure for one still doesn't stop
+      // the rest — a transient/upstream error on one shot shouldn't
+      // block every other empty plate from getting filled.
 
       setProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
     }
 
     setRunning(false);
     setProgress(null);
-    if (stoppedEarly) {
-      setSummary(`Stopped \u2014 still generation isn't set up here (${stoppedEarly}).`);
+    const stopReasons = (Object.entries(stopMessages) as [string, string][]).map(
+      ([engine, message]) => `${engine === "siray" ? "Siray" : "xAI"} isn't set up here (${message})`
+    );
+    if (stopReasons.length > 0) {
+      const filledPart =
+        successCount > 0 ? `Filled ${successCount} still${successCount === 1 ? "" : "s"}; stopped` : "Stopped";
+      setSummary(`${filledPart} \u2014 ${stopReasons.join("; ")}.`);
     } else {
       const failCount = targets.length - successCount;
       setSummary(
