@@ -8,12 +8,9 @@ import {
   getSkidmarksSnapshot,
   markSkidmarksAnalysisFailed,
   normalizeSkidmarksSegment,
-  SKIDMARKS_LOCATION_PLATES,
   SKIDMARKS_MODELS,
-  SKIDMARKS_SHOT_PROMPT_EXAMPLES,
   selectSkidmarksBand,
   setSkidmarksSegmentModel,
-  setSkidmarksSegmentPlate,
   setSkidmarksSegmentShotPrompt,
   skidmarksChecklistState,
   type SkidmarksClipSegment,
@@ -195,44 +192,6 @@ describe("Stuart's locked model allowlist", () => {
   });
 });
 
-/**
- * Shot-prompt example copy tests — Stuart's explicit steer for the
- * field's placeholder/helper text: story beat + energy language only,
- * never camera jargon (that vocabulary belongs to the deleted Camera
- * Angles picker, not to what Stuart types).
- */
-describe("SKIDMARKS_SHOT_PROMPT_EXAMPLES", () => {
-  const CAMERA_JARGON = [
-    "wide shot",
-    "close-up",
-    "closeup",
-    "angle",
-    "mcu",
-    "medium shot",
-    "low angle",
-    "high angle",
-    "tracking shot",
-    "overhead",
-  ];
-
-  it("never uses camera jargon in the example copy", () => {
-    for (const example of SKIDMARKS_SHOT_PROMPT_EXAMPLES) {
-      const lower = example.toLowerCase();
-      for (const jargon of CAMERA_JARGON) {
-        expect(lower).not.toContain(jargon);
-      }
-    }
-  });
-
-  it("reads as story beat / energy, matching Stuart's locked examples", () => {
-    expect(SKIDMARKS_SHOT_PROMPT_EXAMPLES).toEqual([
-      "open on the crowd then find the face",
-      "creep to the keyhole",
-      "chorus hits hard",
-    ]);
-  });
-});
-
 describe("defaultSegmentModel", () => {
   it("only ever auto-assigns LTX (vocal) or Grok (instrumental) — never H3 or Seedance", () => {
     expect(defaultSegmentModel("vocal")).toBe("ltx-lipsync");
@@ -291,26 +250,6 @@ describe("setSkidmarksSegmentModel", () => {
   });
 });
 
-describe("setSkidmarksSegmentPlate", () => {
-  beforeEach(() => {
-    selectSkidmarksBand("jack-ash");
-    attachSkidmarksMp3(createMp3Attachment("track.mp3", 120));
-  });
-
-  it("is a plain single-select — tapping the same plate again no longer clears it", () => {
-    const mp3 = getSkidmarksSnapshot().session.mp3!;
-    const segment = mp3.segments[0];
-
-    setSkidmarksSegmentPlate(segment.id, "crowd-pit");
-    let updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
-    expect(updated.plateId).toBe("crowd-pit");
-
-    setSkidmarksSegmentPlate(segment.id, "crowd-pit");
-    updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
-    expect(updated.plateId).toBe("crowd-pit");
-  });
-});
-
 describe("normalizeSkidmarksSegment", () => {
   it("remaps a legacy/removed model id (Kling) to the vocal/instrumental default", () => {
     const legacy = {
@@ -319,7 +258,7 @@ describe("normalizeSkidmarksSegment", () => {
       endSec: 30,
       label: "instrumental",
       model: "kling", // pre-lock id, no longer valid
-      plateId: "crowd-pit",
+      plateId: "crowd-pit", // field removed entirely — the deleted location-plate picker
       cameraAngle: "wide", // field removed entirely in an earlier pass
       cameraAngleAuto: false, // field removed entirely in an earlier pass
       plateSubject: "cast", // field removed entirely in an earlier pass
@@ -328,9 +267,9 @@ describe("normalizeSkidmarksSegment", () => {
     const normalized = normalizeSkidmarksSegment(legacy);
 
     expect(normalized.model).toBe("grok"); // instrumental default — Kling isn't a valid pick anymore
-    expect(normalized.plateId).toBe("crowd-pit"); // still a valid plate, passes through
     expect(normalized.shotPrompt).toBe("");
     expect(normalized.uncensoredPlateStills).toBe(false);
+    expect(normalized).not.toHaveProperty("plateId");
     expect(normalized).not.toHaveProperty("cameraAngle");
     expect(normalized).not.toHaveProperty("cameraAngleAuto");
     expect(normalized).not.toHaveProperty("plateSubject");
@@ -343,14 +282,11 @@ describe("normalizeSkidmarksSegment", () => {
       endSec: 30,
       label: "vocal",
       model: "siray-uncensored", // SIRAY used to be a normal clip model; no longer valid
-      plateId: "some-removed-plate-id",
     } as unknown as SkidmarksClipSegment;
 
     const normalized = normalizeSkidmarksSegment(legacy);
 
     expect(normalized.model).toBe("ltx-lipsync");
-    expect(normalized.plateId).toBe("neon-stage");
-    expect(SKIDMARKS_LOCATION_PLATES.some((p) => p.id === normalized.plateId)).toBe(true);
   });
 
   it("preserves a still-valid manual model pick (H3/Seedance) across a reload instead of overriding it", () => {
@@ -360,7 +296,6 @@ describe("normalizeSkidmarksSegment", () => {
       endSec: 30,
       label: "instrumental",
       model: "h3",
-      plateId: "warehouse",
       shotPrompt: "the band standing together, posing",
     } as unknown as SkidmarksClipSegment;
 
@@ -372,7 +307,6 @@ describe("normalizeSkidmarksSegment", () => {
       endSec: 30,
       label: "lead",
       model: "seedance",
-      plateId: "warehouse",
       shotPrompt: "",
     } as unknown as SkidmarksClipSegment;
 
