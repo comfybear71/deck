@@ -141,10 +141,25 @@ export function useSkidmarksStudio() {
    * "useful" meaning it clears `hasUsefulVocalCoverage`, not just "a
    * provider returned words"), so it doesn't matter which of the two
    * `.then()`s below actually runs first.
+   *
+   * Every one of these resolve callbacks is passed this attach's own
+   * `mp3.attachId` and the store itself (`lib/skidmarks.ts`) re-checks
+   * it against `session.mp3.attachId` before applying anything — the
+   * durable, real guard against a slow real-API result landing on a
+   * *different* attach later. `analysisTokenRef` below is kept as a
+   * cheap same-instance early-bail (skips even building the result),
+   * but it is **not** the safety guarantee: it lives on this hook
+   * instance and is orphaned the moment `SkidmarksDetailSheet` unmounts
+   * (closing the sheet — `GraphView`'s `{openNode && ... &&
+   * <SkidmarksDetailSheet />}`), while any promise already in flight
+   * keeps running and would otherwise still land on whatever's live
+   * after a reopen. See `SkidmarksMp3Attachment.attachId`'s doc comment.
    */
   const attachMp3 = useCallback((file: File) => {
     const token = (analysisTokenRef.current += 1);
-    attachSkidmarksMp3(createMp3Attachment(file.name, null));
+    const mp3 = createMp3Attachment(file.name, null);
+    const attachId = mp3.attachId;
+    attachSkidmarksMp3(mp3);
 
     // Real, client-side-direct-to-Blob upload of the audio itself (see
     // `lib/mp3Blob.ts`'s doc comment) — the fix for "play survives a
@@ -154,23 +169,23 @@ export function useSkidmarksStudio() {
     uploadSkidmarksMp3Audio(file).then((outcome) => {
       if (analysisTokenRef.current !== token) return; // superseded — drop it
       if (outcome.ok) {
-        setSkidmarksMp3AudioUrl(outcome.url);
+        setSkidmarksMp3AudioUrl(attachId, outcome.url);
       } else if (outcome.unconfigured) {
-        markSkidmarksMp3AudioUnconfigured(outcome.message);
+        markSkidmarksMp3AudioUnconfigured(attachId, outcome.message);
       } else {
-        markSkidmarksMp3AudioFailed(outcome.message);
+        markSkidmarksMp3AudioFailed(attachId, outcome.message);
       }
     });
 
     analyzeVocalActivity(file).then(
       (result) => {
         if (analysisTokenRef.current !== token) return; // superseded — drop it
-        applySkidmarksAnalysisResult(result);
+        applySkidmarksAnalysisResult(attachId, result);
       },
       (err: unknown) => {
         if (analysisTokenRef.current !== token) return;
         const message = err instanceof Error ? err.message : "Vocal analysis failed.";
-        markSkidmarksAnalysisFailed(message);
+        markSkidmarksAnalysisFailed(attachId, message);
       }
     );
 
@@ -178,14 +193,15 @@ export function useSkidmarksStudio() {
       if (analysisTokenRef.current !== token) return; // superseded — drop it
       if (outcome.ok) {
         applySkidmarksTranscriptionResult(
+          attachId,
           outcome.result.words,
           outcome.result.durationSec,
           outcome.result.provider
         );
       } else if (outcome.unconfigured) {
-        markSkidmarksTranscriptionUnconfigured(outcome.message);
+        markSkidmarksTranscriptionUnconfigured(attachId, outcome.message);
       } else {
-        markSkidmarksTranscriptionFailed(outcome.message);
+        markSkidmarksTranscriptionFailed(attachId, outcome.message);
       }
     });
   }, []);
