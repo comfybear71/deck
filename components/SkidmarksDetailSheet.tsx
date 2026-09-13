@@ -51,6 +51,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     removeMp3,
     setMp3Duration,
     setSegmentShotPrompt,
+    setSegmentStill,
   } = useSkidmarksStudio();
 
   const activeBand = bands.find((b) => b.id === session.bandId);
@@ -202,7 +203,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
               </div>
             )}
 
-            {session.mp3 && (
+            {session.mp3 && activeBand && (
               <SkidmarksClipTimeline
                 segments={session.mp3.segments}
                 segmentsSource={session.mp3.segmentsSource}
@@ -211,7 +212,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 transcriptionStatus={session.mp3.transcriptionStatus}
                 transcriptionError={session.mp3.transcriptionError}
                 transcriptionProvider={session.mp3.transcriptionProvider}
+                band={activeBand}
                 onSetSegmentShotPrompt={setSegmentShotPrompt}
+                onSetSegmentStill={setSegmentStill}
               />
             )}
           </div>

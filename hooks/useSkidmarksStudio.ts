@@ -25,8 +25,10 @@ import {
   setSkidmarksMemberAvatarImage,
   setSkidmarksMp3Duration,
   setSkidmarksSegmentShotPrompt,
+  setSkidmarksSegmentStill,
   subscribeSkidmarks,
   type SkidmarksLook,
+  type SkidmarksPlateStill,
   type SkidmarksProjectKind,
   type SkidmarksState,
 } from "@/lib/skidmarks";
@@ -175,6 +177,17 @@ export function useSkidmarksStudio() {
     []
   );
 
+  /** Sets/replaces (`still` non-null) or clears (`still: null`) a clip's
+   * plate still — see `setSkidmarksSegmentStill`'s doc comment. Actually
+   * calling xAI's Grok Imagine API (`lib/plateGeneration.ts`) happens in
+   * `SkidmarksClipStub` itself, not here — this store setter only ever
+   * commits whichever result (an uploaded photo, a generated still, or a
+   * clear) the component already resolved. */
+  const setSegmentStill = useCallback(
+    (segmentId: string, still: SkidmarksPlateStill | null) => setSkidmarksSegmentStill(segmentId, still),
+    []
+  );
+
   return {
     bands: state.bands,
     session: state.session,
@@ -193,5 +206,6 @@ export function useSkidmarksStudio() {
     removeMp3,
     setMp3Duration,
     setSegmentShotPrompt,
+    setSegmentStill,
   };
 }
