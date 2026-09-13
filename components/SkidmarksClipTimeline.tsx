@@ -2,9 +2,7 @@
 
 import { useRef, useState } from "react";
 import {
-  canNudgeSkidmarksSegmentBoundary,
   formatSegmentRange,
-  SEGMENT_NUDGE_STEP_SEC,
   SKIDMARKS_SEGMENT_LABEL_META,
   type SkidmarksAnalysisStatus,
   type SkidmarksBand,
@@ -18,6 +16,7 @@ import { type SkidmarksTranscriptionProvider } from "@/lib/transcription";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 import { SkidmarksClipStub } from "./SkidmarksClipStub";
 import { SkidmarksAutoPlate } from "./SkidmarksAutoPlate";
+import { SkidmarksClipTimingHeaderEdit } from "./SkidmarksClipTimingHeaderEdit";
 
 interface SkidmarksClipTimelineProps {
   segments: SkidmarksClipSegment[];
@@ -43,15 +42,6 @@ interface SkidmarksClipTimelineProps {
    * (`lib/mp3Slice.ts`). `undefined` until that upload finishes (or if
    * it never configures/succeeds) — see `lib/mp3Blob.ts`. */
   mp3AudioUrl?: string;
-  /** The attached song's own real, probed `<audio>` duration
-   * (`SkidmarksMp3Attachment.durationSec`) — needed here (not just in
-   * `lib/skidmarks.ts`) so the last clip's End-nudge "+1s" button can
-   * correctly disable right at the song's own end, matching
-   * `nudgeSkidmarksSegmentBoundary`'s own clamp. `null` during the
-   * brief window before the probe resolves (last clip's End then nudges
-   * later freely, same "unbounded above until known" behavior that
-   * function already documents). */
-  mp3DurationSec: number | null;
   /** Every plate across the whole song that already has a saved
    * render, keyed by `persistedRenderKey` — lifted up to
    * `SkidmarksDetailSheet`'s `useSkidmarksClipRenders` so
@@ -114,10 +104,6 @@ function SegmentRow({
   onSetInstrumentalModel,
   onNudgeStart,
   onNudgeEnd,
-  canNudgeStartEarlier,
-  canNudgeStartLater,
-  canNudgeEndEarlier,
-  canNudgeEndLater,
   renderedPlateIds,
   renderLocked,
   onRenderStart,
@@ -147,15 +133,14 @@ function SegmentRow({
   onSelectPlate: (plateId: string) => void;
   onSetPlateMotionPrompt: (plateId: string, motionPrompt: string) => void;
   onSetInstrumentalModel: (model: SkidmarksInstrumentalVideoModel) => void;
-  /** The compact −1s/+1s stepper's handlers + pre-computed disabled-
-   * state flags — see `SkidmarksClipTimeline`'s doc comment and
-   * `lib/skidmarks.ts`'s `canNudgeSkidmarksSegmentBoundary`. */
+  /** The header's double-tap-to-edit time fields
+   * (`SkidmarksClipTimingHeaderEdit`, rendered directly below) — see
+   * `SkidmarksClipTimeline`'s doc comment. Both setters already clamp
+   * any delta against the song's bounds/neighboring clip, so nothing
+   * here needs a precomputed disabled-state flag the way the old
+   * stepper did. */
   onNudgeStart: (deltaSec: number) => void;
   onNudgeEnd: (deltaSec: number) => void;
-  canNudgeStartEarlier: boolean;
-  canNudgeStartLater: boolean;
-  canNudgeEndEarlier: boolean;
-  canNudgeEndLater: boolean;
   renderedPlateIds: ReadonlySet<string>;
   /** Whether a *different* plate anywhere on this timeline is currently
    * rendering a real video — see `SkidmarksClipTimeline`'s
@@ -189,9 +174,12 @@ function SegmentRow({
         className="flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left"
       >
         <ChevronIcon open={expanded} />
-        <span className="shrink-0 text-xs font-medium tabular-nums text-white/60">
-          {formatSegmentRange(segment.startSec, segment.endSec)}
-        </span>
+        <SkidmarksClipTimingHeaderEdit
+          startSec={segment.startSec}
+          endSec={segment.endSec}
+          onNudgeStart={onNudgeStart}
+          onNudgeEnd={onNudgeEnd}
+        />
         <span
           className={[
             "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium",
@@ -217,12 +205,6 @@ function SegmentRow({
             onSelectPlate={onSelectPlate}
             onSetPlateMotionPrompt={onSetPlateMotionPrompt}
             onSetClipInstrumentalModel={onSetInstrumentalModel}
-            onNudgeStart={onNudgeStart}
-            onNudgeEnd={onNudgeEnd}
-            canNudgeStartEarlier={canNudgeStartEarlier}
-            canNudgeStartLater={canNudgeStartLater}
-            canNudgeEndEarlier={canNudgeEndEarlier}
-            canNudgeEndLater={canNudgeEndLater}
             renderedPlateIds={renderedPlateIds}
             renderLocked={renderLocked}
             onRenderStart={onRenderStart}
@@ -318,17 +300,22 @@ function renderKey(segmentId: string, plateId: string): string {
  * above the per-clip rows — see that component's doc comment for the
  * "fill empties, then stop" contract.
  *
- * **Clip start/end nudge** (2026-09-13): each row's expanded body now
- * opens with `SkidmarksClipTimingNudge`, a compact −1s/+1s stepper for
- * that clip's `startSec`/`endSec` — Stuart's ask, since ElevenLabs
- * Scribe timing lands close but "sometimes 3-4 seconds off." This
- * component is the one place that actually has both the whole
- * `segments` array and the mp3's own `durationSec`, so it's also the
- * one computing each button's `canNudge*` disabled-state flag (via
- * `lib/skidmarks.ts`'s `canNudgeSkidmarksSegmentBoundary`, the exact
- * same clamp math the real nudge commits with) before handing them
- * down through `SegmentRow`/`SkidmarksClipStub` — neither of those
- * re-derives the bound itself. A nudge only ever edits local
+ * **Clip start/end edit** (2026-09-13, revised same day): each row's
+ * own always-visible header — "0:00–0:32" next to the label pill —
+ * *is* the editing surface now, via `SkidmarksClipTimingHeaderEdit`:
+ * double-tap either number to edit it in place. This replaced a
+ * compact −1s/+1s stepper (`SkidmarksClipTimingNudge`, deleted) that
+ * lived inside the expanded body — Stuart's direct follow-up ask,
+ * "I hate seeing big buttons like this and wasting great real estate,"
+ * on the very same feature the stepper shipped for (ElevenLabs Scribe
+ * timing lands close but "sometimes 3-4 seconds off"). The underlying
+ * store setters (`nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd`,
+ * `lib/skidmarks.ts`) are unchanged and already clamp *any* delta
+ * against the song's bounds and the neighboring clip's boundary — so,
+ * unlike the old stepper, this component doesn't need to precompute a
+ * `canNudge*` flag per direction at all; typing an out-of-range value
+ * just clamps to the nearest real bound the same way the old buttons
+ * did at their own limits. A nudge still only ever edits local
  * `startSec`/`endSec` values already on `segments`; it never re-calls
  * ElevenLabs or the energy heuristic, and never touches
  * `segmentsSource`.
@@ -341,7 +328,6 @@ export function SkidmarksClipTimeline({
   band,
   mp3FileName,
   mp3AudioUrl,
-  mp3DurationSec,
   renders,
   onPersisted,
   onSetSegmentShotPrompt,
@@ -439,34 +425,6 @@ export function SkidmarksClipTimeline({
                   onSetInstrumentalModel={(model) => onSetClipInstrumentalModel(segment.id, model)}
                   onNudgeStart={(deltaSec) => onNudgeSegmentStart(segment.id, deltaSec)}
                   onNudgeEnd={(deltaSec) => onNudgeSegmentEnd(segment.id, deltaSec)}
-                  canNudgeStartEarlier={canNudgeSkidmarksSegmentBoundary(
-                    segments,
-                    segment.id,
-                    "start",
-                    -SEGMENT_NUDGE_STEP_SEC,
-                    mp3DurationSec
-                  )}
-                  canNudgeStartLater={canNudgeSkidmarksSegmentBoundary(
-                    segments,
-                    segment.id,
-                    "start",
-                    SEGMENT_NUDGE_STEP_SEC,
-                    mp3DurationSec
-                  )}
-                  canNudgeEndEarlier={canNudgeSkidmarksSegmentBoundary(
-                    segments,
-                    segment.id,
-                    "end",
-                    -SEGMENT_NUDGE_STEP_SEC,
-                    mp3DurationSec
-                  )}
-                  canNudgeEndLater={canNudgeSkidmarksSegmentBoundary(
-                    segments,
-                    segment.id,
-                    "end",
-                    SEGMENT_NUDGE_STEP_SEC,
-                    mp3DurationSec
-                  )}
                   renderedPlateIds={renderedPlateIds}
                   renderLocked={
                     renderingKey !== null &&

@@ -18,6 +18,7 @@ import {
   nudgeSkidmarksSegmentBoundary,
   nudgeSkidmarksSegmentEnd,
   nudgeSkidmarksSegmentStart,
+  parseSkidmarksTimeInput,
   removeSkidmarksClipPlate,
   resetSkidmarksSessionAfterArchive,
   resolveInstrumentalVideoModel,
@@ -1189,6 +1190,52 @@ function threeContiguousSegments(): SkidmarksClipSegment[] {
     { ...base, id: "seg-c", startSec: 20, endSec: 30 },
   ];
 }
+
+/**
+ * The header double-tap-to-edit control's own parser
+ * (`components/SkidmarksClipTimingHeaderEdit.tsx`) — what Stuart
+ * actually types into a time field, turned into whole seconds (or
+ * `null`, on which the edit cancels rather than committing anything).
+ */
+describe("parseSkidmarksTimeInput", () => {
+  it("parses m:ss", () => {
+    expect(parseSkidmarksTimeInput("1:05")).toBe(65);
+    expect(parseSkidmarksTimeInput("0:32")).toBe(32);
+  });
+
+  it("doesn't require zero-padded seconds", () => {
+    expect(parseSkidmarksTimeInput("1:5")).toBe(65);
+  });
+
+  it("accepts multi-digit minutes", () => {
+    expect(parseSkidmarksTimeInput("12:34")).toBe(12 * 60 + 34);
+  });
+
+  it("accepts a bare seconds value with no colon", () => {
+    expect(parseSkidmarksTimeInput("65")).toBe(65);
+    expect(parseSkidmarksTimeInput("0")).toBe(0);
+  });
+
+  it("rounds a decimal seconds value", () => {
+    expect(parseSkidmarksTimeInput("12.6")).toBe(13);
+  });
+
+  it("tolerates surrounding whitespace", () => {
+    expect(parseSkidmarksTimeInput("  1:05  ")).toBe(65);
+  });
+
+  it("rejects an out-of-range seconds part (e.g. 1:65) rather than guessing", () => {
+    expect(parseSkidmarksTimeInput("1:65")).toBeNull();
+  });
+
+  it("rejects empty text and garbage without throwing", () => {
+    expect(parseSkidmarksTimeInput("")).toBeNull();
+    expect(parseSkidmarksTimeInput("   ")).toBeNull();
+    expect(parseSkidmarksTimeInput("abc")).toBeNull();
+    expect(parseSkidmarksTimeInput("1:2:3")).toBeNull();
+    expect(parseSkidmarksTimeInput("-5")).toBeNull();
+  });
+});
 
 describe("nudgeSkidmarksSegmentBoundary", () => {
   it("moves a middle clip's start earlier and shrinks the previous clip's end by the same amount", () => {

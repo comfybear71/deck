@@ -658,12 +658,14 @@ const DEMO_SEGMENT_FALLBACK_DURATION_SEC = 210;
  * right but sometimes 3-4 seconds off," so he wants to slip a clip's
  * start/end after transcription without re-running Scribe — see
  * `nudgeSkidmarksSegmentBoundary`/`nudgeSkidmarksSegmentStart`/
- * `nudgeSkidmarksSegmentEnd` below and `components
- * /SkidmarksClipTimingNudge.tsx` for the compact −1s/+1s stepper this
- * feeds. One tap's worth of nudge — small enough that correcting a
- * typical 3-4s miss takes a handful of taps (matches the "compact
- * stepper, not a big timeline editor" ask), not so small that it takes
- * a dozen taps to matter. */
+ * `nudgeSkidmarksSegmentEnd` below. Originally the fixed step size for
+ * a compact −1s/+1s tap-stepper UI (`components
+ * /SkidmarksClipTimingNudge.tsx`); that UI was replaced the same day
+ * with `components/SkidmarksClipTimingHeaderEdit.tsx`'s double-tap-to-
+ * type-a-time editing on Stuart's own "I hate seeing big buttons"
+ * follow-up ask, which can send any delta, not just this one — this
+ * constant now only survives as a representative "small nudge" value
+ * in `lib/skidmarks.test.ts`. */
 export const SEGMENT_NUDGE_STEP_SEC = 1;
 
 /** Floor on how short a nudge is ever allowed to leave a clip — either
@@ -2450,11 +2452,15 @@ export function nudgeSkidmarksSegmentBoundary(
 }
 
 /**
- * Whether a given nudge would actually move anything — the UI's own
- * disabled-state check for each of the stepper's four buttons
- * (`components/SkidmarksClipTimingNudge.tsx`), reusing the exact same
- * clamp math the real setters commit with rather than a second,
- * possibly-drifting copy of the bound logic.
+ * Whether a given nudge would actually move anything. Originally the
+ * old stepper's own disabled-state check for each of its four buttons;
+ * `components/SkidmarksClipTimingHeaderEdit.tsx`'s double-tap-to-edit
+ * replacement doesn't need a precomputed flag per direction (an
+ * arbitrary typed value just gets clamped by the setters below), so
+ * this is currently unused in this app's own UI — kept as a small,
+ * still-correct, still-tested pure helper (reuses the exact same clamp
+ * math the real setters commit with) in case a future control needs
+ * the same "would this actually move anything" check again.
  */
 export function canNudgeSkidmarksSegmentBoundary(
   segments: SkidmarksClipSegment[],
@@ -2467,9 +2473,10 @@ export function canNudgeSkidmarksSegmentBoundary(
 }
 
 /**
- * The −1s/+1s stepper's store-level setter for a clip's **start**
- * boundary (`components/SkidmarksClipTimingNudge.tsx`) — Stuart's
- * 2026-09-13 "let me slip a clip's start/end after transcription" ask.
+ * The clip-row header's double-tap-to-edit store-level setter for a
+ * clip's **start** boundary (`components
+ * /SkidmarksClipTimingHeaderEdit.tsx`) — Stuart's 2026-09-13 "let me
+ * slip a clip's start/end after transcription" ask.
  * Only ever edits the already-resolved `startSec`s already sitting on
  * `session.mp3.segments` — **never** re-runs ElevenLabs Scribe or the
  * energy heuristic, and never touches `segmentsSource`/
@@ -2848,6 +2855,33 @@ export function formatDuration(totalSeconds: number | null): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+/**
+ * The reverse of `formatDuration` — parses what Stuart actually types
+ * into the clip-row header's double-tap-to-edit time fields
+ * (`components/SkidmarksClipTimingHeaderEdit.tsx`) into whole seconds.
+ * Accepts `"m:ss"`/`"mm:ss"` (seconds 0–59, minutes any length, doesn't
+ * require zero-padding — "1:5" is fine, not just "01:05") or a bare
+ * integer/decimal seconds string ("65"). Returns `null` for anything it
+ * can't confidently parse (empty, garbage text, `"1:65"`) rather than
+ * guessing at a number — the caller cancels the edit on `null` instead
+ * of committing a nonsense value. Never itself clamps to the song's
+ * bounds or a neighbor's own boundary — that's
+ * `nudgeSkidmarksSegmentBoundary`'s job, once this hands back a real
+ * delta.
+ */
+export function parseSkidmarksTimeInput(text: string): number | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const colonMatch = trimmed.match(/^(\d+):([0-5]?\d)$/);
+  if (colonMatch) {
+    return Number(colonMatch[1]) * 60 + Number(colonMatch[2]);
+  }
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    return Math.round(Number(trimmed));
+  }
+  return null;
 }
 
 /** "0:15–0:45" — a clip segment's time range for the timeline row. */

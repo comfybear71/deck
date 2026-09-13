@@ -315,7 +315,6 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 band={activeBand}
                 mp3FileName={session.mp3.fileName}
                 mp3AudioUrl={session.mp3.audioUrl}
-                mp3DurationSec={session.mp3.durationSec}
                 renders={renders}
                 onPersisted={addRender}
                 onSetSegmentShotPrompt={setSegmentShotPrompt}

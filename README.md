@@ -107,7 +107,7 @@ total.
   `SkidmarksDetailSheet` (plus `SkidmarksLandingTiles` /
   `SkidmarksBandPicker` / `SkidmarksMembersModule` / `SkidmarksGeneratePopup`
   / `SkidmarksMp3Card` / `SkidmarksChecklistChips` / `SkidmarksClipTimeline`
-  / `SkidmarksClipStub` / `SkidmarksClipTimingNudge` / `SkidmarksClipRender` /
+  / `SkidmarksClipStub` / `SkidmarksClipTimingHeaderEdit` / `SkidmarksClipRender` /
   `SkidmarksAutoPlate` /
   `SkidmarksRenderedClipsShelf` / `SkidmarksArchiveShelf`) — the Skidmarks vibe-director node's face
   and its locked, one-scroll Music-video flow through the clip timeline's
@@ -1373,19 +1373,29 @@ now (see "Explicitly out of scope" below).
          also considered and set aside in favor of the one shared
          prompt above.
 
-     **Clip start/end nudge** (added 2026-09-13, Stuart's explicit ask):
+     **Clip start/end edit** (added 2026-09-13, revised same day):
      ElevenLabs Scribe's real word-level timing lands "mostly right but
      sometimes 3-4 seconds off," and Stuart wants to slip a clip's cut
      earlier/later to keep it with the music — a **lightweight trim/
      slip, not a heavy NLE**; the real fine-cut still happens in
-     DaVinci Resolve. `SkidmarksClipTimingNudge` is now the very first
-     thing in a clip's expanded panel, right above the plate strip: two
-     compact groups (**Start**, **End**), each a small "−" button, the
-     current time read-only in between, and a "+" button —
-     `SEGMENT_NUDGE_STEP_SEC` (1s) per tap, no editable `mm:ss` text
-     field (per Stuart's chrome lock, a stepper needs no keyboard, no
-     parsing/validation of typed time text, and a handful of taps
-     corrects a typical 3-4s miss just as fast as typing would).
+     DaVinci Resolve. First shipped as a compact −1s/+1s button stepper
+     (`SkidmarksClipTimingNudge`) opening a clip's expanded panel;
+     replaced the same day by `SkidmarksClipTimingHeaderEdit` on
+     Stuart's direct follow-up ("I hate seeing big buttons like this
+     and wasting great real estate... I'd rather be able to double tap
+     into the head[er] with the timing and change it") — the clip row's
+     own always-visible "0:00–0:32" header text is the control now, no
+     expanded-panel real estate spent on it at all. Double-tap either
+     number (a single tap there is deliberately swallowed rather than
+     also toggling the row expanded/collapsed, which a plain single tap
+     on that same row already does) to turn it into a small inline
+     `m:ss` text field; Enter or tapping away commits it —
+     `lib/skidmarks.ts`'s `parseSkidmarksTimeInput` parses what was
+     typed into a delta and sends it through the exact same
+     `nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd` setters the
+     old stepper called, so an out-of-range typed value just clamps the
+     same way mashing the old buttons past their limit used to; an
+     unparseable one cancels the edit instead of committing anything.
        - **Segments are always contiguous** — every real source this
          store ever builds (the seed cadence, and the energy-heuristic/
          transcription-derived timelines alike) walks a cursor forward
