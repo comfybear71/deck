@@ -14,6 +14,7 @@ import {
   classifyXaiVideoHttpFailure,
   classifyXaiVideoJobError,
   extractXaiErrorMessage,
+  MAX_LTX_CLIP_DURATION_SEC,
   POLL_INTERVAL_MS,
   POST,
   resolvePersistenceTarget,
@@ -1071,6 +1072,74 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
     expect(submittedBody.prompt["2"].inputs.audio).toBe("clip.mp3");
     expect(submittedBody.prompt["3"].inputs.model).toBe("LTX-2.5 (Fast)");
     expect(submittedBody.extra_data.api_key_comfy_org).toBe("test-comfy-key");
+  });
+
+  it("real-world regression: a plate requested at exactly MAX_LTX_CLIP_DURATION_SEC never fails with an \"audio slice is Ns\" error", async () => {
+    // Stuart's exact live-QA repro shape: a plate's audio window is
+    // clamped by the caller to exactly the product ceiling (previously
+    // 20s \u2014 the bug \u2014 now MAX_LTX_CLIP_DURATION_SEC/30s). Frame-aligned
+    // outward rounding (`lib/mp3Slice.ts`) must never push the *actual*
+    // slice back over that same ceiling and trip a spurious rejection.
+    const mp3Bytes = encodeTestMp3(45, 44100, 128);
+    const videoBytes = new Uint8Array([1, 2, 3]);
+
+    mockAudioFetch(mp3Bytes);
+    mockUploads("plate.png", "clip-boundary.mp3");
+    mockSubmit("job-boundary");
+    mockDownload(videoBytes);
+
+    const resultPromise = POST(
+      vocalRequest({
+        durationSec: MAX_LTX_CLIP_DURATION_SEC,
+        audioStartSec: 5,
+        audioEndSec: 5 + MAX_LTX_CLIP_DURATION_SEC,
+      })
+    );
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("executed", { prompt_id: "job-boundary", node: "4", output: { video: [{ filename: "out.mp4" }] } });
+    ws.emit("execution_success", { prompt_id: "job-boundary" });
+
+    const res = await resultPromise;
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.code).toBeUndefined();
+    expect(body.durationSec).toBeLessThanOrEqual(MAX_LTX_CLIP_DURATION_SEC);
+  });
+
+  it("clamps a raw segment/plateCount duration well past the ceiling instead of ever sending/erroring past it", async () => {
+    // Mirrors what `lib/clipGeneration.ts`'s `computeLtxPlateDurationSec`
+    // already does client-side (163s / 5 plates \u2248 32-33s/plate raw,
+    // clamped to MAX_LTX_CLIP_DURATION_SEC before this route ever sees
+    // it) \u2014 this route's own defensive slice-trim must agree, in case a
+    // caller ever sends an unclamped audioStartSec/audioEndSec window
+    // wider than the ceiling.
+    const mp3Bytes = encodeTestMp3(45, 44100, 128);
+    const videoBytes = new Uint8Array([4, 5, 6]);
+
+    mockAudioFetch(mp3Bytes);
+    mockUploads("plate.png", "clip-overshoot.mp3");
+    mockSubmit("job-overshoot");
+    mockDownload(videoBytes);
+
+    const resultPromise = POST(
+      vocalRequest({
+        durationSec: MAX_LTX_CLIP_DURATION_SEC,
+        audioStartSec: 0,
+        audioEndSec: 33, // wider than MAX_LTX_CLIP_DURATION_SEC \u2014 must be trimmed, not rejected.
+      })
+    );
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("executed", { prompt_id: "job-overshoot", node: "4", output: { video: [{ filename: "out.mp4" }] } });
+    ws.emit("execution_success", { prompt_id: "job-overshoot" });
+
+    const res = await resultPromise;
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.durationSec).toBeLessThanOrEqual(MAX_LTX_CLIP_DURATION_SEC);
   });
 
   it("falls back to a data: URL (never silently drops a paid render) when no persistence target is given", async () => {
