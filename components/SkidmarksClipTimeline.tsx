@@ -3,18 +3,14 @@
 import { useRef, useState } from "react";
 import {
   formatSegmentRange,
-  isLipSyncModel,
   SKIDMARKS_SEGMENT_LABEL_META,
-  skidmarksModelBadge,
   type SkidmarksAnalysisStatus,
   type SkidmarksClipSegment,
-  type SkidmarksModelId,
-  type SkidmarksPlateId,
   type SkidmarksSegmentsSource,
   type SkidmarksTranscriptionStatus,
 } from "@/lib/skidmarks";
 import { type SkidmarksTranscriptionProvider } from "@/lib/transcription";
-import { SkidmarksPlatesAndCamera } from "./SkidmarksPlatesAndCamera";
+import { SkidmarksClipStub } from "./SkidmarksClipStub";
 
 interface SkidmarksClipTimelineProps {
   segments: SkidmarksClipSegment[];
@@ -24,8 +20,6 @@ interface SkidmarksClipTimelineProps {
   transcriptionStatus: SkidmarksTranscriptionStatus;
   transcriptionError?: string;
   transcriptionProvider?: SkidmarksTranscriptionProvider;
-  onSetSegmentPlate: (segmentId: string, plateId: SkidmarksPlateId) => void;
-  onSetSegmentModel: (segmentId: string, model: SkidmarksModelId) => void;
   onSetSegmentShotPrompt: (segmentId: string, shotPrompt: string) => void;
 }
 
@@ -54,19 +48,14 @@ function SegmentRow({
   segment,
   expanded,
   onToggle,
-  onSetPlate,
-  onSetModel,
   onSetShotPrompt,
 }: {
   segment: SkidmarksClipSegment;
   expanded: boolean;
   onToggle: () => void;
-  onSetPlate: (plateId: SkidmarksPlateId) => void;
-  onSetModel: (model: SkidmarksModelId) => void;
   onSetShotPrompt: (shotPrompt: string) => void;
 }) {
   const meta = SKIDMARKS_SEGMENT_LABEL_META[segment.label];
-  const lipSync = isLipSyncModel(segment.model);
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.02]">
@@ -98,32 +87,11 @@ function SegmentRow({
         >
           {meta.label}
         </span>
-        <span className="flex-1" />
-        {/* Read-only glance at the current pick, not a tap target — the
-            real one-tap Model row lives in the expanded panel
-            (`SkidmarksPlatesAndCamera`) now, so this collapsed badge
-            doesn't duplicate that control. */}
-        <span
-          aria-label={`Model: ${skidmarksModelBadge(segment.model)}${lipSync ? " (lip-sync)" : ""}`}
-          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] font-medium text-white/60"
-        >
-          {lipSync && (
-            <span aria-hidden className="text-[9px] leading-none">
-              {"\u{1F3A4}"}
-            </span>
-          )}
-          {skidmarksModelBadge(segment.model)}
-        </span>
       </div>
 
       {expanded && (
         <div className="px-3 pb-3">
-          <SkidmarksPlatesAndCamera
-            segment={segment}
-            onSetPlate={onSetPlate}
-            onSetModel={onSetModel}
-            onSetShotPrompt={onSetShotPrompt}
-          />
+          <SkidmarksClipStub segment={segment} onSetShotPrompt={onSetShotPrompt} />
         </div>
       )}
     </div>
@@ -177,22 +145,22 @@ function timelineNote(
  * one-line note (see `timelineNote` above, no file paths) still shows
  * when transcription is unconfigured, sparse, or failed, so a
  * fallback timing isn't presented as if it were real. This is editable
- * structure for Stuart to assign a location plate / shot prompt to
- * regardless of which source is showing.
+ * structure for Stuart to assign a shot prompt to regardless of which
+ * source is showing.
  *
- * Each row is individually collapsible (collapsed = time range + label +
- * a read-only model badge — a 🎤 glyph joins it when the current model
- * is LTX Lip-sync; expanded = `SkidmarksPlatesAndCamera`'s big plate-card
- * row + shot-prompt box + a compact Model pill row for that clip — the
- * Camera Angles block from an earlier pass is gone outright, and per
- * Stuart's cost lock the Model row is a plain one-tap pick that's never
- * auto-assigned to H3/Seedance). The whole section can also collapse,
- * same pattern as `ControlPlaneDemo`.
+ * Each row is individually collapsible (collapsed = time range + label
+ * only, no model glance — per Stuart's live-QA chrome lock there is no
+ * model UI anywhere in this build right now, see `SkidmarksClipStub`'s
+ * doc comment; expanded = `SkidmarksClipStub`'s one dashed empty-still
+ * placeholder + one shot-prompt field for that clip, nothing else — the
+ * Camera Angles block, the five-card location-plate picker, and the
+ * Model pill row from earlier passes are all gone outright). The whole
+ * section can also collapse, same pattern as `ControlPlaneDemo`.
  *
- * **Phase note**: this is the plates/clip UI only. The footer's
+ * **Phase note**: this is the clip-stub UI only. The footer's
  * "Generate Clips" button is a **stub** — tapping it never calls a real
  * Comfy MCP / LTX render anywhere in this file or
- * `SkidmarksPlatesAndCamera`; it only shows a "stub, not wired" message,
+ * `SkidmarksClipStub`; it only shows a "stub, not wired" message,
  * surfaced in an always-mounted `role="status"` + `aria-live` line so
  * assistive tech reaches it too, not just sighted users. **This is
  * where the real cost lives, per Stuart**: a real plate *still* image
@@ -206,8 +174,6 @@ export function SkidmarksClipTimeline({
   segmentsSource,
   analysisStatus,
   transcriptionStatus,
-  onSetSegmentPlate,
-  onSetSegmentModel,
   onSetSegmentShotPrompt,
 }: SkidmarksClipTimelineProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
@@ -264,8 +230,6 @@ export function SkidmarksClipTimeline({
                 segment={segment}
                 expanded={expandedIds.has(segment.id)}
                 onToggle={() => toggleExpanded(segment.id)}
-                onSetPlate={(plateId) => onSetSegmentPlate(segment.id, plateId)}
-                onSetModel={(model) => onSetSegmentModel(segment.id, model)}
                 onSetShotPrompt={(shotPrompt) => onSetSegmentShotPrompt(segment.id, shotPrompt)}
               />
             ))}

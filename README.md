@@ -92,9 +92,9 @@ total.
   `SkidmarksDetailSheet` (plus `SkidmarksLandingTiles` /
   `SkidmarksBandPicker` / `SkidmarksMembersModule` / `SkidmarksGeneratePopup`
   / `SkidmarksMp3Card` / `SkidmarksChecklistChips` / `SkidmarksClipTimeline`
-  / `SkidmarksPlatesAndCamera`) — the Skidmarks vibe-director node's face
+  / `SkidmarksClipStub`) — the Skidmarks vibe-director node's face
   and its locked, one-scroll Music-video flow through the clip timeline's
-  plate + shot-prompt tags — see "Skidmarks node (vibe director)" below),
+  empty-still + shot-prompt tags — see "Skidmarks node (vibe director)" below),
   `ActionChips` /
   `AskGrokPanel` (generic detail-sheet primitives — see "Ask Grok (v0
   stub)" below).
@@ -1181,49 +1181,56 @@ now (see "Explicitly out of scope" below).
      `timelineNote` line above whenever it's showing — see that
      function in `SkidmarksClipTimeline.tsx` for the exact priority
      logic. Each clip is its own **collapsible row**: collapsed shows
-     the time range (e.g. "0:15–0:45"), its label pill, and a
-     **read-only** model badge (e.g. "LTX", "H3" — a 🎤 glyph joins it
-     when the current model is LTX Lip-sync — the real one-tap Model
-     row lives in the expanded panel, not here); expanded appends that
-     clip's `SkidmarksPlatesAndCamera` panel — the Camera Angles block
-     from an earlier pass is gone outright, leaving exactly three
+     just the time range (e.g. "0:15–0:45") and its label pill — no
+     model glance, no other chrome; expanded appends that clip's
+     `SkidmarksClipStub` panel, which is **ruthlessly minimal by
+     design** after a round of live QA on an earlier pass
+     (`SkidmarksPlatesAndCamera`, since deleted) that shipped a
+     horizontal row of five named location-plate cards (Neon Stage,
+     Rainy Alley, Desert Highway, Warehouse, Crowd Pit — deterministic
+     gradient swatches, no real plate photos), a Camera Angles block,
+     and a compact Model pill row, with every plate card mirroring the
+     same one `shotPrompt` as its caption. Stuart rejected all of it:
+     a location picker he never asked for, model chrome he doesn't want
+     to operate, and a prompt that visually "duplicated" into every box
+     as he typed (even though it was really only one value underneath).
+     `SkidmarksClipStub` replaces that whole panel with exactly two
      things:
-     - **Large location-plate cards** (Neon Stage, Rainy Alley, Desert
-       Highway, Warehouse, Crowd Pit — deterministic gradient swatches,
-       no real plate photos) in a horizontal scroll, sized like an
-       actual still rather than a thumbnail. Each card overlays the
-       clip's own **time range top-left** and **model badge top-right**
-       directly on the image (a 🎤 glyph joins the badge when the model
-       is LTX Lip-sync) — no metadata text stacked underneath. A card
-       also shows the clip's own shot prompt as its caption, so
-       scrolling between location options never loses "what's supposed
-       to be happening here." Tapping a card is a plain single-select
-       (no off state — a card is always showing *something*).
+     - **One empty-still placeholder** — a dashed-border box (same
+       visual language as the other empty stubs already in Skidmarks,
+       e.g. `SkidmarksGeneratePopup`'s `EmptySlot` and
+       `SkidmarksMembersModule`'s dashed avatar ring), no location, no
+       gradient, no duration label (Stuart doesn't know a clip's actual
+       rendered length until it's actually generated, so a number on an
+       empty placeholder would just be invented). When a real still
+       exists later this is the slot that would show it instead — not
+       implemented yet, no still field exists on `SkidmarksClipSegment`.
      - **One shot-prompt text field** — "what happens in this shot",
-       deliberately short (no lyric dumps, no long captions, and never
-       a hardcoded scene description — this field is entirely
-       Stuart-authored). Editing it only ever updates the prompt text —
-       it does **not** touch `model` (an earlier pass re-derived the
-       model from the prompt's language; that's gone per the cost lock
-       below).
-     - **A compact Model pill row** — one short line, not a helper
-       paragraph.
+       deliberately short (no lyric dumps, no long captions, no helper
+       paragraph underneath, and never a hardcoded scene description —
+       this field is entirely Stuart-authored) and bound to a single
+       `shotPrompt` value per clip. Editing it only ever updates the
+       prompt text — it does **not** touch `model` (an earlier pass
+       re-derived the model from the prompt's language; that's gone per
+       the cost lock below).
 
-     **Auto-assignment is cost-locked** (`defaultSegmentModel` in
-     `lib/skidmarks.ts`) — Stuart: "be very wary of spend." It only ever
-     picks two of the four models, and never rotates/cycles between
-     them on its own:
+     **Auto-assignment is still cost-locked in code**
+     (`defaultSegmentModel` in `lib/skidmarks.ts`) — Stuart: "be very
+     wary of spend" — it just isn't shown as a picker anymore. It only
+     ever picks two of the four models, and never rotates/cycles
+     between them on its own:
      - **Vocal** (verse/bridge, or either real path's Vocal) →
        **LTX Lip-sync**, unconditionally.
      - **Instrumental** (lead/instrumental, any path) → **Grok**,
        unconditionally.
-     - **H3** and **Seedance** are real, selectable pills — Stuart
-       still wants them reachable — but `defaultSegmentModel` will
-       never return either, and nothing else in the codebase picks them
-       on the app's own initiative either; they only ever land on a
-       clip via an explicit tap (`setSkidmarksSegmentModel`). Seedance's
-       pill is captioned "Optional · multi-angle" and H3's "Optional —
-       never auto-assigned" so neither reads as a default in the UI.
+     - **H3** and **Seedance** are valid picks a clip's `model` can
+       hold (`setSkidmarksSegmentModel`), but `defaultSegmentModel`
+       will never return either, and — per Stuart's live-QA chrome
+       lock — there is **no model pill anywhere in this UI** to tap
+       either one from right now. The plan (not implemented) is a
+       single tiny model badge once a clip has a real still; with only
+       an empty placeholder today, a badge would just be more chrome
+       around nothing.
      - **SIRAY** and **Kling** are not in this allowlist at all — SIRAY
        survives only as a narrow, not-wired-into-this-UI data-layer
        opt-in (`uncensoredPlateStills`, "uncensored plate stills only" —
@@ -1237,9 +1244,9 @@ now (see "Explicitly out of scope" below).
      as `PropfolioDetailSheet`'s chip feedback line, but always mounted
      with `role="status"`/`aria-live="polite"` so it reaches the
      accessibility tree/screen readers too, not just sighted users).
-     **Phase note**: this whole step is UI/interaction only — picking a
-     plate or typing a shot prompt is real (persists to `localStorage`,
-     see below), but no plate still or clip ever actually renders.
+     **Phase note**: this whole step is UI/interaction only — typing a
+     shot prompt is real (persists to `localStorage`, see below), but
+     no plate still or clip ever actually renders.
   - The sheet's backdrop is a darker/more opaque scrim
      (`bg-black/90 backdrop-blur-md`, vs. the generic `GraphNodeSheet`'s
      `bg-black/70`) — this sheet opens tall and near the top of the
@@ -1309,7 +1316,9 @@ now (see "Explicitly out of scope" below).
   timestamps once some provider responds (kept even for a `"sparse"`
   result), even though only the merged `segments` render today);
   `SkidmarksClipSegment` (`id`, `startSec`, `endSec`, `label`, `model`,
-  `plateId`, `cameraAngle`); and `SkidmarksState` (`bands`,
+  `shotPrompt`, `uncensoredPlateStills` — no `plateId`/`cameraAngle`;
+  both were deleted outright along with their pickers); and
+  `SkidmarksState` (`bands`,
   `session: { projectKind, bandId, mp3 }`, `removedSeedBandIds` —
   hand-seeded band ids Stuart has deleted, so `normalizeState` doesn't
   resurrect them). The Lyrics/Timing/Ready chip states aren't stored at

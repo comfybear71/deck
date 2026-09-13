@@ -24,13 +24,9 @@ import {
   setSkidmarksBandCoverImage,
   setSkidmarksMemberAvatarImage,
   setSkidmarksMp3Duration,
-  setSkidmarksSegmentModel,
-  setSkidmarksSegmentPlate,
   setSkidmarksSegmentShotPrompt,
   subscribeSkidmarks,
   type SkidmarksLook,
-  type SkidmarksModelId,
-  type SkidmarksPlateId,
   type SkidmarksProjectKind,
   type SkidmarksState,
 } from "@/lib/skidmarks";
@@ -174,14 +170,6 @@ export function useSkidmarksStudio() {
     []
   );
 
-  const setSegmentPlate = useCallback(
-    (segmentId: string, plateId: SkidmarksPlateId) => setSkidmarksSegmentPlate(segmentId, plateId),
-    []
-  );
-  const setSegmentModel = useCallback(
-    (segmentId: string, model: SkidmarksModelId) => setSkidmarksSegmentModel(segmentId, model),
-    []
-  );
   const setSegmentShotPrompt = useCallback(
     (segmentId: string, shotPrompt: string) => setSkidmarksSegmentShotPrompt(segmentId, shotPrompt),
     []
@@ -204,8 +192,6 @@ export function useSkidmarksStudio() {
     attachMp3,
     removeMp3,
     setMp3Duration,
-    setSegmentPlate,
-    setSegmentModel,
     setSegmentShotPrompt,
   };
 }
