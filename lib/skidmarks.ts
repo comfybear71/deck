@@ -1749,6 +1749,21 @@ let pushQueued = false;
  * page has started unloading — iOS Safari otherwise cancels an
  * in-flight `fetch` the instant the tab backgrounds/closes.
  */
+/** A thrown `fetch` (no HTTP response at all — Safari/WebKit's own
+ * "Load failed" wording for a raw network-level blip, as opposed to a
+ * real HTTP error response) gets one retry, after a short pause, before
+ * `pushSkidmarksSessionNow` gives up and shows the error banner. Real
+ * live bug (2026-09-14): Stuart hit this exact "Load failed" mid-Auto-
+ * plate-run, on a visibly weak signal, right as this feature started
+ * flushing a real save after every plate a run fills (more concurrent
+ * network traffic than before, on a connection that was already
+ * struggling) — often just a transient blip that clears itself a moment
+ * later, not a real, persistent failure worth alarming him over. A real
+ * HTTP response (a genuine 413, a real 502) is never retried here — it
+ * would only fail the exact same way again. */
+const SESSION_PUSH_MAX_ATTEMPTS = 2;
+const SESSION_PUSH_RETRY_DELAY_MS = 1500;
+
 async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   if (pushInFlight) {
     pushQueued = true;
@@ -1758,25 +1773,35 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   const snapshot = cachedState;
   setSessionSync({ status: "saving" });
   try {
-    const res = await fetch(SESSION_ENDPOINT, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state: snapshot }),
-      keepalive,
-    });
-    const body = (await res.json().catch(() => ({}))) as SessionPutRouteBody;
-    if (!res.ok || body.ok !== true) {
-      setSessionSync({
-        status: body.configured === false ? "unconfigured" : "error",
-        error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`,
-      });
-    } else {
-      setSessionSync({ status: "synced", lastSavedAt: Date.now() });
+    let lastNetworkError: unknown = null;
+    for (let attempt = 0; attempt < SESSION_PUSH_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const res = await fetch(SESSION_ENDPOINT, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: snapshot }),
+          keepalive,
+        });
+        const body = (await res.json().catch(() => ({}))) as SessionPutRouteBody;
+        if (!res.ok || body.ok !== true) {
+          setSessionSync({
+            status: body.configured === false ? "unconfigured" : "error",
+            error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`,
+          });
+        } else {
+          setSessionSync({ status: "synced", lastSavedAt: Date.now() });
+        }
+        return;
+      } catch (err) {
+        lastNetworkError = err;
+        if (attempt < SESSION_PUSH_MAX_ATTEMPTS - 1) {
+          await new Promise((resolve) => setTimeout(resolve, SESSION_PUSH_RETRY_DELAY_MS));
+        }
+      }
     }
-  } catch (err) {
     setSessionSync({
       status: "error",
-      error: err instanceof Error ? err.message : "Could not save the session.",
+      error: lastNetworkError instanceof Error ? lastNetworkError.message : "Could not save the session.",
     });
   } finally {
     pushInFlight = false;
