@@ -95,6 +95,54 @@ export async function fetchPersistedClipRenders(segmentIds: string[]): Promise<F
   return { ok: true, renders };
 }
 
+export type DeletePersistedClipRenderOutcome = { ok: true } | { ok: false; message: string };
+
+interface DeleteClipRenderRouteBody {
+  deleted?: unknown;
+  error?: unknown;
+}
+
+/**
+ * Stuart's explicit "remove old MP4s from the shelf" ask — deletes the
+ * one persisted render for `(segmentId, plateId)` (every blob under
+ * that plate's own prefix, via `DELETE /api/skidmarks/clip-renders`),
+ * leaving that plate's still, shot prompt, and motion text completely
+ * untouched (all `localStorage`-only, in `lib/skidmarks.ts`, entirely
+ * separate from Blob). Never throws — never silently claims success
+ * either: a network error, an unconfigured Blob store, or a real
+ * delete failure all come back as an honest `{ ok: false, message }` so
+ * `SkidmarksRenderedClipsShelf` can tell Stuart the removal didn't
+ * actually happen instead of clearing the tick/shelf row for a render
+ * that's still sitting there.
+ */
+export async function deletePersistedClipRender(segmentId: string, plateId: string): Promise<DeletePersistedClipRenderOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      `${CLIP_RENDERS_ENDPOINT}?segmentId=${encodeURIComponent(segmentId)}&plateId=${encodeURIComponent(plateId)}`,
+      { method: "DELETE" }
+    );
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Network error." };
+  }
+
+  let body: DeleteClipRenderRouteBody | null = null;
+  try {
+    body = (await res.json()) as DeleteClipRenderRouteBody;
+  } catch {
+    // Handled by the checks below either way.
+  }
+
+  if (!res.ok) {
+    const message = typeof body?.error === "string" ? body.error : `Could not remove this render (HTTP ${res.status}).`;
+    return { ok: false, message };
+  }
+  if (!body || body.deleted !== true) {
+    return { ok: false, message: typeof body?.error === "string" ? body.error : "Could not remove this render." };
+  }
+  return { ok: true };
+}
+
 /** Builds the `${segmentId}:${plateId}` key every "which plates are
  * already rendered" lookup in this feature uses — a plain string key
  * rather than a nested `Map<string, Map<string, ...>>`, since a flat
@@ -102,6 +150,41 @@ export async function fetchPersistedClipRenders(segmentIds: string[]): Promise<F
  * `SkidmarksRenderedClipsShelf`'s listing) needs. */
 export function persistedRenderKey(segmentId: string, plateId: string): string {
   return `${segmentId}:${plateId}`;
+}
+
+/**
+ * The one, shared "what order does the shelf read in" rule —
+ * **timeline/plate position, never "most recently rendered."** Sorts by
+ * `clipIndex` first (a clip's literal 1-based position in the
+ * timeline — the thing Stuart actually means by "order"), then
+ * `startSec`/`endSec` as a defensive tie-break for any caller that
+ * built a `PersistedClipRender` without a real `clipIndex`, then the
+ * stored `filename` last — that's what actually orders more than one
+ * *plate* on the same clip (`01a_...` before `01b_...`, see
+ * `lib/clipRenderBlob.ts`'s `buildClipRenderFilename`).
+ *
+ * **Why this has to be a pure function of each render's own fields,
+ * not of `Map` insertion order**: a re-render of an already-rendered
+ * plate calls `Map.set()` on that plate's *existing* key
+ * (`hooks/useSkidmarksClipRenders.ts`'s `addRender`) — which updates
+ * the value in place without moving it in iteration order — but this
+ * function doesn't even rely on that: recomputing the sort from
+ * scratch off `(clipIndex, startSec, endSec, filename)` every time
+ * means the result is identical no matter what order the caller's
+ * array/map happened to hand renders in, so "just-rendered" can never
+ * jump to the front/back the way it would if this instead sorted by,
+ * say, insertion order or a "last updated" timestamp.
+ *
+ * Returns a new array — never mutates the input.
+ */
+export function sortPersistedRenders<T extends PersistedClipRender>(renders: T[]): T[] {
+  return [...renders].sort(
+    (a, b) =>
+      a.clipIndex - b.clipIndex ||
+      a.startSec - b.startSec ||
+      a.endSec - b.endSec ||
+      a.filename.localeCompare(b.filename)
+  );
 }
 
 /** Appends Vercel Blob's documented `?download=1` query param

@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildForceDownloadUrl,
   buildRendersZip,
+  deletePersistedClipRender,
   fetchPersistedClipRenders,
   persistedRenderKey,
+  sortPersistedRenders,
   type PersistedClipRender,
 } from "./clipRenders";
 
@@ -114,6 +116,118 @@ describe("fetchPersistedClipRenders", () => {
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     const outcome = await fetchPersistedClipRenders(["seg-1"]);
     expect(outcome).toEqual({ ok: false, renders: [], message: "Failed to fetch" });
+  });
+});
+
+function render(overrides: Partial<PersistedClipRender>): PersistedClipRender {
+  return {
+    segmentId: "seg",
+    plateId: "plate",
+    url: "https://x/a.mp4",
+    filename: "01_0000-0040_render.mp4",
+    clipIndex: 1,
+    startSec: 0,
+    endSec: 40,
+    ...overrides,
+  };
+}
+
+describe("sortPersistedRenders", () => {
+  it("orders by clip position (clipIndex), regardless of input order", () => {
+    const third = render({ segmentId: "seg-3", plateId: "p", clipIndex: 3, startSec: 80, endSec: 120, filename: "03_0080-0120_render.mp4" });
+    const first = render({ segmentId: "seg-1", plateId: "p", clipIndex: 1, startSec: 0, endSec: 40, filename: "01_0000-0040_render.mp4" });
+    const second = render({ segmentId: "seg-2", plateId: "p", clipIndex: 2, startSec: 40, endSec: 80, filename: "02_0040-0080_render.mp4" });
+
+    expect(sortPersistedRenders([third, first, second])).toEqual([first, second, third]);
+  });
+
+  it("orders more than one plate on the same clip by their lettered filename (01a before 01b)", () => {
+    const plateB = render({ segmentId: "seg-1", plateId: "plate-b", clipIndex: 1, startSec: 0, endSec: 40, filename: "01b_0000-0040_render.mp4" });
+    const plateA = render({ segmentId: "seg-1", plateId: "plate-a", clipIndex: 1, startSec: 0, endSec: 40, filename: "01a_0000-0040_render.mp4" });
+
+    expect(sortPersistedRenders([plateB, plateA])).toEqual([plateA, plateB]);
+  });
+
+  it("never sorts a 3-digit clip index lexically after a 2-digit one — clipIndex is numeric, not string, comparison", () => {
+    const clip99 = render({ segmentId: "seg-99", plateId: "p", clipIndex: 99, startSec: 3900, endSec: 3940, filename: "99_3900-3940_render.mp4" });
+    const clip100 = render({ segmentId: "seg-100", plateId: "p", clipIndex: 100, startSec: 3940, endSec: 3980, filename: "100_3940-3980_render.mp4" });
+
+    expect(sortPersistedRenders([clip100, clip99])).toEqual([clip99, clip100]);
+  });
+
+  it("does not mutate the input array", () => {
+    const list = [render({ clipIndex: 2 }), render({ clipIndex: 1 })];
+    const original = [...list];
+    sortPersistedRenders(list);
+    expect(list).toEqual(original);
+  });
+
+  it("keeps stable order after a re-render overwrites the same plate's url \u2014 never 'most recently rendered'", () => {
+    // Simulates `hooks/useSkidmarksClipRenders.ts`'s `addRender`: a
+    // re-render of an already-rendered plate only replaces that plate's
+    // `url` (same segmentId/plateId/clipIndex/startSec/endSec/filename —
+    // `lib/clipRenderBlob.ts`'s pathname is stable across takes), it
+    // never changes its position-defining fields.
+    const doorPlate = render({ segmentId: "seg-1", plateId: "door", clipIndex: 1, startSec: 0, endSec: 40, filename: "01_0000-0040_render.mp4", url: "https://x/door-v1.mp4" });
+    const keyholePlate = render({ segmentId: "seg-2", plateId: "keyhole", clipIndex: 2, startSec: 40, endSec: 80, filename: "02_0040-0080_render.mp4", url: "https://x/keyhole-v1.mp4" });
+    const jackPlate = render({ segmentId: "seg-3", plateId: "jack", clipIndex: 3, startSec: 80, endSec: 120, filename: "03_0080-0120_render.mp4", url: "https://x/jack-v1.mp4" });
+
+    const before = sortPersistedRenders([jackPlate, doorPlate, keyholePlate]);
+    expect(before.map((r) => r.plateId)).toEqual(["door", "keyhole", "jack"]);
+
+    // Re-render the *first* clip's plate (door) \u2014 a fresh url, same
+    // identity/position fields, "just re-rendered" so it would sort
+    // first under a naive "most recently rendered" order.
+    const doorPlateReRendered = { ...doorPlate, url: "https://x/door-v2.mp4" };
+    const after = sortPersistedRenders([jackPlate, keyholePlate, doorPlateReRendered]);
+    expect(after.map((r) => r.plateId)).toEqual(["door", "keyhole", "jack"]);
+    expect(after[0].url).toBe("https://x/door-v2.mp4");
+  });
+});
+
+describe("deletePersistedClipRender", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends a DELETE with segmentId/plateId as query params", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { deleted: true }));
+    await deletePersistedClipRender("seg-1", "plate-1");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/skidmarks/clip-renders?segmentId=seg-1&plateId=plate-1");
+    expect(init).toEqual({ method: "DELETE" });
+  });
+
+  it("returns ok on a real deleted:true response", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { deleted: true }));
+    const outcome = await deletePersistedClipRender("seg-1", "plate-1");
+    expect(outcome).toEqual({ ok: true });
+  });
+
+  it("reports an honest failure \u2014 never a silent success \u2014 when the route reports deleted:false", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { deleted: false, error: "Vercel Blob: No token found." }));
+    const outcome = await deletePersistedClipRender("seg-1", "plate-1");
+    expect(outcome).toEqual({ ok: false, message: "Vercel Blob: No token found." });
+  });
+
+  it("reports an honest failure on a non-200 response", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(400, { error: "Missing `segmentId`/`plateId`.", code: "invalid_request" }));
+    const outcome = await deletePersistedClipRender("", "plate-1");
+    expect(outcome).toEqual({ ok: false, message: "Missing `segmentId`/`plateId`." });
+  });
+
+  it("reports a real network error honestly rather than throwing", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const outcome = await deletePersistedClipRender("seg-1", "plate-1");
+    expect(outcome).toEqual({ ok: false, message: "Failed to fetch" });
   });
 });
 
