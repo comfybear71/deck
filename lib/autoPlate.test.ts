@@ -8,6 +8,8 @@ import {
   SIRAY_STILL_COST_USD,
 } from "./autoPlate";
 
+const LOCATION_WORDS = /highway|motel|dive bar|gas station|drive-in|underpass|pickup truck|crossroads/i;
+
 function withPlateCount(segments: SkidmarksClipSegment[], counts: number[]): SkidmarksClipSegment[] {
   return segments.map((segment, i) => {
     const count = counts[i] ?? 1;
@@ -127,6 +129,26 @@ describe("planAutoPlateFill", () => {
     const targets = planAutoPlateFill(segments, longBrief, "Jack Ash");
     expect(targets[0].shotPrompt.toLowerCase()).not.toContain("crumbling concrete wall");
   });
+
+  // Stuart's ask (2026-09-14): Auto-plate is specifically so he never
+  // has to type a per-clip location himself — a generic fill (xAI path,
+  // no master still) has to actually name a real place, not just
+  // describe the camera framing.
+  it("gives every generic (xAI) fill a real backdrop, not just camera framing", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [4]).slice(0, 1);
+    const targets = planAutoPlateFill(segments, "a normal brief with no opener keywords", "Jack Ash");
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(target.shotPrompt).toMatch(LOCATION_WORDS);
+    }
+  });
+
+  it("varies the backdrop across several generic fills, not the same location every time", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [6]).slice(0, 1);
+    const targets = planAutoPlateFill(segments, "a normal brief with no opener keywords", "Jack Ash");
+    const locations = targets.map((t) => t.shotPrompt.match(LOCATION_WORDS)?.[0]);
+    expect(new Set(locations).size).toBeGreaterThan(1);
+  });
 });
 
 describe("ESTIMATED_STILL_COST_USD", () => {
@@ -198,6 +220,20 @@ describe("planAutoPlateFill — master-still routing (Siray)", () => {
     const target = targets.find((t) => t.segmentId === segments[2].id);
     expect(target).toBeDefined();
     expect(target!.shotPrompt.toLowerCase()).toMatch(/back|high front|overhead|over-shoulder/);
+  });
+
+  // Stuart's ask (2026-09-14): `SIRAY_17_POSITIONS` is camera framing
+  // only, so a Siray-routed fill needs its own real backdrop too, not
+  // just whatever's already in the master reference photo.
+  it("gives every Siray-routed fill a real backdrop alongside its camera position", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [6]).slice(0, 1);
+    const targets = planAutoPlateFill(segments, "", "Jack Ash", "", MASTER_STILL);
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(target.shotPrompt).toMatch(LOCATION_WORDS);
+    }
+    const locations = targets.map((t) => t.shotPrompt.match(LOCATION_WORDS)?.[0]);
+    expect(new Set(locations).size).toBeGreaterThan(1);
   });
 });
 
