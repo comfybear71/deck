@@ -21,6 +21,7 @@ import {
   removeSkidmarksClipPlate,
   resetSkidmarksSessionAfterArchive,
   resolveInstrumentalVideoModel,
+  sessionHasSubstantiveContent,
   resolveSelectedPlateId,
   restoreSkidmarksArchivedSession,
   SEGMENT_NUDGE_STEP_SEC,
@@ -40,6 +41,7 @@ import {
   type SkidmarksBand,
   type SkidmarksClipPlateSlot,
   type SkidmarksClipSegment,
+  type SkidmarksState,
 } from "./skidmarks";
 import type { SkidmarksTranscribedWord } from "./transcription";
 
@@ -444,6 +446,72 @@ describe("getSkidmarksSessionSyncSnapshot", () => {
     // Whatever the status is, it must be one this app actually handles
     // \u2014 the banner in `SkidmarksDetailSheet` keys off exactly these.
     expect(["loading", "synced", "saving", "unconfigured", "error"]).toContain(snapshot.status);
+  });
+});
+
+/**
+ * **The real-world bug this guards against**: #57 switched the durable
+ * session copy from `localStorage` to Neon but shipped with no step to
+ * carry an existing `localStorage` session into a fresh, empty Neon
+ * row \u2014 so on the first real deploy, a phone with six tagged Vocal
+ * plates loaded into the pristine seed state, which looked exactly
+ * like the plates had been deleted. They hadn't; nothing had ever read
+ * them into Neon in the first place. `sessionHasSubstantiveContent` is
+ * the pure check `hydrateSkidmarksSessionOnce`'s one-time local-storage
+ * recovery path (see `lib/skidmarks.ts`'s `LEGACY_LOCAL_STORAGE_KEY`
+ * doc comment) uses to tell "nothing real to protect, safe to recover
+ * into" apart from "Stuart already has real content here, don't
+ * clobber it."
+ */
+describe("sessionHasSubstantiveContent", () => {
+  const seedBand: SkidmarksBand = {
+    id: "jack-ash",
+    name: "Jack Ash",
+    tagline: "Dirt roads & bad decisions",
+    coverSeed: 1,
+    editIcon: "pencil",
+    members: [],
+  };
+
+  function stateWith(overrides: Partial<SkidmarksState>): SkidmarksState {
+    return {
+      bands: [seedBand],
+      session: { projectKind: null, bandId: null, mp3: null },
+      removedSeedBandIds: [],
+      ...overrides,
+    };
+  }
+
+  it("reads false for the pristine seed state \u2014 no real band, no mp3, nothing tagged", () => {
+    expect(sessionHasSubstantiveContent(stateWith({}))).toBe(false);
+  });
+
+  it("reads true the moment a non-seed band exists, even with nothing else", () => {
+    const realBand: SkidmarksBand = { ...seedBand, id: "the-real-band", name: "The Real Band" };
+    expect(sessionHasSubstantiveContent(stateWith({ bands: [seedBand, realBand] }))).toBe(true);
+  });
+
+  it("reads true once an mp3 is attached, even before any clip is tagged", () => {
+    const mp3 = createMp3Attachment("song.mp3", 30);
+    expect(
+      sessionHasSubstantiveContent(stateWith({ session: { projectKind: "music-video", bandId: "jack-ash", mp3 } }))
+    ).toBe(true);
+  });
+
+  it("reads true once a segment carries a real shot prompt \u2014 the actual six-tagged-plates scenario", () => {
+    const mp3 = createMp3Attachment("song.mp3", 30);
+    mp3.segments = mp3.segments.map((seg, i) => (i === 0 ? { ...seg, shotPrompt: "slow push in, neon lips" } : seg));
+    expect(
+      sessionHasSubstantiveContent(stateWith({ session: { projectKind: "music-video", bandId: "jack-ash", mp3 } }))
+    ).toBe(true);
+  });
+
+  it("removedSeedBandIds alone \u2014 a deleted seed tile \u2014 does not itself count as substantive", () => {
+    // Deleting a seed band is a real action, but not one worth
+    // recovering *from* localStorage: a fresh Neon row starting with
+    // every seed band present is not a loss the way six tagged plates
+    // vanishing is. Keeps the recovery path from firing on noise.
+    expect(sessionHasSubstantiveContent(stateWith({ removedSeedBandIds: ["jack-ash"] }))).toBe(false);
   });
 });
 

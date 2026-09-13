@@ -1492,6 +1492,61 @@ interface SessionGetRouteBody {
 let hydrationStarted = false;
 
 /**
+ * **Emergency one-time recovery, added after #57's first real deploy.**
+ * #57 switched the durable session copy from `localStorage` to Neon,
+ * but never wrote a step to carry an *existing* `localStorage` session
+ * over into a fresh, empty Neon row \u2014 so on Stuart's first load after
+ * that deploy, Neon genuinely had nothing under his owner id, and this
+ * module fell back to its honest empty state (`SEED_BANDS`, no real
+ * band/session), which looked to him exactly like his real session \u2014
+ * six tagged Vocal plates among them \u2014 had simply vanished.
+ *
+ * It had not. `persist()` never wrote to `localStorage` under #57 (by
+ * design \u2014 Neon is the new state of record), but nothing in that
+ * change ever *deletes* the old blob either, so a real prior session is
+ * very likely still sitting untouched on Stuart's phone under
+ * `LEGACY_LOCAL_STORAGE_KEY`. This reads it back, once, only when
+ * there's nothing better to show, and immediately pushes it to Neon so
+ * it becomes durable there too \u2014 the migration step #57 should have
+ * shipped with in the first place.
+ */
+const LEGACY_LOCAL_STORAGE_KEY = "the-tab:skidmarks-studio";
+
+/** Session-wide "is there anything real here" check \u2014
+ * `hasSkidmarksUserContent` below is segment-scoped; this is the same
+ * idea one level up, covering a real (non-seed) band or an attached mp3
+ * even before any clip has been tagged, since both are already real
+ * signal that this isn't just the pristine demo state. */
+export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
+  const seedIds = new Set(SEED_BANDS.map((b) => b.id));
+  const hasRealBand = state.bands.some((b) => !seedIds.has(b.id));
+  const hasMp3 = state.session.mp3 !== null;
+  const hasTaggedSegments = hasSkidmarksUserContent(state.session.mp3?.segments ?? []);
+  return hasRealBand || hasMp3 || hasTaggedSegments;
+}
+
+/**
+ * Reads and normalizes the pre-#57 `localStorage` session blob, if any
+ * \u2014 never throws (private-mode Safari, corrupt/foreign JSON, a
+ * `localStorage` that simply isn't there all read the same as "nothing
+ * to recover"). Returns `null` rather than a normalized-but-empty state
+ * when there's genuinely nothing usable, so a caller can tell "no
+ * legacy data" apart from "legacy data, but it happened to be blank."
+ */
+function readLegacySkidmarksLocalStorageSession(): SkidmarksState | null {
+  if (!isBrowser()) return null;
+  try {
+    const raw = window.localStorage.getItem(LEGACY_LOCAL_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = normalizeState(JSON.parse(raw));
+    return sessionHasSubstantiveContent(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+
+/**
  * The one-time (per page load) `GET /api/skidmarks/session` —
  * triggered off `subscribeSkidmarks`'s very first subscriber. Never
  * re-triggered on a later re-subscribe (e.g. reopening the Skidmarks
@@ -1508,33 +1563,59 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
   if (hydrationStarted || !isBrowser()) return;
   hydrationStarted = true;
   const editsAtStart = localEditCount;
+
+  // Applies `state` only if Stuart hasn't already started editing the
+  // honest empty state while this load was in flight — see
+  // `shouldApplyHydratedSkidmarksSession`'s doc comment. Returns
+  // whether it actually applied, so a caller (the recovery path below)
+  // knows whether it's also safe to push what it just applied.
+  const applyIfSafe = (state: SkidmarksState): boolean => {
+    if (!shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount)) return false;
+    cachedState = state;
+    notify();
+    return true;
+  };
+
   try {
     const res = await fetch(SESSION_ENDPOINT);
     const body = (await res.json().catch(() => null)) as SessionGetRouteBody | null;
+
     if (!res.ok || !body || body.configured !== true) {
+      // Neon itself isn't reachable/configured right now — still worth
+      // showing a real prior session over the seed demo data if one's
+      // sitting on this phone (see `LEGACY_LOCAL_STORAGE_KEY`'s doc
+      // comment), even though it can't be durably saved back yet.
+      const legacy = readLegacySkidmarksLocalStorageSession();
+      if (legacy) applyIfSafe(legacy);
       setSessionSync({
         status: "unconfigured",
         error: typeof body?.error === "string" ? body.error : `HTTP ${res.status}`,
       });
       return;
     }
-    if (body.state == null) {
-      // A real, honest "nothing saved to Neon yet" outcome — the
-      // in-memory `emptyState()` this module already started with is
-      // exactly right; nothing to apply.
+
+    const fetched = body.state == null ? null : normalizeState(body.state);
+    if (fetched && sessionHasSubstantiveContent(fetched)) {
+      // Neon already has real content — the ordinary case, including
+      // every load after the one-time recovery below has already run.
+      applyIfSafe(fetched);
       setSessionSync({ status: "synced" });
       return;
     }
-    if (!shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount)) {
-      // Stuart already started editing the honest empty state before
-      // this load landed — keep his in-progress local session; see
-      // this function's and `shouldApplyHydratedSkidmarksSession`'s
-      // doc comments.
-      setSessionSync({ status: "synced" });
+
+    // Neon has nothing real yet — either a true "never saved" `null`,
+    // or a row that itself never got past the seed state. Recover a
+    // real prior local session if one exists, and push it to Neon
+    // immediately so it becomes durable there too — the migration step
+    // #57 should have shipped with. `pushSkidmarksSessionNow` sets its
+    // own terminal `sessionSync` status, so nothing further to set here
+    // once it resolves.
+    const legacy = readLegacySkidmarksLocalStorageSession();
+    if (legacy && applyIfSafe(legacy)) {
+      await pushSkidmarksSessionNow();
       return;
     }
-    cachedState = normalizeState(body.state);
-    notify();
+
     setSessionSync({ status: "synced" });
   } catch (err) {
     setSessionSync({

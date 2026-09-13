@@ -165,6 +165,31 @@ Neon row for now, not yet Blob-backed) still goes straight to Vercel
 Blob, unchanged by this migration; see Env vars below for
 `DATABASE_URL`.
 
+**Real live-QA'd bug on the very first deploy of this migration:
+"I lost everything."** Stuart's first load after this shipped came up
+on the seed demo bands instead of his real session — six tagged Vocal
+plates among them. Nothing had actually been deleted: this migration
+switched what `persist()` writes *to* (Neon, not `localStorage`) but
+shipped with no step to carry an *existing* `localStorage` session
+*into* a fresh, empty Neon row. Neon genuinely had nothing under his
+owner id, so this module fell back to its own honest empty state
+(`SEED_BANDS`, no real band/session) — which looked, from the outside,
+exactly like data loss. Fixed by a one-time recovery built into
+`hydrateSkidmarksSessionOnce` itself: whenever a fetched Neon session
+has no real content (`sessionHasSubstantiveContent` — a non-seed band,
+an attached mp3, or any tagged segment), it reads the pre-migration
+`localStorage` blob (`LEGACY_LOCAL_STORAGE_KEY`, the same
+`"the-tab:skidmarks-studio"` key `persist()` used to write), and if
+*that* has real content, adopts it and immediately pushes it to Neon —
+turning the old local copy into the new durable one, once, automatically,
+with nothing for Stuart to do. If Neon's fetched state already has real
+content, the legacy blob is never even consulted, so this can't clobber
+real work done after the migration landed. If you ever add a *second*
+migration that changes what `persist()`'s durable target is, budget for
+this same step — carrying existing state across, not just writing new
+state going forward — as part of the migration itself, not a same-day
+follow-up fire drill.
+
 **The `localStorage` quota machinery is gone — Neon replaced it.**
 Historical context, because the bug it chased was real: a clip's own
 timing stayed correct (small, persisted early) while its plates
