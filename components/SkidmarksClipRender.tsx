@@ -351,35 +351,44 @@ export function SkidmarksClipRender({
       )}
 
       {!generating && (
-        <div className="flex items-center gap-2">
+        // Live-QA fix (2026-09-13, Stuart's explicit, direct ask): the
+        // H3/Grok switch used to be sized to match the primary Render
+        // button (min-h-[36px], text-[12px]) — a "roomy tap target"
+        // justification that made sense on its own but, in practice,
+        // made it read as a second full-weight button rather than a
+        // small mode switch, crowding the actually-important Render
+        // button. `justify-between` (not just `gap-2`) is what actually
+        // pins the Render button flush to the row's right edge — a
+        // fixed gap alone still left visible dead space to its right
+        // whenever the switch/label didn't fill the rest of the row.
+        <div className="flex items-center justify-between gap-2">
           {vocal ? (
             // Vocal only ever has one real backend (Comfy Cloud LTX,
             // lip-sync) — a plain label, never a fake second option
             // just to mirror the Instrumental switch's shape. See this
-            // component's doc comment.
+            // component's doc comment. Sized to match the shrunk H3/
+            // Grok switch below, so the row reads the same whether the
+            // clip is Vocal or Instrumental.
             <span
               aria-label="Vocal render backend: LTX lip-sync"
-              className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-center text-[12px] font-semibold text-white/70"
+              className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-center text-[10px] font-semibold text-white/70"
             >
               LTX
             </span>
           ) : (
-            // Two real, roomy tap targets (not a slim pill row) — each
-            // button's own padding keeps it comfortably past Apple's
-            // ~44pt HIG minimum, same "a thumb should never have to aim
-            // precisely" lesson this feature's other iOS-Safari-tuned
-            // controls already learned the hard way (see
-            // `components/SkidmarksClipStub.tsx`'s
-            // `SkidmarksPlateSelectControl` doc comment). **Now
-            // permanently visible beside the Render button** (moved out
-            // of the confirm-only step 2026-09-14, Stuart's explicit
-            // ask — "not buried only in a hard-to-find confirm... prefer
+            // A genuinely small switch, not a second full-size button —
+            // per Stuart's explicit ask, this stays a compact toggle
+            // (small height/padding/type) rather than matching the
+            // Render button's own visual weight. **Now permanently
+            // visible beside the Render button** (moved out of the
+            // confirm-only step 2026-09-14, Stuart's explicit ask —
+            // "not buried only in a hard-to-find confirm... prefer
             // visible beside the button") rather than only appearing
             // once Render's already been tapped once.
             <div
               role="group"
               aria-label="Instrumental render backend"
-              className="flex shrink-0 items-center gap-1 rounded-full bg-white/[0.04] p-1 text-[12px] font-medium"
+              className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/[0.04] p-0.5 text-[10px] font-medium"
             >
               {(["h3", "grok"] as const).map((option) => (
                 <button
@@ -388,7 +397,7 @@ export function SkidmarksClipRender({
                   onClick={() => onSetInstrumentalVideoModel(option)}
                   aria-pressed={instrumentalVideoModel === option}
                   className={[
-                    "min-h-[36px] rounded-full px-3.5 py-2 transition-colors",
+                    "min-h-[24px] rounded-full px-2 py-1 transition-colors",
                     instrumentalVideoModel === option
                       ? "bg-rose-400 text-zinc-950"
                       : "text-white/50 hover:text-white/80",
@@ -401,9 +410,9 @@ export function SkidmarksClipRender({
           )}
 
           {!confirming ? (
-            // "About half width" per Stuart's explicit ask — the switch/
-            // pill to its left takes the rest of the row instead of this
-            // button spanning edge-to-edge the way it used to.
+            // Exactly half the row's width, pinned flush right by the
+            // container's `justify-between` above — per Stuart's
+            // explicit ask.
             <button
               type="button"
               onClick={startConfirm}
