@@ -16,6 +16,7 @@ import {
   createSkidmarksBand,
   getSkidmarksPersistFailure,
   getSkidmarksSnapshot,
+  getSkidmarksStorageWarning,
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
   markSkidmarksMp3AudioUnconfigured,
@@ -91,6 +92,16 @@ export function useSkidmarksStudio() {
   const persistFailure = useSyncExternalStore(
     subscribeSkidmarks,
     getSkidmarksPersistFailure,
+    () => null
+  );
+
+  /** Non-null once local storage is getting close to its real quota,
+   * even though every write is still actually succeeding — an earlier,
+   * softer heads-up than `persistFailure` above; see
+   * `getSkidmarksStorageWarning`'s doc comment. */
+  const storageWarning = useSyncExternalStore(
+    subscribeSkidmarks,
+    getSkidmarksStorageWarning,
     () => null
   );
 
@@ -307,6 +318,7 @@ export function useSkidmarksStudio() {
     session: state.session,
     removedSeedBandIds: state.removedSeedBandIds,
     persistFailure,
+    storageWarning,
     selectProjectKind,
     selectBand,
     createBand,
