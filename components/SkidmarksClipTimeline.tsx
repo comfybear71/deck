@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   formatSegmentRange,
   SKIDMARKS_SEGMENT_LABEL_META,
@@ -12,16 +12,9 @@ import {
   type SkidmarksTranscriptionStatus,
 } from "@/lib/skidmarks";
 import { type SkidmarksTranscriptionProvider } from "@/lib/transcription";
-import {
-  buildForceDownloadUrl,
-  buildRendersZip,
-  fetchPersistedClipRenders,
-  toBundleEntries,
-  triggerAnchorDownload,
-  triggerBlobDownload,
-  type PersistedClipRender,
-} from "@/lib/clipRenders";
+import type { PersistedClipRender } from "@/lib/clipRenders";
 import { SkidmarksClipStub } from "./SkidmarksClipStub";
+import { SkidmarksAutoPlate } from "./SkidmarksAutoPlate";
 
 interface SkidmarksClipTimelineProps {
   segments: SkidmarksClipSegment[];
@@ -36,10 +29,23 @@ interface SkidmarksClipTimelineProps {
    * (`resolveVocalistForPrompt` in `lib/plateGeneration.ts`) and to name
    * the band in a generated still's prompt. */
   band: SkidmarksBand;
+  /** The attached MP3's own filename — threaded down to
+   * `SkidmarksAutoPlate` as a fallback hint for the scripted
+   * concrete-opener trigger (see `lib/autoPlate.ts`). */
+  mp3FileName?: string;
+  /** Every plate across the whole song that already has a saved
+   * render, keyed by `persistedRenderKey` — lifted up to
+   * `SkidmarksDetailSheet`'s `useSkidmarksClipRenders` so
+   * `SkidmarksRenderedClipsShelf` shares this exact state instead of a
+   * second independent fetch. */
+  renders: Map<string, PersistedClipRender>;
+  onPersisted: (render: PersistedClipRender) => void;
   onSetSegmentShotPrompt: (segmentId: string, shotPrompt: string) => void;
   onSetClipPlateStill: (segmentId: string, plateId: string, still: SkidmarksPlateStill | null) => void;
   onAddClipPlate: (segmentId: string) => void;
   onRemoveClipPlate: (segmentId: string, plateId: string) => void;
+  onSelectClipPlate: (segmentId: string, plateId: string) => void;
+  onSetClipPlateMotionPrompt: (segmentId: string, plateId: string, motionPrompt: string) => void;
 }
 
 const STUB_FEEDBACK_TIMEOUT_MS = 3200;
@@ -73,11 +79,13 @@ function SegmentRow({
   onSetPlateStill,
   onAddPlate,
   onRemovePlate,
+  onSelectPlate,
+  onSetPlateMotionPrompt,
+  renderedPlateIds,
   renderLocked,
   onRenderStart,
   onRenderEnd,
   clipIndex,
-  persistedRender,
   onPersisted,
 }: {
   segment: SkidmarksClipSegment;
@@ -98,17 +106,19 @@ function SegmentRow({
   onSetPlateStill: (plateId: string, still: SkidmarksPlateStill | null) => void;
   onAddPlate: () => void;
   onRemovePlate: (plateId: string) => void;
-  /** Whether a *different* clip on this timeline is currently rendering
-   * a real video — see `SkidmarksClipTimeline`'s `renderingSegmentId`
-   * state and `SkidmarksClipRender`'s doc comment for the "one render
-   * at a time" cost lock this enforces. */
+  onSelectPlate: (plateId: string) => void;
+  onSetPlateMotionPrompt: (plateId: string, motionPrompt: string) => void;
+  renderedPlateIds: ReadonlySet<string>;
+  /** Whether a *different* plate anywhere on this timeline is currently
+   * rendering a real video — see `SkidmarksClipTimeline`'s
+   * `renderingKey` state and `SkidmarksClipRender`'s doc comment
+   * for the "one render at a time" cost lock this enforces. */
   renderLocked: boolean;
-  onRenderStart: () => void;
-  onRenderEnd: () => void;
+  onRenderStart: (plateId: string) => void;
+  onRenderEnd: (plateId: string) => void;
   /** This clip's 1-based position in the timeline — see
    * `SkidmarksClipStub`'s doc comment for what it's used for. */
   clipIndex: number;
-  persistedRender?: PersistedClipRender | null;
   onPersisted: (render: PersistedClipRender) => void;
 }) {
   const meta = SKIDMARKS_SEGMENT_LABEL_META[segment.label];
@@ -155,11 +165,13 @@ function SegmentRow({
             onSetPlateStill={onSetPlateStill}
             onAddPlate={onAddPlate}
             onRemovePlate={onRemovePlate}
+            onSelectPlate={onSelectPlate}
+            onSetPlateMotionPrompt={onSetPlateMotionPrompt}
+            renderedPlateIds={renderedPlateIds}
             renderLocked={renderLocked}
             onRenderStart={onRenderStart}
             onRenderEnd={onRenderEnd}
             clipIndex={clipIndex}
-            persistedRender={persistedRender}
             onPersisted={onPersisted}
           />
         </div>
@@ -199,6 +211,16 @@ function timelineNote(
     : `${reason} \u2014 showing placeholder timing below.`;
 }
 
+/** `${segmentId}:${plateId}` — mirrors `lib/clipRenders.ts`'s
+ * `persistedRenderKey`, used here for the "one render at a time"
+ * cost-lock key instead of just a segment id (two different plates on
+ * the *same* clip must still serialize — Render is one control per
+ * clip at a time either way, but the lock itself is now correctly
+ * scoped to the plate actually rendering). */
+function renderKey(segmentId: string, plateId: string): string {
+  return `${segmentId}:${plateId}`;
+}
+
 /**
  * The clip/segment timeline — appended right under the MP3 checklist
  * once an MP3 exists. `segments` prefers real word-level transcription
@@ -207,77 +229,37 @@ function timelineNote(
  * that, real output from the energy heuristic
  * (`analyzeVocalActivity`, `segmentsSource === "analysis"`); short of
  * that (still resolving, or both failed/unconfigured), this instead
- * shows `buildDemoSegments`' deterministic seed cadence. Once real,
- * useful transcription lands (green Lyrics chip), no caption or note
- * shows at all — Stuart asked for the long "honesty caption" essay
- * gone from the main UI now that ElevenLabs Scribe works; the
- * Lyrics/Timing/Ready chips carry that signal instead. A short
- * one-line note (see `timelineNote` above, no file paths) still shows
- * when transcription is unconfigured, sparse, or failed, so a
- * fallback timing isn't presented as if it were real. This is editable
- * structure for Stuart to assign a shot prompt to regardless of which
- * source is showing.
+ * shows `buildDemoSegments`' deterministic seed cadence.
  *
  * Each row is individually collapsible (collapsed = time range + label
  * only, no model glance — per Stuart's live-QA chrome lock there is no
  * model UI anywhere in this build right now, see `SkidmarksClipStub`'s
  * doc comment; expanded = `SkidmarksClipStub`'s horizontal **plate
- * strip** — one or more independent still slots on this same clip,
- * each upload/generate/replace/clear-able in place, plus a "+" to add
- * another slot (see that component's doc comment for why one clip can
- * hold several plates — the 40s-door problem) — + one multi-line
- * shot-prompt field **shared across every plate on that clip**, nothing
- * else — the Camera Angles block, the five-card location-plate picker,
- * and the Model pill row from earlier passes are all gone outright).
- * This component threads `band` and each clip's `previousStill` (that
- * *previous clip's* **last** plate, specifically — only relevant to
- * *this* clip's first plate slot; later slots continue from the plate
- * before them in their own strip instead) down to `SkidmarksClipStub` —
- * the former resolves which member auto-includes as the vocalist on a
- * Vocal clip, the latter is the "continue from the previous plate"
- * continuity reference — but never touches either itself. The whole
- * section can also collapse, same pattern as `ControlPlaneDemo`.
+ * strip** plus one shared shot-prompt field, plus the one selected
+ * plate's Render control). This component threads `band`, each clip's
+ * `previousStill`, and (new) the whole-song render map down to
+ * `SkidmarksClipStub` — but never touches any of them itself.
  *
  * **Phase note**: the footer's **"Generate Clips" button below stays a
  * deliberate stub** — tapping it never calls a real render for the whole
- * song; it only shows a "stub, not wired" message, surfaced in an
- * always-mounted `role="status"` + `aria-live` line so assistive tech
- * reaches it too, not just sighted users. That's a different thing from
- * each individual clip's own render control, though: `SkidmarksClipStub`
- * (via `components/SkidmarksClipRender.tsx`) now offers a real, opt-in,
- * one-clip-at-a-time video render off a clip's already-generated/
- * uploaded plate still(s) — see that component's doc comment and
- * `app/api/skidmarks/generate-clip/route.ts`. **This is where the real
- * cost lives, per Stuart**: a real plate *still* image (one frame) is
- * cheap; a real *video render/animate* pass is the expensive part —
- * which is exactly why this footer button (render the *entire song* in
- * one tap, no confirm) stays stubbed regardless of the per-clip control
- * existing, and why that per-clip control is cost-capped (fixed 5s/480p)
- * and gated behind an explicit two-tap confirm rather than reachable
- * from here. Seedance's multi-angle clip generation specifically also
- * stays entirely unwired either way — this render pass only ever calls
- * xAI, never Seedance.
+ * song; it only shows a "stub, not wired" message. That's a different
+ * thing from each individual plate's own render control — see
+ * `SkidmarksClipStub`/`components/SkidmarksClipRender.tsx`.
  *
- * **Owns the "which clips already have a saved render" lookup for the
- * whole timeline**, not just whichever row happens to be expanded —
- * fetched once (`fetchPersistedClipRenders`, `lib/clipRenders.ts`) for
- * every clip id on mount and whenever the *set* of clip ids changes
- * (a fresh MP3 attach), not on every keystroke. This is what lets
- * `SkidmarksClipStub`/`SkidmarksClipRender` show a saved render right
- * away after a refresh even before that clip's row has ever been
- * expanded in this session, and is also what backs the **"Download
- * rendered clips"** control below the stub "Generate Clips" button —
- * only shows up once at least one clip has a persisted render, and
- * bundles every currently-known one into a single ZIP (built entirely
- * client-side, `lib/zipDownload.ts` — no server round trip, no paid API
- * call) named with this feature's own numeric convention, falling back
- * to plain sequential per-clip downloads if the zip step itself fails
- * for any reason (a real CORS regression, an expired/deleted blob) —
- * the task's own explicit "otherwise sequential downloads... is OK for
- * v1" escape hatch. This is deliberately a second, separate surface
- * from each clip's own single-render Download link (never the same
- * button): grabbing every rendered clip at once is a "get this whole
- * batch off my phone" action, not a per-clip one.
+ * **The "which plates already have a saved render" lookup, and the
+ * rendered-clips player/download surface, both moved out of this
+ * component** — see `hooks/useSkidmarksClipRenders.ts` (now owned by
+ * `SkidmarksDetailSheet`, shared with `SkidmarksRenderedClipsShelf`)
+ * and that shelf component itself. This component only reads the
+ * already-fetched `renders` map (via the `renders` prop) to compute
+ * each clip's `renderedPlateIds` for its own tick marks and one-
+ * render-at-a-time lock — it never fetches or downloads anything on its
+ * own anymore.
+ *
+ * **Auto-plate**: the slim brief field + Auto-plate control
+ * (`SkidmarksAutoPlate`) lives right under this section's own header,
+ * above the per-clip rows — see that component's doc comment for the
+ * "fill empties, then stop" contract.
  */
 export function SkidmarksClipTimeline({
   segments,
@@ -285,59 +267,25 @@ export function SkidmarksClipTimeline({
   analysisStatus,
   transcriptionStatus,
   band,
+  mp3FileName,
+  renders,
+  onPersisted,
   onSetSegmentShotPrompt,
   onSetClipPlateStill,
   onAddClipPlate,
   onRemoveClipPlate,
+  onSelectClipPlate,
+  onSetClipPlateMotionPrompt,
 }: SkidmarksClipTimelineProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [stubMessage, setStubMessage] = useState<string | null>(null);
   const stubMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Which single clip (if any) is currently mid-render — the literal
-  // enforcement of Stuart's "one render at a time" cost lock across the
-  // *whole* timeline, not just within one clip's own panel. See
+  // Which single (segmentId, plateId) pair, if any, is currently
+  // mid-render — the literal enforcement of Stuart's "one render at a
+  // time" cost lock across the *whole* timeline. See
   // `SkidmarksClipRender`'s doc comment.
-  const [renderingSegmentId, setRenderingSegmentId] = useState<string | null>(null);
-  // What's currently known to be durably persisted, per clip id — see
-  // this component's doc comment. `undefined` while the initial lookup
-  // for a given clip is still in flight (or hasn't started yet);
-  // absent from the map once resolved with nothing saved for that clip.
-  const [persistedRenders, setPersistedRenders] = useState<Map<string, PersistedClipRender>>(new Map());
-  const [bundleState, setBundleState] = useState<{ busy: boolean; message: string | null }>({
-    busy: false,
-    message: null,
-  });
-
-  const segmentIdsKey = useMemo(() => segments.map((s) => s.id).join(","), [segments]);
-
-  useEffect(() => {
-    const segmentIds = segmentIdsKey ? segmentIdsKey.split(",") : [];
-    if (segmentIds.length === 0) return;
-    let cancelled = false;
-    fetchPersistedClipRenders(segmentIds).then((outcome) => {
-      if (cancelled || !outcome.ok) return;
-      setPersistedRenders((prev) => {
-        const next = new Map(prev);
-        for (const render of outcome.renders) next.set(render.segmentId, render);
-        return next;
-      });
-    });
-    return () => {
-      cancelled = true;
-    };
-    // Re-fetches when the *set* of clip ids changes (a fresh MP3
-    // attach), not on every shot-prompt keystroke — `segmentIdsKey` is
-    // stable across an edit to an existing segment's own fields.
-  }, [segmentIdsKey]);
-
-  const handlePersisted = (render: PersistedClipRender) => {
-    setPersistedRenders((prev) => {
-      const next = new Map(prev);
-      next.set(render.segmentId, render);
-      return next;
-    });
-  };
+  const [renderingKey, setRenderingKey] = useState<string | null>(null);
 
   const toggleExpanded = (id: string) => {
     setExpandedIds((prev) => {
@@ -354,42 +302,6 @@ export function SkidmarksClipTimeline({
       "Stub only \u2014 no Comfy MCP / LTX render kicked off. Wire-up comes once that pipeline lands."
     );
     stubMessageTimer.current = setTimeout(() => setStubMessage(null), STUB_FEEDBACK_TIMEOUT_MS);
-  };
-
-  const renderedClips = Array.from(persistedRenders.values());
-
-  const handleDownloadRenderedClips = async () => {
-    if (renderedClips.length === 0 || bundleState.busy) return;
-    setBundleState({ busy: true, message: null });
-
-    if (renderedClips.length === 1) {
-      const [only] = toBundleEntries(renderedClips);
-      triggerAnchorDownload(buildForceDownloadUrl(only.url), only.filename);
-      setBundleState({ busy: false, message: null });
-      return;
-    }
-
-    const zipOutcome = await buildRendersZip(renderedClips);
-    if (zipOutcome.ok) {
-      const zipBlob = new Blob([zipOutcome.zipBytes.slice().buffer], { type: "application/zip" });
-      triggerBlobDownload(zipBlob, "skidmarks-renders.zip");
-      setBundleState({ busy: false, message: null });
-      return;
-    }
-
-    // Zip build failed (a real CORS regression, an expired/deleted
-    // blob) — fall back to plain sequential per-clip downloads, staggered
-    // so the browser doesn't treat a tight burst of clicks as a popup
-    // storm. Per the task's own explicit "sequential downloads with
-    // numeric names is OK for v1" fallback.
-    for (const entry of toBundleEntries(renderedClips)) {
-      triggerAnchorDownload(buildForceDownloadUrl(entry.url), entry.filename);
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    }
-    setBundleState({
-      busy: false,
-      message: `Couldn't bundle these into a zip (${zipOutcome.message}) \u2014 downloaded them one by one instead.`,
-    });
   };
 
   if (segments.length === 0) return null;
@@ -417,10 +329,20 @@ export function SkidmarksClipTimeline({
         <>
           {note && <p className="text-[11px] leading-relaxed text-amber-200/70">{note}</p>}
 
+          <SkidmarksAutoPlate
+            segments={segments}
+            band={band}
+            songTitleHint={mp3FileName}
+            onSetClipPlateStill={onSetClipPlateStill}
+          />
+
           <div className="flex flex-col gap-2">
             {segments.map((segment, i) => {
               const previousPlates = i > 0 ? segments[i - 1].plates : undefined;
               const previousStill = previousPlates?.[previousPlates.length - 1]?.still;
+              const renderedPlateIds = new Set(
+                segment.plates.filter((p) => renders.has(renderKey(segment.id, p.id))).map((p) => p.id)
+              );
               return (
                 <SegmentRow
                   key={segment.id}
@@ -433,12 +355,21 @@ export function SkidmarksClipTimeline({
                   onSetPlateStill={(plateId, still) => onSetClipPlateStill(segment.id, plateId, still)}
                   onAddPlate={() => onAddClipPlate(segment.id)}
                   onRemovePlate={(plateId) => onRemoveClipPlate(segment.id, plateId)}
-                  renderLocked={renderingSegmentId !== null && renderingSegmentId !== segment.id}
-                  onRenderStart={() => setRenderingSegmentId(segment.id)}
-                  onRenderEnd={() => setRenderingSegmentId((current) => (current === segment.id ? null : current))}
+                  onSelectPlate={(plateId) => onSelectClipPlate(segment.id, plateId)}
+                  onSetPlateMotionPrompt={(plateId, motionPrompt) =>
+                    onSetClipPlateMotionPrompt(segment.id, plateId, motionPrompt)
+                  }
+                  renderedPlateIds={renderedPlateIds}
+                  renderLocked={
+                    renderingKey !== null &&
+                    !segment.plates.some((p) => renderKey(segment.id, p.id) === renderingKey)
+                  }
+                  onRenderStart={(plateId) => setRenderingKey(renderKey(segment.id, plateId))}
+                  onRenderEnd={(plateId) => {
+                    setRenderingKey((current) => (current === renderKey(segment.id, plateId) ? null : current));
+                  }}
                   clipIndex={i + 1}
-                  persistedRender={persistedRenders.get(segment.id) ?? null}
-                  onPersisted={handlePersisted}
+                  onPersisted={onPersisted}
                 />
               );
             })}
@@ -467,38 +398,6 @@ export function SkidmarksClipTimeline({
           >
             {stubMessage}
           </p>
-
-          {/* A second, deliberately separate surface from any one clip's
-              own Download link — grabbing every already-rendered clip at
-              once, per the task's "phone \u2192 PC" cross-device ask.
-              Renders nothing at all until at least one clip actually has
-              a saved render \u2014 same "don't show a control for state that
-              doesn't exist yet" pattern as `SkidmarksClipRender` itself. */}
-          {renderedClips.length > 0 && (
-            <div className="flex flex-col gap-1.5 border-t border-white/[0.06] pt-3">
-              <button
-                type="button"
-                onClick={handleDownloadRenderedClips}
-                disabled={bundleState.busy}
-                aria-disabled={bundleState.busy}
-                className={[
-                  "rounded-full px-4 py-2.5 text-center text-[13px] font-semibold transition-colors",
-                  bundleState.busy
-                    ? "cursor-not-allowed bg-white/[0.04] text-white/30"
-                    : "border border-white/10 bg-white/[0.04] text-white/80 hover:bg-white/[0.08]",
-                ].join(" ")}
-              >
-                {bundleState.busy
-                  ? "Bundling\u2026"
-                  : `Download rendered clip${renderedClips.length > 1 ? "s" : ""} (${renderedClips.length})`}
-              </button>
-              {bundleState.message && (
-                <p role="status" aria-live="polite" className="text-[10px] leading-snug text-white/40">
-                  {bundleState.message}
-                </p>
-              )}
-            </div>
-          )}
         </>
       )}
     </div>

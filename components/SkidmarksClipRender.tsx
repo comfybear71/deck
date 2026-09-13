@@ -3,13 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
   buildClipGenerationRequest,
-  CLIP_DURATION_SEC,
   estimateClipRenderCostUsd,
   generateSkidmarksClip,
-  MAX_CLIP_REFERENCE_IMAGES,
   MAX_MOTION_PROMPT_LENGTH,
 } from "@/lib/clipGeneration";
-import { buildClipRenderFilename, buildForceDownloadUrl, type PersistedClipRender } from "@/lib/clipRenders";
+import { buildClipRenderFilename } from "@/lib/clipRenderBlob";
+import type { PersistedClipRender } from "@/lib/clipRenders";
 
 interface SkidmarksClipRenderProps {
   /** The clip's shared shot-prompt text — same field
@@ -17,39 +16,47 @@ interface SkidmarksClipRenderProps {
    * doesn't add a second prompt field. */
   shotPrompt: string;
   bandName: string;
-  /** This clip's plate stills, in strip order — already filtered to
-   * slots that actually have one (an empty dashed placeholder never
-   * counts). Only the first `MAX_CLIP_REFERENCE_IMAGES` are actually
-   * sent; see the "using first N plates" note below. */
-  plateStillDataUrls: string[];
-  /** True when a *different* clip on this timeline is currently
-   * rendering — Stuart's cost lock ("one render at a time or clear
-   * confirm"), enforced across the whole clip list by
-   * `SkidmarksClipTimeline`, not just within one clip's own panel. */
+  /** The *selected* plate's still, and nothing else — `null` when no
+   * plate on this clip is filled yet, in which case this component
+   * renders nothing at all (see this module's doc comment). */
+  plateStillDataUrl: string | null;
+  /** This plate's own stored camera-motion text — lifted to the store
+   * (`SkidmarksClipSegment.plates[].motionPrompt`) rather than local
+   * component state, so switching which plate is selected doesn't lose
+   * or mix up each plate's own motion direction. */
+  motionPrompt: string;
+  onSetMotionPrompt: (value: string) => void;
+  /** This plate's real, auto-computed render length — see
+   * `lib/clipGeneration.ts`'s `computePlateDurationSec`. */
+  durationSec: number;
+  /** True when a *different* plate anywhere on this timeline is
+   * currently rendering — Stuart's cost lock ("one render at a time"),
+   * enforced across the whole timeline by `SkidmarksClipTimeline`, not
+   * just within one clip's own panel. */
   locked: boolean;
-  onRenderStart: () => void;
-  onRenderEnd: () => void;
-  /** This clip's own id plus its 1-based position/time range on the
-   * timeline — the four fields needed to persist a render to Vercel
-   * Blob under a stable, download-friendly pathname
-   * (`lib/clipRenderBlob.ts`) and to build the exact filename Resolve
-   * wants (`buildClipRenderFilename`). */
+  /** Report which plate is starting/finishing a render — lets the
+   * timeline lock every *other* plate for "one render at a time"
+   * without having to re-derive which plate is currently selected on
+   * its own (see `components/SkidmarksClipTimeline.tsx`'s `renderKey`). */
+  onRenderStart: (plateId: string) => void;
+  onRenderEnd: (plateId: string) => void;
   segmentId: string;
+  plateId: string;
+  /** This plate's 0-based position within its own clip's strip, and
+   * that strip's total slot count — used only to letter the persisted
+   * filename once a clip has more than one plate. */
+  plateIndex: number;
+  plateCount: number;
   clipIndex: number;
   startSec: number;
   endSec: number;
-  /** Whatever `SkidmarksClipTimeline` already knows is persisted for
-   * *this* clip — fetched once for every clip on the timeline (whether
-   * expanded or not), so "show it after refresh" works even before
-   * this panel has ever been opened in this session. `undefined` while
-   * that lookup is still in flight; `null` once it's resolved and
-   * confirmed nothing's saved for this clip yet. */
-  persistedRender?: PersistedClipRender | null;
-  /** Reports a freshly-persisted render back up to
-   * `SkidmarksClipTimeline` so its own aggregate list — and "Download
-   * all rendered clips" bundle — stays in sync immediately, without a
-   * second round trip to `/api/skidmarks/clip-renders`. */
-  onPersisted?: (render: PersistedClipRender) => void;
+  /** Whether this exact plate already has a saved render, from an
+   * earlier session or an earlier tap — drives a tiny inline status
+   * line only; the actual player/download now lives in
+   * `SkidmarksRenderedClipsShelf`, not here (per the "declutter the
+   * pink button" ask). */
+  alreadyRendered: boolean;
+  onPersisted: (render: PersistedClipRender) => void;
 }
 
 /** How long the inline "Confirm — real xAI video call, ~$0.4x" step
@@ -67,118 +74,72 @@ function Spinner() {
   );
 }
 
-interface RenderResult {
-  videoUrl: string;
-  durationSec: number;
-  /** Whether `videoUrl` is a durable Vercel Blob URL that survives a
-   * refresh, vs. xAI's own temporary URL (persistence was never asked
-   * for, wasn't configured, or failed — see `persistError`). */
-  persisted: boolean;
-  persistError?: string;
-}
-
 /**
- * The first real (non-stub) slice of Skidmarks' clip *video* render —
- * see `app/api/skidmarks/generate-clip/route.ts`'s module doc comment
- * for the full server-side contract (xAI's Grok Imagine video API,
- * `XAI_API_KEY`, fixed 5s/480p output, live-verified image-to-video
- * path, and — new since #42 — persisting a successful render to
- * durable Vercel Blob storage). Deliberately **not** the "Generate
+ * The real, opt-in per-plate clip *video* render control — see
+ * `app/api/skidmarks/generate-clip/route.ts`'s module doc comment for
+ * the full server-side contract (xAI's Grok Imagine video API,
+ * `XAI_API_KEY`, cost-capped 480p, live-verified image-to-video path,
+ * durable Vercel Blob persistence). Deliberately **not** the "Generate
  * Clips" button (`SkidmarksClipTimeline`) — that stays the honest
- * whole-song stub; this is a much smaller, one-clip, explicit opt-in
- * control that appears on `SkidmarksClipStub`'s panel once a clip
- * actually has a real plate still to animate.
+ * whole-song stub; this animates exactly one already-selected plate at
+ * a time.
  *
- * **Renders nothing at all until there's at least one real still** —
- * an empty plate strip has nothing to animate, and per the "keep
- * plating UI tiny, no button farm" lock, showing a disabled Render
- * button before that point would just be clutter. Once a still exists:
- * one plate → xAI's image-to-video mode (that still locks the first
- * frame, so it stays *that* image being animated); two or three →
- * reference-to-video mode (continuity across the sequence — Stuart's
- * "continuous zoom across 3 plates" door → keyhole → Jack case). More
- * than `MAX_CLIP_REFERENCE_IMAGES` plates still only sends the first
- * `MAX_CLIP_REFERENCE_IMAGES`, same cap `app/api/skidmarks/generate-
- * still/route.ts` uses for reference images — a small note says so
- * rather than silently dropping the rest.
+ * **Per-plate select rework**: this used to animate *every* plate on a
+ * clip's strip at once (multi-reference continuity in one xAI call).
+ * It now always animates just the one **selected** plate
+ * (`lib/skidmarks.ts`'s `resolveSelectedPlateId`), using only that
+ * plate's own still as the image-to-video source and only that plate's
+ * own stored motion text — continuity across a clip's several plates
+ * (door → keyhole → Jack) now comes from rendering each separately with
+ * its own motion, then editing them together in Resolve. **Renders
+ * nothing at all until the selected plate has a real still** — same
+ * "no clutter before there's something to animate" rule as before, just
+ * scoped to one plate now instead of the whole strip.
  *
- * **Optional camera-motion field** — a small multi-line (2-row) text
- * area, capped at `MAX_MOTION_PROMPT_LENGTH`, that becomes the
- * *primary* motion instruction sent to xAI's video call when filled in
- * (e.g. "slow zoom into keyhole, mild pulse on door cracks"),
- * overriding `lib/clipGeneration.ts`'s automatic push-in/zoom phrasing
- * outright rather than being appended alongside it. `shotPrompt` and
- * the plate stills stay exactly what they already were — the visual
- * description and reference images — this field is the one thing #42
- * shipped without: any way to actually direct the *camera*. Left
- * blank, the exact same automatic motion hint this shipped with in #42
- * still applies, so nothing changes for a clip that doesn't use it.
- * Stuart's own explicit ask, after finding "no motion instruction at
- * all" irrational enough to not press Render — still the smallest
- * control this could be (one optional field, not a motion-style
- * picker/menu), consistent with the "keep plating UI tiny" lock.
+ * **Real, auto-computed duration** — `durationSec` (from
+ * `lib/clipGeneration.ts`'s `computePlateDurationSec`, `segmentLengthSec
+ * / plateCount` clamped to 5–15s) is shown, alongside a real per-render
+ * dollar estimate, in the confirm step; nothing here lets Stuart type a
+ * duration in — it's derived, not a picker, per AGENTS.md's "no
+ * duration/resolution knob in the UI" lock.
  *
  * **Cost-aware, explicit two-tap confirm**: the first tap never fires a
  * real request — it only reveals a "Confirm — real xAI video call,
- * ~$0.4x" step (a real per-render dollar estimate, from
- * `estimateClipRenderCostUsd`, not a vague "this costs money" line) that
- * has to be tapped again within `CONFIRM_TIMEOUT_MS`, or it reverts.
- * **One render at a time across the whole timeline**: `locked` (threaded
- * down from `SkidmarksClipTimeline`, which tracks which single segment,
- * if any, is currently rendering) disables this control while any other
- * clip's render is in flight — this is the literal enforcement of
- * Stuart's "one render at a time" cost lock, not just a same-clip
- * re-tap guard.
+ * Ns, ~$0.4x" step that has to be tapped again within
+ * `CONFIRM_TIMEOUT_MS`, or it reverts. **One render at a time across the
+ * whole timeline**: `locked` disables this control while any other
+ * plate's render is in flight.
  *
- * **Persisted to durable Vercel Blob storage, not ephemeral React
- * state.** This is the fix for the exact thing Stuart rejected right
- * after #42 shipped: a render that only lived in this component's own
- * state disappeared on refresh. `generateSkidmarksClip` now returns
- * `persisted: true` plus a durable Blob URL once the server-side save
- * succeeds (see `app/api/skidmarks/generate-clip/route.ts`); this
- * panel also falls back to the `persistedRender` prop
- * (`SkidmarksClipTimeline` fetches what's already saved for every clip,
- * whether expanded or not) whenever this session hasn't rendered
- * anything of its own yet, so a real render still shows up after a
- * reload without needing to be re-triggered. If Vercel Blob genuinely
- * isn't configured, or the save step itself fails, the render Stuart
- * already paid for is still shown and downloadable — just honestly
- * flagged as **not** saved (see the caption below `<video>`), never
- * silently implying durability that didn't happen.
- *
- * **Download uses this feature's own numeric filename convention**
- * (`buildClipRenderFilename` — e.g. `01_0000-0040_render.mp4`) so a
- * clip downloaded to a phone and moved to a PC sorts and matches its
- * timeline position for a DaVinci Resolve import, per the task's own
- * "download-friendly numeric filenames for Resolve" ask. For a
- * persisted render, `?download=1` (Vercel Blob's own documented
- * force-download query param) guarantees the browser actually uses
- * that exact filename via `Content-Disposition`, rather than relying
- * on an HTML anchor's `download` attribute against a cross-origin URL.
+ * **The result no longer renders inline here** — a successful render's
+ * player/download link now lives in the page-bottom
+ * `SkidmarksRenderedClipsShelf` (per the "declutter — move players off
+ * the pink button" ask); this panel only shows a small "Rendered ✓"
+ * status line, never a `<video>`.
  */
 export function SkidmarksClipRender({
   shotPrompt,
   bandName,
-  plateStillDataUrls,
+  plateStillDataUrl,
+  motionPrompt,
+  onSetMotionPrompt,
+  durationSec,
   locked,
   onRenderStart,
   onRenderEnd,
   segmentId,
+  plateId,
+  plateIndex,
+  plateCount,
   clipIndex,
   startSec,
   endSec,
-  persistedRender,
+  alreadyRendered,
   onPersisted,
 }: SkidmarksClipRenderProps) {
   const [confirming, setConfirming] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<RenderResult | null>(null);
-  // Optional, short camera-motion direction — leaves
-  // `lib/clipGeneration.ts`'s automatic push-in/zoom default in place
-  // when blank (this shipped in #42 with no way to ask for anything
-  // else — a pan, a held static shot — see that module's doc comment).
-  const [motionPrompt, setMotionPrompt] = useState("");
+  const [justPersisted, setJustPersisted] = useState(false);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -187,22 +148,9 @@ export function SkidmarksClipRender({
     };
   }, []);
 
-  // Falls back to whatever's already durably saved for this exact clip
-  // — the "show it after refresh" requirement, satisfied even before
-  // Stuart has re-opened this panel in this session — until a fresh
-  // render in *this* session (`result`) exists to take priority.
-  // Derived at render time rather than synced into state via an effect:
-  // there's nothing to subscribe to beyond the prop React already
-  // re-renders this component for.
-  const displayResult: RenderResult | null =
-    result ?? (persistedRender ? { videoUrl: persistedRender.url, durationSec: CLIP_DURATION_SEC, persisted: true } : null);
+  if (!plateStillDataUrl) return null;
 
-  if (plateStillDataUrls.length === 0) return null;
-
-  const usedStillCount = Math.min(plateStillDataUrls.length, MAX_CLIP_REFERENCE_IMAGES);
-  const droppedCount = plateStillDataUrls.length - usedStillCount;
-  const estimatedCost = estimateClipRenderCostUsd(usedStillCount);
-  const downloadFilename = buildClipRenderFilename(clipIndex, startSec, endSec);
+  const estimatedCost = estimateClipRenderCostUsd(durationSec, 1);
 
   const clearConfirmTimer = () => {
     if (confirmTimer.current) {
@@ -233,41 +181,53 @@ export function SkidmarksClipRender({
     }
     setGenerating(true);
     setError(null);
-    onRenderStart();
+    setJustPersisted(false);
+    onRenderStart(plateId);
     try {
       const request = buildClipGenerationRequest({
         shotPrompt: trimmedPrompt,
         bandName,
-        plateStillDataUrls,
+        plateStillDataUrl,
         motionPrompt,
+        durationSec,
         segmentId,
+        plateId,
+        plateIndex,
+        plateCount,
         clipIndex,
         startSec,
         endSec,
       });
       const outcome = await generateSkidmarksClip(request);
       if (outcome.ok) {
-        setResult({
-          videoUrl: outcome.videoUrl,
-          durationSec: outcome.durationSec,
-          persisted: outcome.persisted,
-          persistError: outcome.persistError,
-        });
         if (outcome.persisted) {
-          onPersisted?.({ segmentId, url: outcome.videoUrl, clipIndex, startSec, endSec });
+          const filename = buildClipRenderFilename(
+            clipIndex,
+            startSec,
+            endSec,
+            plateCount > 1 ? plateIndex : undefined
+          );
+          onPersisted({ segmentId, plateId, url: outcome.videoUrl, filename, clipIndex, startSec, endSec });
+          setJustPersisted(true);
+        } else {
+          setError(
+            outcome.persistError
+              ? `Rendered, but not saved — ${outcome.persistError}`
+              : "Rendered, but not saved this time — it won't show up in the shelf below or survive a refresh."
+          );
         }
       } else {
         setError(outcome.message);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not render this clip.");
+      setError(err instanceof Error ? err.message : "Could not render this plate.");
     } finally {
       setGenerating(false);
-      onRenderEnd();
+      onRenderEnd(plateId);
     }
   };
 
-  const actionLabel = usedStillCount > 1 ? "Render plates" : "Animate plate";
+  const showsAsRendered = alreadyRendered || justPersisted;
 
   return (
     <div className="flex flex-col gap-2 border-t border-white/[0.06] pt-3">
@@ -275,19 +235,21 @@ export function SkidmarksClipRender({
         <span className="text-[10px] font-medium uppercase tracking-wide text-white/35">
           Render — real, opt-in
         </span>
-        {droppedCount > 0 && (
-          <span className="text-[10px] text-white/30">using first {usedStillCount} plates</span>
+        {showsAsRendered && !generating && (
+          <span className="text-[10px] font-medium text-emerald-300/80">
+            {"\u2713"} Rendered — see below
+          </span>
         )}
       </div>
 
       {!generating && (
         <textarea
           value={motionPrompt}
-          onChange={(e) => setMotionPrompt(e.target.value)}
-          placeholder="Camera motion for this render (optional) — e.g. slow zoom into keyhole, mild pulse on door cracks"
+          onChange={(e) => onSetMotionPrompt(e.target.value)}
+          placeholder="Camera motion for this plate (optional) — e.g. slow zoom into keyhole, mild pulse on door cracks"
           maxLength={MAX_MOTION_PROMPT_LENGTH}
           rows={2}
-          aria-label="Camera motion for this render"
+          aria-label="Camera motion for this plate"
           className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
         />
       )}
@@ -305,7 +267,7 @@ export function SkidmarksClipRender({
               : "bg-rose-400 text-zinc-950 hover:bg-rose-300 active:bg-rose-400/85",
           ].join(" ")}
         >
-          {displayResult ? `${actionLabel} again` : actionLabel}
+          {showsAsRendered ? "Render plate again" : "Render plate"}
         </button>
       )}
 
@@ -316,7 +278,7 @@ export function SkidmarksClipRender({
             onClick={handleConfirm}
             className="flex-1 rounded-full bg-rose-400 px-3.5 py-2.5 text-center text-[12px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/85"
           >
-            {`Confirm — real xAI video call, ~$${estimatedCost.toFixed(2)}`}
+            {`Confirm — real xAI video call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`}
           </button>
           <button
             type="button"
@@ -337,36 +299,8 @@ export function SkidmarksClipRender({
 
       {locked && !generating && (
         <p className="text-[10px] leading-snug text-white/35">
-          Only one clip renders at a time — finish the other one first.
+          Only one plate renders at a time — finish the other one first.
         </p>
-      )}
-
-      {displayResult && (
-        <div className="flex flex-col gap-1.5">
-          <video src={displayResult.videoUrl} controls playsInline className="w-full rounded-xl bg-black" />
-          <div className="flex items-center justify-between gap-2 text-[11px] text-white/45">
-            <a
-              href={displayResult.persisted ? buildForceDownloadUrl(displayResult.videoUrl) : displayResult.videoUrl}
-              download={downloadFilename}
-              target="_blank"
-              rel="noreferrer"
-              className="font-medium text-rose-300/90 underline-offset-2 hover:underline"
-            >
-              Download {downloadFilename}
-            </a>
-            <span>
-              {displayResult.durationSec}s ·{" "}
-              {displayResult.persisted ? "saved — survives a refresh" : "not saved this time"}
-            </span>
-          </div>
-          {!displayResult.persisted && (
-            <p className="text-[10px] leading-snug text-amber-200/70">
-              {displayResult.persistError
-                ? `Not saved — ${displayResult.persistError}`
-                : "Not saved — this render is only in this tab and won't survive a refresh."}
-            </p>
-          )}
-        </div>
       )}
 
       {error && (
