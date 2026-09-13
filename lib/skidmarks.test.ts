@@ -60,6 +60,14 @@ function word(w: string, startSec: number, endSec: number): SkidmarksTranscribed
   return { word: w, startSec, endSec };
 }
 
+/** The live mp3's own `attachId` — every `apply*Result`/`mark*Failed`
+ * resolve callback needs this now (see `SkidmarksMp3Attachment
+ * .attachId`'s doc comment), so tests grab it fresh off the store the
+ * same way `useSkidmarksStudio.attachMp3` does. */
+function currentAttachId(): string {
+  return getSkidmarksSnapshot().session.mp3!.attachId;
+}
+
 const TRACK_DURATION_SEC = 256; // 4:16, matching the confirmed "Talking To Concrete" report
 
 beforeEach(() => {
@@ -78,7 +86,7 @@ describe("applySkidmarksTranscriptionResult", () => {
       scattered.push(word(`w${t}`, t, t + 0.3));
     }
 
-    applySkidmarksTranscriptionResult(scattered, null, "elevenlabs");
+    applySkidmarksTranscriptionResult(currentAttachId(), scattered, null, "elevenlabs");
 
     let mp3 = getSkidmarksSnapshot().session.mp3;
     expect(mp3?.transcriptionStatus).toBe("sparse");
@@ -108,13 +116,13 @@ describe("applySkidmarksTranscriptionResult", () => {
 
     // Once the heuristic also settles, Lyrics reads "stub" — never
     // green, and no longer stuck on "analyzing" forever.
-    markSkidmarksAnalysisFailed("Analysis took too long and was cancelled.");
+    markSkidmarksAnalysisFailed(currentAttachId(), "Analysis took too long and was cancelled.");
     mp3 = getSkidmarksSnapshot().session.mp3;
     expect(skidmarksChecklistState(mp3 ?? null).lyrics).toBe("stub");
   });
 
   it("does not downgrade an already-landed real heuristic result when transcription turns out sparse", () => {
-    applySkidmarksAnalysisResult({
+    applySkidmarksAnalysisResult(currentAttachId(), {
       segments: [
         { startSec: 0, endSec: 31, vocal: false },
         { startSec: 31, endSec: 200, vocal: true },
@@ -128,7 +136,7 @@ describe("applySkidmarksTranscriptionResult", () => {
     for (let t = 32; t < TRACK_DURATION_SEC; t += 4) {
       scattered.push(word(`w${t}`, t, t + 0.3));
     }
-    applySkidmarksTranscriptionResult(scattered, null, "elevenlabs");
+    applySkidmarksTranscriptionResult(currentAttachId(), scattered, null, "elevenlabs");
 
     const mp3 = getSkidmarksSnapshot().session.mp3;
     // Still showing the real heuristic output, untouched.
@@ -142,7 +150,7 @@ describe("applySkidmarksTranscriptionResult", () => {
     // the track.
     const words = [word("verse", 32, 200)];
 
-    applySkidmarksTranscriptionResult(words, null, "elevenlabs");
+    applySkidmarksTranscriptionResult(currentAttachId(), words, null, "elevenlabs");
 
     const mp3 = getSkidmarksSnapshot().session.mp3;
     expect(mp3?.transcriptionStatus).toBe("done");
@@ -156,13 +164,13 @@ describe("applySkidmarksTranscriptionResult", () => {
   });
 
   it("still wins over a real heuristic result once transcription clears the usefulness bar, regardless of arrival order", () => {
-    applySkidmarksAnalysisResult({
+    applySkidmarksAnalysisResult(currentAttachId(), {
       segments: [{ startSec: 0, endSec: TRACK_DURATION_SEC, vocal: false }],
       durationSec: TRACK_DURATION_SEC,
     });
     expect(getSkidmarksSnapshot().session.mp3?.segmentsSource).toBe("analysis");
 
-    applySkidmarksTranscriptionResult([word("verse", 32, 200)], null, "elevenlabs");
+    applySkidmarksTranscriptionResult(currentAttachId(), [word("verse", 32, 200)], null, "elevenlabs");
 
     expect(getSkidmarksSnapshot().session.mp3?.segmentsSource).toBe("transcription");
   });
@@ -172,8 +180,8 @@ describe("applySkidmarksTranscriptionResult", () => {
     for (let t = 32; t < TRACK_DURATION_SEC; t += 4) {
       scattered.push(word(`w${t}`, t, t + 0.3));
     }
-    applySkidmarksTranscriptionResult(scattered, null, "elevenlabs");
-    markSkidmarksAnalysisFailed("Analysis took too long and was cancelled.");
+    applySkidmarksTranscriptionResult(currentAttachId(), scattered, null, "elevenlabs");
+    markSkidmarksAnalysisFailed(currentAttachId(), "Analysis took too long and was cancelled.");
 
     const mp3 = getSkidmarksSnapshot().session.mp3;
     expect(mp3?.segmentsSource).toBe("seed-fallback");
@@ -183,6 +191,118 @@ describe("applySkidmarksTranscriptionResult", () => {
     const checklist = skidmarksChecklistState(mp3 ?? null);
     expect(checklist.lyrics).toBe("stub");
     expect(checklist.ready).not.toBe("done");
+  });
+
+  it("no-ops entirely for a stale attachId \u2014 a slow real transcription call for a since-replaced attach must never land on whatever's live now", () => {
+    const staleAttachId = currentAttachId();
+    // A brand-new attach (a different song, or the sheet was closed and
+    // reopened after re-picking the same file) replaces the live mp3
+    // before the slow real STT round-trip for the *previous* attach
+    // resolves \u2014 see `SkidmarksMp3Attachment.attachId`'s doc comment.
+    attachSkidmarksMp3(createMp3Attachment("a-different-song.mp3", 90));
+
+    applySkidmarksTranscriptionResult(staleAttachId, [word("verse", 32, 200)], null, "elevenlabs");
+
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    expect(mp3.fileName).toBe("a-different-song.mp3");
+    // Still the fresh seed-fallback timeline for the *new* attach \u2014
+    // never overwritten by the stale attach's real result.
+    expect(mp3.segmentsSource).toBe("seed-fallback");
+    expect(mp3.transcriptionStatus).toBe("checking");
+  });
+
+  it("never discards plates/prompts Stuart already tagged on the current timeline, even once a slower real transcription result finally lands (the actual '#49 Vocal plates disappeared' / 'clip 1 reverted' bug)", () => {
+    // The fast heuristic lands first (real-world: client-side FFT vs. a
+    // real network round-trip), giving Stuart a real timeline to tag.
+    applySkidmarksAnalysisResult(currentAttachId(), {
+      segments: [
+        { startSec: 0, endSec: 31, vocal: false },
+        { startSec: 31, endSec: 200, vocal: true },
+        { startSec: 200, endSec: TRACK_DURATION_SEC, vocal: false },
+      ],
+      durationSec: TRACK_DURATION_SEC,
+    });
+    const vocalSegment = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.label === "vocal")!;
+
+    // Stuart tags a door \u2192 keyhole \u2192 Jack strip on that Vocal
+    // clip before the slower, "more correct" transcription result lands.
+    addSkidmarksClipPlate(vocalSegment.id);
+    addSkidmarksClipPlate(vocalSegment.id);
+    const tagged = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === vocalSegment.id)!;
+    const [door, keyhole, jack] = tagged.plates;
+    setSkidmarksClipPlateStill(vocalSegment.id, door.id, {
+      dataUrl: "data:image/jpeg;base64,DOOR",
+      source: "generated",
+      createdAt: 1,
+    });
+    setSkidmarksClipPlateStill(vocalSegment.id, keyhole.id, {
+      dataUrl: "data:image/jpeg;base64,KEYHOLE",
+      source: "generated",
+      createdAt: 2,
+    });
+    setSkidmarksClipPlateStill(vocalSegment.id, jack.id, {
+      dataUrl: "data:image/jpeg;base64,JACK",
+      source: "generated",
+      createdAt: 3,
+    });
+    setSkidmarksSegmentShotPrompt(vocalSegment.id, "door creaks open, then a keyhole, then Jack");
+
+    // Now the slower real transcription finally resolves, with a
+    // *different* segmentation (word-level timing rarely matches the
+    // heuristic's ranges exactly).
+    applySkidmarksTranscriptionResult(
+      currentAttachId(),
+      [word("verse", 40, 195)],
+      null,
+      "elevenlabs"
+    );
+
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    // The checklist/caption still honestly reflects that real
+    // transcription actually landed and was useful\u2026
+    expect(mp3.transcriptionStatus).toBe("done");
+    // \u2026but the timeline itself, and every plate on it, survives
+    // untouched \u2014 never silently replaced by a fresh, blank
+    // re-segmentation.
+    expect(mp3.segmentsSource).toBe("analysis");
+    expect(mp3.segments).toHaveLength(3);
+    const stillThere = mp3.segments.find((s) => s.id === vocalSegment.id)!;
+    expect(stillThere.plates).toHaveLength(3);
+    expect(stillThere.plates.map((p) => p.still?.dataUrl)).toEqual([
+      "data:image/jpeg;base64,DOOR",
+      "data:image/jpeg;base64,KEYHOLE",
+      "data:image/jpeg;base64,JACK",
+    ]);
+    expect(stillThere.shotPrompt).toBe("door creaks open, then a keyhole, then Jack");
+  });
+});
+
+describe("applySkidmarksAnalysisResult (already-tagged guard)", () => {
+  it("never discards a plate Stuart already tagged on the seed-fallback timeline once the heuristic finally resolves", () => {
+    // Attach fires with seed-fallback segments immediately; Stuart is
+    // fast enough to tag the very first clip before the client-side
+    // heuristic (normally quick, but never instant) has actually run.
+    const seedSegment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    setSkidmarksClipPlateStill(seedSegment.id, seedSegment.plates[0].id, {
+      dataUrl: "data:image/jpeg;base64,SEEDTAG",
+      source: "upload",
+      createdAt: 1,
+    });
+
+    applySkidmarksAnalysisResult(currentAttachId(), {
+      segments: [{ startSec: 0, endSec: TRACK_DURATION_SEC, vocal: true }],
+      durationSec: TRACK_DURATION_SEC,
+    });
+
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    // Still honestly marked as having run\u2026
+    expect(mp3.analysisStatus).toBe("done");
+    // \u2026but the seed timeline (and Stuart's tagged plate on it)
+    // survives untouched rather than being replaced by a fresh
+    // single-segment rebuild.
+    expect(mp3.segmentsSource).toBe("seed-fallback");
+    const stillThere = mp3.segments.find((s) => s.id === seedSegment.id)!;
+    expect(stillThere.plates[0].still?.dataUrl).toBe("data:image/jpeg;base64,SEEDTAG");
   });
 });
 
@@ -760,7 +880,7 @@ describe("setSkidmarksSegmentInstrumentalVideoModel", () => {
 
 describe("setSkidmarksMp3AudioUrl / markSkidmarksMp3AudioUnconfigured / markSkidmarksMp3AudioFailed", () => {
   it("records a successful audio upload as a distinct, durable outcome", () => {
-    setSkidmarksMp3AudioUrl("https://x.public.blob.vercel-storage.com/a.mp3");
+    setSkidmarksMp3AudioUrl(currentAttachId(), "https://x.public.blob.vercel-storage.com/a.mp3");
     const mp3 = getSkidmarksSnapshot().session.mp3!;
     expect(mp3.audioUrl).toBe("https://x.public.blob.vercel-storage.com/a.mp3");
     expect(mp3.audioPersistStatus).toBe("done");
@@ -768,7 +888,7 @@ describe("setSkidmarksMp3AudioUrl / markSkidmarksMp3AudioUnconfigured / markSkid
   });
 
   it("records the honest unconfigured outcome distinctly from a real failure", () => {
-    markSkidmarksMp3AudioUnconfigured("No Blob store connected here.");
+    markSkidmarksMp3AudioUnconfigured(currentAttachId(), "No Blob store connected here.");
     const mp3 = getSkidmarksSnapshot().session.mp3!;
     expect(mp3.audioPersistStatus).toBe("unconfigured");
     expect(mp3.audioPersistError).toBe("No Blob store connected here.");
@@ -776,10 +896,23 @@ describe("setSkidmarksMp3AudioUrl / markSkidmarksMp3AudioUnconfigured / markSkid
   });
 
   it("records a genuine upload failure", () => {
-    markSkidmarksMp3AudioFailed("Network error uploading the audio.");
+    markSkidmarksMp3AudioFailed(currentAttachId(), "Network error uploading the audio.");
     const mp3 = getSkidmarksSnapshot().session.mp3!;
     expect(mp3.audioPersistStatus).toBe("failed");
     expect(mp3.audioPersistError).toBe("Network error uploading the audio.");
+  });
+
+  it("no-ops for a stale attachId that no longer matches the live mp3 (a slow upload for a since-replaced attach)", () => {
+    const staleAttachId = currentAttachId();
+    // A brand-new attach replaces the live mp3 before the slow upload
+    // for the *previous* one resolves.
+    attachSkidmarksMp3(createMp3Attachment("newer-track.mp3", 90));
+
+    setSkidmarksMp3AudioUrl(staleAttachId, "https://x.public.blob.vercel-storage.com/stale.mp3");
+
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    expect(mp3.fileName).toBe("newer-track.mp3");
+    expect(mp3.audioUrl).toBeUndefined();
   });
 });
 

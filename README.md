@@ -1197,7 +1197,37 @@ now (see "Explicitly out of scope" below).
      **Lead**/**Instrumental**) as a fallback, flagged by the short
      `timelineNote` line above whenever it's showing — see that
      function in `SkidmarksClipTimeline.tsx` for the exact priority
-     logic. Each clip is its own **collapsible row**: collapsed shows
+     logic. **That priority order stops applying the instant Stuart has
+     actually tagged real content onto the current timeline** —
+     `lib/skidmarks.ts`'s `hasSkidmarksUserContent` (checked by both
+     `applySkidmarksAnalysisResult` and
+     `applySkidmarksTranscriptionResult` before they rebuild `segments`)
+     — a real live bug: the energy heuristic resolves client-side-fast
+     while real transcription is a genuine network round-trip against a
+     whole song, so there was nothing stopping Stuart from already
+     tagging a door -> keyhole -> Jack plate strip on the fast
+     heuristic's timeline before the slower "more correct" transcription
+     result landed and silently discarded all of it — every plate,
+     every shot prompt — with a brand-new, blank re-segmentation and no
+     warning (reported live as "all Vocal plates disappeared except the
+     first one" / "clip 1 resolved back to an older clip"). Once any
+     segment has a filled plate, a shot prompt, an extra "+" plate slot,
+     a manual plate selection, or a manually-picked model, a later
+     resolve still records `analysisStatus`/`transcriptionStatus`/
+     `transcriptionProvider` honestly (the chips never lie about whether
+     a real signal landed), it just leaves `segments`/`segmentsSource`
+     alone instead of overwriting them. Separately, every one of these
+     async resolve callbacks (`apply*Result`, `mark*Failed`,
+     `mark*Unconfigured`, `setSkidmarksMp3AudioUrl`) now takes the
+     attach's own `attachId` (`SkidmarksMp3Attachment.attachId`, minted
+     fresh in `createMp3Attachment`), and the store re-checks it against
+     the *live* `session.mp3.attachId` before applying anything — a
+     durable, store-level guard, not just `useSkidmarksStudio`'s
+     `analysisTokenRef` (a `useRef` on the `SkidmarksDetailSheet`
+     component instance, orphaned the moment that sheet unmounts —
+     closing the sheet while a slow real transcription call is still in
+     flight, then reopening it, used to leave that stale promise free to
+     land squarely on whatever's live afterward). Each clip is its own **collapsible row**: collapsed shows
      just the time range (e.g. "0:15–0:45") and its label pill — no
      model glance, no other chrome; expanded appends that clip's
      `SkidmarksClipStub` panel, which is **ruthlessly minimal by
@@ -1848,8 +1878,17 @@ now (see "Explicitly out of scope" below).
   `tagline`, `coverSeed`, `editIcon`, `members: SkidmarksMember[]`);
   `SkidmarksMember` (`id`, `name`, optional `role`, `emoji`,
   `looks: SkidmarksLook[]`); `SkidmarksLook` (`id`, `seed`, `prompt`,
-  `photoreal`, `createdAt`); `SkidmarksMp3Attachment` (`fileName`,
-  `durationSec`, `attachedAt`, `segments: SkidmarksClipSegment[]`,
+  `photoreal`, `createdAt`);   `SkidmarksMp3Attachment` (`fileName`,
+  `durationSec`, `attachedAt`, `attachId` — a stable id minted fresh in
+  `createMp3Attachment` for *this* attach, never reused; every async
+  resolve callback this attach kicks off (`applySkidmarksAnalysisResult`,
+  `applySkidmarksTranscriptionResult`, `setSkidmarksMp3AudioUrl`, and
+  their `mark*Failed`/`mark*Unconfigured` siblings) takes this id and
+  the store no-ops unless it still matches the *live*
+  `session.mp3.attachId` — the durable guard against a slow real API
+  call landing on a different attach that's since replaced it (see the
+  "Clip / segment timeline" step above for the exact live bug this
+  fixes), `segments: SkidmarksClipSegment[]`,
   `segmentsSource: "transcription" | "analysis" | "seed-fallback"`,
   `analysisStatus: "analyzing" | "done" | "failed"`, optional
   `analysisError`, `transcriptionStatus: "checking" | "unconfigured" |

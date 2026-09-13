@@ -153,6 +153,58 @@ to Vercel Blob (JSON metadata + JSON snapshot + media), never
 in this repo (see Env vars) — when it lands, it should replace *all* of
 this `localStorage` session state, not just the archive.
 
+**A slow real API result must never silently overwrite already-tagged
+plates/prompts, or land on a different attach than the one it was for.**
+Real live-QA'd bug, reported right after #49 merged: "all Vocal plates
+disappeared except the first one" / clip 1 "resolved back to an older
+clip." Root cause was two gaps in `lib/skidmarks.ts`, both pre-existing
+(not introduced by #49 itself — #49 just happened to be the deploy
+Stuart was on when he hit them):
+1. `applySkidmarksAnalysisResult`/`applySkidmarksTranscriptionResult`
+   (the two async "a real signal just resolved" callbacks
+   `useSkidmarksStudio.attachMp3` kicks off) used to unconditionally
+   rebuild the *entire* `segments` array from scratch — fresh ids, one
+   blank plate each — the moment either landed. Correct the first time
+   (nothing's tagged yet), but the energy heuristic resolves
+   client-side-fast while real transcription is a genuine network
+   round-trip against a whole song; there was nothing stopping Stuart
+   from already tagging a door → keyhole → Jack strip on the fast
+   heuristic's timeline before the slower "more correct" transcription
+   landed and silently discarded all of it. Fixed via
+   `hasSkidmarksUserContent` — both functions now check whether the
+   *current* segments already have real content (any filled plate, a
+   shot prompt, an extra "+" slot, a plate selection, a manual model
+   pick) before rebuilding, and skip the rebuild entirely if so (still
+   recording `analysisStatus`/`transcriptionStatus`/`segmentsSource`
+   honestly either way — the chips never lie about whether a real
+   signal landed).
+2. Every one of those same resolve callbacks, plus
+   `setSkidmarksMp3AudioUrl`/`mark*Failed`/`mark*Unconfigured`, only
+   ever no-op'd on `!mp3` (the mp3 was cleared) — nothing checked
+   whether the *live* mp3 was still the same attach the promise was
+   originally for. `useSkidmarksStudio`'s own `analysisTokenRef` guard
+   is a `useRef` scoped to the `SkidmarksDetailSheet` component
+   instance, which fully unmounts whenever the sheet closes
+   (`GraphView`'s `{openNode && ... && <SkidmarksDetailSheet />}`) — a
+   promise still in flight from *before* that unmount keeps running,
+   and its `.then()` closure checks itself against its own now-orphaned
+   ref object (never invalidated by the unmount), so it could still
+   land on whatever's live after a reopen or a fresh attach. Fixed by
+   giving every `SkidmarksMp3Attachment` its own stable `attachId`
+   (minted once in `createMp3Attachment`, backfilled by `normalizeState`
+   for an older stored session) and having the store itself — not just
+   the component ref — re-check it against `session.mp3.attachId`
+   before applying anything. This is the durable guarantee now; the
+   component-side ref check is kept only as a cheap early bail.
+
+If you touch `applySkidmarksAnalysisResult`,
+`applySkidmarksTranscriptionResult`, any of the other `mp3`-scoped
+resolve/mark functions in `lib/skidmarks.ts`, or `useSkidmarksStudio
+.attachMp3`, keep both guards — `attachId` alone doesn't protect
+already-tagged content on the *same* attach, and
+`hasSkidmarksUserContent` alone doesn't protect against a stale
+promise for a *different*, since-replaced attach.
+
 ## Plating UX locks — don't reinvent these, don't add a picker
 
 - An empty plate is **one dashed/dotted placeholder tile**. Never a

@@ -824,6 +824,27 @@ export interface SkidmarksMp3Attachment {
   /** Real duration (seconds) once probed from the picked file; null while probing or if probing failed. */
   durationSec: number | null;
   attachedAt: number;
+  /** Stable identity for *this* attach, minted once in
+   * `createMp3Attachment` and never reused (a re-attach, even of the
+   * exact same file, always mints a fresh one via `attachSkidmarksMp3`
+   * — see that function's doc comment). Every async "resolve" callback
+   * this attach kicks off (`applySkidmarksAnalysisResult`,
+   * `applySkidmarksTranscriptionResult`, `setSkidmarksMp3AudioUrl`, the
+   * `mark*Failed`/`mark*Unconfigured` siblings) takes this id and
+   * no-ops unless it still matches `session.mp3.attachId` — a durable,
+   * store-level guard against a slow real API call (a multi-minute
+   * song's transcription can take a while) landing on a *different*
+   * attach that's since replaced it, which a purely component-`useRef`
+   * generation counter (`useSkidmarksStudio`'s old `analysisTokenRef`)
+   * can't guarantee: that ref lives on the `SkidmarksDetailSheet`
+   * component instance, which fully unmounts whenever the sheet closes
+   * (`GraphView`'s `{openNode && ... && <SkidmarksDetailSheet />}`) —
+   * a still-in-flight promise from *before* that unmount keeps running
+   * and, on resolve, checks itself against its own now-orphaned ref
+   * object (never invalidated by the unmount), so it can still land
+   * squarely on whatever's live after a reopen. Backfilled by
+   * `normalizeState` for a session saved before this field existed. */
+  attachId: string;
   /** The clip/segment timeline. Real word-timing-derived vocal/
    * instrumental regions once `segmentsSource === "transcription"`,
    * real energy-heuristic ones once `segmentsSource === "analysis"`, or
@@ -1053,6 +1074,7 @@ export function createMp3Attachment(
     fileName,
     durationSec,
     attachedAt: Date.now(),
+    attachId: generateId("mp3"),
     segments: buildDemoSegments(durationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC),
     segmentsSource: "seed-fallback",
     analysisStatus: "analyzing",
@@ -1263,9 +1285,20 @@ function normalizeState(parsed: unknown): SkidmarksState {
       ? "Audio upload doesn't survive a page reload (the audio file itself isn't kept) \u2014 re-attach the MP3 to re-try it."
       : storedMp3?.audioPersistError;
 
+  // A session saved before `attachId` existed has no way to tell "this
+  // rehydrated mp3" apart from "a slow resolve callback for whatever was
+  // live before the reload" — backfill a fresh one on load so every
+  // `apply*Result`/`mark*Failed` guard below has something real to check
+  // against going forward (a stale pre-reload promise can't survive a
+  // full page reload anyway, since its whole JS closure is gone with it).
+  const attachId = typeof storedMp3?.attachId === "string" && storedMp3.attachId.length > 0
+    ? storedMp3.attachId
+    : generateId("mp3");
+
   const mp3: SkidmarksMp3Attachment | null = storedMp3
     ? {
         ...storedMp3,
+        attachId,
         segments,
         segmentsSource,
         analysisStatus,
@@ -1544,15 +1577,14 @@ export function setSkidmarksMp3Duration(durationSec: number): void {
 }
 
 /** Records a successful MP3-audio Blob upload — see
- * `SkidmarksMp3Attachment.audioUrl`'s doc comment. No-ops if the mp3
- * was removed/replaced before the upload finished (same "can't tell
- * *this* file from a same-shaped new one" caveat as
- * `applySkidmarksAnalysisResult` — callers should additionally guard
- * against a stale/superseded result themselves). */
-export function setSkidmarksMp3AudioUrl(audioUrl: string): void {
+ * `SkidmarksMp3Attachment.audioUrl`'s doc comment. No-ops if `attachId`
+ * no longer matches the live `session.mp3` (removed, or replaced by a
+ * newer attach, before the upload finished) — see
+ * `SkidmarksMp3Attachment.attachId`'s doc comment. */
+export function setSkidmarksMp3AudioUrl(attachId: string, audioUrl: string): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
-  if (!mp3) return;
+  if (!mp3 || mp3.attachId !== attachId) return;
   persist({
     ...current,
     session: {
@@ -1567,21 +1599,23 @@ export function setSkidmarksMp3AudioUrl(audioUrl: string): void {
  * split as `markSkidmarksTranscriptionUnconfigured`/
  * `markSkidmarksTranscriptionFailed`. Playback from the local, in-tab
  * object URL is completely unaffected either way — this only means
- * playback won't survive a refresh this time. */
-export function markSkidmarksMp3AudioUnconfigured(reason: string): void {
+ * playback won't survive a refresh this time. No-ops if `attachId` no
+ * longer matches the live `session.mp3` — see
+ * `SkidmarksMp3Attachment.attachId`'s doc comment. */
+export function markSkidmarksMp3AudioUnconfigured(attachId: string, reason: string): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
-  if (!mp3) return;
+  if (!mp3 || mp3.attachId !== attachId) return;
   persist({
     ...current,
     session: { ...current.session, mp3: { ...mp3, audioPersistStatus: "unconfigured", audioPersistError: reason } },
   });
 }
 
-export function markSkidmarksMp3AudioFailed(reason: string): void {
+export function markSkidmarksMp3AudioFailed(attachId: string, reason: string): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
-  if (!mp3) return;
+  if (!mp3 || mp3.attachId !== attachId) return;
   persist({
     ...current,
     session: { ...current.session, mp3: { ...mp3, audioPersistStatus: "failed", audioPersistError: reason } },
@@ -1602,6 +1636,42 @@ function buildSegmentsFromVocalRanges(
 }
 
 /**
+ * True once Stuart has actually put real work into the *current*
+ * segment list — a filled plate, a shot prompt, a per-plate motion
+ * note, an extra "+" plate slot, an explicit plate selection, or a
+ * manually-picked model. Purely derived from `segments` themselves
+ * (never a separate stored flag) — a fresh seed/analysis timeline
+ * nobody has touched yet always reads `false`.
+ *
+ * **This is the actual fix for "clip 1 resolved back to an older clip"
+ * / "all Vocal plates disappeared."** `applySkidmarksAnalysisResult`
+ * and `applySkidmarksTranscriptionResult` used to unconditionally
+ * rebuild the *entire* `segments` array from scratch (fresh ids, one
+ * blank plate each) the moment either resolved — correct the very
+ * first time (nothing's tagged yet), but the energy heuristic resolves
+ * client-side-fast while real transcription is a genuine network round
+ * trip against a whole song; there was nothing stopping Stuart from
+ * already tagging several plates on the fast heuristic's timeline
+ * before the slower, "more correct" transcription result finally landed
+ * and silently discarded all of it, wholesale, with no merge and no
+ * warning. Both call sites now check this before rebuilding — once it's
+ * `true`, a later resolve still records the real
+ * `analysisStatus`/`transcriptionStatus`/`segmentsSource` honestly (so
+ * the checklist chips never lie), it just stops replacing `segments`
+ * out from under whatever Stuart already built. */
+function hasSkidmarksUserContent(segments: SkidmarksClipSegment[]): boolean {
+  return segments.some(
+    (s) =>
+      s.shotPrompt.trim().length > 0 ||
+      s.uncensoredPlateStills ||
+      (s.selectedPlateId != null && s.selectedPlateId.length > 0) ||
+      s.plates.length > 1 ||
+      s.plates.some((p) => !!p.still || !!p.motionPrompt) ||
+      s.model !== defaultSegmentModel(s.label)
+  );
+}
+
+/**
  * Applies a finished `analyzeVocalActivity` result: maps its real
  * vocal/instrumental time ranges into `SkidmarksClipSegment`s (each
  * still gets a default model via `defaultSegmentModel`, same rule as
@@ -1618,20 +1688,28 @@ function buildSegmentsFromVocalRanges(
  * and succeed) but leaves `segments`/`segmentsSource` alone rather than
  * replacing real transcribed timing with the heuristic's.
  *
- * No-ops if the mp3 was removed/replaced before analysis finished —
- * callers should additionally guard against a stale/superseded result
- * themselves (see `useSkidmarksStudio`'s generation-token check) since
- * this function can't tell "still the same file" from "a same-shaped
- * new one".
+ * **Never clobbers real work Stuart already did**, either —
+ * `hasSkidmarksUserContent` (see its own doc comment for the exact live
+ * bug this fixes) gates the rebuild the same way the transcription
+ * check does: once any current segment has a filled plate, a shot
+ * prompt, or any other real tagging on it, this still records
+ * `analysisStatus: "done"` honestly but leaves `segments`/
+ * `segmentsSource` untouched instead of overwriting them.
+ *
+ * No-ops entirely if `attachId` no longer matches the live
+ * `session.mp3` — the mp3 was removed, or replaced by a newer attach,
+ * before this resolved (see `SkidmarksMp3Attachment.attachId`'s doc
+ * comment for why this is checked here, durably, rather than trusting
+ * only a caller-side generation-token check).
  */
-export function applySkidmarksAnalysisResult(result: VocalAnalysisResult): void {
+export function applySkidmarksAnalysisResult(attachId: string, result: VocalAnalysisResult): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
-  if (!mp3) return;
+  if (!mp3 || mp3.attachId !== attachId) return;
   const hasRealTranscription = mp3.segmentsSource === "transcription";
-  const segments = hasRealTranscription
-    ? mp3.segments
-    : buildSegmentsFromVocalRanges(result.segments);
+  const alreadyTagged = hasSkidmarksUserContent(mp3.segments);
+  const segments =
+    hasRealTranscription || alreadyTagged ? mp3.segments : buildSegmentsFromVocalRanges(result.segments);
   persist({
     ...current,
     session: {
@@ -1640,7 +1718,7 @@ export function applySkidmarksAnalysisResult(result: VocalAnalysisResult): void 
         ...mp3,
         durationSec: mp3.durationSec ?? result.durationSec,
         segments,
-        segmentsSource: hasRealTranscription ? mp3.segmentsSource : "analysis",
+        segmentsSource: hasRealTranscription || alreadyTagged ? mp3.segmentsSource : "analysis",
         analysisStatus: "done",
         analysisError: undefined,
       },
@@ -1656,20 +1734,25 @@ export function applySkidmarksAnalysisResult(result: VocalAnalysisResult): void 
  * never silently presenting the fallback as real. `reason` is shown
  * verbatim in the timeline's caption, so keep it short and
  * non-technical where possible. Like `applySkidmarksAnalysisResult`,
- * never downgrades an already-real transcription result.
+ * never downgrades an already-real transcription result, and (per
+ * `hasSkidmarksUserContent`) never relabels an already-tagged timeline
+ * back to `"seed-fallback"` just because the heuristic itself failed.
+ * No-ops if `attachId` no longer matches the live `session.mp3` — see
+ * `SkidmarksMp3Attachment.attachId`'s doc comment.
  */
-export function markSkidmarksAnalysisFailed(reason: string): void {
+export function markSkidmarksAnalysisFailed(attachId: string, reason: string): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
-  if (!mp3) return;
+  if (!mp3 || mp3.attachId !== attachId) return;
   const hasRealTranscription = mp3.segmentsSource === "transcription";
+  const alreadyTagged = hasSkidmarksUserContent(mp3.segments);
   persist({
     ...current,
     session: {
       ...current.session,
       mp3: {
         ...mp3,
-        segmentsSource: hasRealTranscription ? mp3.segmentsSource : "seed-fallback",
+        segmentsSource: hasRealTranscription || alreadyTagged ? mp3.segmentsSource : "seed-fallback",
         analysisStatus: "failed",
         analysisError: reason,
       },
@@ -1718,18 +1801,31 @@ export function markSkidmarksAnalysisFailed(reason: string): void {
  * showing — outranking both the energy heuristic and the seed cadence,
  * regardless of which resolved first (both start in parallel from
  * attach; transcription's network round-trip means it can land either
- * before or after the heuristic).
+ * before or after the heuristic) — **unless Stuart has already tagged
+ * real content onto the current timeline** (`hasSkidmarksUserContent`
+ * — see its doc comment for the exact live bug this fixes: a real STT
+ * round-trip against a whole song is genuinely slow, plenty of time to
+ * have already started plating clips off the fast heuristic's
+ * timeline before this lands). In that case this still records
+ * `transcriptionStatus`/`transcriptionProvider` honestly, it just
+ * leaves `segments`/`segmentsSource` alone instead of discarding
+ * Stuart's work for a "more correct" timeline.
+ *
+ * No-ops entirely if `attachId` no longer matches the live
+ * `session.mp3` — see `SkidmarksMp3Attachment.attachId`'s doc comment.
  */
 export function applySkidmarksTranscriptionResult(
+  attachId: string,
   words: SkidmarksTranscribedWord[],
   reportedDurationSec: number | null,
   provider?: SkidmarksTranscriptionProvider
 ): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
-  if (!mp3) return;
+  if (!mp3 || mp3.attachId !== attachId) return;
   const totalSec = mp3.durationSec ?? reportedDurationSec ?? DEMO_SEGMENT_FALLBACK_DURATION_SEC;
   const wordSegments = segmentsFromWords(words, totalSec);
+  const alreadyTagged = hasSkidmarksUserContent(mp3.segments);
 
   if (!hasUsefulVocalCoverage(wordSegments, totalSec)) {
     const coveredSec = vocalCoverageSec(wordSegments);
@@ -1761,7 +1857,7 @@ export function applySkidmarksTranscriptionResult(
     return;
   }
 
-  const segments = buildSegmentsFromVocalRanges(wordSegments);
+  const segments = alreadyTagged ? mp3.segments : buildSegmentsFromVocalRanges(wordSegments);
   persist({
     ...current,
     session: {
@@ -1771,7 +1867,7 @@ export function applySkidmarksTranscriptionResult(
         durationSec: mp3.durationSec ?? reportedDurationSec,
         words,
         segments,
-        segmentsSource: "transcription",
+        segmentsSource: alreadyTagged ? mp3.segmentsSource : "transcription",
         transcriptionStatus: "done",
         transcriptionProvider: provider,
         transcriptionError: undefined,
@@ -1787,12 +1883,14 @@ export function applySkidmarksTranscriptionResult(
  * the energy-heuristic/seed fallback already honestly shows) since
  * nothing actually went wrong; transcription just isn't wired up in
  * this environment. `reason` is the server's own explanation, shown
- * verbatim in the timeline's caption.
+ * verbatim in the timeline's caption. No-ops if `attachId` no longer
+ * matches the live `session.mp3` — see
+ * `SkidmarksMp3Attachment.attachId`'s doc comment.
  */
-export function markSkidmarksTranscriptionUnconfigured(reason: string): void {
+export function markSkidmarksTranscriptionUnconfigured(attachId: string, reason: string): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
-  if (!mp3) return;
+  if (!mp3 || mp3.attachId !== attachId) return;
   persist({
     ...current,
     session: {
@@ -1807,12 +1905,13 @@ export function markSkidmarksTranscriptionUnconfigured(reason: string): void {
  * bad audio, an actual upstream API error) — distinct from
  * `markSkidmarksTranscriptionUnconfigured`, which covers the honest
  * "no key set" case. `reason` is shown verbatim in the timeline's
- * caption.
+ * caption. No-ops if `attachId` no longer matches the live
+ * `session.mp3` — see `SkidmarksMp3Attachment.attachId`'s doc comment.
  */
-export function markSkidmarksTranscriptionFailed(reason: string): void {
+export function markSkidmarksTranscriptionFailed(attachId: string, reason: string): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
-  if (!mp3) return;
+  if (!mp3 || mp3.attachId !== attachId) return;
   persist({
     ...current,
     session: {
