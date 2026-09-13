@@ -648,6 +648,28 @@ export interface SkidmarksPlateStill {
  * rebuilds off the real duration the first time it resolves. */
 const DEMO_SEGMENT_FALLBACK_DURATION_SEC = 210;
 
+/**
+ * Stuart's 2026-09-13 hard ask: ElevenLabs Scribe timing lands "mostly
+ * right but sometimes 3-4 seconds off," so he wants to slip a clip's
+ * start/end after transcription without re-running Scribe — see
+ * `nudgeSkidmarksSegmentBoundary`/`nudgeSkidmarksSegmentStart`/
+ * `nudgeSkidmarksSegmentEnd` below and `components
+ * /SkidmarksClipTimingNudge.tsx` for the compact −1s/+1s stepper this
+ * feeds. One tap's worth of nudge — small enough that correcting a
+ * typical 3-4s miss takes a handful of taps (matches the "compact
+ * stepper, not a big timeline editor" ask), not so small that it takes
+ * a dozen taps to matter. */
+export const SEGMENT_NUDGE_STEP_SEC = 1;
+
+/** Floor on how short a nudge is ever allowed to leave a clip — either
+ * the one being nudged, or the neighbor whose shared cut point moves
+ * with it (see `nudgeSkidmarksSegmentBoundary`'s doc comment). A manual,
+ * deliberate tap gets a more conservative floor than
+ * `lib/audioAnalysis.ts`'s `MIN_SEGMENT_SEC` (that one folds away
+ * automatic-detector noise; this one just stops a real clip from being
+ * nudged down to nothing). */
+export const MIN_NUDGE_SEGMENT_SEC = 1;
+
 /** Caps a clip's plate strip (`SkidmarksClipSegment.plates`) so "+"
  * can't grow it unbounded — a handful of plates covers the motivating
  * door → keyhole → Jack case with room to spare, without letting the
@@ -1940,6 +1962,141 @@ function updateSkidmarksSegment(
     ...current,
     session: { ...current.session, mp3: { ...current.session.mp3, segments } },
   });
+}
+
+/**
+ * Pure boundary-nudge math — exported mainly so it's directly testable
+ * without touching the `localStorage`-backed store; the real setters
+ * (`nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd`) just wrap
+ * this around `getSkidmarksSnapshot`/`persist`.
+ *
+ * **Every real segment source this store ever builds is contiguous**
+ * (`buildDemoSegments`, `buildSegmentsFromVocalRanges` off either
+ * `analyzeVocalActivity`'s heuristic or `segmentsFromWords`'
+ * transcription output all walk a `cursor` forward with no gaps) —
+ * `segments[i].endSec === segments[i + 1].startSec` always holds before
+ * a nudge. That invariant is what makes "clamp only" vs. "gently adjust
+ * the adjacent boundary" (the two options this feature's task called
+ * out to investigate) an easy pick rather than a coin flip: nudging one
+ * clip's `start`/`end` is really nudging the **shared cut point** with
+ * its neighbor, so this always moves both sides of that cut together —
+ * stretching this clip by however many seconds shrinks the neighbor by
+ * the exact same amount, and the timeline stays gap-free/overlap-free
+ * automatically, with no separate "did this create a gap?" check
+ * needed anywhere else. A plain clamp-only approach (only ever touching
+ * the one segment being nudged) would either open a silent gap or let
+ * two clips overlap the moment the nudged edge crosses into the
+ * neighbor's own span — exactly what "clips don't overlap illegally"
+ * rules out.
+ *
+ * Clamped on both ends of the move so neither this clip nor the
+ * neighbor it's borrowing from/lending to ever drops below
+ * `MIN_NUDGE_SEGMENT_SEC`, and so the very first clip's `startSec`
+ * never goes below `0` or the very last clip's `endSec` never passes
+ * `totalDurationSec` once that's known (still unbounded above while
+ * `totalDurationSec` is `null` — e.g. the brief window before the
+ * `<audio>` duration probe resolves — rather than silently refusing to
+ * nudge the last clip at all during that window).
+ *
+ * Returns the **same** `segments` array reference, unchanged, when
+ * `segmentId` isn't found or the requested nudge is already a genuine
+ * no-op (already sitting at a bound) — lets callers skip a pointless
+ * `persist`/re-render.
+ */
+export function nudgeSkidmarksSegmentBoundary(
+  segments: SkidmarksClipSegment[],
+  segmentId: string,
+  edge: "start" | "end",
+  deltaSec: number,
+  totalDurationSec: number | null
+): SkidmarksClipSegment[] {
+  const index = segments.findIndex((s) => s.id === segmentId);
+  if (index === -1 || deltaSec === 0) return segments;
+  const segment = segments[index];
+
+  if (edge === "start") {
+    const prev = index > 0 ? segments[index - 1] : undefined;
+    const lowerBoundRaw = prev ? prev.startSec + MIN_NUDGE_SEGMENT_SEC : 0;
+    const upperBound = segment.endSec - MIN_NUDGE_SEGMENT_SEC;
+    // If the segment/neighbor were already shorter than
+    // `MIN_NUDGE_SEGMENT_SEC` going in (pre-existing data this feature
+    // didn't create), keep the clamp order sane rather than letting a
+    // too-high lower bound push the result past the upper one.
+    const lowerBound = Math.min(lowerBoundRaw, upperBound);
+    const newStart = Math.min(upperBound, Math.max(lowerBound, segment.startSec + deltaSec));
+    if (newStart === segment.startSec) return segments;
+    return segments.map((s, i) => {
+      if (i === index) return { ...s, startSec: newStart };
+      if (prev && i === index - 1) return { ...s, endSec: newStart };
+      return s;
+    });
+  }
+
+  const next = index < segments.length - 1 ? segments[index + 1] : undefined;
+  const lowerBound = segment.startSec + MIN_NUDGE_SEGMENT_SEC;
+  const upperBoundRaw = next
+    ? next.endSec - MIN_NUDGE_SEGMENT_SEC
+    : totalDurationSec !== null
+      ? totalDurationSec
+      : Infinity;
+  const upperBound = Math.max(lowerBound, upperBoundRaw);
+  const newEnd = Math.min(upperBound, Math.max(lowerBound, segment.endSec + deltaSec));
+  if (newEnd === segment.endSec) return segments;
+  return segments.map((s, i) => {
+    if (i === index) return { ...s, endSec: newEnd };
+    if (next && i === index + 1) return { ...s, startSec: newEnd };
+    return s;
+  });
+}
+
+/**
+ * Whether a given nudge would actually move anything — the UI's own
+ * disabled-state check for each of the stepper's four buttons
+ * (`components/SkidmarksClipTimingNudge.tsx`), reusing the exact same
+ * clamp math the real setters commit with rather than a second,
+ * possibly-drifting copy of the bound logic.
+ */
+export function canNudgeSkidmarksSegmentBoundary(
+  segments: SkidmarksClipSegment[],
+  segmentId: string,
+  edge: "start" | "end",
+  deltaSec: number,
+  totalDurationSec: number | null
+): boolean {
+  return nudgeSkidmarksSegmentBoundary(segments, segmentId, edge, deltaSec, totalDurationSec) !== segments;
+}
+
+/**
+ * The −1s/+1s stepper's store-level setter for a clip's **start**
+ * boundary (`components/SkidmarksClipTimingNudge.tsx`) — Stuart's
+ * 2026-09-13 "let me slip a clip's start/end after transcription" ask.
+ * Only ever edits the already-resolved `startSec`s already sitting on
+ * `session.mp3.segments` — **never** re-runs ElevenLabs Scribe or the
+ * energy heuristic, and never touches `segmentsSource`/
+ * `transcriptionStatus`/`analysisStatus` (a nudge doesn't change which
+ * signal originally produced this timeline, just where its cuts fall).
+ * See `nudgeSkidmarksSegmentBoundary`'s doc comment for exactly how the
+ * shared neighbor boundary moves along with it. No-ops if there's no
+ * attached mp3, the segment doesn't exist, or the nudge is already at
+ * a bound.
+ */
+export function nudgeSkidmarksSegmentStart(segmentId: string, deltaSec: number): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  const segments = nudgeSkidmarksSegmentBoundary(mp3.segments, segmentId, "start", deltaSec, mp3.durationSec);
+  if (segments === mp3.segments) return;
+  persist({ ...current, session: { ...current.session, mp3: { ...mp3, segments } } });
+}
+
+/** Same as `nudgeSkidmarksSegmentStart`, for a clip's **end** boundary. */
+export function nudgeSkidmarksSegmentEnd(segmentId: string, deltaSec: number): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3) return;
+  const segments = nudgeSkidmarksSegmentBoundary(mp3.segments, segmentId, "end", deltaSec, mp3.durationSec);
+  if (segments === mp3.segments) return;
+  persist({ ...current, session: { ...current.session, mp3: { ...mp3, segments } } });
 }
 
 /** One-tap model switch — per Stuart's cost lock, this is the *only*

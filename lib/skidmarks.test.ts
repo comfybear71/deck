@@ -4,6 +4,7 @@ import {
   applySkidmarksAnalysisResult,
   applySkidmarksTranscriptionResult,
   attachSkidmarksMp3,
+  canNudgeSkidmarksSegmentBoundary,
   createMp3Attachment,
   defaultSegmentModel,
   getSkidmarksSnapshot,
@@ -11,12 +12,17 @@ import {
   markSkidmarksMp3AudioFailed,
   markSkidmarksMp3AudioUnconfigured,
   MAX_PLATES_PER_CLIP,
+  MIN_NUDGE_SEGMENT_SEC,
   normalizeSkidmarksSegment,
+  nudgeSkidmarksSegmentBoundary,
+  nudgeSkidmarksSegmentEnd,
+  nudgeSkidmarksSegmentStart,
   removeSkidmarksClipPlate,
   resetSkidmarksSessionAfterArchive,
   resolveInstrumentalVideoModel,
   resolveSelectedPlateId,
   restoreSkidmarksArchivedSession,
+  SEGMENT_NUDGE_STEP_SEC,
   SKIDMARKS_MODELS,
   selectSkidmarksBand,
   setSkidmarksClipPlateMotionPrompt,
@@ -960,5 +966,201 @@ describe("restoreSkidmarksArchivedSession / resetSkidmarksSessionAfterArchive", 
     expect(state.session.bandId).toBeNull();
     expect(state.session.mp3).toBeNull();
     expect(state.bands.length).toBe(bandsBefore);
+  });
+});
+
+/**
+ * Stuart's 2026-09-13 hard ask: ElevenLabs Scribe timing is "mostly
+ * right but sometimes 3-4 seconds off," so he wants to slip a clip's
+ * start/end after transcription without re-running Scribe. These tests
+ * exercise `nudgeSkidmarksSegmentBoundary` directly (the pure math, no
+ * store) plus the store-level setters, against three contiguous
+ * segments spanning a known 30s total — small and hand-checkable
+ * rather than reusing `buildDemoSegments`' 7-segment cadence.
+ */
+function threeContiguousSegments(): SkidmarksClipSegment[] {
+  const base = createMp3Attachment("nudge-test.mp3", 30).segments[0];
+  return [
+    { ...base, id: "seg-a", startSec: 0, endSec: 10 },
+    { ...base, id: "seg-b", startSec: 10, endSec: 20 },
+    { ...base, id: "seg-c", startSec: 20, endSec: 30 },
+  ];
+}
+
+describe("nudgeSkidmarksSegmentBoundary", () => {
+  it("moves a middle clip's start earlier and shrinks the previous clip's end by the same amount", () => {
+    const segments = threeContiguousSegments();
+    const next = nudgeSkidmarksSegmentBoundary(segments, "seg-b", "start", -3, 30);
+    expect(next.find((s) => s.id === "seg-b")?.startSec).toBe(7);
+    expect(next.find((s) => s.id === "seg-a")?.endSec).toBe(7);
+    // The far clip is never touched by a nudge two clips away.
+    expect(next.find((s) => s.id === "seg-c")).toEqual(segments[2]);
+  });
+
+  it("moves a middle clip's end later and stretches the next clip's start by the same amount", () => {
+    const segments = threeContiguousSegments();
+    const next = nudgeSkidmarksSegmentBoundary(segments, "seg-b", "end", 4, 30);
+    expect(next.find((s) => s.id === "seg-b")?.endSec).toBe(24);
+    expect(next.find((s) => s.id === "seg-c")?.startSec).toBe(24);
+    expect(next.find((s) => s.id === "seg-a")).toEqual(segments[0]);
+  });
+
+  it("never produces a gap or an overlap across the whole timeline after a nudge", () => {
+    const segments = threeContiguousSegments();
+    const next = nudgeSkidmarksSegmentBoundary(segments, "seg-b", "start", 3, 30);
+    for (let i = 0; i < next.length - 1; i++) {
+      expect(next[i].endSec).toBe(next[i + 1].startSec);
+    }
+    expect(next[0].startSec).toBe(0);
+    expect(next[next.length - 1].endSec).toBe(30);
+  });
+
+  it("clamps the very first clip's start at 0, never going negative", () => {
+    const segments = threeContiguousSegments();
+    const next = nudgeSkidmarksSegmentBoundary(segments, "seg-a", "start", -5, 30);
+    expect(next.find((s) => s.id === "seg-a")?.startSec).toBe(0);
+  });
+
+  it("clamps the very last clip's end at the song's own known duration", () => {
+    const segments = threeContiguousSegments();
+    const next = nudgeSkidmarksSegmentBoundary(segments, "seg-c", "end", 5, 30);
+    expect(next.find((s) => s.id === "seg-c")?.endSec).toBe(30);
+  });
+
+  it("lets the last clip's end nudge freely later while the song duration is still unknown", () => {
+    const segments = threeContiguousSegments();
+    const next = nudgeSkidmarksSegmentBoundary(segments, "seg-c", "end", 5, null);
+    expect(next.find((s) => s.id === "seg-c")?.endSec).toBe(35);
+  });
+
+  it(`never lets a nudge shrink either side of the moved boundary below MIN_NUDGE_SEGMENT_SEC (${MIN_NUDGE_SEGMENT_SEC}s)`, () => {
+    const segments = threeContiguousSegments();
+    // seg-b is 10s long (10\u201320); pushing its start almost all the
+    // way to its own end must stop MIN_NUDGE_SEGMENT_SEC short of it.
+    const next = nudgeSkidmarksSegmentBoundary(segments, "seg-b", "start", 9.5, 30);
+    const b = next.find((s) => s.id === "seg-b")!;
+    expect(b.endSec - b.startSec).toBeGreaterThanOrEqual(MIN_NUDGE_SEGMENT_SEC);
+
+    const shrunkPrev = nudgeSkidmarksSegmentBoundary(segments, "seg-a", "start", 9.5, 30);
+    const a = shrunkPrev.find((s) => s.id === "seg-a")!;
+    // seg-a starts at 0, nudging its own start later shrinks seg-a
+    // itself \u2014 same floor applies to the clip being nudged, not
+    // just its neighbor.
+    expect(a.endSec - a.startSec).toBeGreaterThanOrEqual(MIN_NUDGE_SEGMENT_SEC);
+  });
+
+  it("returns the exact same array reference for an unknown segment id (a true no-op)", () => {
+    const segments = threeContiguousSegments();
+    expect(nudgeSkidmarksSegmentBoundary(segments, "not-a-real-id", "start", 1, 30)).toBe(segments);
+  });
+
+  it("returns the exact same array reference once a boundary is already sitting at its clamp", () => {
+    const segments = threeContiguousSegments();
+    const atZero = nudgeSkidmarksSegmentBoundary(segments, "seg-a", "start", -1, 30);
+    expect(atZero).toBe(segments); // already 0, can't go lower
+    expect(nudgeSkidmarksSegmentBoundary(segments, "seg-c", "end", 1, 30)).toBe(segments); // already at total
+  });
+
+  it("treats a zero delta as a no-op", () => {
+    const segments = threeContiguousSegments();
+    expect(nudgeSkidmarksSegmentBoundary(segments, "seg-b", "start", 0, 30)).toBe(segments);
+  });
+});
+
+describe("canNudgeSkidmarksSegmentBoundary", () => {
+  it("mirrors nudgeSkidmarksSegmentBoundary's own no-op detection", () => {
+    const segments = threeContiguousSegments();
+    expect(canNudgeSkidmarksSegmentBoundary(segments, "seg-a", "start", -SEGMENT_NUDGE_STEP_SEC, 30)).toBe(
+      false
+    );
+    expect(canNudgeSkidmarksSegmentBoundary(segments, "seg-a", "start", SEGMENT_NUDGE_STEP_SEC, 30)).toBe(
+      true
+    );
+    expect(canNudgeSkidmarksSegmentBoundary(segments, "seg-c", "end", SEGMENT_NUDGE_STEP_SEC, 30)).toBe(
+      false
+    );
+    expect(canNudgeSkidmarksSegmentBoundary(segments, "seg-c", "end", -SEGMENT_NUDGE_STEP_SEC, 30)).toBe(
+      true
+    );
+  });
+});
+
+describe("nudgeSkidmarksSegmentStart / nudgeSkidmarksSegmentEnd (store-level)", () => {
+  beforeEach(() => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("nudge-store-test.mp3", 210));
+  });
+
+  it("edits only the nudged clip's start and its immediate predecessor's end, leaving every other segment untouched", () => {
+    const before = getSkidmarksSnapshot().session.mp3!.segments;
+    const target = before[2]; // a real seed-cadence boundary, not the very first clip
+    const untouchedIds = before.filter((s) => s.id !== target.id && s.id !== before[1].id).map((s) => s.id);
+
+    nudgeSkidmarksSegmentStart(target.id, -SEGMENT_NUDGE_STEP_SEC);
+
+    const after = getSkidmarksSnapshot().session.mp3!.segments;
+    const updatedTarget = after.find((s) => s.id === target.id)!;
+    const updatedPrev = after.find((s) => s.id === before[1].id)!;
+    expect(updatedTarget.startSec).toBe(target.startSec - SEGMENT_NUDGE_STEP_SEC);
+    expect(updatedPrev.endSec).toBe(before[1].endSec - SEGMENT_NUDGE_STEP_SEC);
+    for (const id of untouchedIds) {
+      expect(after.find((s) => s.id === id)).toEqual(before.find((s) => s.id === id));
+    }
+  });
+
+  it("edits only the nudged clip's end and its immediate successor's start", () => {
+    const before = getSkidmarksSnapshot().session.mp3!.segments;
+    const target = before[2];
+    const next = before[3];
+
+    nudgeSkidmarksSegmentEnd(target.id, SEGMENT_NUDGE_STEP_SEC);
+
+    const after = getSkidmarksSnapshot().session.mp3!.segments;
+    expect(after.find((s) => s.id === target.id)?.endSec).toBe(target.endSec + SEGMENT_NUDGE_STEP_SEC);
+    expect(after.find((s) => s.id === next.id)?.startSec).toBe(next.startSec + SEGMENT_NUDGE_STEP_SEC);
+  });
+
+  it("never touches segmentsSource, transcriptionStatus, or analysisStatus \u2014 a nudge is purely local, never a re-run of Scribe/the heuristic", () => {
+    const mp3Before = getSkidmarksSnapshot().session.mp3!;
+    const target = mp3Before.segments[2];
+
+    nudgeSkidmarksSegmentStart(target.id, -SEGMENT_NUDGE_STEP_SEC);
+    nudgeSkidmarksSegmentEnd(target.id, SEGMENT_NUDGE_STEP_SEC);
+
+    const mp3After = getSkidmarksSnapshot().session.mp3!;
+    expect(mp3After.segmentsSource).toBe(mp3Before.segmentsSource);
+    expect(mp3After.transcriptionStatus).toBe(mp3Before.transcriptionStatus);
+    expect(mp3After.analysisStatus).toBe(mp3Before.analysisStatus);
+  });
+
+  it("never touches a clip's plates, shotPrompt, or model", () => {
+    const before = getSkidmarksSnapshot().session.mp3!.segments;
+    const target = before[2];
+    setSkidmarksSegmentShotPrompt(target.id, "a door creaks open");
+
+    nudgeSkidmarksSegmentStart(target.id, -SEGMENT_NUDGE_STEP_SEC);
+
+    const after = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === target.id)!;
+    expect(after.shotPrompt).toBe("a door creaks open");
+    expect(after.model).toBe(target.model);
+    expect(after.plates).toEqual(target.plates);
+  });
+
+  it("clamps the last clip's end nudge at the mp3's own probed durationSec", () => {
+    const before = getSkidmarksSnapshot().session.mp3!.segments;
+    const last = before[before.length - 1];
+    expect(last.endSec).toBe(210);
+
+    nudgeSkidmarksSegmentEnd(last.id, SEGMENT_NUDGE_STEP_SEC);
+
+    const after = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === last.id)!;
+    expect(after.endSec).toBe(210); // no-op, already at the song's own end
+  });
+
+  it("no-ops without throwing when there's no attached mp3", () => {
+    resetSkidmarksSessionAfterArchive();
+    expect(() => nudgeSkidmarksSegmentStart("whatever", 1)).not.toThrow();
+    expect(() => nudgeSkidmarksSegmentEnd("whatever", 1)).not.toThrow();
+    expect(getSkidmarksSnapshot().session.mp3).toBeNull();
   });
 });
