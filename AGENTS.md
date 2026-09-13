@@ -157,34 +157,14 @@ Neon row (`lib/skidmarksSession-server.ts`, one fixed single-tenant
 skidmarks/session` per page load and written via a debounced,
 serialized `PUT` after every local mutation — see `lib/skidmarks.ts`'s
 "Neon-backed session persistence" doc comment for the exact hydrate/
-push implementation and its two race guards. Media (MP3 audio, clip
-renders, archive snapshots, **and — 2026-09-14 — a plate still, a
-member's avatar photo, and a band's cover photo, all previously the one
-remaining exception here** — see the "plate stills are Blob-backed now"
-note below) goes straight to Vercel Blob, unchanged by this migration;
-see Env vars below for `DATABASE_URL`.
-
-**`localStorage` is back, but only as a same-device safety net, not a
-source of truth (2026-09-14) — read this before "fixing" it away
-again.** The hard lock above is about *where reads come from*: Neon (via
-`GET`) is still the only thing a fresh device/browser ever hydrates
-from, and still the only place a second device would ever see this
-session. What changed is durability on *this* device when Neon's `PUT`
-itself keeps failing: a real, repeated live bug on a weak mobile
-connection — `pushSkidmarksSessionNow`'s own one retry isn't enough for
-a sustained failure, real generated plates looked fine on screen but
-never actually reached Neon, and a refresh silently reverted Stuart to
-Neon's last *successful* save, discarding everything since. `persist()`
-now also writes the full state to one `localStorage` key
-(`LOCAL_BACKUP_KEY`, distinct from the old, one-time-only
-`LEGACY_LOCAL_STORAGE_KEY`) on every mutation — synchronous, no network,
-can't fail from bad signal. On every hydrate, if that backup has
-*strictly more real filled plates* (`countFilledPlates`) than what Neon
-just returned, that's treated as a save that never landed, not stale
-leftovers: the backup wins, gets applied, and gets pushed to Neon
-immediately. This is deliberately narrow (a plate-count comparison, not
-a general merge) and never overrides Neon when Neon's copy is equal or
-ahead — it only ever recovers real local work Neon never actually got.
+push implementation and its two race guards. `localStorage` is fully
+gone from this file; grep it and the only remaining `localStorage`
+matches in this whole file are comments describing what used to be
+there or unrelated field-shape docs. Media (MP3 audio, clip renders,
+archive snapshots — plate stills are still `data:` URLs inside the
+Neon row for now, not yet Blob-backed) still goes straight to Vercel
+Blob, unchanged by this migration; see Env vars below for
+`DATABASE_URL`.
 
 **Real live-QA'd bug on the very first deploy of this migration:
 "I lost everything."** Stuart's first load after this shipped came up
@@ -224,12 +204,11 @@ disk. Two fixes landed for that, and **only one of them survives**:
    *generated* still (`generatePlateStill`) was persisted straight off
    xAI's raw response with no size cap at all — it's downscaled the
    same way via `downscaleDataUrlImage` (1024px ceiling) right where
-   `SkidmarksClipStub`'s Generate flow receives it. Don't remove this on
-   the grounds that a plate still is Blob-backed now (see below) and the
-   Neon-row-size worry is gone: this cap also keeps what briefly travels
-   as base64 on its way *to* Blob (and the `localStorage` backup above,
-   which still stores whatever a Blob upload hasn't replaced yet)
-   reasonable over a phone connection.
+   `SkidmarksClipStub`'s Generate flow receives it. Don't remove this
+   on the grounds that the quota is gone: plate stills still travel as
+   base64 `data:` URLs *inside* the Neon row, so the cap is what keeps
+   that row — and every `PUT` carrying it — a sane size over a phone
+   connection.
 2. **Deleted**: `describeSkidmarksPersistFailure`,
    `getSkidmarksPersistFailure`, `getSkidmarksStorageWarning`,
    `exceedsSkidmarksStorageWarningThreshold`, `lastPersistFailure`,
