@@ -79,7 +79,7 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Per-plate render duration | **Real, auto-computed** — `segmentLengthSec / plateCount`, clamped to `[5, 15]`s (Grok's documented ceiling), no UI picker | `lib/clipGeneration.ts`'s `computePlateDurationSec` |
 | Render persistence | **Real**, per-**plate** now (not per-clip — see the pathname migration note below) — saved to durable Vercel Blob storage, survives a refresh; download uses a numeric (lettered once a clip has >1 plate) filename for Resolve | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
 | Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**; "download all" zip/sequential-fallback lives here now | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts` |
-| MP3 audio → Vercel Blob | **Real** — the attached MP3's own audio bytes upload client-side-direct to Blob at attach time so **playback survives a refresh**, honestly labeled when unconfigured/failed | `lib/mp3Blob.ts`, `components/SkidmarksMp3Card.tsx` |
+| MP3 audio → Vercel Blob | **Real** — the attached MP3's own audio bytes upload client-side-direct to Blob at attach time so **playback survives a refresh**; the resulting URL is **never written into `localStorage`** — only a small, inert `audioId` routing key is, and the real playable URL is looked up fresh from Blob every time it's needed | `lib/mp3AudioPath.ts`, `lib/mp3Blob.ts`, `app/api/skidmarks/mp3-audio/route.ts`, `components/SkidmarksMp3Card.tsx` |
 | Auto-plate from a short brief | **Real** — fills *empty* plate slots across the whole clip list with real xAI-generated stills off a small heuristic planner (never an LLM call against the brief), **then stops**; never overwrites a filled plate, never renders video | `lib/autoPlate.ts`, `components/SkidmarksAutoPlate.tsx` |
 | Finished-song archive | **Real** — "Archive" snapshots the live band+mp3 (segments, plates, prompts, motion text) to Vercel Blob JSON + carries forward the mp3's own audio URL, lists in a page-bottom shelf, "Open in editor" restores it (auto-archiving whatever's currently live first), "Download project zip" bundles prompts/stills/renders/audio "as practical." No Neon — not patterned anywhere in this repo yet (see Env vars) | `lib/skidmarksArchive.ts`, `app/api/skidmarks/archive/route.ts`, `app/api/skidmarks/blob-upload/route.ts`, `components/SkidmarksArchiveShelf.tsx` |
 | Whole-song **"Generate Clips"** button | **Stub, deliberately** — never auto-renders every clip in the song | `components/SkidmarksClipTimeline.tsx` |
@@ -104,18 +104,37 @@ under the old 2-level path is simply orphaned (not deleted, just no
 longer listed/linked) — flagging this explicitly rather than pretending
 it was seamless.
 
-**No `localStorage` for genuinely new durable state.** The existing
-`lib/skidmarks.ts` session mirror (bands/session/segments/plates,
-including plate stills as `data:` URLs) is still `localStorage`-backed
-— that's pre-existing debt this PR didn't create or fix, and adding a
-field to an existing plate/segment (`motionPrompt`, `selectedPlateId`)
-follows that same existing pattern, not a new one. But the **archive of
-record** for a finished song, and the MP3's own durable audio copy, are
-both genuinely new durable state added in this pass — both go straight
-to Vercel Blob (JSON metadata + JSON snapshot + media), never
-`localStorage`, per the hard lock. Neon is still not patterned anywhere
-in this repo (see Env vars) — when it lands, it should replace *all* of
-this `localStorage` session state, not just the archive.
+**No `localStorage` for genuinely new durable state — the attached MP3's
+audio included, explicitly, per Stuart's own reiterated lock.** The
+existing `lib/skidmarks.ts` session mirror (bands/session/segments/
+plates, including plate stills as `data:` URLs) is still
+`localStorage`-backed — that's pre-existing debt this PR didn't create
+or fix, and adding a field to an existing plate/segment (`motionPrompt`,
+`selectedPlateId`) follows that same existing pattern, not a new one.
+But the **archive of record** for a finished song, and the MP3's own
+durable audio copy, are both genuinely new durable state added in this
+pass, and neither the audio bytes *nor the pointer to them* may live in
+`localStorage`:
+- The audio bytes always go straight to Vercel Blob
+  (`lib/mp3Blob.ts`/`lib/mp3AudioPath.ts`, client-side-direct upload).
+- `SkidmarksMp3Attachment` carries only a small, inert `audioId`
+  routing key in the `localStorage`-mirrored session object — **never**
+  the Blob URL itself. The actual playable URL is always re-derived
+  fresh from a live Blob lookup (`GET /api/skidmarks/mp3-audio`,
+  `fetchSkidmarksMp3AudioUrl`) whenever it's needed
+  (`SkidmarksMp3Card`'s playback fallback, `archiveSkidmarksSession`'s
+  audio reference) — the same "never trust a cached copy, always ask
+  Blob" pattern `lib/clipRenders.ts` already uses for persisted clip
+  renders. If you ever find yourself writing a Blob URL string into
+  anything that flows through `lib/skidmarks.ts`'s `persist()`, stop —
+  that's exactly the shape of this lock.
+- The archived song's own metadata (including its resolved `audioUrl`)
+  is fine to hold a real URL, because that record lives in Vercel Blob
+  JSON (`skidmarks/archive/index.json`), not `localStorage` at all.
+
+Neon is still not patterned anywhere in this repo (see Env vars) — when
+it lands, it should replace *all* of this `localStorage` session state,
+not just the archive/audio pieces this pass already moved off it.
 
 ## Plating UX locks — don't reinvent these, don't add a picker
 
