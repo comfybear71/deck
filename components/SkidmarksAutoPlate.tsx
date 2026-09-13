@@ -15,6 +15,7 @@ import {
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
+import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import {
   getSkidmarksSnapshot,
   SKIDMARKS_SEGMENT_LABEL_META,
@@ -191,9 +192,25 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
         const previousPlateId = plateIndex > 0 ? segment.plates[plateIndex - 1].id : undefined;
         const previousGeneratedThisRun = previousPlateId ? generatedStills.get(previousPlateId) : undefined;
         const previousPersistedStill = previousPlateId ? segment.plates[plateIndex - 1].still : undefined;
-        const continuityStillDataUrl = target.continueFromPreviousPlate
+        // `previousGeneratedThisRun` always holds a real `data:` URL
+        // (this run's own in-memory cache, never uploaded — see below);
+        // `previousPersistedStill?.dataUrl` may be a real Blob URL as of
+        // 2026-09-14 (`lib/plateStillBlob.ts`), so resolve either one the
+        // same way `vocalist.avatarImage` already is above — a fast
+        // no-op when it's already `data:`.
+        const rawContinuityStillDataUrl = target.continueFromPreviousPlate
           ? (previousGeneratedThisRun?.dataUrl ?? previousPersistedStill?.dataUrl)
           : undefined;
+        let continuityStillDataUrl: string | undefined;
+        if (rawContinuityStillDataUrl) {
+          try {
+            continuityStillDataUrl = await resolvePlateReferenceDataUrl(rawContinuityStillDataUrl);
+          } catch {
+            // Best-effort, same spirit as the vocalist identity
+            // resolution above — drop the continuity reference rather
+            // than fail this whole target over it.
+          }
+        }
         // Live-QA fix: only carries the locked-character lock forward
         // when the plate actually continued from *itself* already
         // featured him — see `lib/skidmarks.ts`'s `SkidmarksPlateStill
@@ -229,9 +246,19 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
         // simpler call shape.
         // eslint-disable-next-line react-hooks/purity
         const createdAt = Date.now();
+        // The in-memory cache below keeps the raw `data:` URL (cheap —
+        // this run's own later targets may need it back as real base64
+        // for continuity, and re-fetching a just-uploaded Blob URL would
+        // just be wasted round trips); only the *persisted* value
+        // (written via `onSetClipPlateStill`, which ends up in the Neon
+        // session PUT) needs to move to Blob — see
+        // `lib/plateStillBlob.ts`'s module doc comment for why. Falls
+        // back to keeping the still inline this session on a Blob
+        // failure rather than losing a still Stuart just paid for.
         generatedStills.set(target.plateId, { dataUrl: outcome.dataUrl, featuresLockedCharacter });
+        const uploadOutcome = await uploadSkidmarksPlateStill(outcome.dataUrl);
         onSetClipPlateStill(target.segmentId, target.plateId, {
-          dataUrl: outcome.dataUrl,
+          dataUrl: uploadOutcome.ok ? uploadOutcome.url : outcome.dataUrl,
           source: "generated",
           createdAt,
           featuresLockedCharacter,

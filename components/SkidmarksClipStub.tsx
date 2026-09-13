@@ -5,7 +5,6 @@ import { createPortal } from "react-dom";
 import {
   downscaleDataUrlImage,
   MAX_PLATES_PER_CLIP,
-  readImageFileAsDataUrl,
   resolveInstrumentalVideoModel,
   resolveSelectedPlateId,
   SKIDMARKS_SEGMENT_LABEL_META,
@@ -24,6 +23,7 @@ import {
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
 import { computeLtxPlateDurationSec, computePlateDurationSec } from "@/lib/clipGeneration";
+import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import { SkidmarksClipRender } from "./SkidmarksClipRender";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 
@@ -564,6 +564,7 @@ function SkidmarksPlateBox({
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [useLastPlate, setUseLastPlate] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [busyLabel, setBusyLabel] = useState("Generating…");
   const [error, setError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -635,13 +636,27 @@ function SkidmarksPlateBox({
     const file = e.target.files?.[0];
     e.target.value = ""; // lets picking the exact same file again still fire onChange
     if (!file) return;
+    setBusyLabel("Saving…");
+    setGenerating(true);
+    setError(null);
     try {
-      const dataUrl = await readImageFileAsDataUrl(file);
-      onSetStill({ dataUrl, source: "upload", createdAt: Date.now() });
+      // Uploads the picked file straight to Vercel Blob (no base64
+      // round trip needed — a real `File` is already what `upload()`
+      // wants) so the session's Neon PUT only ever stores this still's
+      // URL, not its full bytes — see `lib/plateStillBlob.ts`'s module
+      // doc comment for the real 413 this fixes.
+      const outcome = await uploadSkidmarksPlateStill(file);
+      if (!outcome.ok) {
+        setError(outcome.message);
+        return;
+      }
+      onSetStill({ dataUrl: outcome.url, source: "upload", createdAt: Date.now() });
       closeMenu();
-      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not read that image.");
+    } finally {
+      setGenerating(false);
+      setBusyLabel("Generating…");
     }
   };
 
@@ -669,7 +684,12 @@ function SkidmarksPlateBox({
         resolvedVocalist = { ...vocalist, avatarImage: identityDataUrl };
       }
 
-      const continuityStillDataUrl = useLastPlate ? previousStill?.dataUrl : undefined;
+      // `previousStill.dataUrl` is a real Blob URL as of 2026-09-14
+      // (`lib/plateStillBlob.ts`), not a base64 `data:` URL — resolve it
+      // the same way `vocalist.avatarImage` just was, a fast no-op for a
+      // still saved before that change (still a literal `data:` URL).
+      const continuityStillDataUrl =
+        useLastPlate && previousStill ? await resolvePlateReferenceDataUrl(previousStill.dataUrl) : undefined;
       const request = buildPlateGenerationRequest({
         shotPrompt: trimmedPrompt,
         vocal,
@@ -700,12 +720,24 @@ function SkidmarksPlateBox({
         } catch {
           // Keep the original, full-size dataUrl — see comment above.
         }
+        // Uploads to Blob so the session's Neon PUT stores this still's
+        // URL, not its full base64 bytes (see `lib/plateStillBlob.ts`'s
+        // module doc comment for the 413 this fixes). A still Stuart
+        // just paid xAI/Siray for should never be dropped over a Blob
+        // hiccup — falls back to keeping it inline this session (usable
+        // now, just won't survive a save until regenerated) rather than
+        // losing it.
+        setBusyLabel("Saving…");
+        const uploadOutcome = await uploadSkidmarksPlateStill(dataUrl);
         onSetStill({
-          dataUrl,
+          dataUrl: uploadOutcome.ok ? uploadOutcome.url : dataUrl,
           source: "generated",
           createdAt: Date.now(),
           featuresLockedCharacter: request.featuresLockedCharacter,
         });
+        if (!uploadOutcome.ok) {
+          setError(`Generated, but couldn't save it for persistence yet — ${uploadOutcome.message}`);
+        }
         closeMenu();
       } else {
         setError(outcome.message);
@@ -714,6 +746,7 @@ function SkidmarksPlateBox({
       setError(err instanceof Error ? err.message : "Could not prepare the reference image for generation.");
     } finally {
       setGenerating(false);
+      setBusyLabel("Generating…");
     }
   };
 
@@ -779,7 +812,7 @@ function SkidmarksPlateBox({
           {generating && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/60 text-[11px] font-medium text-white/85">
               <Spinner />
-              {"Generating\u2026"}
+              {busyLabel}
             </div>
           )}
         </div>

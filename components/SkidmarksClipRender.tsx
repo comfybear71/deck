@@ -11,6 +11,7 @@ import {
 } from "@/lib/clipGeneration";
 import { buildClipRenderFilename } from "@/lib/clipRenderBlob";
 import type { PersistedClipRender } from "@/lib/clipRenders";
+import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import type { SkidmarksInstrumentalVideoModel, SkidmarksMember } from "@/lib/skidmarks";
 
 interface SkidmarksClipRenderProps {
@@ -272,10 +273,16 @@ export function SkidmarksClipRender({
     setJustPersisted(false);
     onRenderStart(plateId);
     try {
+      // `plateStillDataUrl` is a real Blob URL as of 2026-09-14 (`lib/
+      // plateStillBlob.ts`) rather than a base64 `data:` URL — this
+      // route (like xAI's/Siray's) only accepts a real `data:` URL as a
+      // reference image, so resolve it first (a fast no-op for a still
+      // saved before that change, still a literal `data:` URL).
+      const resolvedStillDataUrl = await resolvePlateReferenceDataUrl(plateStillDataUrl);
       const request = buildClipGenerationRequest({
         shotPrompt: trimmedPrompt,
         bandName,
-        plateStillDataUrl,
+        plateStillDataUrl: resolvedStillDataUrl,
         motionPrompt,
         durationSec,
         vocal,

@@ -20,11 +20,13 @@
  *    uploaded client-side-direct via `@vercel/blob/client`'s `upload()`
  *    — see `app/api/skidmarks/blob-upload/route.ts`'s doc comment for
  *    why this can't go through a normal POST body) — the entire band +
- *    mp3 attachment (segments, plates' real stills as `data:` URLs,
- *    shot prompts, motion prompts) needed to actually restore the
- *    session via "Open in editor." This can be several MB once plate
- *    stills are embedded — exactly the case `upload()`'s direct-to-Blob
- *    path exists for.
+ *    mp3 attachment (segments, plates' still references, shot prompts,
+ *    motion prompts) needed to actually restore the session via "Open in
+ *    editor." A plate's own still is itself just a Blob URL as of
+ *    2026-09-14 (`lib/plateStillBlob.ts`), not an embedded `data:` URL —
+ *    this snapshot stays small regardless, but still goes
+ *    direct-to-Blob rather than a normal route body, same as every other
+ *    upload this feature makes.
  *
  * **The archived song's audio is *referenced*, not re-uploaded** — by
  * the time Stuart taps Archive, the attached MP3's own audio already
@@ -39,7 +41,7 @@
 import { upload } from "@vercel/blob/client";
 import { buildStoreZip } from "./zipDownload";
 import { fetchPersistedClipRenders } from "./clipRenders";
-import { getSkidmarksCharacterLock, resolveVocalistForPrompt } from "./plateGeneration";
+import { getSkidmarksCharacterLock, resolvePlateReferenceDataUrl, resolveVocalistForPrompt } from "./plateGeneration";
 import { formatDuration, type SkidmarksBand, type SkidmarksMp3Attachment } from "./skidmarks";
 
 const ARCHIVE_PATH_PREFIX = "skidmarks/archive/";
@@ -408,15 +410,28 @@ export async function buildArchiveZip(
   entries.push({ name: "brief.txt", data: new TextEncoder().encode(buildSongBriefText(song, snapshot)) });
   entries.push({ name: "plan.txt", data: new TextEncoder().encode(buildSongPlanText(song)) });
 
-  snapshot.mp3.segments.forEach((segment, segmentIndex) => {
-    segment.plates.forEach((plate, plateIndex) => {
-      if (!plate.still) return;
-      const letter = segment.plates.length > 1 ? String.fromCharCode(97 + plateIndex) : "";
-      const ext = extensionFromDataUrl(plate.still.dataUrl);
-      const filename = `plates/${String(segmentIndex + 1).padStart(2, "0")}${letter}_${segment.label}.${ext}`;
-      entries.push({ name: filename, data: dataUrlToBytes(plate.still.dataUrl) });
-    });
-  });
+  // A plate's own still is a real Blob URL as of 2026-09-14 (`lib/
+  // plateStillBlob.ts`), not an embedded `data:` URL — `resolvePlate
+  // ReferenceDataUrl` fetches it back into real bytes (a fast no-op for
+  // a still saved before that change, still a literal `data:` URL).
+  // Best-effort per plate, same spirit as the audio/render fetches below
+  // — one still failing to fetch shouldn't fail the whole zip.
+  for (let segmentIndex = 0; segmentIndex < snapshot.mp3.segments.length; segmentIndex += 1) {
+    const segment = snapshot.mp3.segments[segmentIndex];
+    for (let plateIndex = 0; plateIndex < segment.plates.length; plateIndex += 1) {
+      const plate = segment.plates[plateIndex];
+      if (!plate.still) continue;
+      try {
+        const resolvedDataUrl = await resolvePlateReferenceDataUrl(plate.still.dataUrl);
+        const letter = segment.plates.length > 1 ? String.fromCharCode(97 + plateIndex) : "";
+        const ext = extensionFromDataUrl(resolvedDataUrl);
+        const filename = `plates/${String(segmentIndex + 1).padStart(2, "0")}${letter}_${segment.label}.${ext}`;
+        entries.push({ name: filename, data: dataUrlToBytes(resolvedDataUrl) });
+      } catch {
+        // Best-effort — see comment above.
+      }
+    }
+  }
 
   if (song.audioUrl) {
     try {
