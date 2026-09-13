@@ -87,7 +87,7 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Render persistence | **Real**, per-**plate** now (not per-clip — see the pathname migration note below) — saved to durable Vercel Blob storage, survives a refresh; download uses a numeric (lettered once a clip has >1 plate) filename for Resolve. **Exactly one render per `(segmentId, plateId)` is an enforced invariant, not just a convention** — see the "exactly-one-render" note below | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
 | Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**, cards laid out in one `overflow-x-auto` horizontal strip (not a vertical stack) so a phone with several renders doesn't turn into one huge scroll; "download all" zip/sequential-fallback stays reachable underneath the strip. Each card has an explicit small **Download** pill (same `rounded-full` shape/size as Remove, tiny download icon — still the existing `buildForceDownloadUrl`/Blob `?download=1` mechanism and numeric/lettered filename, never the native `<video>` share/⋯ menu) plus a **Remove** control — deletes that plate's persisted Blob render(s) and clears its tick, never touches the plate's still/shot/motion prompts (those are separate, `localStorage`-only state) | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts`, `lib/clipRenders.ts`'s `deletePersistedClipRender`/`buildForceDownloadUrl` |
 | MP3 audio → Vercel Blob | **Real** — the attached MP3's own audio bytes upload client-side-direct to Blob at attach time so **playback survives a refresh**, honestly labeled when unconfigured/failed | `lib/mp3Blob.ts`, `components/SkidmarksMp3Card.tsx` |
-| Auto-plate from a short brief | **Real** — fills *empty* plate slots across the whole clip list with a real generated still, **then stops**; never overwrites a filled plate, never renders video. Its one scripted exception (the door → keyhole → Jack opener for *Talking to Concrete*'s 0:00–0:40) carries Stuart's own exact wording, recreated 2026-09-13 after the Neon-migration data-loss incident — see `CONCRETE_OPENER_SHOTS`'s own inline comments before touching that wording again. **Two real fill engines now**: a band with no master reference photo set still gets the small hand-authored xAI templates this always shipped with; a band whose resolved vocalist *does* have a real `avatarImage` set instead gets real angle variety off Stuart's own "17 positions" pack (`lib/sirayPositions.ts`, his pack pasted verbatim 2026-09-13) via Siray's Seedream 4.5 ref2i-spicy model (`lib/sirayClient.ts`, `SIRAY_API_KEY`) — one real camera position per empty slot, picked automatically by the same vocal/instrumental/first-clip signals the xAI templates already used, never a picker. The scripted door/keyhole/Jack opener always stays on the xAI path even when a master still is set — it's a specific, hand-authored sequence, not a position to auto-pick. **Honesty note**: this Siray path is ported from Stuart's own other proven repo, not live-verified from this sandbox (`SIRAY_API_KEY` lives on his real Vercel project, not here) — see `lib/sirayClient.ts`'s own module doc comment. | `lib/autoPlate.ts`, `lib/sirayPositions.ts`, `lib/sirayClient.ts`, `components/SkidmarksAutoPlate.tsx`, `app/api/skidmarks/generate-still-siray/route.ts` |
+| Auto-plate from a short brief | **Real** — fills *empty* plate slots across the whole clip list with a real generated still, **then stops**; never overwrites a filled plate, never renders video. Its one scripted exception (the door → keyhole → Jack opener for *Talking to Concrete*'s 0:00–0:40) carries Stuart's own exact wording, recreated 2026-09-13 after the Neon-migration data-loss incident — see `CONCRETE_OPENER_SHOTS`'s own inline comments before touching that wording again. **Two real fill engines now**: a band with no master reference photo set still gets the small hand-authored xAI templates this always shipped with (reworded 2026-09-13 to off-axis framing — see the character-lock section below); a band whose resolved vocalist *does* have a real `avatarImage` set instead gets real angle variety off Stuart's own "17 positions" pack (`lib/sirayPositions.ts`, his pack pasted verbatim 2026-09-13) via Siray's Seedream 4.5 ref2i-spicy model (`lib/sirayClient.ts`, `SIRAY_API_KEY`) — one real camera position per empty slot, picked automatically by the same vocal/instrumental/first-clip signals the xAI templates already used, never a picker, and **now excludes the front-facing positions** (1/2/3/4/12/17 — see the character-lock section below) from auto-pick. The scripted door/keyhole/Jack opener always stays on the xAI path even when a master still is set — it's a specific, hand-authored sequence, not a position to auto-pick. **A locked character's hallmark/negative-cue lock (identity + no-front-stare) now merges into every Siray-routed prompt too** (`buildSirayCharacterPrompt` in `lib/plateGeneration.ts`, fixed 2026-09-13 after a real identity-drift + camera-stare bug — see the character-lock section below); it used to send Siray a bare camera-position sentence with no lock text at all. **Honesty note**: this Siray path is ported from Stuart's own other proven repo, not live-verified from this sandbox (`SIRAY_API_KEY` lives on his real Vercel project, not here) — see `lib/sirayClient.ts`'s own module doc comment. | `lib/autoPlate.ts`, `lib/sirayPositions.ts`, `lib/sirayClient.ts`, `lib/plateGeneration.ts`, `components/SkidmarksAutoPlate.tsx`, `app/api/skidmarks/generate-still-siray/route.ts` |
 | Clip start/end edit | **Real** — double-tap either number in a clip row's own always-visible header ("0:00–0:32") to edit it in place, via `SkidmarksClipTimingHeaderEdit` (`lib/skidmarks.ts`'s `parseSkidmarksTimeInput` parses what's typed). Replaced a compact −1s/+1s button stepper (`SkidmarksClipTimingNudge`, deleted 2026-09-13, same day it shipped) on Stuart's direct "I hate seeing big buttons... wasting great real estate" follow-up. Segments are always contiguous, so an edit moves the **shared cut point** with the neighboring clip — the previous clip's `endSec` (start edit) or next clip's `startSec` (end edit) shifts by the same amount, which is what keeps the whole timeline gap-free/overlap-free automatically; see `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary` doc comment for why that beat a clamp-only design. Clamped to `[0, durationSec]` and a `MIN_NUDGE_SEGMENT_SEC` (1s) floor on either side of the moved boundary; free-edit within those bounds, not a fixed ±few-seconds cap — an unparseable typed value just cancels the edit. **Never re-runs ElevenLabs Scribe or the energy heuristic** — only edits the already-resolved segment times already in `session.mp3.segments`, and never touches `segmentsSource`/plates/shot prompt/model. Persisted the same way every other segment field already is — the Neon session row, not `localStorage`. | `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary`/`nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd`/`parseSkidmarksTimeInput`, `components/SkidmarksClipTimingHeaderEdit.tsx`, `components/SkidmarksClipTimeline.tsx` |
 | Finished-song archive | **Real** — "Archive" snapshots the live band+mp3 (segments, plates, prompts, motion text) to Vercel Blob JSON + carries forward the mp3's own audio URL, lists in a page-bottom shelf, "Open in editor" restores it (auto-archiving whatever's currently live first), "Download project zip" bundles prompts/stills/renders/audio "as practical," **plus a per-song `brief.txt`/`plan.txt`** (Stuart's own director-workflow templates, auto-filled with whatever the app already knows — Song/Band/Length/MP3, and a locked character's `directorNote` as the Artist line — everything else left blank for him to fill by hand; `docs/skidmarks/director-brain.txt` is the one persistent, cross-song counterpart to these two and is deliberately *not* bundled into any song's zip). Deliberately still Blob, not Neon, for this one piece — see `lib/skidmarksArchive.ts`'s own module doc comment for why (this is unrelated to Neon now being real for the session mirror itself, see the Neon section above) | `lib/skidmarksArchive.ts`, `app/api/skidmarks/archive/route.ts`, `app/api/skidmarks/blob-upload/route.ts`, `components/SkidmarksArchiveShelf.tsx`, `docs/skidmarks/director-brain.txt` |
 | Whole-song **"Generate Clips"** button | **Removed entirely (2026-09-14)** — Stuart's explicit ask: "It does nothing useful and confuses him." It was a deliberate stub (never auto-rendered every clip in the song), but a pink, primary-looking button that did nothing real read as broken rather than honest. Whole-song auto-render itself stays exactly as out-of-scope/never-to-build as before — removing the stub button is not the same ask as wiring one up; each plate's own opt-in Render control is unaffected. | `components/SkidmarksClipTimeline.tsx` |
@@ -516,6 +516,19 @@ character in this build:
   jawline ever lit or visible, even in close-up or backlit.
 - Glowing **neon-blue lips** — the one feature that breaks through the
   shadow.
+- **Never a front-facing camera stare** (added 2026-09-13, live-QA
+  report: "every fucking image is staring straight out the camera") —
+  every plate he's in is shot at an angled ¾, profile, over-the-
+  shoulder, or looking-away framing, eyes never toward the lens, even
+  when his mouth/neon lips are readable. Encoded in both
+  `promptHallmarks` (the positive instruction) and `negativeCues`
+  (explicitly bans a square-on stare, direct eye contact with the lens,
+  passport-/headshot-style framing). `lib/plateGeneration.ts`'s
+  `routingFramingHint` for Vocal + LTX Lip-sync clips was also reworded
+  the same day — it used to end in `, camera-facing, `, an affirmative
+  style instruction that directly fought this lock; never reintroduce
+  the literal phrases "camera-facing"/"looking at camera"/"straight-on
+  portrait" into that hint.
 - His real reference photo (`public/skidmarks/jack-ash-reference.jpg`)
   is passed as an identity reference whenever he's actually in frame —
   on a **Vocal** clip (he auto-includes as the resolved vocalist), *and*
@@ -537,6 +550,34 @@ character in this build:
   only ever carries forward along a continuity chain that actually
   featured him — never onto a door/keyhole/generic-B-roll plate just
   because it continues from *something*.
+- **The Siray/master-still Auto-plate path merges this same lock too**
+  (`lib/plateGeneration.ts`'s `buildSirayCharacterPrompt`, wired in
+  `components/SkidmarksAutoPlate.tsx`) — a real reported bug, fixed
+  2026-09-13: `generatePlateStillViaSiray` used to send Siray nothing
+  but the bare camera-position sentence from `lib/sirayPositions.ts`
+  ("Front MCU — chest-up, mouth readable."), with **zero** hallmark/
+  negative-cue text, on the theory that "Siray's ref2i model keeps the
+  reference subject on its own." That theory was wrong in practice —
+  Stuart's report was identity drift ("not even Jack Ash, some white
+  [expletive]") plus every shot staring into the lens with nothing
+  telling it not to. `buildSirayCharacterPrompt` merges the same
+  hallmark + negative-cue text the xAI path already injects onto every
+  Siray position prompt before it's sent; the Auto-plate component also
+  now sets the resulting still's `featuresLockedCharacter` flag for a
+  Siray-routed target (previously left `undefined` for every one of
+  them, which could silently drop the lock on a later "Use last plate"
+  continuation). If you touch either `generatePlateStillViaSiray`'s
+  caller or `buildSirayCharacterPrompt`, keep this merge — don't let the
+  Siray path drift back to sending Siray a bare position sentence.
+  Relatedly, `lib/sirayPositions.ts`'s `pickSirayPosition` now excludes
+  the front-facing positions Stuart explicitly banned (1, 2, 3, 4, 12,
+  17 — "Front wide"/"Front ¾"/"Front MCU"/"Front CU"/"Low front"/the
+  extreme mouth-jaw close-up) from every auto-pick pool, falling back to
+  the off-axis mouth-on subset (5–8) when a pool would otherwise end up
+  empty (the wide group, 1–2, is itself entirely banned). Those
+  positions remain real, valid entries in Stuart's own numbered pack —
+  only *auto*-pick is restricted; don't remove them from
+  `SIRAY_17_POSITIONS` itself.
 - This is a small, hand-authored allowlist, not inferred from anything.
   A new locked character needs the same explicit, hand-written
   hallmarks/negative-cues treatment — don't guess at a "look" for a

@@ -1460,11 +1460,14 @@ now (see "Explicitly out of scope" below).
        (xAI, above); a clip's LTX/Grok/H3 tag (see the cost-lock section
        below) only changes this same call's prompt framing
        (`routingFramingHint`): Vocal clips tagged LTX Lip-sync get a
-       tight, camera-facing framing hint; H3-tagged clips ("simple
-       stills" per the product ask) get a plainer single-subject hint;
-       everything else (Grok, the instrumental/B-roll default, or a
-       manual Seedance pick) gets a wider, dynamic establishing-shot
-       hint.
+       tight, **angled off-axis** framing hint (¾/profile, mouth stays
+       readable, eyes never toward the lens — reworded 2026-09-13 off a
+       live-QA report that the old wording literally said
+       "camera-facing," fighting Jack Ash's own no-stare lock below);
+       H3-tagged clips ("simple stills" per the product ask) get a
+       plainer single-subject hint; everything else (Grok, the
+       instrumental/B-roll default, or a manual Seedance pick) gets a
+       wider, dynamic establishing-shot hint.
      - **A single vocalist/lead auto-includes on Vocal clips**
        (`resolveVocalistForPrompt`) — if a band has exactly one named
        member, it's them, unambiguously (both seed bands today: Jack
@@ -1484,7 +1487,14 @@ now (see "Explicitly out of scope" below).
        **always** fully hidden in deep shadow — no eyes/brow/nose/
        cheeks/jawline ever lit or visible, even in close-up — with
        glowing neon-blue lips as the one feature breaking through that
-       darkness. Injected whenever he's genuinely "in frame":
+       darkness. **The lock also bans a front-facing camera stare**
+       (added 2026-09-13, live-QA report: "every fucking image is
+       staring straight out the camera") — he must be shot at an angled
+       ¾, profile, over-the-shoulder, or looking-away framing, eyes
+       never toward the lens, even in a shot where his mouth/lips are
+       readable; the negative cues explicitly ban a square-on stare,
+       direct eye contact with the lens, and passport-/headshot-style
+       framing. Injected whenever he's genuinely "in frame":
        automatically whenever Jack Ash resolves as the vocalist on a
        **Vocal** clip, *and* on an **Instrumental/B-roll** clip when
        either (a) Stuart's own shot prompt names him directly
@@ -1782,6 +1792,26 @@ now (see "Explicitly out of scope" below).
     sequence, not a position to auto-pick from the 17. A band with no
     master still (or no `SIRAY_API_KEY` configured) is completely
     unaffected — same xAI-only behavior as before this existed.
+    **Live-QA fix (2026-09-13)**: this Siray path used to send only the
+    bare camera-position sentence ("Front MCU — chest-up, mouth
+    readable.") with **zero** identity-lock text — a locked character
+    (Jack Ash) drifted off-identity ("not even Jack Ash, some white
+    cunt," Stuart's report) and had nothing steering it away from a
+    front-facing stare. Two fixes, both in `lib/plateGeneration.ts`/
+    `lib/sirayPositions.ts`: (1) `buildSirayCharacterPrompt` now merges
+    the same hallmark + negative-cue lock text the xAI path already
+    injected onto every Siray position prompt before it's sent, and
+    `components/SkidmarksAutoPlate.tsx` now also sets the resulting
+    still's `featuresLockedCharacter` flag (previously left `undefined`
+    for every Siray target, which could silently drop the lock on a
+    later "Use last plate" continuation); (2) `pickSirayPosition` now
+    excludes the front-facing positions Stuart explicitly banned (1, 2,
+    3, 4, 12, 17 — "Front wide"/"Front ¾"/"Front MCU"/"Front CU"/"Low
+    front"/the extreme mouth-jaw close-up) from every auto-pick pool,
+    falling back to the off-axis mouth-on subset (5–8: ¾/profile) when a
+    pool (the wide group, 1–2, both banned) would otherwise be empty.
+    These positions remain real, valid entries in Stuart's own numbered
+    pack for manual reference — only auto-pick is restricted.
     **Then it stops** — no auto video render, ever, on either engine;
     every plate this fills is still just a still Stuart can inspect/
     enlarge/reject/regenerate like any other, and it never overwrites
