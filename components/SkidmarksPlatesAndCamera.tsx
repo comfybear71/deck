@@ -6,6 +6,7 @@ import {
   skidmarksModelBadge,
   SKIDMARKS_LOCATION_PLATES,
   SKIDMARKS_MODELS,
+  SKIDMARKS_SHOT_PROMPT_EXAMPLES,
   type SkidmarksClipSegment,
   type SkidmarksModelId,
   type SkidmarksPlateId,
@@ -36,6 +37,13 @@ const SHOT_PROMPT_MAX_LENGTH = 160;
  * reverted). SIRAY survives only as a data-layer opt-in
  * (`uncensoredPlateStills`/`SKIDMARKS_UNCENSORED_STILLS_LABEL`) with no
  * pill here; Kling isn't in this build at all.
+ *
+ * The shot-prompt box's placeholder/helper (see
+ * `SKIDMARKS_SHOT_PROMPT_EXAMPLES`) deliberately steers toward **story
+ * beat + energy** ("chorus hits hard", "creep to the keyhole") rather
+ * than camera jargon — Stuart writes the feeling of the moment, not a
+ * shot list; see that constant's doc comment for how a future real
+ * pipeline is meant to turn that into an actual cut rhythm on its own.
  *
  * Each plate card is a stub — no real plate photos, no real still
  * generation — but is deliberately sized like an actual still (bigger
@@ -110,11 +118,16 @@ export function SkidmarksPlatesAndCamera({
         type="text"
         value={segment.shotPrompt}
         onChange={(e) => onSetShotPrompt(e.target.value)}
-        placeholder="What happens in this shot"
+        placeholder={`e.g. \u201c${SKIDMARKS_SHOT_PROMPT_EXAMPLES[2]}\u201d or \u201c${SKIDMARKS_SHOT_PROMPT_EXAMPLES[1]}\u201d`}
         maxLength={SHOT_PROMPT_MAX_LENGTH}
         aria-label="Shot prompt"
         className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
       />
+      <p className="text-[9px] leading-relaxed text-white/30">
+        Story beat + energy, not camera terms {"\u2014"} e.g. {"\u201c"}
+        {SKIDMARKS_SHOT_PROMPT_EXAMPLES[0]}
+        {"\u201d"}.
+      </p>
 
       {/* Compact model row — a plain one-tap pick, never auto-assigned
           (see this file's doc comment). One short line, not a helper

@@ -445,6 +445,32 @@ export function defaultSegmentPlateId(vocal: boolean): SkidmarksPlateId {
 }
 
 /**
+ * Example prompts for the Shot prompt field's placeholder/helper text —
+ * Stuart's explicit steer: **story beat + energy, never camera
+ * jargon**. "Open on the crowd then find the face" and "creep to the
+ * keyhole" are staging/narrative beats; "chorus hits hard" is pure
+ * energy. None of these say "wide shot", "close-up", or "angle" — that
+ * vocabulary belongs to the Camera Angles picker this build already
+ * deleted outright, not to what Stuart types here.
+ *
+ * The intended design (not implemented yet — there's no real cut/edit
+ * pipeline in this build, only the stub "Generate Clips" button): a
+ * real backend would be what translates this energy language into an
+ * actual cut rhythm — e.g. holding a wide, scene-setting frame through
+ * a beat's build, then cutting to a tighter, more intimate frame right
+ * as a lyric/chorus hits ("Wide → MCU on lyric attack") — automatically,
+ * the same way `defaultSegmentModel` picks LTX/Grok without Stuart
+ * touching a pill. He writes the *feeling*; a future real pipeline
+ * would be responsible for turning that into shot-by-shot camera
+ * decisions, not a picker he has to operate himself.
+ */
+export const SKIDMARKS_SHOT_PROMPT_EXAMPLES = [
+  "open on the crowd then find the face",
+  "creep to the keyhole",
+  "chorus hits hard",
+] as const;
+
+/**
  * One clip/segment on the timeline: a time range, a label, a plain-
  * language `shotPrompt` ("what happens in this shot"), a location
  * `plateId`, and a `model` (see `defaultSegmentModel`), plus the narrow

@@ -10,6 +10,7 @@ import {
   normalizeSkidmarksSegment,
   SKIDMARKS_LOCATION_PLATES,
   SKIDMARKS_MODELS,
+  SKIDMARKS_SHOT_PROMPT_EXAMPLES,
   selectSkidmarksBand,
   setSkidmarksSegmentModel,
   setSkidmarksSegmentPlate,
@@ -191,6 +192,44 @@ describe("Stuart's locked model allowlist", () => {
     expect(byId.grok.note).toBeUndefined();
     expect(byId.h3.note).toBeTruthy();
     expect(byId.seedance.note).toBeTruthy();
+  });
+});
+
+/**
+ * Shot-prompt example copy tests — Stuart's explicit steer for the
+ * field's placeholder/helper text: story beat + energy language only,
+ * never camera jargon (that vocabulary belongs to the deleted Camera
+ * Angles picker, not to what Stuart types).
+ */
+describe("SKIDMARKS_SHOT_PROMPT_EXAMPLES", () => {
+  const CAMERA_JARGON = [
+    "wide shot",
+    "close-up",
+    "closeup",
+    "angle",
+    "mcu",
+    "medium shot",
+    "low angle",
+    "high angle",
+    "tracking shot",
+    "overhead",
+  ];
+
+  it("never uses camera jargon in the example copy", () => {
+    for (const example of SKIDMARKS_SHOT_PROMPT_EXAMPLES) {
+      const lower = example.toLowerCase();
+      for (const jargon of CAMERA_JARGON) {
+        expect(lower).not.toContain(jargon);
+      }
+    }
+  });
+
+  it("reads as story beat / energy, matching Stuart's locked examples", () => {
+    expect(SKIDMARKS_SHOT_PROMPT_EXAMPLES).toEqual([
+      "open on the crowd then find the face",
+      "creep to the keyhole",
+      "chorus hits hard",
+    ]);
   });
 });
 
