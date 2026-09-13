@@ -59,13 +59,13 @@ export function estimateClipRenderCostUsd(referenceImageCount: number): number {
   return CLIP_DURATION_SEC * CLIP_SECOND_RATE_USD + referenceImageCount * PER_REFERENCE_IMAGE_USD;
 }
 
-/** Longest a typed camera-motion override can be \u2014 short by design
- * (a phrase like "slow pan left, then hold", not a paragraph); enforced
- * both as the `<input>`'s own `maxLength` in
- * `components/SkidmarksClipRender.tsx` and here, so a request built
- * without going through that input (a test, a future caller) can't
- * quietly bypass the same cap. */
-export const MAX_MOTION_PROMPT_LENGTH = 140;
+/** Longest a typed camera-motion override can be \u2014 still short by
+ * design (a couple of lines like "slow zoom into keyhole, mild pulse on
+ * door cracks", not a paragraph); enforced both as the `<textarea>`'s
+ * own `maxLength` in `components/SkidmarksClipRender.tsx` and here, so
+ * a request built without going through that field (a test, a future
+ * caller) can't quietly bypass the same cap. */
+export const MAX_MOTION_PROMPT_LENGTH = 220;
 
 /**
  * Motion language keyed off how many plate stills are feeding this
@@ -75,14 +75,18 @@ export const MAX_MOTION_PROMPT_LENGTH = 140;
  * the door \u2192 keyhole \u2192 Jack plate sequence, under one Instrumental
  * clip \u2014 so that's the one default this function encodes when Stuart
  * hasn't typed his own motion direction. **No longer the only option**:
- * `buildClipGenerationRequest` below lets an explicit, short
- * `motionPrompt` override this default outright (added on Stuart's own
- * explicit ask, after the per-clip Render control shipped in #42 with
- * no way to ask for anything other than a push-in/zoom \u2014 a pan, a
- * held static shot, a whip-pan, etc. had no way to reach xAI). Still
- * the smallest control this could be: one short optional text field,
- * not a style picker/menu \u2014 leaving it blank keeps the exact same
- * automatic behavior this shipped with.
+ * `buildClipGenerationRequest` below lets an explicit `motionPrompt`
+ * become the *primary* motion instruction sent to xAI outright \u2014
+ * `shotPrompt` and the plate stills stay the visual description/
+ * reference images, this is specifically the camera direction, added
+ * on Stuart's own explicit ask ("no motion instruction at all" was
+ * irrational enough that he wouldn't press Render \u2014 the per-clip
+ * Render control shipped in #42 with no way to ask for anything other
+ * than a push-in/zoom; a pan, a held static shot, a whip-pan, etc. had
+ * no way to reach xAI). Still the smallest control this could be: one
+ * short optional multi-line text field, not a style picker/menu \u2014
+ * leaving it blank keeps the exact same automatic behavior this
+ * shipped with.
  * Two-or-more references get the multi-plate continuity phrasing
  * (xAI's reference-to-video mode, guided by the whole sequence in
  * order); exactly one gets a single-image push-in instead (xAI's
@@ -146,14 +150,16 @@ export interface BuildClipGenerationRequestParams {
    * `plateStillDataUrls.length > MAX_CLIP_REFERENCE_IMAGES` themselves
    * (see `components/SkidmarksClipRender.tsx`). */
   plateStillDataUrls: string[];
-  /** An optional, short camera-motion direction Stuart typed himself
-   * (e.g. "slow pan left, then hold on the door") \u2014 when given
-   * (non-blank), this replaces `routingMotionHint`'s automatic
-   * push-in/zoom phrasing outright rather than being appended alongside
-   * it, so Stuart's own explicit direction is never diluted or
-   * contradicted by the default. Trimmed and capped at
-   * `MAX_MOTION_PROMPT_LENGTH`; blank/omitted keeps the exact same
-   * automatic behavior this shipped with in #42. */
+  /** An optional, short (multi-line OK) camera-motion direction Stuart
+   * typed himself (e.g. "slow zoom into keyhole, mild pulse on door
+   * cracks") \u2014 the *primary* motion instruction sent to xAI when
+   * given (non-blank); `shotPrompt`/the plate stills remain the visual
+   * description and reference images, unchanged. Replaces
+   * `routingMotionHint`'s automatic push-in/zoom phrasing outright
+   * rather than being appended alongside it, so Stuart's own explicit
+   * direction is never diluted or contradicted by the default. Trimmed
+   * and capped at `MAX_MOTION_PROMPT_LENGTH`; blank/omitted keeps the
+   * exact same automatic behavior this shipped with in #42. */
   motionPrompt?: string;
   /** Passed straight through to the built `ClipGenerationRequest` \u2014
    * see that interface's doc comment. */

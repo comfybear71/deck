@@ -1433,11 +1433,16 @@ now (see "Explicitly out of scope" below).
      xAI's image-to-video mode (animates that still). Two or three plates
      → reference-to-video mode, guided by the whole sequence in order —
      Stuart's "continuous zoom across the door → keyhole → Jack plates"
-     case. An optional short **camera-motion** text field (capped at
-     `MAX_MOTION_PROMPT_LENGTH`, `lib/clipGeneration.ts`) overrides the
-     automatic push-in/zoom motion phrasing when filled in — e.g. "slow
-     pan left, hold on the door" — added on Stuart's explicit ask so a
-     render isn't locked to push-in/zoom forever; left blank, the
+     case. An optional, small multi-line **camera-motion** field (a
+     2-row textarea, capped at `MAX_MOTION_PROMPT_LENGTH`,
+     `lib/clipGeneration.ts`) becomes the *primary* motion instruction
+     sent to xAI's video call when filled in — e.g. "slow zoom into
+     keyhole, mild pulse on door cracks" — while `shotPrompt` and the
+     plate stills stay exactly what they already were, the visual
+     description and reference images. Added on Stuart's explicit ask:
+     #42 shipped this control with *no* motion instruction at all
+     (only the automatic push-in/zoom default), which he found
+     irrational enough not to press Render over; left blank, that
      original automatic motion hint still applies, and this is still a
      single free-text field, not a camera-angle picker. Fixed, hardcoded
      5s/480p output (≈$0.40–$0.43 per render, depending on plate count)

@@ -102,6 +102,16 @@ describe("buildClipGenerationRequest", () => {
     expect(prompt).not.toContain("Slow cinematic push-in zoom");
   });
 
+  it("preserves a multi-line motionPrompt verbatim (aside from trimming) — this is a multi-line field, not single-line", () => {
+    const { prompt } = buildClipGenerationRequest({
+      shotPrompt: "a door creaks open",
+      bandName: "Jack Ash",
+      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      motionPrompt: "slow zoom into keyhole,\nmild pulse on door cracks",
+    });
+    expect(prompt).toContain("slow zoom into keyhole,\nmild pulse on door cracks");
+  });
+
   it("trims a motionPrompt and falls back to the automatic hint when it's blank/whitespace-only", () => {
     const { prompt } = buildClipGenerationRequest({
       shotPrompt: "a door creaks open",

@@ -74,7 +74,7 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Energy heuristic (vocal/instrumental fallback) | **Real**, client-side, no key needed | `lib/audioAnalysis.ts` |
 | Plate *still* generation | **Real** — xAI Grok Imagine *image* API | `app/api/skidmarks/generate-still/route.ts`, `lib/plateGeneration.ts` |
 | Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to `localStorage` | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `components/SkidmarksClipStub.tsx` |
-| Per-clip opt-in *video* render | **Real** — xAI Grok Imagine *video* API, one clip at a time, explicit two-tap confirm, fixed 5s/480p cost cap, optional short camera-motion override | `app/api/skidmarks/generate-clip/route.ts`, `components/SkidmarksClipRender.tsx` |
+| Per-clip opt-in *video* render | **Real** — xAI Grok Imagine *video* API, one clip at a time, explicit two-tap confirm, fixed 5s/480p cost cap, optional multi-line camera-motion field as the primary motion instruction | `app/api/skidmarks/generate-clip/route.ts`, `components/SkidmarksClipRender.tsx` |
 | Render persistence | **Real** — a successful render is saved to durable Vercel Blob storage (not `localStorage`, not ephemeral React state), survives a refresh; download uses a numeric filename for Resolve, plus a "Download rendered clips" zip/sequential bundle across the whole timeline | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
 | Whole-song **"Generate Clips"** button | **Stub, deliberately** — never auto-renders every clip in the song | `components/SkidmarksClipTimeline.tsx` |
 | Voice, in-app stitch | Not built | — |
@@ -103,12 +103,16 @@ render control.
   exists in the data layer and still steers prompt phrasing under the
   hood, but there is no tap surface for it today — don't add one
   without an explicit ask. **One narrow exception, added on an
-  explicit ask**: `components/SkidmarksClipRender.tsx` has one short,
-  optional camera-motion text input (capped at
-  `MAX_MOTION_PROMPT_LENGTH`, `lib/clipGeneration.ts`) that overrides
-  the automatic push-in/zoom motion phrasing when filled in — still a
-  single free-text field, not a camera-angle picker/menu; leaving it
-  blank keeps the original automatic behavior.
+  explicit ask**: `components/SkidmarksClipRender.tsx` has one small,
+  optional, multi-line camera-motion field (a 2-row `<textarea>`,
+  capped at `MAX_MOTION_PROMPT_LENGTH`, `lib/clipGeneration.ts`) that
+  becomes the *primary* motion instruction sent to xAI's video call
+  when filled in (`shotPrompt`/the plate stills stay the visual
+  description and reference images) — still a single free-text field,
+  not a camera-angle picker/menu; leaving it blank keeps the original
+  automatic push-in/zoom behavior. Stuart's stated reason for this one:
+  #42's Render control had *no* motion instruction at all, which he
+  found irrational enough not to press the button.
 - Any **new** control (the render button included) has to survive the
   same test: is this the smallest possible surface, or is it turning
   into a button farm? Prefer reusing an existing field/gesture over

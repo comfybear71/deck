@@ -102,16 +102,21 @@ interface RenderResult {
  * still/route.ts` uses for reference images — a small note says so
  * rather than silently dropping the rest.
  *
- * **Optional camera-motion field** — a single short text input (capped
- * at `MAX_MOTION_PROMPT_LENGTH`) that overrides
- * `lib/clipGeneration.ts`'s automatic push-in/zoom motion phrasing when
- * filled in (e.g. "slow pan left, hold on the door"); left blank, the
- * exact same automatic motion hint this shipped with in #42 still
- * applies. Added on Stuart's own explicit ask after that automatic-only
- * behavior left no way to request anything but a push-in/zoom — still
- * the smallest control this could be (one optional field, not a
- * motion-style picker/menu), consistent with the "keep plating UI tiny"
- * lock.
+ * **Optional camera-motion field** — a small multi-line (2-row) text
+ * area, capped at `MAX_MOTION_PROMPT_LENGTH`, that becomes the
+ * *primary* motion instruction sent to xAI's video call when filled in
+ * (e.g. "slow zoom into keyhole, mild pulse on door cracks"),
+ * overriding `lib/clipGeneration.ts`'s automatic push-in/zoom phrasing
+ * outright rather than being appended alongside it. `shotPrompt` and
+ * the plate stills stay exactly what they already were — the visual
+ * description and reference images — this field is the one thing #42
+ * shipped without: any way to actually direct the *camera*. Left
+ * blank, the exact same automatic motion hint this shipped with in #42
+ * still applies, so nothing changes for a clip that doesn't use it.
+ * Stuart's own explicit ask, after finding "no motion instruction at
+ * all" irrational enough to not press Render — still the smallest
+ * control this could be (one optional field, not a motion-style
+ * picker/menu), consistent with the "keep plating UI tiny" lock.
  *
  * **Cost-aware, explicit two-tap confirm**: the first tap never fires a
  * real request — it only reveals a "Confirm — real xAI video call,
@@ -276,14 +281,14 @@ export function SkidmarksClipRender({
       </div>
 
       {!generating && (
-        <input
-          type="text"
+        <textarea
           value={motionPrompt}
           onChange={(e) => setMotionPrompt(e.target.value)}
-          placeholder="Camera motion (optional) — e.g. slow pan left, hold on the door"
+          placeholder="Camera motion for this render (optional) — e.g. slow zoom into keyhole, mild pulse on door cracks"
           maxLength={MAX_MOTION_PROMPT_LENGTH}
+          rows={2}
           aria-label="Camera motion for this render"
-          className="w-full rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-[12px] text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
+          className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
         />
       )}
 
