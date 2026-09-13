@@ -64,8 +64,10 @@ export const MINIMAX_H3_MODEL = "MiniMax-H3";
  * pay-as-you-go pricing, platform.minimax.io/docs/guides/pricing-paygo),
  * same "cheapest documented tier by default, hardcoded not an env
  * override" cost lock this app's other two video backends already use
- * (`CLIP_RESOLUTION` in the Grok path, `DEFAULT_LTX_MODEL` in
- * `lib/comfyCloud.ts`). */
+ * (`CLIP_RESOLUTION` in the Grok path; on the Vocal/LTX path the
+ * equivalent lock is the verified `workflow/LTX_2.3_IA2V_Cloud.json`
+ * template itself, which `lib/comfyCloud.ts` submits unmodified apart
+ * from five patched node inputs). */
 export const MINIMAX_H3_RESOLUTION = "768P";
 
 export interface MinimaxCredentials {

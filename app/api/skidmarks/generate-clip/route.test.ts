@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Mp3Encoder } from "@breezystack/lamejs";
+import LTX_23_IA2V_TEMPLATE from "@/workflow/LTX_2.3_IA2V_Cloud.json";
+import { COMFY_CLOUD_POLL_INTERVAL_MS } from "@/lib/comfyCloud";
 
 const putMock = vi.fn();
 const listMock = vi.fn();
@@ -886,44 +888,14 @@ describe("resolvePersistenceTarget", () => {
     ).toBeNull();
   });
 });
-
-/** A fake `MinimalWebSocket` (`lib/comfyCloud.ts`) driven directly by
- * these tests \u2014 same shape/spirit as `lib/comfyCloud.test.ts`'s own
- * `FakeWebSocket`, duplicated here since the route calls
- * `waitForComfyCloudCompletion` with its default (global `WebSocket`)
- * constructor, which these tests stub globally rather than injecting a
- * test double through the route's own (non-existent) extra parameter. */
-class FakeWebSocket {
-  static instances: FakeWebSocket[] = [];
-  url: string;
-  closed = false;
-  onopen: (() => void) | null = null;
-  onmessage: ((event: { data: unknown }) => void) | null = null;
-  onerror: ((event: unknown) => void) | null = null;
-  onclose: (() => void) | null = null;
-
-  constructor(url: string) {
-    this.url = url;
-    FakeWebSocket.instances.push(this);
-  }
-  close() {
-    this.closed = true;
-  }
-  emit(msgType: string, data: Record<string, unknown> = {}) {
-    this.onmessage?.({ data: JSON.stringify({ type: msgType, data }) });
-  }
-}
-
-describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) render path", () => {
+describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) render path", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
     vi.stubEnv("COMFY_CLOUD_API_KEY", "test-comfy-key");
     vi.stubEnv("COMFY_URL", "");
-    FakeWebSocket.instances = [];
     putMock.mockReset();
     listMock.mockReset();
     delMock.mockReset();
@@ -975,7 +947,7 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("reports missing_audio_url honestly when mp3AudioUrl is blank \u2014 never a fake success", async () => {
+  it("reports missing_audio_url honestly when mp3AudioUrl is blank — never a fake success", async () => {
     const res = await POST(vocalRequest({ mp3AudioUrl: "" }));
     const body = await res.json();
     expect(res.status).toBe(400);
@@ -1019,12 +991,29 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
   function mockSubmit(promptId = "job-1") {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: promptId }), { status: 200 }));
   }
+  /** Mocks `GET /api/jobs/{promptId}` (plural). `SaveVideo` serialises
+   * through `PreviewVideo.as_dict()`, which emits its files under
+   * **`images`**, not `video` — so that's the shape mocked here. */
+  function mockJobPoll(body: Record<string, unknown> = {
+    status: "completed",
+    outputs: { "341": { images: [{ filename: "out.mp4", subfolder: "video", type: "output" }] } },
+  }) {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 200 }));
+  }
   function mockDownload(videoBytes: Uint8Array) {
     fetchMock
       .mockResolvedValueOnce(
         new Response(null, { status: 302, headers: { location: "https://storage.example.com/signed/clip.mp4" } })
       )
       .mockResolvedValueOnce(new Response(new Uint8Array(videoBytes), { status: 200 }));
+  }
+
+  /** The one submitted graph, parsed back off the `POST /api/prompt`
+   * call this test made. */
+  function submittedGraph(): Record<string, { inputs: Record<string, unknown> }> {
+    const i = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    expect(i).toBeGreaterThanOrEqual(0);
+    return JSON.parse(fetchMock.mock.calls[i][1].body as string).prompt;
   }
 
   it("runs the full real pipeline end to end and persists the result to Vercel Blob", async () => {
@@ -1034,23 +1023,14 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
     mockAudioFetch(mp3Bytes);
     mockUploads();
     mockSubmit("job-1");
+    mockJobPoll();
     mockDownload(videoBytes);
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
     putMock.mockResolvedValueOnce({
       url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0005_render.mp4",
     });
 
-    const resultPromise = POST(vocalRequest());
-    // Let the fetch-driven steps (audio fetch, both uploads, submit) run
-    // before the WebSocket exists to drive to completion.
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const ws = FakeWebSocket.instances[0];
-    expect(ws.url).toContain("wss://cloud.comfy.org/ws");
-    expect(ws.url).toContain("token=test-comfy-key");
-    ws.emit("executed", { prompt_id: "job-1", node: "4", output: { video: [{ filename: "out.mp4" }] } });
-    ws.emit("execution_success", { prompt_id: "job-1" });
-
-    const res = await resultPromise;
+    const res = await POST(vocalRequest());
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -1058,99 +1038,35 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
       "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0005_render.mp4"
     );
     // Frame-aligned actual duration (see `lib/mp3Slice.ts`) rounds
-    // outward to the nearest real MP3 frame boundary \u2014 never exactly
+    // outward to the nearest real MP3 frame boundary — never exactly
     // the requested 5s, but always close to it.
     expect(body.durationSec).toBeGreaterThanOrEqual(5);
     expect(body.durationSec).toBeLessThan(5.1);
     expect(body.persisted).toBe(true);
 
-    // The workflow submitted to Comfy Cloud names both uploaded files
-    // and forwards the partner-node api key.
-    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
-    const submittedBody = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string);
-    expect(submittedBody.prompt["1"].inputs.image).toBe("plate.png");
-    expect(submittedBody.prompt["2"].inputs.audio).toBe("clip.mp3");
-    expect(submittedBody.prompt["3"].inputs.model).toBe("LTX-2.5 (Fast)");
-    expect(submittedBody.extra_data.api_key_comfy_org).toBe("test-comfy-key");
+    // The submitted graph is the LTX 2.3 template with this render's
+    // own five patched inputs — both uploaded filenames, the prompt,
+    // the real sliced duration, and the save prefix.
+    const graph = submittedGraph();
+    expect(graph["269"].inputs.image).toBe("plate.png");
+    expect(graph["276"].inputs.audio).toBe("clip.mp3");
+    expect(graph["340:319"].inputs.value).toBe("singing directly to camera, slow push in");
+    expect(graph["340:331"].inputs.value).toBe(body.durationSec);
+    expect(graph["341"].inputs.filename_prefix).toBe("video/skidmarks_ltx");
   });
 
-  it("real-world regression: a plate requested at exactly MAX_LTX_CLIP_DURATION_SEC never fails with an \"audio slice is Ns\" error", async () => {
-    // Stuart's exact live-QA repro shape: a plate's audio window is
-    // clamped by the caller to exactly the product ceiling (previously
-    // 20s \u2014 the bug \u2014 now MAX_LTX_CLIP_DURATION_SEC/30s). Frame-aligned
-    // outward rounding (`lib/mp3Slice.ts`) must never push the *actual*
-    // slice back over that same ceiling and trip a spurious rejection.
-    const mp3Bytes = encodeTestMp3(45, 44100, 128);
-    const videoBytes = new Uint8Array([1, 2, 3]);
-
-    mockAudioFetch(mp3Bytes);
-    mockUploads("plate.png", "clip-boundary.mp3");
-    mockSubmit("job-boundary");
-    mockDownload(videoBytes);
-
-    const resultPromise = POST(
-      vocalRequest({
-        durationSec: MAX_LTX_CLIP_DURATION_SEC,
-        audioStartSec: 5,
-        audioEndSec: 5 + MAX_LTX_CLIP_DURATION_SEC,
-      })
-    );
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const ws = FakeWebSocket.instances[0];
-    ws.emit("executed", { prompt_id: "job-boundary", node: "4", output: { video: [{ filename: "out.mp4" }] } });
-    ws.emit("execution_success", { prompt_id: "job-boundary" });
-
-    const res = await resultPromise;
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body.code).toBeUndefined();
-    expect(body.durationSec).toBeLessThanOrEqual(MAX_LTX_CLIP_DURATION_SEC);
-  });
-
-  it("clamps a raw segment/plateCount duration well past the ceiling instead of ever sending/erroring past it", async () => {
-    // Mirrors what `lib/clipGeneration.ts`'s `computeLtxPlateDurationSec`
-    // already does client-side (163s / 5 plates \u2248 32-33s/plate raw,
-    // clamped to MAX_LTX_CLIP_DURATION_SEC before this route ever sees
-    // it) \u2014 this route's own defensive slice-trim must agree, in case a
-    // caller ever sends an unclamped audioStartSec/audioEndSec window
-    // wider than the ceiling.
-    const mp3Bytes = encodeTestMp3(45, 44100, 128);
-    const videoBytes = new Uint8Array([4, 5, 6]);
-
-    mockAudioFetch(mp3Bytes);
-    mockUploads("plate.png", "clip-overshoot.mp3");
-    mockSubmit("job-overshoot");
-    mockDownload(videoBytes);
-
-    const resultPromise = POST(
-      vocalRequest({
-        durationSec: MAX_LTX_CLIP_DURATION_SEC,
-        audioStartSec: 0,
-        audioEndSec: 33, // wider than MAX_LTX_CLIP_DURATION_SEC \u2014 must be trimmed, not rejected.
-      })
-    );
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const ws = FakeWebSocket.instances[0];
-    ws.emit("executed", { prompt_id: "job-overshoot", node: "4", output: { video: [{ filename: "out.mp4" }] } });
-    ws.emit("execution_success", { prompt_id: "job-overshoot" });
-
-    const res = await resultPromise;
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body.durationSec).toBeLessThanOrEqual(MAX_LTX_CLIP_DURATION_SEC);
-  });
-
-  it("falls back to a data: URL (never silently drops a paid render) when no persistence target is given", async () => {
-    const mp3Bytes = encodeTestMp3(6);
-    const videoBytes = new Uint8Array([9, 9, 9]);
-
-    mockAudioFetch(mp3Bytes);
+  it("polls GET /api/jobs/{promptId} — plural, never /api/history/{id} — and opens no WebSocket", async () => {
+    mockAudioFetch(encodeTestMp3(6));
     mockUploads();
-    mockSubmit("job-2");
-    mockDownload(videoBytes);
+    mockSubmit("job-poll");
+    mockJobPoll({ status: "pending" });
+    mockJobPoll({ status: "running" });
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
 
+    // Fake timers so the two real 2.5s gaps between polls don't make
+    // this test wait them out for real.
+    vi.useFakeTimers();
     const resultPromise = POST(
       postRequest({
         vocal: true,
@@ -1162,12 +1078,139 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
         audioEndSec: 5,
       })
     );
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const ws = FakeWebSocket.instances[0];
-    ws.emit("executed", { prompt_id: "job-2", node: "4", output: { video: [{ filename: "out.mp4" }] } });
-    ws.emit("execution_success", { prompt_id: "job-2" });
-
+    await vi.advanceTimersByTimeAsync(COMFY_CLOUD_POLL_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(COMFY_CLOUD_POLL_INTERVAL_MS);
     const res = await resultPromise;
+    vi.useRealTimers();
+    expect(res.status).toBe(200);
+
+    const polls = fetchMock.mock.calls.map(([url]) => String(url)).filter((u) => u.includes("/api/jobs/"));
+    expect(polls.length).toBe(3);
+    expect(polls[0]).toBe("https://cloud.comfy.org/api/jobs/job-poll");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/history/"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith("ws"))).toBe(false);
+  });
+
+  it("submits a body of just { prompt } — no extra_data.api_key_comfy_org, and no partner node in the graph", async () => {
+    mockAudioFetch(encodeTestMp3(6));
+    mockUploads();
+    mockSubmit("job-shape");
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
+    putMock.mockResolvedValueOnce({ url: "https://abc.public.blob.vercel-storage.com/x.mp4" });
+
+    await POST(vocalRequest());
+
+    const i = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const rawBody = fetchMock.mock.calls[i][1].body as string;
+    expect(Object.keys(JSON.parse(rawBody))).toEqual(["prompt"]);
+    expect(rawBody).not.toContain("api_key_comfy_org");
+    expect(rawBody).not.toContain("LtxApi25AudioToVideo");
+    expect(rawBody).not.toContain("model.resolution");
+  });
+
+  it("submits the verified template unchanged apart from the five patched nodes, ID LoRA included", async () => {
+    mockAudioFetch(encodeTestMp3(6));
+    mockUploads("only-plate.png", "only-clip.mp3");
+    mockSubmit("job-template");
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
+    putMock.mockResolvedValueOnce({ url: "https://abc.public.blob.vercel-storage.com/x.mp4" });
+
+    await POST(vocalRequest());
+
+    const graph = submittedGraph();
+    const template = LTX_23_IA2V_TEMPLATE as unknown as Record<string, unknown>;
+    expect(Object.keys(graph).sort()).toEqual(Object.keys(template).sort());
+    const differing = Object.keys(template).filter(
+      (id) => JSON.stringify(graph[id]) !== JSON.stringify(template[id])
+    );
+    expect(differing.sort()).toEqual(["269", "276", "340:319", "340:331", "341"]);
+    // The `talkvid-3k` ID LoRA is what holds a face through motion —
+    // it must survive every patch.
+    expect(JSON.stringify(graph)).toContain("talkvid-3k");
+  });
+
+  it("real-world regression: a plate requested at exactly MAX_LTX_CLIP_DURATION_SEC never fails with an \"audio slice is Ns\" error", async () => {
+    // Stuart's exact live-QA repro shape: a plate's audio window is
+    // clamped by the caller to exactly the product ceiling (previously
+    // 20s — the bug — now MAX_LTX_CLIP_DURATION_SEC/30s). Frame-aligned
+    // outward rounding (`lib/mp3Slice.ts`) must never push the *actual*
+    // slice back over that same ceiling and trip a spurious rejection.
+    const mp3Bytes = encodeTestMp3(45, 44100, 128);
+
+    mockAudioFetch(mp3Bytes);
+    mockUploads("plate.png", "clip-boundary.mp3");
+    mockSubmit("job-boundary");
+    mockJobPoll();
+    mockDownload(new Uint8Array([1, 2, 3]));
+
+    const res = await POST(
+      vocalRequest({
+        durationSec: MAX_LTX_CLIP_DURATION_SEC,
+        audioStartSec: 5,
+        audioEndSec: 5 + MAX_LTX_CLIP_DURATION_SEC,
+      })
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.code).toBeUndefined();
+    expect(body.durationSec).toBeLessThanOrEqual(MAX_LTX_CLIP_DURATION_SEC);
+    // 30s is an ordinary graph input on LTX 2.3 — it reaches the graph
+    // untouched, with no hosted-node 20s cap in the way.
+    expect(submittedGraph()["340:331"].inputs.value).toBe(body.durationSec);
+    expect(body.durationSec).toBeGreaterThan(29);
+  });
+
+  it("clamps a raw segment/plateCount duration well past the ceiling instead of ever sending/erroring past it", async () => {
+    // Mirrors what `lib/clipGeneration.ts`'s `computeLtxPlateDurationSec`
+    // already does client-side (163s / 5 plates ≈ 32-33s/plate raw,
+    // clamped to MAX_LTX_CLIP_DURATION_SEC before this route ever sees
+    // it) — this route's own defensive slice-trim must agree, in case a
+    // caller ever sends an unclamped audioStartSec/audioEndSec window
+    // wider than the ceiling.
+    const mp3Bytes = encodeTestMp3(45, 44100, 128);
+
+    mockAudioFetch(mp3Bytes);
+    mockUploads("plate.png", "clip-overshoot.mp3");
+    mockSubmit("job-overshoot");
+    mockJobPoll();
+    mockDownload(new Uint8Array([4, 5, 6]));
+
+    const res = await POST(
+      vocalRequest({
+        durationSec: MAX_LTX_CLIP_DURATION_SEC,
+        audioStartSec: 0,
+        audioEndSec: 33, // wider than MAX_LTX_CLIP_DURATION_SEC — must be trimmed, not rejected.
+      })
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.durationSec).toBeLessThanOrEqual(MAX_LTX_CLIP_DURATION_SEC);
+  });
+
+  it("falls back to a data: URL (never silently drops a paid render) when no persistence target is given", async () => {
+    mockAudioFetch(encodeTestMp3(6));
+    mockUploads();
+    mockSubmit("job-2");
+    mockJobPoll();
+    mockDownload(new Uint8Array([9, 9, 9]));
+
+    const res = await POST(
+      postRequest({
+        vocal: true,
+        prompt: "x",
+        referenceImageDataUrls: [TINY_DATA_URL],
+        durationSec: 5,
+        mp3AudioUrl: "https://blob.vercel-storage.com/song.mp3",
+        audioStartSec: 0,
+        audioEndSec: 5,
+      })
+    );
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -1176,22 +1219,14 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
   });
 
   it("still returns the render (as a data: URL), honestly flagged unsaved, when Blob persistence fails", async () => {
-    const mp3Bytes = encodeTestMp3(6);
-    const videoBytes = new Uint8Array([7, 7, 7]);
-
-    mockAudioFetch(mp3Bytes);
+    mockAudioFetch(encodeTestMp3(6));
     mockUploads();
     mockSubmit("job-3");
-    mockDownload(videoBytes);
+    mockJobPoll();
+    mockDownload(new Uint8Array([7, 7, 7]));
     putMock.mockRejectedValueOnce(new Error("Vercel Blob: No token found."));
 
-    const resultPromise = POST(vocalRequest());
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const ws = FakeWebSocket.instances[0];
-    ws.emit("executed", { prompt_id: "job-3", node: "4", output: { video: [{ filename: "out.mp4" }] } });
-    ws.emit("execution_success", { prompt_id: "job-3" });
-
-    const res = await resultPromise;
+    const res = await POST(vocalRequest());
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -1201,8 +1236,7 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
   });
 
   it("surfaces a real Comfy Cloud submit failure verbatim", async () => {
-    const mp3Bytes = encodeTestMp3(6);
-    mockAudioFetch(mp3Bytes);
+    mockAudioFetch(encodeTestMp3(6));
     mockUploads();
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "Invalid node graph" }), { status: 200 }));
 
@@ -1215,42 +1249,51 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
   });
 
   it("surfaces a real Comfy Cloud execution_error verbatim", async () => {
-    const mp3Bytes = encodeTestMp3(6);
-    mockAudioFetch(mp3Bytes);
+    mockAudioFetch(encodeTestMp3(6));
     mockUploads();
     mockSubmit("job-4");
+    mockJobPoll({ status: "failed", execution_error: { exception_message: "OOMError" } });
 
-    const resultPromise = POST(vocalRequest());
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const ws = FakeWebSocket.instances[0];
-    ws.emit("execution_error", { prompt_id: "job-4", exception_message: "OOMError" });
-
-    const res = await resultPromise;
+    const res = await POST(vocalRequest());
     const body = await res.json();
 
     expect(res.status).toBe(502);
     expect(body.error).toContain("OOMError");
   });
 
-  it("always submits the hardcoded default LTX model \u2014 no env override (not a confirmed Comfy key name)", async () => {
-    const mp3Bytes = encodeTestMp3(6);
-    mockAudioFetch(mp3Bytes);
+  it("reads SaveVideo's `images` output key — a finished render is never reported as no_video_output", async () => {
+    mockAudioFetch(encodeTestMp3(6));
     mockUploads();
-    mockSubmit("job-5");
-    mockDownload(new Uint8Array([1]));
+    mockSubmit("job-images");
+    mockJobPoll({
+      status: "completed",
+      outputs: { "341": { images: [{ filename: "skidmarks_ltx_00001.mp4", subfolder: "video", type: "output" }] } },
+    });
+    mockDownload(new Uint8Array([1, 2]));
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
     putMock.mockResolvedValueOnce({ url: "https://abc.public.blob.vercel-storage.com/x.mp4" });
 
-    const resultPromise = POST(vocalRequest());
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    const ws = FakeWebSocket.instances[0];
-    ws.emit("executed", { prompt_id: "job-5", node: "4", output: { video: [{ filename: "out.mp4" }] } });
-    ws.emit("execution_success", { prompt_id: "job-5" });
-    await resultPromise;
+    const res = await POST(vocalRequest());
+    const body = await res.json();
 
-    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
-    const submittedBody = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string);
-    expect(submittedBody.prompt["3"].inputs.model).toBe("LTX-2.5 (Fast)");
+    expect(res.status).toBe(200);
+    expect(body.code).toBeUndefined();
+    // The download asked for exactly the file `images` named.
+    const viewCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/view"));
+    expect(String(viewCall?.[0])).toContain("filename=skidmarks_ltx_00001.mp4");
+  });
+
+  it("reports no_video_output honestly when a completed job really carries no mp4", async () => {
+    mockAudioFetch(encodeTestMp3(6));
+    mockUploads();
+    mockSubmit("job-empty");
+    mockJobPoll({ status: "completed", outputs: { "341": { images: [{ filename: "preview.png" }] } } });
+
+    const res = await POST(vocalRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(502);
+    expect(body.code).toBe("no_video_output");
   });
 });
 
