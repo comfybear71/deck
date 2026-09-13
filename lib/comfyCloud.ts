@@ -1,65 +1,82 @@
 /**
- * Server-only thin client for Comfy Cloud's own documented HTTP/
- * WebSocket API (https://cloud.comfy.org, docs.comfy.org/development/
- * cloud/api-reference) — the backend `app/api/skidmarks/generate-clip/
- * route.ts` calls for a **Vocal** plate's real video render (see this
- * repo's AGENTS.md, "Stuart lock (2026-09-13): LTX runs on Comfy
- * Cloud — not Fal, Replicate, or SIRAY for Vocal animation").
+ * Server-only thin client for Comfy Cloud's own HTTP API
+ * (https://cloud.comfy.org) — the backend `app/api/skidmarks/
+ * generate-clip/route.ts` calls for a **Vocal** plate's real video
+ * render (see this repo's AGENTS.md, "Stuart lock (2026-09-13): LTX
+ * runs on Comfy Cloud — not Fal, Replicate, or SIRAY for Vocal
+ * animation").
  *
- * **Endpoint shapes below are pulled directly from Comfy's own current
- * published docs, not guessed at** — `POST /api/prompt` (submit a
- * workflow graph, get back a `prompt_id`), `POST /api/upload/image`
- * (generic multipart upload into the `input` directory — despite the
- * path name, this is also how Comfy's own frontend uploads *audio* for
- * a `LoadAudio` node; see `src/extensions/core/uploadAudio.ts` in
- * Comfy-Org/ComfyUI_frontend, which POSTs to this exact same endpoint
- * under the `image` form field for an audio file), `GET /api/view`
- * (download a named output, 302-redirecting to a signed storage URL),
- * and the WebSocket (`wss://.../ws?clientId=...&token=<API key>`,
- * `executed`/`execution_success`/`execution_error` messages) used here
- * to learn a finished job's output filenames — the REST `GET /api/job/
- * {promptId}/status` endpoint Comfy also documents only reports a bare
- * `{status}` string, with no output filenames in it, so the WebSocket
- * is the one *documented* path on this reference to actually learn
- * what a finished job produced.
+ * **This is a port of the original Skidmarks repo's own real, working
+ * Cloud client** (`src/lib/comfyCloudClient.ts` +
+ * `src/lib/ltxCloudIa2v.ts` there), not a doc-derived reimplementation.
+ * Every endpoint path, field name and job-status string below is what
+ * that client actually uses against a live Comfy Cloud account with
+ * 100+ real LTX renders behind it:
+ * - `POST /api/upload/image` — generic multipart upload into the
+ *   `input` directory; the form field is called `image` even for an
+ *   mp3 (that's how Comfy's own frontend uploads audio for `LoadAudio`).
+ * - `POST /api/prompt` — body is just `{ prompt }` (the full API-format
+ *   graph). **No `extra_data.api_key_comfy_org`** — that second key
+ *   copy is only needed by Comfy *partner* nodes, and the LTX 2.3 graph
+ *   this app submits has none (it runs checkpoints/LoRAs/samplers
+ *   inside Comfy itself).
+ * - `GET /api/jobs/{promptId}` — **plural `jobs`, not
+ *   `/api/history/{id}`.** The original client carries a standing
+ *   comment saying exactly this; `/api/history/{id}` is the *local*
+ *   ComfyUI shape and is not the Cloud one.
+ * - `GET /api/view` — download a named output, 302-redirecting to a
+ *   signed storage URL.
  *
- * **Honesty note — this plumbing is real, but not live-verified in this
- * sandbox.** Unlike this repo's xAI Grok routes (`app/api/skidmarks/
- * generate-still/route.ts`, `generate-clip/route.ts`'s existing
- * Instrumental path), which were exercised against a real, working key
- * while being built, there is no `COMFY_CLOUD_API_KEY` available in
- * this environment to make a real call against. Every endpoint path,
- * header name, and request/response shape below is copied from Comfy's
- * own current documentation (cited above) rather than invented, and the
- * `LtxApi25AudioToVideo`/`LoadImage`/`LoadAudio` node schemas in
- * `buildLtxAudioToVideoWorkflow` come from Comfy's own per-node
- * reference pages (docs.comfy.org/built-in-nodes/LtxApi25AudioToVideo)
- * — but the *whole graph*, wired together and submitted as one request,
- * has not been run against a real account. If the real API rejects a
- * specific field name or graph shape this file assumes, that surfaces
- * as this module's own honest `upstream_error`/`invalid_request`
- * outcome (never a fake success) — see this file's module doc comment
- * in `app/api/skidmarks/generate-clip/route.ts` for how that's
- * surfaced to Stuart.
+ * **Why polling and not a WebSocket.** An earlier pass here watched
+ * Comfy's WebSocket for `executed`/`execution_success`. Besides not
+ * being what the proven client does, a long-lived socket inside a
+ * Vercel serverless function was never going to be reliable. This
+ * module polls `GET /api/jobs/{promptId}` on an interval with an
+ * honest deadline instead.
  *
- * **No "workflow id"/deployment id needed, no model-override env var
- * either.** Unlike ComfyDeploy's `deployment_id`-based `POST /run/
- * deployment/queue` API (a different third-party product, not used
- * here per Stuart's explicit "Comfy Cloud" lock), Comfy Cloud's own
- * `/api/prompt` endpoint takes the *entire* workflow graph in the
- * request body — this app builds that graph itself
- * (`buildLtxAudioToVideoWorkflow`) rather than referencing a pre-saved
- * one by id. Only two env vars are real here, confirmed against the
- * original Skidmarks repo's own `.env.example`: `COMFY_CLOUD_API_KEY`
- * and `COMFY_URL` (blank = Comfy Cloud) — nothing else is invented.
+ * **Why LTX 2.3 and not the hosted `LtxApi25AudioToVideo` partner
+ * node.** A previous pass built a small four-node graph around that
+ * partner node, written off doc pages. It failed validation on the
+ * first real call (`required_input_missing` for `model.resolution` —
+ * its `model` input is a DynamicCombo that flattens to dotted sibling
+ * keys in API-format JSON), and had two further faults behind that one
+ * (`SaveVideo` also needs `format`/`format.codec`; the node hard-
+ * rejects driving audio outside 2–20s in its own `execute()`, while
+ * Stuart renders 30s clips routinely). The original Skidmarks repo
+ * never used that node at all — it submits the full, self-contained
+ * LTX 2.3 graph in `workflow/LTX_2.3_IA2V_Cloud.json`. That is the
+ * path with real renders behind it, so that is the path this app
+ * takes now. Duration is an ordinary graph input here (node
+ * `340:331`), so there is no hosted-node duration ceiling to work
+ * around.
  *
- * **LTX-2.5 is a Comfy "Partner Node"** (it calls out to Lightricks'
- * own hosted API, not a model Comfy itself runs) — Comfy's docs say a
- * request using one must carry the same API key a second time, in
- * `extra_data.api_key_comfy_org`, alongside the `X-API-Key` header used
- * for the Cloud API call itself. `submitComfyCloudWorkflow` below sends
- * both.
+ * **The template is a verified artifact, not source code.** It is
+ * copied byte-for-byte from the original repo and must not be
+ * reformatted, pruned or "tidied" — in particular the `talkvid-3k` ID
+ * LoRA is what holds a face through motion. `buildLtx23Ia2vWorkflow`
+ * patches exactly five node inputs and touches nothing else; it is
+ * imported as a TypeScript JSON module (`resolveJsonModule`) rather
+ * than read off disk with `fs`, because an `fs` read of a non-traced
+ * file is fragile on Vercel.
+ *
+ * **Honesty note — this plumbing is ported, but not live-verified in
+ * this sandbox.** There is no `COMFY_CLOUD_API_KEY` available in this
+ * environment to make a real call against, so nothing here has been
+ * run end to end from this repo. Passing tests are not proof the
+ * render works; the only proof is Stuart tapping Vocal Render on his
+ * iPhone after a deploy and a shelf clip playing. Two things the
+ * original repo does that were deliberately *not* ported, either of
+ * which is cheap to add if the first live render shows it's needed:
+ * it letterboxes the plate to 16:9 before upload
+ * (`letterboxPlateForCloudIa2v`), and it builds a specific Cloud IA2V
+ * prompt paragraph (`buildCloudIa2vPrompt`) with a lip-sync lead line
+ * and a style lock. This app sends the shot prompt as-is.
+ *
+ * Only two env vars are real here, confirmed against the original
+ * Skidmarks repo's own `.env.example`: `COMFY_CLOUD_API_KEY` and
+ * `COMFY_URL` (blank = Comfy Cloud) — nothing else is invented.
  */
+import LTX_23_IA2V_TEMPLATE from "@/workflow/LTX_2.3_IA2V_Cloud.json";
 
 /** Confirmed against the original Skidmarks repo's own `.env.example`
  * — these are the two real env var names, and the *only* two; nothing
@@ -73,16 +90,12 @@ const API_KEY_ENV_VAR = "COMFY_CLOUD_API_KEY";
 const URL_ENV_VAR = "COMFY_URL";
 
 const DEFAULT_BASE_URL = "https://cloud.comfy.org";
-/** LTX-2.5 (Fast) is the cheaper of Comfy's two documented LTX-2.5
- * partner-node tiers ($0.09-0.13/s vs. Pro's $0.12-0.17/s per
- * Lightricks' own published API pricing, docs.ltx.io/pricing) — same
- * "cheapest documented tier by default" cost lock as
- * `app/api/skidmarks/generate-clip/route.ts`'s existing `CLIP_RESOLUTION
- * = "480p"` for the Grok path. Hardcoded, not an env override — unlike
- * `XAI_VIDEO_MODEL`, the confirmed `.env.example` doesn't establish a
- * model-override var for Comfy, and this repo's lock is "don't invent
- * other Comfy key names." */
-export const DEFAULT_LTX_MODEL = "LTX-2.5 (Fast)";
+
+/** Default `filename_prefix` patched into the template's `SaveVideo`
+ * node (`341`) — the original repo uses the same `video/` subfolder
+ * convention, which `pickComfyCloudVideo` also happens to prefer when
+ * a job reports several outputs. */
+export const DEFAULT_LTX_FILENAME_PREFIX = "video/skidmarks_ltx";
 
 export interface ComfyCloudCredentials {
   apiKey: string;
@@ -101,21 +114,13 @@ export function resolveComfyCloudCredentials(): ComfyCloudCredentials | null {
   return { apiKey, baseUrl };
 }
 
-function wsUrlFor(baseUrl: string, apiKey: string, clientId: string): string {
-  const wsBase = baseUrl.replace(/^http/, "ws");
-  return `${wsBase}/ws?clientId=${encodeURIComponent(clientId)}&token=${encodeURIComponent(apiKey)}`;
-}
-
-function generateClientId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-const UPLOAD_TIMEOUT_MS = 30_000;
-const SUBMIT_TIMEOUT_MS = 20_000;
-const DOWNLOAD_TIMEOUT_MS = 60_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+const SUBMIT_TIMEOUT_MS = 60_000;
+const POLL_TIMEOUT_MS = 30_000;
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+/** Gap between `GET /api/jobs/{id}` polls — the original client's own
+ * `pollMs` default. */
+export const COMFY_CLOUD_POLL_INTERVAL_MS = 2_500;
 
 export type ComfyCloudFailure = { ok: false; status: number; code: string; error: string };
 
@@ -149,9 +154,9 @@ export type UploadInputOutcome =
 
 /**
  * `POST /api/upload/image` — uploads raw bytes into Comfy Cloud's
- * `input` directory so a `LoadImage`/`LoadAudio` node in the submitted
- * workflow can reference it by filename. Works for audio despite the
- * path's name (see this module's doc comment) — the field is always
+ * `input` directory so the template's `LoadImage` (`269`) / `LoadAudio`
+ * (`276`) node can reference it by filename. Works for audio despite
+ * the path's name (see this module's doc comment) — the field is always
  * called `image` regardless of the actual file's real content type.
  */
 export async function uploadComfyCloudInput(
@@ -162,7 +167,7 @@ export async function uploadComfyCloudInput(
 ): Promise<UploadInputOutcome> {
   const form = new FormData();
   // `new Uint8Array(bytes)` (rather than `bytes` directly) guarantees a
-  // plain `ArrayBuffer`-backed copy \u2014 `Blob`'s `BlobPart` type doesn't
+  // plain `ArrayBuffer`-backed copy — `Blob`'s `BlobPart` type doesn't
   // accept the wider `ArrayBufferLike` a `Uint8Array` can otherwise be
   // backed by (e.g. a `SharedArrayBuffer`), even though every real
   // caller here only ever passes a plain-`ArrayBuffer`-backed one.
@@ -210,9 +215,13 @@ export type SubmitWorkflowOutcome = { ok: true; promptId: string } | ComfyCloudF
 /**
  * `POST /api/prompt` — submits a full workflow graph (API format: `{
  * [nodeId]: { class_type, inputs } }`) and returns the `prompt_id` used
- * to track it. Always includes `extra_data.api_key_comfy_org` (see this
- * module's doc comment's Partner Node note) since every workflow this
- * app submits uses the `LtxApi25AudioToVideo` partner node.
+ * to track it.
+ *
+ * The body is **just `{ prompt }`**, matching the original repo's
+ * `cloudQueuePrompt`. There is deliberately no
+ * `extra_data.api_key_comfy_org`: that second copy of the key is a
+ * Comfy *partner node* requirement, and the LTX 2.3 graph this app
+ * submits contains no partner nodes.
  */
 export async function submitComfyCloudWorkflow(
   workflow: Record<string, unknown>,
@@ -223,7 +232,7 @@ export async function submitComfyCloudWorkflow(
     res = await fetch(`${creds.baseUrl}/api/prompt`, {
       method: "POST",
       headers: { "X-API-Key": creds.apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: workflow, extra_data: { api_key_comfy_org: creds.apiKey } }),
+      body: JSON.stringify({ prompt: workflow }),
       signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
     });
   } catch (err) {
@@ -239,7 +248,7 @@ export async function submitComfyCloudWorkflow(
 
   if (!res.ok) {
     const { code } = classifyComfyHttpFailure(res.status);
-    const message = typeof (payload as { error?: unknown })?.error === "string" ? (payload as { error: string }).error : "";
+    const message = extractErrorMessage(payload);
     return {
       ok: false,
       status: res.status,
@@ -248,9 +257,10 @@ export async function submitComfyCloudWorkflow(
     };
   }
 
-  const body = (payload ?? {}) as { prompt_id?: unknown; error?: unknown };
-  if (typeof body.error === "string" && body.error) {
-    return { ok: false, status: 422, code: "invalid_request", error: `Comfy Cloud rejected the workflow: ${body.error}` };
+  const body = (payload ?? {}) as { prompt_id?: unknown };
+  const message = extractErrorMessage(payload);
+  if (message) {
+    return { ok: false, status: 422, code: "invalid_request", error: `Comfy Cloud rejected the workflow: ${message}` };
   }
   if (typeof body.prompt_id !== "string" || !body.prompt_id) {
     return {
@@ -263,158 +273,174 @@ export async function submitComfyCloudWorkflow(
   return { ok: true, promptId: body.prompt_id };
 }
 
+/** Comfy Cloud reports a rejected workflow either as a bare `error`
+ * string or as `{ error: { message } }` — the original client handles
+ * both shapes, so this does too. */
+function extractErrorMessage(payload: unknown): string {
+  const err = (payload as { error?: unknown } | null)?.error;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object" && typeof (err as { message?: unknown }).message === "string") {
+    return (err as { message: string }).message;
+  }
+  return "";
+}
+
 export interface ComfyCloudOutputFile {
   filename: string;
   subfolder?: string;
   type?: string;
 }
 
-export type WaitForCompletionOutcome =
+/** One node's entry in a finished job's `outputs` map. `SaveVideo`
+ * serialises through `PreviewVideo.as_dict()`, which emits its files
+ * under **`images`** — not `video`. All four keys are accepted here
+ * because the original repo's own `pickCloudVideo` accepts all four,
+ * and a graph change upstream shouldn't silently turn a paid, finished
+ * render into a `no_video_output`. */
+export interface ComfyCloudNodeOutputs {
+  images?: ComfyCloudOutputFile[];
+  video?: ComfyCloudOutputFile[];
+  videos?: ComfyCloudOutputFile[];
+  gifs?: ComfyCloudOutputFile[];
+}
+
+export type PollJobOutcome =
   | { ok: true; videoFile: ComfyCloudOutputFile }
   | ComfyCloudFailure;
 
-/** Minimal shape of the WebSocket implementation this module needs —
- * matches both the browser/Node global `WebSocket` and a fake test
- * double (`lib/comfyCloud.test.ts`) without depending on either's full
- * interface. Accepting this as an injectable param (rather than always
- * reaching for the global) is what makes `waitForComfyCloudCompletion`
- * unit-testable without a real socket. */
-export interface MinimalWebSocket {
-  close(): void;
-  onopen: (() => void) | null;
-  onmessage: ((event: { data: unknown }) => void) | null;
-  onerror: ((event: unknown) => void) | null;
-  onclose: (() => void) | null;
-}
-export type WebSocketCtor = new (url: string) => MinimalWebSocket;
-
-function resolveDefaultWebSocketCtor(): WebSocketCtor | null {
-  return typeof WebSocket !== "undefined" ? (WebSocket as unknown as WebSocketCtor) : null;
-}
-
-interface ComfyWsMessage {
-  type?: string;
-  data?: {
-    prompt_id?: string;
-    node?: string;
-    output?: { video?: ComfyCloudOutputFile[] };
-    exception_message?: string;
-  };
+interface ComfyCloudJobBody {
+  status?: unknown;
+  outputs?: Record<string, ComfyCloudNodeOutputs> | null;
+  execution_error?: { exception_message?: unknown; message?: unknown } | null;
+  error?: unknown;
 }
 
 /**
- * Opens Comfy Cloud's documented WebSocket, waits for this specific
- * `promptId`'s `execution_success` (collecting any `executed` node's
- * `output.video` along the way — the `SaveVideo` node in
- * `buildLtxAudioToVideoWorkflow`) or `execution_error`, and resolves
- * honestly either way. Never hangs forever — `deadlineMs` closes the
- * socket and reports a real `timeout` outcome, mirroring
- * `app/api/skidmarks/generate-clip/route.ts`'s existing xAI
- * `POLL_DEADLINE_MS`/"no resume after timeout" shape.
+ * Picks the finished job's rendered mp4 out of its `outputs` map —
+ * ported from the original repo's `pickCloudVideo`.
+ *
+ * The `images`/`gifs` keys are filtered to `.mp4` entries only (a
+ * `SaveVideo` node's files land under `images`, but a graph that also
+ * saved a real still would put a `.png` there too); `video`/`videos`
+ * are taken as-is. When several candidates exist, one whose path looks
+ * like an LTX/IA2V/video output wins, otherwise the first.
  */
-export function waitForComfyCloudCompletion(
+export function pickComfyCloudVideo(
+  outputs: Record<string, ComfyCloudNodeOutputs> | null | undefined
+): ComfyCloudOutputFile | null {
+  const vids: ComfyCloudOutputFile[] = [];
+  for (const node of Object.values(outputs ?? {})) {
+    if (!node) continue;
+    for (const v of node.video ?? []) vids.push(v);
+    for (const v of node.videos ?? []) vids.push(v);
+    for (const g of node.gifs ?? []) {
+      if (/\.mp4$/i.test(g?.filename ?? "")) vids.push(g);
+    }
+    for (const im of node.images ?? []) {
+      if (/\.mp4$/i.test(im?.filename ?? "")) vids.push(im);
+    }
+  }
+  if (!vids.length) return null;
+  const prefer = vids.find((v) => /ltx|ia2v|video/i.test(`${v.subfolder ?? ""}/${v.filename}`));
+  return prefer ?? vids[0];
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Polls `GET /api/jobs/{promptId}` — **plural `jobs`; this is not
+ * `/api/history/{id}`**, which is the *local* ComfyUI shape. The
+ * original client carries a standing comment saying exactly that, and
+ * it is the single easiest thing to get wrong here.
+ *
+ * `completed`/`success` finish the job (its `outputs` then go through
+ * `pickComfyCloudVideo`); `failed`/`error`/`cancelled` fail it,
+ * surfacing Comfy's own `execution_error.exception_message` verbatim
+ * rather than a summary of it. Anything else is still running.
+ *
+ * Never hangs forever — past `deadlineMs` this returns an honest
+ * `timeout` outcome, mirroring `app/api/skidmarks/generate-clip/
+ * route.ts`'s existing xAI/MiniMax "no resume after timeout" shape:
+ * the render may still finish on Comfy's side, but nothing here checks
+ * back on it later.
+ */
+export async function pollComfyCloudJob(
   promptId: string,
   creds: ComfyCloudCredentials,
   deadlineMs: number,
-  webSocketCtor: WebSocketCtor | null = resolveDefaultWebSocketCtor()
-): Promise<WaitForCompletionOutcome> {
-  return new Promise((resolve) => {
-    if (!webSocketCtor) {
-      resolve({
-        ok: false,
-        status: 500,
-        code: "no_websocket",
-        error: "This server runtime has no WebSocket implementation available to watch the Comfy Cloud job.",
+  pollIntervalMs: number = COMFY_CLOUD_POLL_INTERVAL_MS
+): Promise<PollJobOutcome> {
+  const startedAt = Date.now();
+
+  while (true) {
+    let res: Response;
+    try {
+      res = await fetch(`${creds.baseUrl}/api/jobs/${encodeURIComponent(promptId)}`, {
+        method: "GET",
+        headers: { "X-API-Key": creds.apiKey },
+        cache: "no-store",
+        signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
       });
-      return;
+    } catch (err) {
+      return networkFailure(`checking job ${promptId}`, err);
     }
 
-    let settled = false;
-    let videoFile: ComfyCloudOutputFile | undefined;
-    let ws: MinimalWebSocket;
+    let payload: unknown = null;
+    try {
+      payload = await res.json();
+    } catch {
+      // Handled by the !res.ok check below; a 200 with unreadable JSON
+      // falls through as an unknown status and polls again.
+    }
 
-    const settle = (outcome: WaitForCompletionOutcome) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        ws.close();
-      } catch {
-        // Best-effort close — the outcome above already reflects reality.
-      }
-      resolve(outcome);
-    };
+    if (!res.ok) {
+      const { code } = classifyComfyHttpFailure(res.status);
+      return {
+        ok: false,
+        status: res.status,
+        code,
+        error: `Comfy Cloud returned HTTP ${res.status} checking the render's job status.`,
+      };
+    }
 
-    const timer = setTimeout(() => {
-      settle({
+    const job = (payload ?? {}) as ComfyCloudJobBody;
+    const status = String(job.status ?? "unknown").toLowerCase();
+
+    if (status === "failed" || status === "error" || status === "cancelled") {
+      const detail =
+        (typeof job.execution_error?.exception_message === "string" && job.execution_error.exception_message) ||
+        (typeof job.execution_error?.message === "string" && job.execution_error.message) ||
+        (typeof job.error === "string" && job.error) ||
+        `Comfy Cloud's job failed (${status})`;
+      return { ok: false, status: 502, code: "upstream_error", error: `Comfy Cloud's job failed: ${detail}` };
+    }
+
+    if (status === "completed" || status === "success") {
+      const videoFile = pickComfyCloudVideo(job.outputs);
+      if (videoFile) return { ok: true, videoFile };
+      return {
+        ok: false,
+        status: 502,
+        code: "no_video_output",
+        error: "Comfy Cloud's job finished successfully but reported no video output to download.",
+      };
+    }
+
+    if (Date.now() + pollIntervalMs - startedAt >= deadlineMs) {
+      return {
         ok: false,
         status: 504,
         code: "timeout",
         error:
-          `Comfy Cloud's job was still running after ${Math.round(deadlineMs / 1000)}s \u2014 this route stopped ` +
+          `Comfy Cloud's job was still ${status} after ${Math.round(deadlineMs / 1000)}s — this route stopped ` +
           "waiting. The render may still finish on Comfy's side, but this app has no way to check back on it; " +
           "try again in a bit.",
-      });
-    }, deadlineMs);
-
-    try {
-      ws = new webSocketCtor(wsUrlFor(creds.baseUrl, creds.apiKey, generateClientId()));
-    } catch (err) {
-      clearTimeout(timer);
-      resolve({
-        ok: false,
-        status: 502,
-        code: "network_error",
-        error: `Could not open a WebSocket to Comfy Cloud: ${err instanceof Error ? err.message : "unknown error"}.`,
-      });
-      return;
+      };
     }
-
-    ws.onerror = (event) => {
-      settle({
-        ok: false,
-        status: 502,
-        code: "network_error",
-        error: `Comfy Cloud's WebSocket reported an error: ${event instanceof Error ? event.message : "connection error"}.`,
-      });
-    };
-
-    ws.onmessage = (event) => {
-      let parsed: ComfyWsMessage;
-      try {
-        parsed = JSON.parse(typeof event.data === "string" ? event.data : String(event.data)) as ComfyWsMessage;
-      } catch {
-        return; // A binary preview frame or malformed text — not this job's completion signal.
-      }
-      if (parsed.data?.prompt_id !== promptId) return;
-
-      if (parsed.type === "executed" && parsed.data.output?.video?.length) {
-        videoFile = parsed.data.output.video[0];
-        return;
-      }
-      if (parsed.type === "execution_success") {
-        if (videoFile) {
-          settle({ ok: true, videoFile });
-        } else {
-          settle({
-            ok: false,
-            status: 502,
-            code: "no_video_output",
-            error: "Comfy Cloud's job finished successfully but reported no video output to download.",
-          });
-        }
-        return;
-      }
-      if (parsed.type === "execution_error") {
-        settle({
-          ok: false,
-          status: 502,
-          code: "upstream_error",
-          error: `Comfy Cloud's job failed: ${parsed.data.exception_message ?? "unknown error"}.`,
-        });
-      }
-    };
-  });
+    await sleep(pollIntervalMs);
+  }
 }
 
 export type DownloadOutputOutcome = { ok: true; bytes: Uint8Array } | ComfyCloudFailure;
@@ -495,66 +521,74 @@ export async function downloadComfyCloudOutput(
   }
 }
 
-export interface LtxAudioToVideoWorkflowInputs {
+export interface Ltx23Ia2vWorkflowInputs {
+  /** Filename `uploadComfyCloudInput` stored the plate still under. */
   imageFilename: string;
+  /** Filename `uploadComfyCloudInput` stored this plate's sliced vocal
+   * audio under. */
   audioFilename: string;
+  /** The shot prompt, sent as-is (see this module's doc comment on
+   * `buildCloudIa2vPrompt`, deliberately not ported). */
   prompt: string;
-  model: string;
-  seed?: number;
+  /** Output length in seconds — an ordinary graph input here, with no
+   * hosted-node ceiling to work around. */
+  durationSec: number;
+  filenamePrefix?: string;
+}
+
+/** The five template node ids this app ever patches — the same five
+ * the original repo's `runLtxCloudIa2v` patches, and the only five. */
+const IA2V_NODE_IMAGE = "269";
+const IA2V_NODE_AUDIO = "276";
+const IA2V_NODE_PROMPT = "340:319";
+const IA2V_NODE_DURATION = "340:331";
+const IA2V_NODE_SAVE = "341";
+
+type TemplateNode = { class_type?: string; inputs?: Record<string, unknown> };
+
+function patchNodeInputs(graph: Record<string, unknown>, nodeId: string, patch: Record<string, unknown>): void {
+  const node = graph[nodeId] as TemplateNode | undefined;
+  if (!node?.inputs) {
+    // Template and code have drifted — a deploy-time mistake, not a
+    // user outcome. Throwing here fails loudly at build/render time
+    // rather than silently submitting an unpatched graph that would
+    // render someone else's plate.
+    throw new Error(`LTX 2.3 IA2V template is missing node ${nodeId} (or its inputs) — template and code have drifted.`);
+  }
+  Object.assign(node.inputs, patch);
 }
 
 /**
- * Builds the one workflow graph this feature ever submits — API-format
- * JSON (`{ [nodeId]: { class_type, inputs } }`, edges as `[sourceNodeId,
- * outputIndex]` — ComfyUI's own universal graph-export shape, not
- * specific to this node), wiring together:
- * - `LoadImage` (node `"1"`) — the selected plate's own still, already
- *   uploaded via `uploadComfyCloudInput`.
- * - `LoadAudio` (node `"2"`) — this plate's own sliced vocal-performance
- *   audio (`lib/mp3Slice.ts`), also already uploaded.
- * - `LtxApi25AudioToVideo` (node `"3"`) — the actual partner-node call;
- *   inputs match that node's own documented schema exactly (`audio`,
- *   `model`, `prompt`, `seed`, optional `image` — docs.comfy.org/
- *   built-in-nodes/LtxApi25AudioToVideo). Its own documented behavior:
- *   the **audio's length sets the output video's duration** (2-20s,
- *   raises an error outside that range) — this is why the plate's
- *   sliced audio window, not a separate duration field, is what
- *   actually controls how long the rendered clip runs.
- * - `SaveVideo` (node `"4"`) — writes the node's `video` output so it
- *   shows up in the `executed` WebSocket message
- *   `waitForComfyCloudCompletion` reads. `SaveVideo`'s own exact input
- *   names (`video`, `filename_prefix`) follow ComfyUI's general
- *   save-node convention (matching `SaveImage`'s `images`/
- *   `filename_prefix` shape) rather than a `SaveVideo`-specific doc
- *   page fetched for this build — flagged per this module's "not
- *   live-verified" honesty note.
+ * Builds the one workflow graph this feature submits: a
+ * `structuredClone` of `workflow/LTX_2.3_IA2V_Cloud.json` with exactly
+ * five node inputs patched. The clone is per call on purpose —
+ * concurrent requests on the same warm serverless instance must not be
+ * able to patch each other's graph, and the imported template object
+ * itself is never mutated.
+ *
+ * | node | input | value |
+ * |---|---|---|
+ * | `269` `LoadImage` | `image` | uploaded plate filename |
+ * | `276` `LoadAudio` | `audio` | uploaded mp3 filename |
+ * | `340:319` `PrimitiveString` | `value` | the prompt |
+ * | `340:331` `PrimitiveFloat` | `value` | duration in seconds |
+ * | `341` `SaveVideo` | `filename_prefix` | default `video/skidmarks_ltx` |
+ *
+ * **Everything else in the graph stays exactly as the template has it**
+ * — the checkpoint, the `talkvid-3k` ID LoRA that holds a face through
+ * motion, the samplers, the VAE chain. Don't "improve" any of it: this
+ * is the graph with 100+ real renders behind it.
  */
-export function buildLtxAudioToVideoWorkflow(inputs: LtxAudioToVideoWorkflowInputs): Record<string, unknown> {
-  return {
-    "1": {
-      class_type: "LoadImage",
-      inputs: { image: inputs.imageFilename },
-    },
-    "2": {
-      class_type: "LoadAudio",
-      inputs: { audio: inputs.audioFilename },
-    },
-    "3": {
-      class_type: "LtxApi25AudioToVideo",
-      inputs: {
-        audio: ["2", 0],
-        image: ["1", 0],
-        model: inputs.model,
-        prompt: inputs.prompt,
-        seed: inputs.seed ?? 42,
-      },
-    },
-    "4": {
-      class_type: "SaveVideo",
-      inputs: {
-        video: ["3", 0],
-        filename_prefix: "skidmarks_ltx",
-      },
-    },
-  };
+export function buildLtx23Ia2vWorkflow(inputs: Ltx23Ia2vWorkflowInputs): Record<string, unknown> {
+  const graph = structuredClone(LTX_23_IA2V_TEMPLATE) as unknown as Record<string, unknown>;
+
+  patchNodeInputs(graph, IA2V_NODE_IMAGE, { image: inputs.imageFilename });
+  patchNodeInputs(graph, IA2V_NODE_AUDIO, { audio: inputs.audioFilename });
+  patchNodeInputs(graph, IA2V_NODE_PROMPT, { value: inputs.prompt });
+  patchNodeInputs(graph, IA2V_NODE_DURATION, { value: inputs.durationSec });
+  patchNodeInputs(graph, IA2V_NODE_SAVE, {
+    filename_prefix: inputs.filenamePrefix ?? DEFAULT_LTX_FILENAME_PREFIX,
+  });
+
+  return graph;
 }

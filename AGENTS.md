@@ -79,15 +79,15 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Word-level transcription (lyrics timing) | **Real** — ElevenLabs Scribe only, no other provider | `app/api/skidmarks/transcribe/route.ts` |
 | Energy heuristic (vocal/instrumental fallback) | **Real**, client-side, no key needed | `lib/audioAnalysis.ts` |
 | Plate *still* generation | **Real** — xAI Grok Imagine *image* API | `app/api/skidmarks/generate-still/route.ts`, `lib/plateGeneration.ts` |
-| Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to `localStorage` (the existing session-state mirror — see the "no `localStorage`" note below for what's actually exempt from that) | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `components/SkidmarksClipStub.tsx` |
+| Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to **Neon** now (one session row per studio owner — see the "no `localStorage`" note below) | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `lib/skidmarksSession-server.ts`, `components/SkidmarksClipStub.tsx` |
 | Per-plate select + tick | **Real** — a small corner control on each filled plate tile (radio-style, one plate selected per clip at a time) plus a filled/empty tick for "already has a saved render"; see `lib/skidmarks.ts`'s `resolveSelectedPlateId` | `components/SkidmarksClipStub.tsx` |
-| Per-plate opt-in *video* render | **Real, three backends now, routed by Vocal vs. Instrumental, plus a real H3/Grok switch on Instrumental — no persistent picker.** Vocal clips → **Comfy Cloud's LTX-2.5 `AudioToVideo` partner node** (`COMFY_CLOUD_API_KEY`), driven by a real frame-sliced (`lib/mp3Slice.ts`) window of the attached song's own vocal audio (`mp3.audioUrl`), 5–20s — unchanged, no switch. Instrumental/B-roll clips → **MiniMax H3** (`MINIMAX_API_KEY`, optional `MINIMAX_GROUP_ID`) **by default** (Stuart's 2026-09-13 "H3 please, for this smoke" lock, superseding the older "never auto-assign H3" *still-image* cost lock below — the two are separate fields, see `SkidmarksInstrumentalVideoModel`'s doc comment), 5–15s, first-frame (optionally first+last-frame) image-to-video; **xAI Grok Imagine video** stays fully wired one tap away, same 5–15s range — a small H3/Grok switch lives *inside* the existing two-tap Render confirm, added on Stuart's own explicit ask ("a single H3 \| Grok choice inside the existing two-tap Render confirm"), persisted per clip (`SkidmarksClipSegment.instrumentalVideoModel`). Either way: animates **the one selected plate's own still only**, one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`). **Honesty note**: neither the Comfy/LTX nor the MiniMax H3 path is live-verified in this sandbox (no `COMFY_CLOUD_API_KEY`/`MINIMAX_API_KEY` available here) — see `lib/comfyCloud.ts`'s and `lib/minimaxH3.ts`'s own module doc comments; the H3 request/response shapes are mirrored from the original Skidmarks repo's own real H3 client, not invented. | `app/api/skidmarks/generate-clip/route.ts`, `lib/comfyCloud.ts`, `lib/minimaxH3.ts`, `lib/mp3Slice.ts`, `lib/clipGeneration.ts`, `lib/skidmarks.ts`, `components/SkidmarksClipRender.tsx` |
+| Per-plate opt-in *video* render | **Real, three backends now, routed by Vocal vs. Instrumental, plus a real H3/Grok switch on Instrumental — no persistent picker.** Vocal clips → **Comfy Cloud running the full LTX 2.3 IA2V graph** (`workflow/LTX_2.3_IA2V_Cloud.json`, `COMFY_CLOUD_API_KEY`), driven by a real frame-sliced (`lib/mp3Slice.ts`) window of the attached song's own vocal audio (`mp3.audioUrl`), 5–30s — no switch. This path used to call Comfy's hosted `LtxApi25AudioToVideo` partner node; that never survived a real call (see `lib/comfyCloud.ts`'s module doc comment) and the graph the original Skidmarks repo actually renders with replaced it. Instrumental/B-roll clips → **MiniMax H3** (`MINIMAX_API_KEY`, optional `MINIMAX_GROUP_ID`) **by default** (Stuart's 2026-09-13 "H3 please, for this smoke" lock, superseding the older "never auto-assign H3" *still-image* cost lock below — the two are separate fields, see `SkidmarksInstrumentalVideoModel`'s doc comment), 5–15s, first-frame (optionally first+last-frame) image-to-video; **xAI Grok Imagine video** stays fully wired one tap away, same 5–15s range — a small H3/Grok switch lives *inside* the existing two-tap Render confirm, added on Stuart's own explicit ask ("a single H3 \| Grok choice inside the existing two-tap Render confirm"), persisted per clip (`SkidmarksClipSegment.instrumentalVideoModel`). Either way: animates **the one selected plate's own still only**, one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`). **Honesty note**: neither the Comfy/LTX nor the MiniMax H3 path is live-verified in this sandbox (no `COMFY_CLOUD_API_KEY`/`MINIMAX_API_KEY` available here) — see `lib/comfyCloud.ts`'s and `lib/minimaxH3.ts`'s own module doc comments. Both are ported from the original Skidmarks repo's own real clients rather than invented, but **a passing test suite is not proof either renders**: the only proof for LTX is Stuart tapping Vocal Render on his iPhone after a deploy and a shelf clip playing. | `app/api/skidmarks/generate-clip/route.ts`, `lib/comfyCloud.ts`, `lib/minimaxH3.ts`, `lib/mp3Slice.ts`, `lib/clipGeneration.ts`, `lib/skidmarks.ts`, `components/SkidmarksClipRender.tsx` |
 | Per-plate render duration | **Real, auto-computed** — `segmentLengthSec / plateCount`, clamped to `[5, 15]`s (Grok's documented ceiling), no UI picker | `lib/clipGeneration.ts`'s `computePlateDurationSec` |
 | Render persistence | **Real**, per-**plate** now (not per-clip — see the pathname migration note below) — saved to durable Vercel Blob storage, survives a refresh; download uses a numeric (lettered once a clip has >1 plate) filename for Resolve. **Exactly one render per `(segmentId, plateId)` is an enforced invariant, not just a convention** — see the "exactly-one-render" note below | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
 | Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**, cards laid out in one `overflow-x-auto` horizontal strip (not a vertical stack) so a phone with several renders doesn't turn into one huge scroll; "download all" zip/sequential-fallback stays reachable underneath the strip. Each card has an explicit small **Download** pill (same `rounded-full` shape/size as Remove, tiny download icon — still the existing `buildForceDownloadUrl`/Blob `?download=1` mechanism and numeric/lettered filename, never the native `<video>` share/⋯ menu) plus a **Remove** control — deletes that plate's persisted Blob render(s) and clears its tick, never touches the plate's still/shot/motion prompts (those are separate, `localStorage`-only state) | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts`, `lib/clipRenders.ts`'s `deletePersistedClipRender`/`buildForceDownloadUrl` |
 | MP3 audio → Vercel Blob | **Real** — the attached MP3's own audio bytes upload client-side-direct to Blob at attach time so **playback survives a refresh**, honestly labeled when unconfigured/failed | `lib/mp3Blob.ts`, `components/SkidmarksMp3Card.tsx` |
 | Auto-plate from a short brief | **Real** — fills *empty* plate slots across the whole clip list with real xAI-generated stills off a small heuristic planner (never an LLM call against the brief), **then stops**; never overwrites a filled plate, never renders video | `lib/autoPlate.ts`, `components/SkidmarksAutoPlate.tsx` |
-| Clip start/end nudge | **Real** — a compact −1s/+1s stepper (`SkidmarksClipTimingNudge`) at the top of each clip's expanded panel lets Stuart slip that clip's `startSec`/`endSec` after transcription/analysis lands, since ElevenLabs Scribe timing is "mostly right but sometimes 3-4 seconds off." Segments are always contiguous, so a nudge moves the **shared cut point** with the neighboring clip — the previous clip's `endSec` (start-nudge) or next clip's `startSec` (end-nudge) shifts by the same amount, which is what keeps the whole timeline gap-free/overlap-free automatically; see `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary` doc comment for why that beat a clamp-only design. Clamped to `[0, durationSec]` and a `MIN_NUDGE_SEGMENT_SEC` (1s) floor on either side of the moved boundary; free-edit within those bounds, not a fixed ±few-seconds cap. **Never re-runs ElevenLabs Scribe or the energy heuristic** — only edits the already-resolved segment times already in `session.mp3.segments`, and never touches `segmentsSource`/plates/shot prompt/model. Persisted the same `localStorage` way every other segment field already is. | `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary`/`nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd`, `components/SkidmarksClipTimingNudge.tsx`, `components/SkidmarksClipTimeline.tsx`, `components/SkidmarksClipStub.tsx` |
+| Clip start/end nudge | **Real** — a compact −1s/+1s stepper (`SkidmarksClipTimingNudge`) at the top of each clip's expanded panel lets Stuart slip that clip's `startSec`/`endSec` after transcription/analysis lands, since ElevenLabs Scribe timing is "mostly right but sometimes 3-4 seconds off." Segments are always contiguous, so a nudge moves the **shared cut point** with the neighboring clip — the previous clip's `endSec` (start-nudge) or next clip's `startSec` (end-nudge) shifts by the same amount, which is what keeps the whole timeline gap-free/overlap-free automatically; see `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary` doc comment for why that beat a clamp-only design. Clamped to `[0, durationSec]` and a `MIN_NUDGE_SEGMENT_SEC` (1s) floor on either side of the moved boundary; free-edit within those bounds, not a fixed ±few-seconds cap. **Never re-runs ElevenLabs Scribe or the energy heuristic** — only edits the already-resolved segment times already in `session.mp3.segments`, and never touches `segmentsSource`/plates/shot prompt/model. Persisted the same way every other segment field already is — which as of #57 means the Neon session row, not `localStorage`. | `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary`/`nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd`, `components/SkidmarksClipTimingNudge.tsx`, `components/SkidmarksClipTimeline.tsx`, `components/SkidmarksClipStub.tsx` |
 | Finished-song archive | **Real** — "Archive" snapshots the live band+mp3 (segments, plates, prompts, motion text) to Vercel Blob JSON + carries forward the mp3's own audio URL, lists in a page-bottom shelf, "Open in editor" restores it (auto-archiving whatever's currently live first), "Download project zip" bundles prompts/stills/renders/audio "as practical." No Neon — not patterned anywhere in this repo yet (see Env vars) | `lib/skidmarksArchive.ts`, `app/api/skidmarks/archive/route.ts`, `app/api/skidmarks/blob-upload/route.ts`, `components/SkidmarksArchiveShelf.tsx` |
 | Whole-song **"Generate Clips"** button | **Stub, deliberately** — never auto-renders every clip in the song | `components/SkidmarksClipTimeline.tsx` |
 | Voice, in-app stitch | Not built | — |
@@ -141,18 +141,104 @@ was charged, and that it won't show up in the shelf or survive a
 refresh — never just a quiet "Rendered ✓" tick with nothing to actually
 show for it.
 
-**No `localStorage` for genuinely new durable state.** The existing
+**No `localStorage` anywhere for Skidmarks studio state — the whole
 `lib/skidmarks.ts` session mirror (bands/session/segments/plates,
-including plate stills as `data:` URLs) is still `localStorage`-backed
-— that's pre-existing debt this PR didn't create or fix, and adding a
-field to an existing plate/segment (`motionPrompt`, `selectedPlateId`)
-follows that same existing pattern, not a new one. But the **archive of
-record** for a finished song, and the MP3's own durable audio copy, are
-both genuinely new durable state added in this pass — both go straight
-to Vercel Blob (JSON metadata + JSON snapshot + media), never
-`localStorage`, per the hard lock. Neon is still not patterned anywhere
-in this repo (see Env vars) — when it lands, it should replace *all* of
-this `localStorage` session state, not just the archive.
+selections, prompts, motion text) now lives in Neon, not
+`localStorage`.** This is a hard, repeated Stuart lock ("never
+localStorage for studio state of record"), and the literal fix for a
+real bug: the old `localStorage` mirror raced with itself across phone
+storage/tab-suspend behavior and silently wiped tagged plates/prompts.
+`cachedState` is still the synchronous in-memory value every mutator
+reads/writes (`useSyncExternalStore` needs a synchronous snapshot, and
+a network call can't be one), but its *durable* copy is now a single
+Neon row (`lib/skidmarksSession-server.ts`, one fixed single-tenant
+`owner_id` — this app has no auth system), read via one `GET /api/
+skidmarks/session` per page load and written via a debounced,
+serialized `PUT` after every local mutation — see `lib/skidmarks.ts`'s
+"Neon-backed session persistence" doc comment for the exact hydrate/
+push implementation and its two race guards. `localStorage` is fully
+gone from this file; grep it and the only remaining `localStorage`
+matches in this whole file are comments describing what used to be
+there or unrelated field-shape docs. Media (MP3 audio, clip renders,
+archive snapshots — plate stills are still `data:` URLs inside the
+Neon row for now, not yet Blob-backed) still goes straight to Vercel
+Blob, unchanged by this migration; see Env vars below for
+`DATABASE_URL`.
+
+**The `localStorage` quota machinery is gone — Neon replaced it.**
+Historical context, because the bug it chased was real: a clip's own
+timing stayed correct (small, persisted early) while its plates
+reverted to empty dashed placeholders — `persist()` used to swallow a
+failed `localStorage.setItem` completely silently, so nothing past the
+point iOS Safari's tight per-origin quota was hit had actually reached
+disk. Two fixes landed for that, and **only one of them survives**:
+
+1. **Kept, and still load-bearing**: an *uploaded* plate still already
+   went through `readImageFileAsDataUrl`'s downscale pass, but a
+   *generated* still (`generatePlateStill`) was persisted straight off
+   xAI's raw response with no size cap at all — it's downscaled the
+   same way via `downscaleDataUrlImage` (1024px ceiling) right where
+   `SkidmarksClipStub`'s Generate flow receives it. Don't remove this
+   on the grounds that the quota is gone: plate stills still travel as
+   base64 `data:` URLs *inside* the Neon row, so the cap is what keeps
+   that row — and every `PUT` carrying it — a sane size over a phone
+   connection.
+2. **Deleted**: `describeSkidmarksPersistFailure`,
+   `getSkidmarksPersistFailure`, `getSkidmarksStorageWarning`,
+   `exceedsSkidmarksStorageWarningThreshold`, `lastPersistFailure`,
+   `lastPersistWarning`, `STORAGE_SIZE_WARNING_BYTES`,
+   `STORAGE_SIZE_WARNING_MESSAGE`, their two `useSyncExternalStore`
+   subscriptions in `useSkidmarksStudio`, and their four `describe`
+   blocks. `persist()` no longer writes to `localStorage` at all, so
+   none of that code could ever fire again — leaving it in would have
+   shipped UI structurally incapable of showing.
+
+The need it served is met by `SkidmarksSessionSyncState` instead:
+`"error"` carries Neon's own failure reason verbatim, `"unconfigured"`
+says plainly that edits won't survive a refresh. Same "a save that
+didn't happen must never look like a success" principle, reporting on
+the store that actually exists. **If the sheet shows "Session storage
+isn't connected here", `DATABASE_URL` is not reaching that deployment
+— that banner is the honest signal working, not a bug.**
+
+Also kept from that same pass, and neither one was `localStorage`-
+specific: the `setSkidmarksMp3Duration` clobber guard, and
+`SkidmarksAutoPlate`'s execution loop re-checking the *live* store (not
+its own stale, planned-up-front `segments` snapshot) immediately before
+writing each still back, so a plate Stuart fills manually mid-run can't
+be silently overwritten by that same run's now-stale plan.
+
+**Follow-up on that same report**: Stuart confirmed the wipe cleared
+`shotPrompt` (and the plate stills) together, not stills alone — i.e.
+a whole clip's tagged state, not one field. Re-verified directly
+against the merged code (not memory) that this doesn't point at a gap
+in `hasSkidmarksUserContent` itself — it does check
+`s.shotPrompt.trim().length > 0`, correctly, and all three real
+`buildDefaultSegment`-based rebuild call sites
+(`applySkidmarksAnalysisResult`, `applySkidmarksTranscriptionResult`,
+`setSkidmarksMp3Duration`) are already gated by it. Grepped the whole
+repo for every other write to `.plates`/`.shotPrompt` — every setter
+(`setSkidmarksClipPlateStill`, `setSkidmarksSegmentShotPrompt`,
+`addSkidmarksClipPlate`, `removeSkidmarksClipPlate`,
+`setSkidmarksClipPlateMotionPrompt`) goes through `updateSkidmarksSegment`,
+scoped to one matching segment id, never a sibling; the rendered-clips
+shelf's "Remove" only ever touches its own local render-tracking Map,
+never `lib/skidmarks.ts` state; archive restore only replaces the live
+session after an explicit "Open in editor" tap on one specific row.
+No fourth rebuild path was found. The actual "other path" that blanks
+a whole clip's tagged state as a unit **without** going through any
+`applySkidmarks*Result` function is exactly the `persist()` gap above:
+one `localStorage.setItem` call writes the *entire* state as a single
+JSON blob, so a shot prompt typed and several stills generated after
+the last successful write are all lost together the moment a later
+reload rehydrates from that older, smaller snapshot — this is silent
+data loss from a failed write, not a rebuild function replacing
+anything. **That whole failure mode is now structural history**: the
+state of record is one Neon row written by a debounced, serialized
+`PUT`, not a single `localStorage.setItem` blob, so there is no quota
+left to silently lose a write to. The proactive 3MB warning layer that
+was added on top of the downscale fix has been deleted with the rest of
+the quota machinery (see above).
 
 **A slow real API result must never silently overwrite already-tagged
 plates/prompts, or land on a different attach than the one it was for.**
@@ -205,6 +291,23 @@ resolve/mark functions in `lib/skidmarks.ts`, or `useSkidmarksStudio
 already-tagged content on the *same* attach, and
 `hasSkidmarksUserContent` alone doesn't protect against a stale
 promise for a *different*, since-replaced attach.
+
+**That fix missed one more `mp3`-scoped resolve callback:
+`setSkidmarksMp3Duration`** — real live-QA'd regression, reported after
+#51+#53 had already landed: "clip 1 lost again," same symptom as the
+bug above. This one's driven by the `<audio>` element's own
+`loadedmetadata` probe (`SkidmarksMp3Card`), not analysis/
+transcription, and it had neither guard — it unconditionally rebuilt
+`segments` via `buildDemoSegments(durationSec)` whenever
+`durationSec === null && segmentsSource === "seed-fallback"`. iOS
+Safari can defer `loadedmetadata` well past attach (its power-saving
+media policy can hold it until Stuart actually taps Play), leaving a
+real window to have already tagged a clip on the seed-fallback timeline
+before this fires. Now takes `attachId` and checks
+`hasSkidmarksUserContent` exactly like the other two. If you add a
+*fourth* `mp3`-scoped resolve path later, give it both guards too —
+this file's real bug history is now three-for-three on "the first
+fix's shape was right, a sibling callback just didn't get it yet."
 
 ## Plating UX locks — don't reinvent these, don't add a picker
 
@@ -421,26 +524,60 @@ the request, and validate length against `shotPrompt` only.
     $0.08/sec at 768P, $0.13/sec at 2K, first 5 reference images free
     ($0.04 each past that — this feature never sends more than 2).
     This app only ever requests 768P.
-  - **Comfy Cloud LTX-2.5 (Fast)** (Vocal, unchanged): $0.13/sec at
-    1080p (LTX-2.5's only documented output resolution), no
-    per-reference-image surcharge.
+  - **Comfy Cloud, LTX 2.3 IA2V graph** (Vocal): the confirm step
+    estimates $0.13/sec, Lightricks' own published LTX direct-API rate,
+    with no per-reference-image surcharge. **This is a stand-in, not a
+    verified bill** — the graph runs on Comfy Cloud's own GPUs and is
+    billed as Comfy Cloud compute/credits, not as an LTX API call. It's
+    the most honest real number available without a key to check the
+    credit burn against (`lib/clipGeneration.ts`'s
+    `LTX_SECOND_RATE_USD` is the one place to correct it once
+    Stuart's real statement says otherwise).
 - **Real, auto-computed per-plate duration** — `segmentLengthSec /
   plateCount`, clamped to `[MIN_CLIP_DURATION_SEC, MAX_CLIP_DURATION_SEC]`
   = `[5, 15]` seconds for both Instrumental backends (Grok's documented
   ceiling; MiniMax H3's own real ceiling is `[4, 15]`, looser, so this
   app's existing Grok range already sits safely inside it — no separate
-  H3 duration bounds needed), or `[5, 20]` for Vocal/Comfy-LTX,
+  H3 duration bounds needed), or `[5, 30]` for Vocal/Comfy-LTX,
   computed by `lib/clipGeneration.ts`'s `computePlateDurationSec`/
-  `computeLtxPlateDurationSec`. **Still not a UI picker or an env
-  var** — Stuart never gets a duration field to type into; the number is
-  derived from the clip's own real length and plate count, shown to him
-  read-only in the confirm step. If a future task asks for a manual
-  override, that's a fresh, explicit, code-reviewed ask — this rework
+  `computeLtxPlateDurationSec`. **The Vocal ceiling was `20`, briefly,
+  and is `30` now.** The `20` was real, but it belonged to the hosted
+  `LtxApi25AudioToVideo` partner node, which genuinely hard-rejects
+  driving audio outside `2-20s` in its own `execute()`. It was never a
+  cap on Stuart's actual workflow (many real ~30s LTX renders on his own
+  Comfy Cloud account) because that workflow never used that node. The
+  Vocal path now submits the LTX 2.3 IA2V graph, where duration is an
+  ordinary graph input (node `340:331`) with no such ceiling, so `30`
+  simply matches his demonstrated usage. **A raw `segmentLengthSec /
+  plateCount` past either ceiling must never throw — it always clamps**,
+  and the confirm step always shows that *clamped* number, never the
+  raw pre-clamp one. A second, related real bug (also fixed in the same
+  pass): frame-aligned audio slicing (`lib/mp3Slice.ts`'s
+  `sliceMp3ToTimeRange`) always rounds **outward** to fully cover the
+  requested window, so a plate clamped to *exactly* the ceiling could
+  still get sliced a hair past it — Stuart hit this live at the old 20s
+  ceiling, when the partner node really did reject it (`"This plate's audio slice is 20.0s"`, rejected, even though
+  the request had already been correctly clamped to 20). Fixed by
+  passing the ceiling into `sliceMp3ToTimeRange` as its own
+  `maxDurationSec`, which now trims whole frames off the *end* of an
+  over-long slice instead of erroring — `app/api/skidmarks/generate-
+  clip/route.ts`'s Vocal branch has no upper-bound rejection at all
+  anymore, only a floor check for genuinely too-little-audio-left. If
+  you touch `computePlateDurationSec`/`computeLtxPlateDurationSec`,
+  `sliceMp3ToTimeRange`, or the Vocal branch of `generate-clip/
+  route.ts`, keep both fixes — the clamp prevents an unreasonable
+  *request*, the trim prevents a reasonable one from failing on
+  rounding alone. **Still not a UI picker or an env var** — Stuart never
+  gets a duration field to type into; the number is derived from the
+  clip's own real length and plate count, shown to him read-only in the
+  confirm step. If a future task asks for a manual override, that's a
+  fresh, explicit, code-reviewed ask — this rework
   didn't add one.
 - **Resolution stays hardcoded** per backend (480p for Grok, 768P for
-  MiniMax H3, 1080p for LTX-2.5 — each backend's own cheapest
-  documented tier) — same "not an env var, not a picker" lock across
-  all three.
+  MiniMax H3; on the Vocal/LTX path the equivalent lock is the verified
+  `workflow/LTX_2.3_IA2V_Cloud.json` template itself, submitted
+  unmodified apart from five patched node inputs) — same "not an env
+  var, not a picker" lock across all three.
 - **One render at a time, enforced in code, across the whole song, not
   just the whole clip** (`SkidmarksClipTimeline`'s `renderingKey` lock,
   keyed by `${segmentId}:${plateId}` — a plate-level key now, since a
@@ -503,8 +640,10 @@ the request, and validate length against `shotPrompt` only.
   render only (`app/api/skidmarks/generate-clip/route.ts`'s Comfy/LTX
   branch, `lib/comfyCloud.ts`). Create at platform.comfy.org (an active
   Comfy Cloud subscription is required to run workflows via this API).
-  Used both as the `X-API-Key` header and forwarded a second time in
-  `extra_data.api_key_comfy_org` (LTX-2.5 is a Comfy "Partner Node").
+  Sent as the `X-API-Key` header only. It is **not** forwarded a second
+  time in `extra_data.api_key_comfy_org` — that second copy is a Comfy
+  *partner node* requirement, and the LTX 2.3 graph this app submits
+  has no partner nodes.
   Missing it never blocks an Instrumental clip on either backend
   (H3/Grok, above) — only Vocal renders get this key's own honest
   `missing_api_key` outcome.
@@ -513,11 +652,33 @@ the request, and validate length against `shotPrompt` only.
   serverless ComfyUI instance instead.
 - `COMFY_CLOUD_API_KEY`/`COMFY_URL` are the **only two** Comfy-related
   env vars — confirmed against the original Skidmarks repo's own
-  `.env.example`, not invented here. No model-override var (the LTX
-  tier is hardcoded to `LTX-2.5 (Fast)`, the cheaper of Comfy's two
-  documented tiers) and no "workflow id"/deployment id var — this app
-  submits the full workflow graph itself on each call (`POST /api/
-  prompt`), unlike a deployment-id-based API.
+  `.env.example`, not invented here. No model-override var (the whole
+  model/sampler/LoRA stack lives in the verified
+  `workflow/LTX_2.3_IA2V_Cloud.json` template, imported as a TS JSON
+  module — never read off disk with `fs`, which is fragile on Vercel)
+  and no "workflow id"/deployment id var — this app submits the full
+  workflow graph itself on each call (`POST /api/prompt`, body is just
+  `{ prompt }`), unlike a deployment-id-based API. Job status is polled
+  at `GET /api/jobs/{promptId}` — **plural `jobs`, not
+  `/api/history/{id}`**, which is the local ComfyUI shape; there is no
+  WebSocket anywhere in this path any more (a long-lived socket in a
+  serverless function was never going to be reliable).
+- **Never edit `workflow/LTX_2.3_IA2V_Cloud.json`.** It is copied
+  byte-for-byte from the original Skidmarks repo and has 100+ real
+  renders behind it. `lib/comfyCloud.ts`'s `buildLtx23Ia2vWorkflow`
+  `structuredClone`s it per call and patches exactly five node inputs —
+  `269` `image`, `276` `audio`, `340:319` `value` (prompt), `340:331`
+  `value` (duration), `341` `filename_prefix` — and throws if any of
+  those five is missing. Everything else (checkpoint, the `talkvid-3k`
+  ID LoRA that holds a face through motion, samplers, VAE chain) stays
+  untouched. Two things the original repo does that were deliberately
+  **not** ported, both cheap to add if the first live render shows
+  they're needed: it letterboxes the plate to 16:9 before upload
+  (`letterboxPlateForCloudIa2v` — port it if heads get cropped or the
+  shape is wrong), and it builds a specific Cloud IA2V prompt paragraph
+  with a lip-sync lead line and a style lock (`buildCloudIa2vPrompt` —
+  port it if lip-sync is worse than Skidmarks'). Deck sends the shot
+  prompt as-is.
 - `ELEVENLABS_API_KEY` (or `ELEVEN_LABS_API_KEY` as a fallback name) —
   required for real word-level transcription
   (`app/api/skidmarks/transcribe/route.ts`); missing it falls back to
@@ -555,13 +716,19 @@ the request, and validate length against `shotPrompt` only.
   feature and it could plausibly carry more than a few hundred KB,
   default to this same client-upload pattern rather than a normal JSON
   POST body.
-- **No Neon/Postgres anywhere in this repo yet** — `@neondatabase/
-  serverless`, `drizzle`, `prisma`, etc. are not dependencies, and no
-  connection string env var is read anywhere. The archive of record
-  (this pass) uses Vercel Blob JSON instead, explicitly as an interim
-  answer — see the README's Skidmarks follow-up note for the intended
-  eventual Neon migration, which should absorb the *entire*
-  `lib/skidmarks.ts` session mirror, not just the archive.
+- `DATABASE_URL` (falls back to `DATABASE_URL_UNPOOLED`) — **Neon is
+  now wired**, via `@neondatabase/serverless`'s HTTP driver
+  (`lib/db.ts`). Backs the Skidmarks studio session store
+  (`lib/skidmarksSession-server.ts`, `GET`/`PUT /api/skidmarks/
+  session`) — one row, keyed by a fixed single-tenant
+  `SKIDMARKS_STUDIO_OWNER_ID` (default `"stuart"`; this app has no auth
+  system). Missing it never crashes — every route returns the same
+  honest `configured: false` shape Blob routes already use, and
+  `lib/skidmarks.ts`'s session-sync indicator shows "not saving here"
+  instead of silently pretending edits are durable. The finished-song
+  **archive** (`lib/skidmarksArchive.ts`) still uses Vercel Blob JSON,
+  unchanged by this migration — only the live edit session moved to
+  Neon.
 - None of the above being unset should ever crash anything — every
   route returns an honest `missing_api_key`/`unconfigured` outcome
   instead. If you add a new real API call, match that shape.
