@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  addSkidmarksClipPlate,
   applySkidmarksAnalysisResult,
   applySkidmarksTranscriptionResult,
   attachSkidmarksMp3,
@@ -7,12 +8,14 @@ import {
   defaultSegmentModel,
   getSkidmarksSnapshot,
   markSkidmarksAnalysisFailed,
+  MAX_PLATES_PER_CLIP,
   normalizeSkidmarksSegment,
+  removeSkidmarksClipPlate,
   SKIDMARKS_MODELS,
   selectSkidmarksBand,
+  setSkidmarksClipPlateStill,
   setSkidmarksSegmentModel,
   setSkidmarksSegmentShotPrompt,
-  setSkidmarksSegmentStill,
   skidmarksChecklistState,
   type SkidmarksClipSegment,
 } from "./skidmarks";
@@ -259,52 +262,163 @@ describe("SEED_BANDS", () => {
   });
 });
 
-describe("setSkidmarksSegmentStill", () => {
+describe("setSkidmarksClipPlateStill", () => {
   beforeEach(() => {
     selectSkidmarksBand("jack-ash");
     attachSkidmarksMp3(createMp3Attachment("track.mp3", 120));
   });
 
-  it("sets a still (upload or generated) and clears it back to no still at all with null", () => {
+  it("starts every fresh segment with exactly one blank plate slot", () => {
     const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    expect(segment.plates).toHaveLength(1);
+    expect(segment.plates[0].still).toBeUndefined();
+  });
 
-    setSkidmarksSegmentStill(segment.id, {
+  it("sets a still (upload or generated) on a plate slot and clears it back to empty with null", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    const plateId = segment.plates[0].id;
+
+    setSkidmarksClipPlateStill(segment.id, plateId, {
       dataUrl: "data:image/jpeg;base64,AAAA",
       source: "upload",
       createdAt: 1000,
     });
     let updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
-    expect(updated.still).toEqual({ dataUrl: "data:image/jpeg;base64,AAAA", source: "upload", createdAt: 1000 });
+    expect(updated.plates[0].still).toEqual({
+      dataUrl: "data:image/jpeg;base64,AAAA",
+      source: "upload",
+      createdAt: 1000,
+    });
 
-    setSkidmarksSegmentStill(segment.id, {
+    setSkidmarksClipPlateStill(segment.id, plateId, {
       dataUrl: "data:image/jpeg;base64,BBBB",
       source: "generated",
       createdAt: 2000,
     });
     updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
-    expect(updated.still).toEqual({ dataUrl: "data:image/jpeg;base64,BBBB", source: "generated", createdAt: 2000 });
+    expect(updated.plates[0].still).toEqual({
+      dataUrl: "data:image/jpeg;base64,BBBB",
+      source: "generated",
+      createdAt: 2000,
+    });
 
-    setSkidmarksSegmentStill(segment.id, null);
+    setSkidmarksClipPlateStill(segment.id, plateId, null);
     updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
-    expect(updated.still).toBeUndefined();
+    expect(updated.plates[0].still).toBeUndefined();
     // Cleared outright, not just set to `undefined` — matches every
-    // other optional field's "unset" shape on this type.
-    expect(updated).not.toHaveProperty("still");
+    // other optional field's "unset" shape on this type. The slot itself
+    // still exists (this only clears the still, not the slot).
+    expect(updated.plates[0]).not.toHaveProperty("still");
+    expect(updated.plates).toHaveLength(1);
   });
 
-  it("never touches shotPrompt or model when setting/clearing a still", () => {
+  it("never touches shotPrompt or model when setting/clearing a plate's still", () => {
     const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
     setSkidmarksSegmentShotPrompt(segment.id, "a door creaks open");
 
-    setSkidmarksSegmentStill(segment.id, {
+    setSkidmarksClipPlateStill(segment.id, segment.plates[0].id, {
       dataUrl: "data:image/jpeg;base64,AAAA",
       source: "upload",
       createdAt: 1000,
     });
 
     const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    // Shared per-clip prompt, untouched by a plate-level change.
     expect(updated.shotPrompt).toBe("a door creaks open");
     expect(updated.model).toBe(segment.model);
+  });
+
+  it("only ever updates the matching plate id, leaving sibling plates untouched", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    addSkidmarksClipPlate(segment.id);
+    const withTwo = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    const [first, second] = withTwo.plates;
+
+    setSkidmarksClipPlateStill(segment.id, second.id, {
+      dataUrl: "data:image/jpeg;base64,KEYHOLE",
+      source: "generated",
+      createdAt: 3000,
+    });
+
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.plates.find((p) => p.id === first.id)?.still).toBeUndefined();
+    expect(updated.plates.find((p) => p.id === second.id)?.still?.dataUrl).toBe(
+      "data:image/jpeg;base64,KEYHOLE"
+    );
+  });
+});
+
+describe("addSkidmarksClipPlate / removeSkidmarksClipPlate", () => {
+  beforeEach(() => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("track.mp3", 120));
+  });
+
+  it("appends an empty plate slot per tap, for the door \u2192 keyhole \u2192 Jack case", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+
+    addSkidmarksClipPlate(segment.id);
+    addSkidmarksClipPlate(segment.id);
+
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.plates).toHaveLength(3);
+    expect(updated.plates.every((p) => p.still === undefined)).toBe(true);
+    // Every slot has its own stable id, even though all three start blank.
+    expect(new Set(updated.plates.map((p) => p.id)).size).toBe(3);
+  });
+
+  it("caps the strip at MAX_PLATES_PER_CLIP \u2014 further taps no-op", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+
+    for (let i = 0; i < MAX_PLATES_PER_CLIP + 3; i++) {
+      addSkidmarksClipPlate(segment.id);
+    }
+
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.plates).toHaveLength(MAX_PLATES_PER_CLIP);
+  });
+
+  it("removes an empty plate slot outright", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    addSkidmarksClipPlate(segment.id);
+    const withTwo = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    const secondPlateId = withTwo.plates[1].id;
+
+    removeSkidmarksClipPlate(segment.id, secondPlateId);
+
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.plates).toHaveLength(1);
+    expect(updated.plates.some((p) => p.id === secondPlateId)).toBe(false);
+  });
+
+  it("never removes the last remaining plate slot", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    const onlyPlateId = segment.plates[0].id;
+
+    removeSkidmarksClipPlate(segment.id, onlyPlateId);
+
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.plates).toHaveLength(1);
+    expect(updated.plates[0].id).toBe(onlyPlateId);
+  });
+
+  it("never removes a plate slot that already holds a real still", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    addSkidmarksClipPlate(segment.id);
+    const withTwo = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    const [first, second] = withTwo.plates;
+
+    setSkidmarksClipPlateStill(segment.id, first.id, {
+      dataUrl: "data:image/jpeg;base64,DOOR",
+      source: "generated",
+      createdAt: 4000,
+    });
+
+    removeSkidmarksClipPlate(segment.id, first.id);
+
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.plates).toHaveLength(2);
+    expect(updated.plates.map((p) => p.id)).toEqual([first.id, second.id]);
   });
 });
 
@@ -371,7 +485,7 @@ describe("normalizeSkidmarksSegment", () => {
     expect(normalizeSkidmarksSegment(seedanceLegacy).model).toBe("seedance");
   });
 
-  it("has no `still` at all for a pre-plate-stills session, rather than a fabricated placeholder", () => {
+  it("backfills exactly one blank plate slot for a pre-plate-stills session with no still at all", () => {
     const legacy = {
       id: "seg-5",
       startSec: 0,
@@ -381,12 +495,14 @@ describe("normalizeSkidmarksSegment", () => {
       shotPrompt: "",
     } as unknown as SkidmarksClipSegment;
 
-    expect(normalizeSkidmarksSegment(legacy).still).toBeUndefined();
-    expect(normalizeSkidmarksSegment(legacy)).not.toHaveProperty("still");
+    const normalized = normalizeSkidmarksSegment(legacy);
+    expect(normalized.plates).toHaveLength(1);
+    expect(normalized.plates[0].still).toBeUndefined();
+    expect(normalized).not.toHaveProperty("still"); // legacy top-level field is gone, not just empty
   });
 
-  it("preserves a real, valid still across a reload", () => {
-    const withStill = {
+  it("migrates a pre-multi-plate session's single top-level `still` into the new plates array", () => {
+    const withLegacyStill = {
       id: "seg-6",
       startSec: 0,
       endSec: 30,
@@ -396,14 +512,17 @@ describe("normalizeSkidmarksSegment", () => {
       still: { dataUrl: "data:image/jpeg;base64,AAAA", source: "generated", createdAt: 12345 },
     } as unknown as SkidmarksClipSegment;
 
-    expect(normalizeSkidmarksSegment(withStill).still).toEqual({
+    const normalized = normalizeSkidmarksSegment(withLegacyStill);
+    expect(normalized).not.toHaveProperty("still");
+    expect(normalized.plates).toHaveLength(1);
+    expect(normalized.plates[0].still).toEqual({
       dataUrl: "data:image/jpeg;base64,AAAA",
       source: "generated",
       createdAt: 12345,
     });
   });
 
-  it("drops a corrupt/malformed `still` rather than trusting it as-is", () => {
+  it("drops a corrupt/malformed legacy top-level `still` rather than trusting it as-is, backfilling one blank slot instead", () => {
     const base = {
       id: "seg-7",
       startSec: 0,
@@ -419,7 +538,7 @@ describe("normalizeSkidmarksSegment", () => {
       normalizeSkidmarksSegment({
         ...base,
         still: { dataUrl: "https://example.com/temp.jpg", source: "upload", createdAt: 1 },
-      } as unknown as SkidmarksClipSegment).still
+      } as unknown as SkidmarksClipSegment).plates[0].still
     ).toBeUndefined();
 
     // Unrecognized `source`.
@@ -427,7 +546,7 @@ describe("normalizeSkidmarksSegment", () => {
       normalizeSkidmarksSegment({
         ...base,
         still: { dataUrl: "data:image/jpeg;base64,AAAA", source: "ai", createdAt: 1 },
-      } as unknown as SkidmarksClipSegment).still
+      } as unknown as SkidmarksClipSegment).plates[0].still
     ).toBeUndefined();
 
     // Missing `createdAt`.
@@ -435,13 +554,67 @@ describe("normalizeSkidmarksSegment", () => {
       normalizeSkidmarksSegment({
         ...base,
         still: { dataUrl: "data:image/jpeg;base64,AAAA", source: "upload" },
-      } as unknown as SkidmarksClipSegment).still
+      } as unknown as SkidmarksClipSegment).plates[0].still
     ).toBeUndefined();
 
     // Not an object at all.
     expect(
       normalizeSkidmarksSegment({ ...base, still: "data:image/jpeg;base64,AAAA" } as unknown as SkidmarksClipSegment)
-        .still
+        .plates[0].still
     ).toBeUndefined();
+  });
+
+  it("re-validates a real post-multi-plate session's plates array, keeping valid stills and stable ids", () => {
+    const withPlates = {
+      id: "seg-8",
+      startSec: 0,
+      endSec: 40,
+      label: "instrumental",
+      model: "grok",
+      shotPrompt: "door, then keyhole",
+      plates: [
+        { id: "plate-door", still: { dataUrl: "data:image/jpeg;base64,DOOR", source: "generated", createdAt: 1 } },
+        { id: "plate-keyhole" },
+      ],
+    } as unknown as SkidmarksClipSegment;
+
+    const normalized = normalizeSkidmarksSegment(withPlates);
+    expect(normalized.plates).toHaveLength(2);
+    expect(normalized.plates[0]).toEqual({
+      id: "plate-door",
+      still: { dataUrl: "data:image/jpeg;base64,DOOR", source: "generated", createdAt: 1 },
+    });
+    expect(normalized.plates[1]).toEqual({ id: "plate-keyhole" });
+  });
+
+  it("drops a corrupt still inside a real plates array without dropping the slot itself", () => {
+    const withCorruptPlate = {
+      id: "seg-9",
+      startSec: 0,
+      endSec: 40,
+      label: "instrumental",
+      model: "grok",
+      shotPrompt: "",
+      plates: [{ id: "plate-1", still: { dataUrl: "https://example.com/stale.jpg", source: "upload", createdAt: 1 } }],
+    } as unknown as SkidmarksClipSegment;
+
+    const normalized = normalizeSkidmarksSegment(withCorruptPlate);
+    expect(normalized.plates).toHaveLength(1);
+    expect(normalized.plates[0]).toEqual({ id: "plate-1" });
+  });
+
+  it("backfills one blank slot if a real session's `plates` array is somehow empty", () => {
+    const emptyPlates = {
+      id: "seg-10",
+      startSec: 0,
+      endSec: 40,
+      label: "instrumental",
+      model: "grok",
+      shotPrompt: "",
+      plates: [],
+    } as unknown as SkidmarksClipSegment;
+
+    const normalized = normalizeSkidmarksSegment(emptyPlates);
+    expect(normalized.plates).toHaveLength(1);
   });
 });

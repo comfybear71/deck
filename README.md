@@ -1199,21 +1199,22 @@ now (see "Explicitly out of scope" below).
      things — and, in a later pass than the chrome-lock rewrite itself,
      the first of the two now holds a **real** plate still, not just an
      empty stand-in:
-     - **One plate placeholder/still** — a dashed-border box (same
-       visual language as the other empty stubs already in Skidmarks,
-       e.g. `SkidmarksGeneratePopup`'s `EmptySlot` and
-       `SkidmarksMembersModule`'s dashed avatar ring) while empty, no
-       location, no gradient, no duration label (Stuart doesn't know a
-       clip's actual rendered length until it's actually generated, so a
-       number on an empty placeholder would just be invented). **Plate
-       stills: upload or generate, real either way** — tapping the
-       empty box opens a tiny two-option popover (Upload / Generate, no
-       other chrome):
+     - **A horizontal strip of plate slots** (originally just one —
+       see "Multiple plates per clip" below for why it's now a strip) —
+       each slot a dashed-border box (same visual language as the other
+       empty stubs already in Skidmarks, e.g. `SkidmarksGeneratePopup`'s
+       `EmptySlot` and `SkidmarksMembersModule`'s dashed avatar ring)
+       while empty, no location, no gradient, no duration label (Stuart
+       doesn't know a clip's actual rendered length until it's actually
+       generated, so a number on an empty placeholder would just be
+       invented). **Plate stills: upload or generate, real either
+       way** — tapping an empty slot opens a tiny two-option popover
+       (Upload / Generate, no other chrome):
        - **Upload** opens a real native `accept="image/*"` file picker;
          the picked photo goes through the same
          `readImageFileAsDataUrl` downscale-to-JPEG pass the band
-         cover/member avatar pickers already use, and is stored as this
-         clip's `still` (`SkidmarksClipSegment.still`, a `data:` URL —
+         cover/member avatar pickers already use, and is stored as that
+         slot's still (`SkidmarksClipPlateSlot.still`, a `data:` URL —
          round-trips through `localStorage` same as a picked avatar).
        - **Generate** calls a real backend — **xAI's Grok Imagine API**
          (`lib/plateGeneration.ts`'s `buildPlateGenerationRequest` +
@@ -1254,11 +1255,75 @@ now (see "Explicitly out of scope" below).
        room to read), still deliberately short overall (no lyric dumps,
        no long captions, no helper paragraph underneath, and never a
        hardcoded scene description — this field is entirely
-       Stuart-authored) and bound to a single `shotPrompt` value per
-       clip. Editing it only ever updates the prompt text — it does
-       **not** touch `model` (an earlier pass re-derived the model from
-       the prompt's language; that's gone per the cost lock below) and
-       does not touch an existing `still` either (see above).
+       Stuart-authored) and bound to a single `shotPrompt` value **shared
+       by every plate slot on that clip** (see "Multiple plates per clip"
+       below for why it's shared rather than per-slot). Editing it only
+       ever updates the prompt text — it does **not** touch `model` (an
+       earlier pass re-derived the model from the prompt's language;
+       that's gone per the cost lock below) and does not touch an
+       existing still either (see above).
+
+     **Multiple plates per clip (the 40s-door problem)**: Stuart's
+     original report on this exact live track — Concrete's intro maps
+     as one long `0:00–0:40` Instrumental clip, and a single generated
+     door still for the whole 40 seconds is creatively useless; he needs
+     door → keyhole → Jack seated, each its own plate, without pulling
+     out Resolve for a fine cut just to add two more cut points. The
+     fix stays as small as the chrome lock allows — **not** a second
+     timeline row per beat, just a **horizontal strip of plate slots on
+     the same one clip**:
+       - A fresh clip still starts with **exactly one** dashed empty
+         plate — first-use/empty state is unchanged from the
+         single-plate build above.
+       - A small **"+"** at the end of the strip appends one more empty
+         slot (`addSkidmarksClipPlate` in `lib/skidmarks.ts`), capped at
+         `MAX_PLATES_PER_CLIP` (6) so the strip (and `localStorage`)
+         can't grow unbounded. Each slot keeps every gesture the
+         single-plate box already had — tap-to-upload/generate,
+         tap-to-replace once filled, the corner "×", and press-and-hold
+         to clear — completely unchanged, just scoped to one slot
+         instead of the whole clip. An empty slot beyond the first can
+         also be removed outright (a small "×" in its other corner,
+         `removeSkidmarksClipPlate`) to undo an accidental "+" — but
+         only while it's still empty; a slot already holding a real
+         still has to be cleared first, so one tap can never discard a
+         generated/uploaded image by accident.
+       - **One shared shot prompt for the whole clip, not one per
+         plate** — the smallest control that still lets each plate show
+         different content, per Stuart's explicit preference: a
+         generated still already bakes in whatever the prompt said *at
+         generation time*, so editing the shared prompt before tapping
+         Generate on each slot in turn ("a door creaking open" → tap
+         Generate on slot 1 → edit to "a keyhole with a sliver of light"
+         → tap Generate on slot 2 → edit to "Jack Ash seated, backlit" →
+         tap Generate on slot 3) gets door/keyhole/Jack without a second
+         prompt field repeating the same idea three times over. See
+         `lib/skidmarks.ts`'s `SkidmarksClipSegment` doc comment for the
+         same reasoning in the data layer.
+       - **Continuity still makes sense across the strip**: the "Use
+         last plate" checkbox in a slot's Generate popover now offers
+         the still-slot immediately before it *in that same clip's
+         strip* (so keyhole can continue from door, and Jack can
+         continue from keyhole) — falling back to the *previous clip's*
+         last plate for the strip's very first slot, exactly like the
+         single-plate build's cross-clip continuity already worked.
+       - **Data shape**: `SkidmarksClipSegment.still` (a single optional
+         `SkidmarksPlateStill`) is replaced by
+         `SkidmarksClipSegment.plates: SkidmarksClipPlateSlot[]` (never
+         empty — `id` + optional `still` per slot). A session saved
+         before this shipped had at most one top-level `still`;
+         `normalizeSkidmarksSegment` migrates that into a one-slot
+         `plates` array on load rather than dropping it, same honest
+         "never lose real data across a shape change" pattern this
+         file already uses for a legacy `model`/`shotPrompt`.
+       - **Explicitly out of scope for this pass**: the earlier
+         clip-*timeline*-split idea (breaking `0:00–0:40` into several
+         separate rows with their own time ranges) was considered and
+         **rejected** — Stuart's actual ask was more plates on the
+         *same* clip, not more rows on the timeline, so there is no
+         "Split" control anywhere in this build. Per-plate prompts were
+         also considered and set aside in favor of the one shared
+         prompt above.
 
      **Model routing, vocalist auto-include, and Jack Ash's character
      lock** (`lib/plateGeneration.ts`) — all automatic, no picker/toggle
@@ -1466,13 +1531,16 @@ now (see "Explicitly out of scope" below).
   timestamps once some provider responds (kept even for a `"sparse"`
   result), even though only the merged `segments` render today);
   `SkidmarksClipSegment` (`id`, `startSec`, `endSec`, `label`, `model`,
-  `shotPrompt`, `uncensoredPlateStills`, optional `still:
-  SkidmarksPlateStill` — no `plateId`/`cameraAngle`; both were deleted
-  outright along with their pickers); `SkidmarksPlateStill` (`dataUrl` —
-  always a `data:` URL, never a bare/temporary remote one, so it
-  round-trips through `localStorage`; `source: "upload" | "generated"`,
-  informational only, not rendered as a badge anywhere per the chrome
-  lock; `createdAt`); and
+  `shotPrompt` — one shared value for every plate on the clip, see
+  "Multiple plates per clip" above — `uncensoredPlateStills`, and
+  `plates: SkidmarksClipPlateSlot[]`, always non-empty — no
+  `plateId`/`cameraAngle`; both were deleted outright along with their
+  pickers); `SkidmarksClipPlateSlot` (`id`, optional `still:
+  SkidmarksPlateStill` — the single-still field this replaced);
+  `SkidmarksPlateStill` (`dataUrl` — always a `data:` URL, never a
+  bare/temporary remote one, so it round-trips through `localStorage`;
+  `source: "upload" | "generated"`, informational only, not rendered as
+  a badge anywhere per the chrome lock; `createdAt`); and
   `SkidmarksState` (`bands`,
   `session: { projectKind, bandId, mp3 }`, `removedSeedBandIds` —
   hand-seeded band ids Stuart has deleted, so `normalizeState` doesn't

@@ -17,7 +17,7 @@ interface SkidmarksDetailSheetProps {
 
 /**
  * Skidmarks' detail sheet — the locked Music-video director flow,
- * through the clip/segment timeline's empty-still + shot-prompt tags (voice,
+ * through the clip/segment timeline's plate-strip + shot-prompt tags (voice,
  * animate, and stitch are explicitly out of scope for this build; see
  * `lib/skidmarks.ts`'s module doc comment). **One continuous scroll**:
  * the landing's three project-type tiles stay put at the top, and each
@@ -51,7 +51,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     removeMp3,
     setMp3Duration,
     setSegmentShotPrompt,
-    setSegmentStill,
+    setClipPlateStill,
+    addClipPlate,
+    removeClipPlate,
   } = useSkidmarksStudio();
 
   const activeBand = bands.find((b) => b.id === session.bandId);
@@ -214,7 +216,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 transcriptionProvider={session.mp3.transcriptionProvider}
                 band={activeBand}
                 onSetSegmentShotPrompt={setSegmentShotPrompt}
-                onSetSegmentStill={setSegmentStill}
+                onSetClipPlateStill={setClipPlateStill}
+                onAddClipPlate={addClipPlate}
+                onRemoveClipPlate={removeClipPlate}
               />
             )}
           </div>

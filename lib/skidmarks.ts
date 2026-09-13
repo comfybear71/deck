@@ -82,13 +82,19 @@
  * cadence itself when it's showing (a deterministic
  * verse/bridge/lead/instrumental scaffold). **Plate stills are real
  * now, though** (a later pass than the one this module doc comment
- * otherwise describes): a clip's `still` (`SkidmarksPlateStill`) is
+ * otherwise describes): each slot in a clip's plate strip
+ * (`SkidmarksClipSegment.plates`, a `SkidmarksClipPlateSlot[]`) holds
  * either a photo Stuart uploaded or a real image
  * `lib/plateGeneration.ts` generated via xAI's Grok Imagine API
  * (`app/api/skidmarks/generate-still/route.ts`) — see that module's doc
  * comment for what's actually wired vs. still a stub (the *video*
  * render pass stays a stub everywhere in this build; only the one-frame
- * still is real).
+ * still is real). **A clip can hold more than one plate slot** — a
+ * "+" control on the expanded panel appends another empty slot to that
+ * same clip's horizontal strip (`addSkidmarksClipPlate`), so one long
+ * Instrumental clip (the 40s-door problem) can get a door plate, a
+ * keyhole plate, and a Jack-seated plate without splitting the timeline
+ * row itself into three separate clips.
  *
  * Persistence mirrors `lib/control-plane.ts` / `lib/graphLayout.ts`: an
  * in-memory cache is the synchronous source of truth the UI reads via
@@ -110,19 +116,19 @@
  * this build: voice, animate, and stitch, and any actual clip *video*
  * rendering ("Generate Clips" is a stub button — see
  * `SkidmarksClipTimeline`) — the flow stops dead after the clip
- * timeline's one still-or-empty-placeholder + shot-prompt tag per clip
- * (`SkidmarksClipStub`; the still itself is real — upload or generate,
- * see `lib/plateGeneration.ts` — the *video* pass past it is not).
- * Camera angle and the location-plate picker are both **gone outright**
- * — see the QA fix that removed the multi-card plate carousel — and the
- * model row went with them: `SKIDMARKS_MODELS` (LTX/Grok/H3/Seedance) and
- * the cost-locked `defaultSegmentModel` auto-assignment (LTX or Grok
- * only, never H3/Seedance) both still exist and still run, but as of
- * this pass there is **no model picker in the UI at all** — Stuart
- * didn't ask for one back, and a tiny model badge is only meant to
- * reappear once a clip has a real still (see `SkidmarksClipStub`'s doc
- * comment). Nothing here can quietly start spending against a pricier
- * model on its own either way.
+ * timeline's plate strip + shared shot-prompt tag per clip
+ * (`SkidmarksClipStub`; each plate's still is real — upload or
+ * generate, see `lib/plateGeneration.ts` — the *video* pass past it is
+ * not). Camera angle and the location-plate picker are both **gone
+ * outright** — see the QA fix that removed the multi-card plate
+ * carousel — and the model row went with them: `SKIDMARKS_MODELS`
+ * (LTX/Grok/H3/Seedance) and the cost-locked `defaultSegmentModel`
+ * auto-assignment (LTX or Grok only, never H3/Seedance) both still
+ * exist and still run, but as of this pass there is **no model picker
+ * in the UI at all** — Stuart didn't ask for one back, and a tiny model
+ * badge is only meant to reappear once a clip has a real still (see
+ * `SkidmarksClipStub`'s doc comment). Nothing here can quietly start
+ * spending against a pricier model on its own either way.
  */
 
 import type { VocalAnalysisResult } from "./audioAnalysis";
@@ -427,9 +433,9 @@ export function remapLegacySkidmarksModel(modelId: string, vocal: boolean): Skid
  * deliberately **no** location/plate field — Stuart's live QA on an
  * earlier pass (a horizontal row of named location cards: Neon Stage,
  * Rainy Alley, Desert Highway...) rejected that outright as a picker he
- * never asked for, so the expanded panel (`SkidmarksClipStub`) now
- * shows one plain empty-still placeholder per clip instead, with no
- * location concept behind it at all.
+ * never asked for, so the expanded panel (`SkidmarksClipStub`) shows a
+ * plain empty-still placeholder per plate instead, with no location
+ * concept behind it at all.
  * `model` starts **auto-assigned** (via `defaultSegmentModel`) — the
  * whole point of the default rule is that Stuart never has to think
  * about it before typing a shot prompt. Per Stuart's cost lock,
@@ -439,7 +445,23 @@ export function remapLegacySkidmarksModel(modelId: string, vocal: boolean): Skid
  * see `SkidmarksClipStub`'s doc comment), never automatically and never
  * by editing `shotPrompt` (that only ever updates the prompt text — see
  * `setSkidmarksSegmentShotPrompt`).
- */
+ *
+ * **Multiple plates per clip** (added for the 40s-door problem — a
+ * single Instrumental clip that needs a door plate, then a keyhole
+ * plate, then a Jack-seated plate, without splitting the timeline row
+ * itself into three separate time ranges): `plates` is a **horizontal
+ * strip of independent still slots** on this one clip, sharing this one
+ * `startSec`/`endSec`/`label`/`shotPrompt`. **Deliberately one shared
+ * `shotPrompt` for the whole strip, not one per plate** — Stuart's ask
+ * was the smallest control that still lets each plate show different
+ * content: editing the shared prompt before tapping Generate on a given
+ * plate is enough (each generated still already bakes in whatever the
+ * prompt said *at generation time* — the prompt itself doesn't need to
+ * be remembered per plate afterward), so a per-plate prompt field would
+ * just be a second form control repeating the same idea. Always has at
+ * least one slot (`buildBlankPlateSlot`) — a clip is never left with a
+ * pate strip; see `addSkidmarksClipPlate`/`removeSkidmarksClipPlate` for
+ * how the strip grows/shrinks and `MAX_PLATES_PER_CLIP` for its cap. */
 export interface SkidmarksClipSegment {
   id: string;
   startSec: number;
@@ -447,11 +469,11 @@ export interface SkidmarksClipSegment {
   label: SkidmarksSegmentLabel;
   model: SkidmarksModelId;
   /** Plain-language "what happens in this shot" — the one control
-   * surface on the expanded panel, alongside the empty-still
-   * placeholder. Deliberately short (no lyric dumps, no long
-   * captions). Defaults to `""`; a single value per clip, never
-   * mirrored across multiple cards. Does **not** drive `model` — see
-   * `setSkidmarksSegmentShotPrompt`. */
+   * surface on the expanded panel, alongside the plate strip.
+   * Deliberately short (no lyric dumps, no long captions). Defaults to
+   * `""`; **one shared value for every plate in `plates`**, never a
+   * per-plate field — see this interface's doc comment for why. Does
+   * **not** drive `model` — see `setSkidmarksSegmentShotPrompt`. */
   shotPrompt: string;
   /** SIRAY's narrow carve-out: **uncensored plate stills only** — never
    * read by anything animation-related (the stub "Generate Clips"
@@ -461,13 +483,27 @@ export interface SkidmarksClipSegment {
    * `setSkidmarksSegmentUncensoredPlateStills`. Not wired into the main
    * clip UI in this pass — see that constant's doc comment. */
   uncensoredPlateStills: boolean;
-  /** The real plate still for this clip's placeholder, once one exists —
-   * either a photo Stuart uploaded or a real image `lib/plateGeneration.ts`
-   * generated via xAI's Grok Imagine API (`app/api/skidmarks/
-   * generate-still/route.ts`). `undefined` until then, matching every
-   * other optional field here — `SkidmarksClipStub` renders the dashed
-   * empty placeholder whenever this is unset. Set/replaced/cleared via
-   * `setSkidmarksSegmentStill`; a `null` call clears it back to empty. */
+  /** The horizontal strip of plate slots for this clip — see this
+   * interface's doc comment. Always non-empty; a fresh clip starts with
+   * exactly one blank slot (the single dashed placeholder Stuart's
+   * already used to). */
+  plates: SkidmarksClipPlateSlot[];
+}
+
+/** One slot in a clip's plate strip — either the empty dashed
+ * placeholder (`still` unset) or a real still, once one exists. `id` is
+ * stable across an upload/generate/replace/clear on that same slot (so
+ * React keys and continuity/removal logic don't depend on array index),
+ * but a `null` call to `setSkidmarksClipPlateStill` clears `still` back
+ * to unset on the *same* slot rather than removing it — removing the
+ * slot outright is the separate `removeSkidmarksClipPlate`. */
+export interface SkidmarksClipPlateSlot {
+  id: string;
+  /** The real still for this slot, once one exists — either a photo
+   * Stuart uploaded or a real image `lib/plateGeneration.ts` generated
+   * via xAI's Grok Imagine API (`app/api/skidmarks/generate-still/
+   * route.ts`). `undefined` until then — `SkidmarksClipStub` renders
+   * the dashed empty placeholder whenever this is unset. */
   still?: SkidmarksPlateStill;
 }
 
@@ -494,12 +530,26 @@ export interface SkidmarksPlateStill {
  * rebuilds off the real duration the first time it resolves. */
 const DEMO_SEGMENT_FALLBACK_DURATION_SEC = 210;
 
+/** Caps a clip's plate strip (`SkidmarksClipSegment.plates`) so "+"
+ * can't grow it unbounded — a handful of plates covers the motivating
+ * door → keyhole → Jack case with room to spare, without letting the
+ * horizontal scroll (or `localStorage`, which each plate's still adds
+ * to) grow without limit. `addSkidmarksClipPlate` no-ops past this. */
+export const MAX_PLATES_PER_CLIP = 6;
+
+/** Mints one empty plate slot — the dashed placeholder a fresh clip (or
+ * a fresh "+" tap) always starts a slot as. */
+function buildBlankPlateSlot(): SkidmarksClipPlateSlot {
+  return { id: generateId("plate") };
+}
+
 /** Shared segment builder — mints a fresh `SkidmarksClipSegment` with
- * every default field (`model`/`shotPrompt`/`uncensoredPlateStills`)
- * set per the locked cost-lock rules, off just a time range + label.
- * Used by both `buildDemoSegments` (the seed cadence) and
- * `buildSegmentsFromVocalRanges` (real transcription/heuristic output)
- * so neither path can drift from the other's defaults. */
+ * every default field (`model`/`shotPrompt`/`uncensoredPlateStills`/a
+ * single blank `plates` slot) set per the locked cost-lock rules, off
+ * just a time range + label. Used by both `buildDemoSegments` (the seed
+ * cadence) and `buildSegmentsFromVocalRanges` (real transcription/
+ * heuristic output) so neither path can drift from the other's
+ * defaults. */
 function buildDefaultSegment(
   startSec: number,
   endSec: number,
@@ -513,6 +563,7 @@ function buildDefaultSegment(
     model: defaultSegmentModel(label),
     shotPrompt: "",
     uncensoredPlateStills: false,
+    plates: [buildBlankPlateSlot()],
   };
 }
 
@@ -852,6 +903,17 @@ export function createMp3Attachment(
  * or `plateId` from the deleted location-plate picker) are simply
  * dropped — this function builds a fresh object rather than spreading
  * `raw`, so they don't linger in the next `persist()` write.
+ *
+ * - `plates` — a session saved **before** the multi-plate strip shipped
+ *   only ever had a single top-level `still` (optional). That single
+ *   still (if any) migrates into a one-slot `plates` array
+ *   (`normalizeLegacyStillToPlates`) rather than being dropped, so an
+ *   already-generated/uploaded still survives this shape change. A
+ *   session saved **after** the strip shipped has a real `plates` array
+ *   already, which just gets each slot's `still` re-validated
+ *   (`normalizeSkidmarksPlateSlot`) the same way the old single `still`
+ *   always was. Either way this never leaves a clip with zero plates —
+ *   an empty/missing `plates` array still backfills to one blank slot.
  */
 /** Validates a rehydrated `still` — must be a real `data:` URL with a
  * recognized `source` and a numeric `createdAt`, else it's dropped
@@ -867,12 +929,35 @@ function normalizeSkidmarksStill(value: unknown): SkidmarksPlateStill | undefine
   return { dataUrl: v.dataUrl, source: v.source, createdAt: v.createdAt };
 }
 
+/** Validates one rehydrated plate slot — keeps its `id` if it's a real
+ * non-empty string (so continuity/removal logic keyed off `id` survives
+ * a reload), mints a fresh one otherwise, and re-validates `still` the
+ * same way a top-level still always was. */
+function normalizeSkidmarksPlateSlot(value: unknown): SkidmarksClipPlateSlot {
+  const v = (value && typeof value === "object" ? value : {}) as Partial<SkidmarksClipPlateSlot>;
+  const id = typeof v.id === "string" && v.id.length > 0 ? v.id : generateId("plate");
+  const still = normalizeSkidmarksStill(v.still);
+  return still ? { id, still } : { id };
+}
+
+/** Migration path for a pre-multi-plate session: its one top-level
+ * `still` (if any) becomes the lone slot in a fresh `plates` array,
+ * rather than being silently dropped when the shape changed. */
+function normalizeLegacyStillToPlates(rawStill: unknown): SkidmarksClipPlateSlot[] {
+  const still = normalizeSkidmarksStill(rawStill);
+  return [still ? { id: generateId("plate"), still } : buildBlankPlateSlot()];
+}
+
 export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksClipSegment {
   const r = raw as Partial<SkidmarksClipSegment> & Record<string, unknown>;
   const vocal = SKIDMARKS_SEGMENT_LABEL_META[raw.label]?.vocal ?? false;
   const shotPrompt = typeof r.shotPrompt === "string" ? r.shotPrompt : "";
   const uncensoredPlateStills = typeof r.uncensoredPlateStills === "boolean" ? r.uncensoredPlateStills : false;
-  const still = normalizeSkidmarksStill(r.still);
+  const rawPlates = Array.isArray(r.plates) ? r.plates : undefined;
+  const plates =
+    rawPlates && rawPlates.length > 0
+      ? rawPlates.map(normalizeSkidmarksPlateSlot)
+      : normalizeLegacyStillToPlates(r.still);
   return {
     id: raw.id,
     startSec: raw.startSec,
@@ -881,7 +966,7 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
     model: remapLegacySkidmarksModel(String(raw.model), vocal),
     shotPrompt,
     uncensoredPlateStills,
-    ...(still ? { still } : {}),
+    plates,
   };
 }
 
@@ -1526,22 +1611,58 @@ export function setSkidmarksSegmentShotPrompt(segmentId: string, shotPrompt: str
   updateSkidmarksSegment(segmentId, (s) => ({ ...s, shotPrompt }));
 }
 
-/** Sets, replaces, or clears a clip's plate still — the empty-placeholder
- * slot's one piece of real state (`SkidmarksClipSegment.still`). Passing
- * `null` clears it back to the empty dashed placeholder (Stuart's "small
- * clear/X on the plate" ask) — this is the **only** way a still is ever
- * removed; nothing here auto-clears a still on its own (e.g. editing the
- * shot prompt afterward doesn't stale-invalidate it — regenerating is an
- * explicit tap, same spirit as `setSkidmarksSegmentShotPrompt` never
- * touching `model`). */
-export function setSkidmarksSegmentStill(segmentId: string, still: SkidmarksPlateStill | null): void {
+/** Sets, replaces, or clears one plate slot's still — the multi-plate
+ * successor to the old single-still `setSkidmarksSegmentStill`, scoped
+ * to one slot in `SkidmarksClipSegment.plates` by `plateId`. Passing
+ * `null` clears that slot back to its empty dashed placeholder (Stuart's
+ * original "small clear/X on the plate" ask, now per-slot) — it does
+ * **not** remove the slot itself (see `removeSkidmarksClipPlate` for
+ * that); nothing here auto-clears a still on its own (e.g. editing the
+ * shared shot prompt afterward doesn't stale-invalidate any slot —
+ * regenerating is an explicit tap, same spirit as
+ * `setSkidmarksSegmentShotPrompt` never touching `model`). No-ops if the
+ * segment or that specific plate slot doesn't exist. */
+export function setSkidmarksClipPlateStill(
+  segmentId: string,
+  plateId: string,
+  still: SkidmarksPlateStill | null
+): void {
+  updateSkidmarksSegment(segmentId, (s) => ({
+    ...s,
+    plates: s.plates.map((p) => {
+      if (p.id !== plateId) return p;
+      return still === null ? { id: p.id } : { id: p.id, still };
+    }),
+  }));
+}
+
+/** The "+" control on a clip's plate strip — appends one more empty
+ * slot so Stuart can generate/upload a different still for it (door →
+ * keyhole → Jack, all under the same 0:00–0:40 clip). Capped at
+ * `MAX_PLATES_PER_CLIP`; no-ops past that cap or if the segment doesn't
+ * exist. */
+export function addSkidmarksClipPlate(segmentId: string): void {
   updateSkidmarksSegment(segmentId, (s) => {
-    if (still === null) {
-      const next = { ...s };
-      delete next.still;
-      return next;
-    }
-    return { ...s, still };
+    if (s.plates.length >= MAX_PLATES_PER_CLIP) return s;
+    return { ...s, plates: [...s.plates, buildBlankPlateSlot()] };
+  });
+}
+
+/** Removes one plate slot outright — undoing an accidental "+" (or a
+ * slot Stuart cleared and no longer wants taking up room in the strip).
+ * Deliberately narrow: only ever removes a slot that's currently
+ * **empty** (clearing a real still is `setSkidmarksClipPlateStill(...,
+ * null)`, a separate, non-destructive step — this function never
+ * discards a real still as a side effect of removing its slot), and
+ * only when the clip has **more than one** slot, so `plates` can never
+ * end up empty. No-ops (silently keeps the slot) if either guard fails,
+ * or if the segment/slot doesn't exist. */
+export function removeSkidmarksClipPlate(segmentId: string, plateId: string): void {
+  updateSkidmarksSegment(segmentId, (s) => {
+    if (s.plates.length <= 1) return s;
+    const plate = s.plates.find((p) => p.id === plateId);
+    if (!plate || plate.still) return s;
+    return { ...s, plates: s.plates.filter((p) => p.id !== plateId) };
   });
 }
 
