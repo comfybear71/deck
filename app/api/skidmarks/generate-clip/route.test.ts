@@ -419,16 +419,19 @@ describe("POST /api/skidmarks/generate-clip", () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    it("re-downloads the finished render and uploads it to Blob under this clip's stable pathname, returning the durable URL", async () => {
+    it("re-downloads the finished render and uploads it to Blob under this plate's stable pathname, returning the durable URL", async () => {
       mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
       fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
-      putMock.mockResolvedValueOnce({ url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/01_0000-0040_render.mp4" });
+      putMock.mockResolvedValueOnce({
+        url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
+      });
 
       const res = await POST(
         postRequest({
           prompt: "slow zoom",
           referenceImageDataUrls: [TINY_DATA_URL],
           segmentId: "seg-1",
+          plateId: "plate-1",
           clipIndex: 1,
           startSec: 0,
           endSec: 40,
@@ -438,14 +441,14 @@ describe("POST /api/skidmarks/generate-clip", () => {
 
       expect(res.status).toBe(200);
       expect(body).toEqual({
-        videoUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/01_0000-0040_render.mp4",
+        videoUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
         durationSec: 5,
         persisted: true,
       });
 
       expect(putMock).toHaveBeenCalledTimes(1);
       const [pathname, , options] = putMock.mock.calls[0];
-      expect(pathname).toBe("skidmarks/clip-renders/seg-1/01_0000-0040_render.mp4");
+      expect(pathname).toBe("skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4");
       expect(options).toMatchObject({
         access: "public",
         contentType: "video/mp4",
@@ -458,6 +461,61 @@ describe("POST /api/skidmarks/generate-clip", () => {
       expect(redownloadUrl).toBe("https://vidgen.x.ai/clip.mp4");
     });
 
+    it("letters the pathname's basename when the client reports more than one plate on this clip", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+      fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      putMock.mockResolvedValueOnce({
+        url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-2/01b_0000-0040_render.mp4",
+      });
+
+      await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
+          plateId: "plate-2",
+          plateIndex: 1,
+          plateCount: 3,
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+
+      const [pathname] = putMock.mock.calls[0];
+      expect(pathname).toBe("skidmarks/clip-renders/seg-1/plate-2/01b_0000-0040_render.mp4");
+    });
+
+    it("forwards a real, clamped durationSec to xAI's own `duration` parameter", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+
+      await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          durationSec: 13,
+        })
+      );
+
+      const [, startInit] = fetchMock.mock.calls[0];
+      expect(JSON.parse(startInit.body as string).duration).toBe(13);
+    });
+
+    it("clamps an out-of-range durationSec into [MIN_CLIP_DURATION_SEC, MAX_CLIP_DURATION_SEC]", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+
+      await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          durationSec: 999,
+        })
+      );
+
+      const [, startInit] = fetchMock.mock.calls[0];
+      expect(JSON.parse(startInit.body as string).duration).toBe(15);
+    });
+
     it("still returns the render (xAI's temporary URL), honestly flagged as unsaved, when Blob upload itself fails", async () => {
       mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
       fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
@@ -468,6 +526,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
           prompt: "slow zoom",
           referenceImageDataUrls: [TINY_DATA_URL],
           segmentId: "seg-1",
+          plateId: "plate-1",
           clipIndex: 1,
           startSec: 0,
           endSec: 40,
@@ -491,6 +550,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
           prompt: "slow zoom",
           referenceImageDataUrls: [TINY_DATA_URL],
           segmentId: "seg-1",
+          plateId: "plate-1",
           clipIndex: 1,
           startSec: 0,
           endSec: 40,
@@ -513,6 +573,27 @@ describe("POST /api/skidmarks/generate-clip", () => {
           prompt: "slow zoom",
           referenceImageDataUrls: [TINY_DATA_URL],
           segmentId: "../not/safe",
+          plateId: "plate-1",
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body).toEqual({ videoUrl: "https://vidgen.x.ai/clip.mp4", durationSec: 5 });
+      expect(putMock).not.toHaveBeenCalled();
+    });
+
+    it("skips persistence when plateId is missing, even if segmentId/clipIndex/startSec/endSec are all valid", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+
+      const res = await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
           clipIndex: 1,
           startSec: 0,
           endSec: 40,
@@ -528,25 +609,81 @@ describe("POST /api/skidmarks/generate-clip", () => {
 });
 
 describe("resolvePersistenceTarget", () => {
-  it("returns a normalized target when all four fields are valid", () => {
-    expect(resolvePersistenceTarget({ segmentId: "seg-1", clipIndex: 1.6, startSec: 0.4, endSec: 39.6 })).toEqual({
+  it("returns a normalized target when segmentId/plateId/clipIndex/startSec/endSec are all valid", () => {
+    expect(
+      resolvePersistenceTarget({
+        segmentId: "seg-1",
+        plateId: "plate-1",
+        clipIndex: 1.6,
+        startSec: 0.4,
+        endSec: 39.6,
+      })
+    ).toEqual({
       segmentId: "seg-1",
+      plateId: "plate-1",
       clipIndex: 2,
       startSec: 0,
       endSec: 40,
+      plateLetterIndex: undefined,
     });
   });
 
+  it("sets plateLetterIndex only when plateIndex/plateCount are both given and plateCount > 1", () => {
+    expect(
+      resolvePersistenceTarget({
+        segmentId: "seg-1",
+        plateId: "plate-2",
+        clipIndex: 1,
+        startSec: 0,
+        endSec: 40,
+        plateIndex: 1,
+        plateCount: 3,
+      })
+    ).toMatchObject({ plateLetterIndex: 1 });
+
+    expect(
+      resolvePersistenceTarget({
+        segmentId: "seg-1",
+        plateId: "plate-1",
+        clipIndex: 1,
+        startSec: 0,
+        endSec: 40,
+        plateIndex: 0,
+        plateCount: 1,
+      })
+    ).toMatchObject({ plateLetterIndex: undefined });
+  });
+
   it("returns null when segmentId is missing, empty, or unsafe", () => {
-    expect(resolvePersistenceTarget({ clipIndex: 1, startSec: 0, endSec: 40 })).toBeNull();
-    expect(resolvePersistenceTarget({ segmentId: "", clipIndex: 1, startSec: 0, endSec: 40 })).toBeNull();
-    expect(resolvePersistenceTarget({ segmentId: "../etc", clipIndex: 1, startSec: 0, endSec: 40 })).toBeNull();
+    expect(resolvePersistenceTarget({ plateId: "plate-1", clipIndex: 1, startSec: 0, endSec: 40 })).toBeNull();
+    expect(
+      resolvePersistenceTarget({ segmentId: "", plateId: "plate-1", clipIndex: 1, startSec: 0, endSec: 40 })
+    ).toBeNull();
+    expect(
+      resolvePersistenceTarget({ segmentId: "../etc", plateId: "plate-1", clipIndex: 1, startSec: 0, endSec: 40 })
+    ).toBeNull();
+  });
+
+  it("returns null when plateId is missing, empty, or unsafe", () => {
+    expect(resolvePersistenceTarget({ segmentId: "seg-1", clipIndex: 1, startSec: 0, endSec: 40 })).toBeNull();
+    expect(
+      resolvePersistenceTarget({ segmentId: "seg-1", plateId: "", clipIndex: 1, startSec: 0, endSec: 40 })
+    ).toBeNull();
+    expect(
+      resolvePersistenceTarget({ segmentId: "seg-1", plateId: "../etc", clipIndex: 1, startSec: 0, endSec: 40 })
+    ).toBeNull();
   });
 
   it("returns null when clipIndex/startSec/endSec are missing, non-numeric, or negative", () => {
-    expect(resolvePersistenceTarget({ segmentId: "seg-1", startSec: 0, endSec: 40 })).toBeNull();
-    expect(resolvePersistenceTarget({ segmentId: "seg-1", clipIndex: "1", startSec: 0, endSec: 40 })).toBeNull();
-    expect(resolvePersistenceTarget({ segmentId: "seg-1", clipIndex: -1, startSec: 0, endSec: 40 })).toBeNull();
-    expect(resolvePersistenceTarget({ segmentId: "seg-1", clipIndex: 1, startSec: -5, endSec: 40 })).toBeNull();
+    expect(resolvePersistenceTarget({ segmentId: "seg-1", plateId: "plate-1", startSec: 0, endSec: 40 })).toBeNull();
+    expect(
+      resolvePersistenceTarget({ segmentId: "seg-1", plateId: "plate-1", clipIndex: "1", startSec: 0, endSec: 40 })
+    ).toBeNull();
+    expect(
+      resolvePersistenceTarget({ segmentId: "seg-1", plateId: "plate-1", clipIndex: -1, startSec: 0, endSec: 40 })
+    ).toBeNull();
+    expect(
+      resolvePersistenceTarget({ segmentId: "seg-1", plateId: "plate-1", clipIndex: 1, startSec: -5, endSec: 40 })
+    ).toBeNull();
   });
 });

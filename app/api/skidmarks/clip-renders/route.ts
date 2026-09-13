@@ -35,7 +35,17 @@ export const runtime = "nodejs";
 
 export interface ClipRenderListItem {
   segmentId: string;
+  /** Which plate slot within `segmentId`'s strip this render belongs to
+   * — a clip's plates now render (and persist) independently, so a
+   * render is only ever really identified by the pair, not `segmentId`
+   * alone. See `lib/clipRenderBlob.ts`'s module doc comment. */
+  plateId: string;
   url: string;
+  /** The exact basename this render is stored under — already lettered
+   * (`01a_...`) if this clip had more than one plate at render time.
+   * Trusting the stored basename here means a listing never has to
+   * re-derive the right filename from `clipIndex` alone. */
+  filename: string;
   clipIndex: number;
   startSec: number;
   endSec: number;
@@ -77,7 +87,9 @@ export async function GET(request: Request) {
       if (!parsed || !segmentIdSet.has(parsed.segmentId)) continue;
       renders.push({
         segmentId: parsed.segmentId,
+        plateId: parsed.plateId,
         url: blob.url,
+        filename: parsed.filename,
         clipIndex: parsed.clipIndex,
         startSec: parsed.startSec,
         endSec: parsed.endSec,
