@@ -1506,13 +1506,24 @@ now (see "Explicitly out of scope" below).
     busy panel — Stuart rejected that as jammed on live QA. They now
     live in one page-bottom, collapsible **"Rendered clips"** shelf
     (`components/SkidmarksRenderedClipsShelf.tsx`), **default open**,
-    sorted in timeline order, with the same "download all" zip (falling
-    back to sequential per-clip downloads) reachable from there. A clip's
-    own expanded panel is scoped back down to stills + shot prompt +
-    motion + Render only — nothing video-shaped squashed into it. Both
-    this shelf and each plate's tick share one lookup
-    (`hooks/useSkidmarksClipRenders.ts`, lifted up to
+    sorted in timeline order. A clip's own expanded panel is scoped back
+    down to stills + shot prompt + motion + Render only — nothing
+    video-shaped squashed into it. Both this shelf and each plate's tick
+    share one lookup (`hooks/useSkidmarksClipRenders.ts`, lifted up to
     `SkidmarksDetailSheet` so neither has to re-fetch independently).
+    **Horizontal strip, not a vertical stack** (second live-QA fix, same
+    shelf): once a song had more than a couple of renders, stacking each
+    full-width `<video>` player vertically turned the whole page into
+    one very long scroll on a phone. Each render is now a compact card
+    (fixed `w-44` width, fixed-height video) in one `overflow-x-auto`
+    row — the same iOS-Safari-friendly pattern `SkidmarksClipStub`'s own
+    plate strip already uses (`touch-pan-x` per card, not `touch-none`,
+    so a horizontal drag that starts on top of a `<video>` still scrolls
+    the strip instead of fighting it; `overscroll-x-contain` +
+    `-webkit-overflow-scrolling: touch` on the row). The per-clip
+    download link stays under each card, and the "download all" zip
+    control (falling back to sequential per-clip downloads if the zip
+    step fails) stays reachable underneath the whole strip.
 
   - **MP3 audio → Vercel Blob ("play survives a refresh")**: the
     attached MP3's raw `File` never persisted (still true — a `File`
