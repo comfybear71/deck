@@ -10,6 +10,7 @@ import {
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
   markSkidmarksMp3AudioUnconfigured,
+  markSkidmarksMp3AudioUploaded,
   MAX_PLATES_PER_CLIP,
   normalizeSkidmarksSegment,
   removeSkidmarksClipPlate,
@@ -20,7 +21,6 @@ import {
   selectSkidmarksBand,
   setSkidmarksClipPlateMotionPrompt,
   setSkidmarksClipPlateStill,
-  setSkidmarksMp3AudioUrl,
   setSkidmarksSegmentModel,
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
@@ -684,11 +684,10 @@ describe("setSkidmarksSegmentSelectedPlate / setSkidmarksClipPlateMotionPrompt",
   });
 });
 
-describe("setSkidmarksMp3AudioUrl / markSkidmarksMp3AudioUnconfigured / markSkidmarksMp3AudioFailed", () => {
-  it("records a successful audio upload as a distinct, durable outcome", () => {
-    setSkidmarksMp3AudioUrl("https://x.public.blob.vercel-storage.com/a.mp3");
+describe("markSkidmarksMp3AudioUploaded / markSkidmarksMp3AudioUnconfigured / markSkidmarksMp3AudioFailed", () => {
+  it("records a successful audio upload as a distinct, durable outcome, without ever touching a URL", () => {
+    markSkidmarksMp3AudioUploaded();
     const mp3 = getSkidmarksSnapshot().session.mp3!;
-    expect(mp3.audioUrl).toBe("https://x.public.blob.vercel-storage.com/a.mp3");
     expect(mp3.audioPersistStatus).toBe("done");
     expect(mp3.audioPersistError).toBeUndefined();
   });
@@ -698,7 +697,6 @@ describe("setSkidmarksMp3AudioUrl / markSkidmarksMp3AudioUnconfigured / markSkid
     const mp3 = getSkidmarksSnapshot().session.mp3!;
     expect(mp3.audioPersistStatus).toBe("unconfigured");
     expect(mp3.audioPersistError).toBe("No Blob store connected here.");
-    expect(mp3.audioUrl).toBeUndefined();
   });
 
   it("records a genuine upload failure", () => {
@@ -706,6 +704,17 @@ describe("setSkidmarksMp3AudioUrl / markSkidmarksMp3AudioUnconfigured / markSkid
     const mp3 = getSkidmarksSnapshot().session.mp3!;
     expect(mp3.audioPersistStatus).toBe("failed");
     expect(mp3.audioPersistError).toBe("Network error uploading the audio.");
+  });
+
+  it("createMp3Attachment keeps only the small, inert audioId routing key \u2014 never a URL \u2014 and seeds audioPersistStatus honestly", () => {
+    const withAudio = createMp3Attachment("song.mp3", 120, "audio-abc123");
+    expect(withAudio.audioId).toBe("audio-abc123");
+    expect(withAudio.audioPersistStatus).toBe("uploading");
+    expect((withAudio as unknown as { audioUrl?: unknown }).audioUrl).toBeUndefined();
+
+    const withoutAudio = createMp3Attachment("song.mp3", 120);
+    expect(withoutAudio.audioId).toBeUndefined();
+    expect(withoutAudio.audioPersistStatus).toBeUndefined();
   });
 });
 

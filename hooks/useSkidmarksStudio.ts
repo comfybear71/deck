@@ -3,7 +3,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import { analyzeVocalActivity } from "@/lib/audioAnalysis";
 import { transcribeAudio } from "@/lib/transcription";
-import { uploadSkidmarksMp3Audio } from "@/lib/mp3Blob";
+import { generateMp3AudioId, uploadSkidmarksMp3Audio } from "@/lib/mp3Blob";
 import {
   addSkidmarksClipPlate,
   addSkidmarksLook,
@@ -18,6 +18,7 @@ import {
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
   markSkidmarksMp3AudioUnconfigured,
+  markSkidmarksMp3AudioUploaded,
   markSkidmarksTranscriptionFailed,
   markSkidmarksTranscriptionUnconfigured,
   removeSkidmarksBand,
@@ -32,7 +33,6 @@ import {
   setSkidmarksClipPlateMotionPrompt,
   setSkidmarksClipPlateStill,
   setSkidmarksMemberAvatarImage,
-  setSkidmarksMp3AudioUrl,
   setSkidmarksMp3Duration,
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
@@ -144,17 +144,29 @@ export function useSkidmarksStudio() {
    */
   const attachMp3 = useCallback((file: File) => {
     const token = (analysisTokenRef.current += 1);
-    attachSkidmarksMp3(createMp3Attachment(file.name, null));
+    // Minted *before* the upload starts, and attached to the store
+    // immediately, so the routing key is stable from the very first
+    // render — this is the only audio-related thing that ever lands in
+    // `lib/skidmarks.ts`'s `localStorage`-mirrored session object; the
+    // real playable URL never does (see `SkidmarksMp3Attachment.audioId`'s
+    // doc comment).
+    const audioId = generateMp3AudioId();
+    attachSkidmarksMp3(createMp3Attachment(file.name, null, audioId));
 
     // Real, client-side-direct-to-Blob upload of the audio itself (see
     // `lib/mp3Blob.ts`'s doc comment) — the fix for "play survives a
     // refresh." Runs in the background alongside analysis/
     // transcription; a slow or failed upload never blocks anything else
-    // about this attach.
-    uploadSkidmarksMp3Audio(file).then((outcome) => {
+    // about this attach. The upload's own result URL is deliberately
+    // discarded here — `markSkidmarksMp3AudioUploaded` only records
+    // that the write succeeded, never the URL itself; a fresh Blob
+    // lookup by `audioId` (`SkidmarksMp3Card`'s use of
+    // `fetchSkidmarksMp3AudioUrl`) is always what actually resolves
+    // playback.
+    uploadSkidmarksMp3Audio(file, audioId).then((outcome) => {
       if (analysisTokenRef.current !== token) return; // superseded — drop it
       if (outcome.ok) {
-        setSkidmarksMp3AudioUrl(outcome.url);
+        markSkidmarksMp3AudioUploaded();
       } else if (outcome.unconfigured) {
         markSkidmarksMp3AudioUnconfigured(outcome.message);
       } else {

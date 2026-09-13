@@ -6,6 +6,7 @@ import {
   waveformBars,
   type SkidmarksMp3Attachment,
 } from "@/lib/skidmarks";
+import { fetchSkidmarksMp3AudioUrl } from "@/lib/mp3Blob";
 
 interface SkidmarksMp3CardProps {
   mp3: SkidmarksMp3Attachment | null;
@@ -21,13 +22,15 @@ interface SkidmarksMp3CardProps {
  * local, in-tab object URL takes priority whenever it exists (this
  * session's own picked `File`, no network round trip needed); once
  * that's gone (a page reload dropped the `File` — it never persists,
- * see this file's doc comment) but a durable Blob URL was uploaded at
- * attach time (`mp3.audioUrl`, see `lib/mp3Blob.ts`), that becomes the
- * fallback source instead of leaving playback dead after a refresh.
+ * see this file's doc comment) this falls back to `remoteAudioUrl` — a
+ * URL fetched *fresh* from Blob just now (`fetchSkidmarksMp3AudioUrl`,
+ * called by this component's own effect below), never a value read out
+ * of `lib/skidmarks.ts`'s `localStorage`-mirrored session object.
  * `undefined` when neither is available (no Blob store connected, the
- * upload failed, or this session hasn't attached anything real yet). */
-function resolveAudioSrc(localObjectUrl: string | null, mp3: SkidmarksMp3Attachment | null): string | undefined {
-  return localObjectUrl ?? mp3?.audioUrl ?? undefined;
+ * upload failed/hasn't finished yet, or this session hasn't attached
+ * anything real yet). */
+function resolveAudioSrc(localObjectUrl: string | null, remoteAudioUrl: string | null): string | undefined {
+  return localObjectUrl ?? remoteAudioUrl ?? undefined;
 }
 
 const BAR_COUNT = 40;
@@ -117,8 +120,14 @@ function Waveform({ fileName, progress }: { fileName: string; progress: number }
  * see `lib/audioAnalysis.ts` — plus a real, durable upload of the audio
  * itself to Vercel Blob (`lib/mp3Blob.ts`) so **playback now survives a
  * refresh**: `resolveAudioSrc` below prefers this session's own local
- * object URL when it exists, and falls back to `mp3.audioUrl` (the
- * durable Blob URL) once the local `File`/object URL is gone.
+ * object URL when it exists, and falls back to a URL this component
+ * fetches *fresh from Blob* (`fetchSkidmarksMp3AudioUrl`, keyed off
+ * `mp3.audioId`) once the local `File`/object URL is gone. Per Stuart's
+ * hard lock, that fallback URL is never read out of `lib/skidmarks.ts`'s
+ * `localStorage`-mirrored session object — only the small, inert
+ * `audioId` routing key lives there; the actual playable URL always
+ * comes from a live Blob lookup, same "never trust a cached copy"
+ * pattern `lib/clipRenders.ts` already uses for persisted clip renders.
  */
 export function SkidmarksMp3Card({
   mp3,
@@ -132,12 +141,38 @@ export function SkidmarksMp3Card({
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [remoteAudioUrl, setRemoteAudioUrl] = useState<string | null>(null);
 
   useEffect(() => {
     return () => {
       if (audioUrl) URL.revokeObjectURL(audioUrl);
     };
   }, [audioUrl]);
+
+  // Only bothers Blob once the local, in-tab object URL is gone (a
+  // fresh attach already has real playback via that local URL, so
+  // there's nothing to look up yet — this fires for the actual
+  // "reload dropped the File" case, i.e. exactly when a fallback is
+  // needed). Never reads a cached URL — every mount/`audioId` change
+  // re-asks Blob directly, per Stuart's "no localStorage for the
+  // audio" lock (see `resolveAudioSrc`'s doc comment). Doesn't reset
+  // `remoteAudioUrl` synchronously on a dependency change — a
+  // momentarily-stale value here is harmless (`resolveAudioSrc` always
+  // prefers a real `audioUrl` over it, and it's simply unused once
+  // `mp3` itself goes away) — only the real, resolved answer ever
+  // overwrites it.
+  useEffect(() => {
+    if (audioUrl || !mp3?.audioId) return;
+    let cancelled = false;
+    const audioId = mp3.audioId;
+    fetchSkidmarksMp3AudioUrl(audioId).then((outcome) => {
+      if (cancelled) return;
+      setRemoteAudioUrl(outcome.ok ? outcome.url : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [audioUrl, mp3?.audioId]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -218,7 +253,7 @@ export function SkidmarksMp3Card({
     );
   }
 
-  const audioSrc = resolveAudioSrc(audioUrl, mp3);
+  const audioSrc = resolveAudioSrc(audioUrl, remoteAudioUrl);
 
   return (
     <div className="rounded-2xl border border-rose-400/30 bg-rose-400/[0.03] p-4">
@@ -264,10 +299,10 @@ export function SkidmarksMp3Card({
       </div>
 
       <p className="mt-2 truncate text-[11px] text-white/40">{mp3.fileName}</p>
-      {!audioUrl && mp3.audioUrl && (
+      {!audioUrl && remoteAudioUrl && (
         <p className="mt-1 text-[10px] leading-snug text-white/30">Playing from a saved copy after a refresh.</p>
       )}
-      {!audioUrl && !mp3.audioUrl && mp3.audioPersistStatus === "failed" && (
+      {!audioUrl && !remoteAudioUrl && mp3.audioPersistStatus === "failed" && (
         <p className="mt-1 text-[10px] leading-snug text-amber-200/70">
           {"Audio wasn\u2019t saved this time \u2014 it won\u2019t play after a refresh ("}
           {mp3.audioPersistError ?? "unknown reason"}
