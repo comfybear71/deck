@@ -791,27 +791,28 @@ export interface SkidmarksMp3Attachment {
    * case, which isn't a failure. Surfaced verbatim in the timeline's
    * honesty caption. */
   transcriptionError?: string;
-  /** A durable Vercel Blob URL for the attached MP3's own audio bytes,
-   * once uploaded — the fix for "play survives a refresh": the raw
-   * picked `File` never persists (see this module's doc comment and
-   * `SkidmarksMp3Card`), so before this field existed, a reload always
-   * lost real playback even though every other bit of session state
-   * survived. `useSkidmarksStudio.attachMp3` kicks off a real,
-   * client-side-direct-to-Blob upload (`lib/mp3Blob.ts`, via
-   * `@vercel/blob/client`'s `upload()` — bypasses this app's own
-   * serverless function entirely, so there's no risk of hitting
-   * Vercel's ~4.5MB function-body cap the way a normal API POST would
-   * for a real song-length file) the moment a file's attached; this
-   * field fills in once that upload resolves. `undefined` until then,
-   * or if it never configures/succeeds — see `audioPersistStatus`. */
-  audioUrl?: string;
-  /** Real upload lifecycle for `audioUrl`, mirroring
+  /** A small, inert routing key into the attached MP3's own durable
+   * audio Blob (`lib/mp3AudioPath.ts`, `skidmarks/mp3-audio/{audioId}
+   * .mp3`) — deliberately **not** the Blob URL itself. Per Stuart's
+   * hard lock, nothing about the attached MP3, including its audio,
+   * may depend on `localStorage` for durability; this object is part
+   * of `lib/skidmarks.ts`'s `localStorage`-mirrored session store, so
+   * the real playable URL is never written here — see
+   * `lib/mp3Blob.ts`'s `fetchSkidmarksMp3AudioUrl`, which
+   * `SkidmarksMp3Card` calls fresh, straight against Blob, whenever it
+   * needs a fallback source (i.e. once the session's own local object
+   * URL is gone, typically after a reload). Minted once per attach
+   * (`useSkidmarksStudio.attachMp3`); `undefined` for a session saved
+   * before this field existed. */
+  audioId?: string;
+  /** Real upload lifecycle for the `audioId` Blob write, mirroring
    * `transcriptionStatus`'s honesty shape: `"uploading"` while in
-   * flight, `"done"` once `audioUrl` is set, `"unconfigured"` when no
-   * Blob store is connected here (expected, not an error), `"failed"`
-   * for a genuine upload failure. Never blocks anything — the MP3 card
-   * still plays fine from the local, in-tab object URL either way; this
-   * only governs whether playback also survives a refresh. */
+   * flight, `"done"` once the upload actually succeeded, `"unconfigured"`
+   * when no Blob store is connected here (expected, not an error),
+   * `"failed"` for a genuine upload failure. Never blocks anything —
+   * the MP3 card still plays fine from the local, in-tab object URL
+   * either way; this only governs whether playback also survives a
+   * refresh. */
   audioPersistStatus?: "uploading" | "done" | "unconfigured" | "failed";
   audioPersistError?: string;
 }
@@ -977,7 +978,15 @@ export function buildMockLook(prompt: string, photoreal: number): SkidmarksLook 
  * they don't produce anything usable. */
 export function createMp3Attachment(
   fileName: string,
-  durationSec: number | null
+  durationSec: number | null,
+  /** Minted by the caller (`useSkidmarksStudio.attachMp3`, via
+   * `lib/mp3AudioPath.ts`'s `generateMp3AudioId`) *before* the real
+   * audio upload even starts, so the routing key is stable and present
+   * from the very first render — never a URL, see
+   * `SkidmarksMp3Attachment.audioId`'s doc comment. Optional so any
+   * existing/test caller that doesn't care about audio persistence
+   * still works unchanged. */
+  audioId?: string
 ): SkidmarksMp3Attachment {
   return {
     fileName,
@@ -987,6 +996,8 @@ export function createMp3Attachment(
     segmentsSource: "seed-fallback",
     analysisStatus: "analyzing",
     transcriptionStatus: "checking",
+    audioId,
+    audioPersistStatus: audioId ? "uploading" : undefined,
   };
 }
 
@@ -1183,6 +1194,12 @@ function normalizeState(parsed: unknown): SkidmarksState {
     storedMp3?.audioPersistStatus === "uploading"
       ? "Audio upload doesn't survive a page reload (the audio file itself isn't kept) \u2014 re-attach the MP3 to re-try it."
       : storedMp3?.audioPersistError;
+  // `audioId` is a small, inert routing key, not the audio itself —
+  // still worth type-validating on the way in, same defensive spirit as
+  // every other rehydrated field on this object. Never a URL — see
+  // `SkidmarksMp3Attachment.audioId`'s doc comment for why this app
+  // never trusts a cached Blob URL out of `localStorage`.
+  const audioId = typeof storedMp3?.audioId === "string" ? storedMp3.audioId : undefined;
 
   const mp3: SkidmarksMp3Attachment | null = storedMp3
     ? {
@@ -1194,6 +1211,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
         transcriptionStatus,
         transcriptionError,
         transcriptionProvider,
+        audioId,
         audioPersistStatus,
         audioPersistError,
       }
@@ -1465,12 +1483,18 @@ export function setSkidmarksMp3Duration(durationSec: number): void {
 }
 
 /** Records a successful MP3-audio Blob upload — see
- * `SkidmarksMp3Attachment.audioUrl`'s doc comment. No-ops if the mp3
- * was removed/replaced before the upload finished (same "can't tell
- * *this* file from a same-shaped new one" caveat as
- * `applySkidmarksAnalysisResult` — callers should additionally guard
- * against a stale/superseded result themselves). */
-export function setSkidmarksMp3AudioUrl(audioUrl: string): void {
+ * `SkidmarksMp3Attachment.audioId`'s doc comment. Deliberately takes no
+ * URL parameter: the upload's own result URL is only ever used for
+ * *this session's* immediate purposes (nothing here — the still-live
+ * local object URL already covers this session's own playback); the
+ * durable answer always comes from a fresh `fetchSkidmarksMp3AudioUrl`
+ * call against `audioId`, never from a value stashed in this
+ * `localStorage`-mirrored object. No-ops if the mp3 was removed/
+ * replaced before the upload finished (same "can't tell *this* file
+ * from a same-shaped new one" caveat as `applySkidmarksAnalysisResult`
+ * — callers should additionally guard against a stale/superseded
+ * result themselves). */
+export function markSkidmarksMp3AudioUploaded(): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
   if (!mp3) return;
@@ -1478,7 +1502,7 @@ export function setSkidmarksMp3AudioUrl(audioUrl: string): void {
     ...current,
     session: {
       ...current.session,
-      mp3: { ...mp3, audioUrl, audioPersistStatus: "done", audioPersistError: undefined },
+      mp3: { ...mp3, audioPersistStatus: "done", audioPersistError: undefined },
     },
   });
 }
