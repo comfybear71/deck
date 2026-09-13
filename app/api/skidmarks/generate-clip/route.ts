@@ -210,6 +210,10 @@ export const MAX_CLIP_DURATION_SEC = 15;
 
 const START_TIMEOUT_MS = 20_000;
 const POLL_TIMEOUT_MS = 20_000;
+/** Kept short \u2014 this is a cheap `HEAD` sanity check right after our own
+ * `put()`, not a real download; it should never meaningfully add to the
+ * time Stuart's already waited for the render itself. */
+const VERIFY_TIMEOUT_MS = 8_000;
 /** Time between status polls. Exported so tests can advance fake timers
  * by exactly this much rather than guessing. */
 export const POLL_INTERVAL_MS = 4_000;
@@ -651,6 +655,40 @@ export async function persistClipRenderToBlob(
       addRandomSuffix: false,
       allowOverwrite: true,
     });
+
+    // Live-QA'd real gap: `put()` resolving does not guarantee the
+    // returned URL is actually, reliably fetchable right away (an
+    // edge-cache miss serving a stale 404, a since-pruned/overwritten
+    // path, a truncated upload) \u2014 and this feature's hard rule is
+    // "a paid success must never be silently invisible" (see AGENTS.md).
+    // A plate 2 render shipped exactly this way once: `persisted: true`
+    // came back, the shelf wired in a URL that quietly wasn't playable,
+    // and Stuart saw a black broken card with no error at all. One
+    // cheap `HEAD` here closes that gap \u2014 a failure here still
+    // returns the render Stuart already paid for via the normal
+    // `persisted: false` / `persistError` path below (same honest shape
+    // as every other persistence failure), instead of wiring a dead URL
+    // into the shelf and calling it done.
+    try {
+      const verifyRes = await fetch(blob.url, {
+        method: "HEAD",
+        signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+      });
+      if (!verifyRes.ok) {
+        return {
+          ok: false,
+          reason:
+            `The render was saved to Vercel Blob, but the saved file isn't reachable yet (HTTP ${verifyRes.status}) ` +
+            "\u2014 not marking this as a successful save.",
+        };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        reason: `The render was saved to Vercel Blob, but could not be verified as playable: ${err instanceof Error ? err.message : "network error"}.`,
+      };
+    }
+
     await pruneStaleRendersForPlate(target.segmentId, target.plateId, pathname);
     return { ok: true, url: blob.url };
   } catch (err) {
