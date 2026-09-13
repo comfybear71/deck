@@ -14,6 +14,7 @@ import {
   clearSkidmarksMp3,
   createMp3Attachment,
   createSkidmarksBand,
+  getSkidmarksSessionSyncSnapshot,
   getSkidmarksSnapshot,
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
@@ -38,12 +39,14 @@ import {
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
   subscribeSkidmarks,
+  subscribeSkidmarksSessionSync,
   type SkidmarksBand,
   type SkidmarksInstrumentalVideoModel,
   type SkidmarksLook,
   type SkidmarksMp3Attachment,
   type SkidmarksPlateStill,
   type SkidmarksProjectKind,
+  type SkidmarksSessionSyncState,
   type SkidmarksState,
 } from "@/lib/skidmarks";
 
@@ -53,12 +56,17 @@ const EMPTY_STATE: SkidmarksState = {
   removedSeedBandIds: [],
 };
 
+const LOADING_SESSION_SYNC_STATE: SkidmarksSessionSyncState = { status: "loading" };
+
 /**
  * React binding for the Skidmarks Music-video studio store
  * (`lib/skidmarks.ts`) — same `useSyncExternalStore` shape as
  * `useDialModes`/the old `useSkidmarksProjects`, so SSR always sees the
- * empty state and the client re-renders with whatever's in
- * `localStorage` right after hydration.
+ * empty state and the client re-renders with whatever Neon's `GET /api/
+ * skidmarks/session` returns right after the store's one-time hydrate
+ * (see `lib/skidmarks.ts`'s "Neon-backed session persistence" doc
+ * comment — `localStorage` is gone outright as this feature's state of
+ * record now).
  *
  * Also owns the real side-effecting logic this flow needs: kicking off
  * both `analyzeVocalActivity` (`lib/audioAnalysis.ts`, the energy
@@ -73,12 +81,23 @@ const EMPTY_STATE: SkidmarksState = {
  * `attachMp3`/`removeMp3` bumps it, and any in-flight analysis or
  * transcription whose captured token no longer matches just gets
  * dropped.
+ *
+ * `sessionSync` is a second, independent `useSyncExternalStore` binding
+ * onto `lib/skidmarks.ts`'s ephemeral Neon round-trip status (never
+ * part of `state`, never persisted) — exposed so `SkidmarksDetailSheet`
+ * can show an honest "not saving here right now" line instead of
+ * silently implying every edit is durable.
  */
 export function useSkidmarksStudio() {
   const state = useSyncExternalStore(
     subscribeSkidmarks,
     getSkidmarksSnapshot,
     () => EMPTY_STATE
+  );
+  const sessionSync = useSyncExternalStore(
+    subscribeSkidmarksSessionSync,
+    getSkidmarksSessionSyncSnapshot,
+    () => LOADING_SESSION_SYNC_STATE
   );
 
   const analysisTokenRef = useRef(0);
@@ -293,6 +312,9 @@ export function useSkidmarksStudio() {
     bands: state.bands,
     session: state.session,
     removedSeedBandIds: state.removedSeedBandIds,
+    /** The live Neon session round-trip status — see this hook's doc
+     * comment and `lib/skidmarks.ts`'s `SkidmarksSessionSyncState`. */
+    sessionSync,
     selectProjectKind,
     selectBand,
     createBand,

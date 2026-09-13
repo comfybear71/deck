@@ -10,7 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * cache can't leak into the next.
  */
 const sqlMock = vi.fn();
-const neonMock = vi.fn(() => sqlMock);
+const neonMock = vi.fn();
+neonMock.mockReturnValue(sqlMock);
 vi.mock("@neondatabase/serverless", () => ({
   neon: (...args: unknown[]) => neonMock(...args),
 }));

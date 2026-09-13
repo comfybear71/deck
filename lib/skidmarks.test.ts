@@ -6,6 +6,7 @@ import {
   attachSkidmarksMp3,
   createMp3Attachment,
   defaultSegmentModel,
+  getSkidmarksSessionSyncSnapshot,
   getSkidmarksSnapshot,
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
@@ -17,6 +18,7 @@ import {
   resolveInstrumentalVideoModel,
   resolveSelectedPlateId,
   restoreSkidmarksArchivedSession,
+  shouldApplyHydratedSkidmarksSession,
   SKIDMARKS_MODELS,
   selectSkidmarksBand,
   setSkidmarksClipPlateMotionPrompt,
@@ -27,6 +29,7 @@ import {
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
   skidmarksChecklistState,
+  subscribeSkidmarksSessionSync,
   type SkidmarksBand,
   type SkidmarksClipPlateSlot,
   type SkidmarksClipSegment,
@@ -960,5 +963,36 @@ describe("restoreSkidmarksArchivedSession / resetSkidmarksSessionAfterArchive", 
     expect(state.session.bandId).toBeNull();
     expect(state.session.mp3).toBeNull();
     expect(state.bands.length).toBe(bandsBefore);
+  });
+});
+
+/**
+ * `shouldApplyHydratedSkidmarksSession` is the server-backed successor
+ * to the same "a slow real result can't clobber real work already in
+ * progress" principle `SkidmarksMp3Attachment.attachId`/
+ * `hasSkidmarksUserContent` already enforce one layer down — see this
+ * module's "Neon-backed session persistence" doc comment. Under
+ * Vitest's `node` environment `isBrowser()` is always false, so the
+ * actual `fetch`-driven hydrate/push functions never run in this test
+ * file; these tests exercise the one pure decision function directly.
+ */
+describe("shouldApplyHydratedSkidmarksSession", () => {
+  it("applies the fetched session when no local edit happened while it was in flight", () => {
+    expect(shouldApplyHydratedSkidmarksSession(5, 5)).toBe(true);
+  });
+
+  it("discards the fetched session once any local edit landed while it was in flight", () => {
+    expect(shouldApplyHydratedSkidmarksSession(5, 6)).toBe(false);
+    expect(shouldApplyHydratedSkidmarksSession(0, 3)).toBe(false);
+  });
+});
+
+describe("Skidmarks session sync status store", () => {
+  it("exposes a live snapshot and lets a listener subscribe/unsubscribe without throwing", () => {
+    const snapshot = getSkidmarksSessionSyncSnapshot();
+    expect(snapshot.status).toBeDefined();
+    const unsubscribe = subscribeSkidmarksSessionSync(() => {});
+    expect(typeof unsubscribe).toBe("function");
+    unsubscribe();
   });
 });
