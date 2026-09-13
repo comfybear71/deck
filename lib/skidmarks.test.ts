@@ -22,6 +22,7 @@ import {
   setSkidmarksClipPlateMotionPrompt,
   setSkidmarksClipPlateStill,
   setSkidmarksMp3AudioUrl,
+  setSkidmarksMp3Duration,
   setSkidmarksSegmentInstrumentalVideoModel,
   setSkidmarksSegmentModel,
   setSkidmarksSegmentSelectedPlate,
@@ -303,6 +304,117 @@ describe("applySkidmarksAnalysisResult (already-tagged guard)", () => {
     expect(mp3.segmentsSource).toBe("seed-fallback");
     const stillThere = mp3.segments.find((s) => s.id === seedSegment.id)!;
     expect(stillThere.plates[0].still?.dataUrl).toBe("data:image/jpeg;base64,SEEDTAG");
+  });
+});
+
+/**
+ * `setSkidmarksMp3Duration` regression tests — the one remaining
+ * silent-rebuild path #51 missed. #51 gated
+ * `applySkidmarksAnalysisResult`/`applySkidmarksTranscriptionResult`
+ * with `hasSkidmarksUserContent` + `attachId`, but this third
+ * post-attach resolve callback (the `<audio>` element's own
+ * `loadedmetadata` probe) had neither guard, so it could still
+ * unconditionally rebuild `segments` via `buildDemoSegments(durationSec)`
+ * whenever `durationSec` was still `null` and `segmentsSource` was still
+ * `"seed-fallback"` — exactly the live-QA'd "clip 1 lost again, gone
+ * back to another version" report filed after #51+#53 had already
+ * landed. These tests attach with `durationSec: null` (real-world:
+ * attach always starts this way — see `createMp3Attachment`) to
+ * actually exercise the pre-fix rebuild window, which the file's other
+ * `beforeEach` (real `TRACK_DURATION_SEC` passed at attach) never did.
+ */
+describe("setSkidmarksMp3Duration", () => {
+  it("still rebuilds the seed-fallback timeline off the real duration the very first time it resolves, when nothing is tagged yet", () => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("talking-to-concrete.mp3", null));
+    const attachId = currentAttachId();
+
+    setSkidmarksMp3Duration(attachId, TRACK_DURATION_SEC);
+
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    expect(mp3.durationSec).toBe(TRACK_DURATION_SEC);
+    expect(mp3.segmentsSource).toBe("seed-fallback");
+    // Rebuilt off the real total \u2014 the last segment's end now
+    // matches the real duration, not the demo fallback's.
+    expect(mp3.segments.at(-1)!.endSec).toBe(TRACK_DURATION_SEC);
+  });
+
+  it("never discards a plate/prompt Stuart already tagged on the seed-fallback timeline once a deferred duration probe finally resolves (the actual 'clip 1 lost again' regression)", () => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("talking-to-concrete.mp3", null));
+    const attachId = currentAttachId();
+
+    // Real-world: iOS Safari can defer an `<audio>` element's
+    // `loadedmetadata` well past attach (power-saving media policy —
+    // it may not fire until Stuart actually taps Play). Plenty of time
+    // to have already tagged clip 1 on the still-null-duration
+    // seed-fallback timeline before this ever resolves.
+    const clip1 = getSkidmarksSnapshot().session.mp3!.segments[0];
+    setSkidmarksClipPlateStill(clip1.id, clip1.plates[0].id, {
+      dataUrl: "data:image/jpeg;base64,CLIP1DOOR",
+      source: "generated",
+      createdAt: 1,
+    });
+    setSkidmarksSegmentShotPrompt(clip1.id, "door creaks open");
+    const taggedSegmentCount = getSkidmarksSnapshot().session.mp3!.segments.length;
+
+    setSkidmarksMp3Duration(attachId, TRACK_DURATION_SEC);
+
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    // The real duration is still recorded honestly\u2026
+    expect(mp3.durationSec).toBe(TRACK_DURATION_SEC);
+    // \u2026but `segments` — clip 1 and its tagged plate/prompt —
+    // survive untouched instead of being silently replaced by a fresh
+    // re-segmentation off the real total.
+    expect(mp3.segments).toHaveLength(taggedSegmentCount);
+    const stillThere = mp3.segments.find((s) => s.id === clip1.id)!;
+    expect(stillThere.plates[0].still?.dataUrl).toBe("data:image/jpeg;base64,CLIP1DOOR");
+    expect(stillThere.shotPrompt).toBe("door creaks open");
+  });
+
+  it("no-ops entirely for a stale attachId \u2014 a deferred metadata probe for a since-replaced attach must never land on whatever's live now", () => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("talking-to-concrete.mp3", null));
+    const staleAttachId = currentAttachId();
+
+    // A new attach (a different song, or the sheet was closed/reopened
+    // after re-picking the same file) replaces the live mp3 before the
+    // previous attach's deferred `loadedmetadata` fires.
+    attachSkidmarksMp3(createMp3Attachment("a-different-song.mp3", null));
+    const freshSegmentCount = getSkidmarksSnapshot().session.mp3!.segments.length;
+
+    setSkidmarksMp3Duration(staleAttachId, TRACK_DURATION_SEC);
+
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    expect(mp3.fileName).toBe("a-different-song.mp3");
+    // Still null \u2014 the stale attach's late duration never lands on
+    // the new one.
+    expect(mp3.durationSec).toBeNull();
+    expect(mp3.segments).toHaveLength(freshSegmentCount);
+  });
+
+  it("does not rebuild once real analysis/transcription has already replaced the seed timeline", () => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("talking-to-concrete.mp3", null));
+    const attachId = currentAttachId();
+
+    applySkidmarksAnalysisResult(attachId, {
+      segments: [
+        { startSec: 0, endSec: 31, vocal: false },
+        { startSec: 31, endSec: 200, vocal: true },
+        { startSec: 200, endSec: TRACK_DURATION_SEC, vocal: false },
+      ],
+      durationSec: TRACK_DURATION_SEC,
+    });
+    expect(getSkidmarksSnapshot().session.mp3?.segmentsSource).toBe("analysis");
+    const analysisSegments = getSkidmarksSnapshot().session.mp3!.segments;
+
+    // A late `loadedmetadata` resolve after real analysis already won.
+    setSkidmarksMp3Duration(attachId, TRACK_DURATION_SEC);
+
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    expect(mp3.segmentsSource).toBe("analysis");
+    expect(mp3.segments).toEqual(analysisSegments);
   });
 });
 

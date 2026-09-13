@@ -1554,18 +1554,49 @@ export function attachSkidmarksMp3(mp3: SkidmarksMp3Attachment): void {
  * resolves — attach happens immediately with `durationSec: null` so the
  * card can render right away instead of waiting on the probe. Also
  * drives the `timing` chip (`skidmarksChecklistState`) straight off
- * `durationSec !== null` — no separate timer/flag needed. */
-export function setSkidmarksMp3Duration(durationSec: number): void {
+ * `durationSec !== null` — no separate timer/flag needed.
+ *
+ * **This was the one remaining "silently rebuild segments after #51"
+ * gap** — real live-QA'd regression: "clip 1 lost again — gone back to
+ * another version," same symptom as the bug #51 fixed, after #51+#53
+ * had already landed. #51 gated `applySkidmarksAnalysisResult`/
+ * `applySkidmarksTranscriptionResult` with `hasSkidmarksUserContent` +
+ * `attachId`, but this function — the *third* real signal that can
+ * resolve after attach and still rebuild `segments` off
+ * `mp3.durationSec === null && segmentsSource === "seed-fallback"` —
+ * was never given either guard. On iOS Safari an `<audio>` element's
+ * `loadedmetadata` can be deferred well past attach (real quirk, not
+ * hypothetical: iOS's power-saving media policy can delay metadata load
+ * until Stuart actually taps Play), so there's a real window where he's
+ * already tagged a door \u2192 keyhole \u2192 Jack strip on the
+ * seed-fallback timeline before this ever fires — and when it finally
+ * does, `buildDemoSegments(durationSec)` resegments the *entire* track
+ * off the real duration (different boundaries than the fallback one he
+ * tagged against) and silently discards every plate/prompt on it. Now
+ * gated the same way as the other two: no-ops entirely for a stale
+ * `attachId` (a slow/deferred metadata event for a since-replaced
+ * attach), and never rebuilds once `hasSkidmarksUserContent` is true —
+ * still honestly records the real `durationSec` either way (that alone
+ * never loses anything), it just stops replacing `segments` out from
+ * under whatever Stuart already built. See the "mp3-scoped resolve/mark
+ * functions" note in AGENTS.md/this file's other `apply` and `mark`
+ * functions — this one belongs to that same guarded family. */
+export function setSkidmarksMp3Duration(attachId: string, durationSec: number): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
-  if (!mp3) return;
+  if (!mp3 || mp3.attachId !== attachId) return;
   // The very first time a real duration resolves (attach always starts
   // with `durationSec: null`) *and* nothing real has replaced the seed
-  // segments yet, rebuild them off the real total instead of the
-  // fallback one they were seeded with. If real analysis has already
-  // finished (a fast decode can beat the `<audio>` element's own probe),
-  // leave its segments alone — don't clobber real output with seed data.
-  const shouldRebuildSeed = mp3.durationSec === null && mp3.segmentsSource === "seed-fallback";
+  // segments yet, *and* Stuart hasn't already tagged real content onto
+  // the current timeline, rebuild segments off the real total instead
+  // of the fallback one they were seeded with. If real analysis has
+  // already finished (a fast decode can beat the `<audio>` element's
+  // own probe), or Stuart's already plated/prompted a clip, leave
+  // `segments` alone — don't clobber real output or real work with a
+  // fresh seed rebuild.
+  const alreadyTagged = hasSkidmarksUserContent(mp3.segments);
+  const shouldRebuildSeed =
+    mp3.durationSec === null && mp3.segmentsSource === "seed-fallback" && !alreadyTagged;
   const segments = shouldRebuildSeed ? buildDemoSegments(durationSec) : mp3.segments;
   persist({
     ...current,

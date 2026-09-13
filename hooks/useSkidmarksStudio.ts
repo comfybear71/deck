@@ -214,7 +214,7 @@ export function useSkidmarksStudio() {
   }, []);
 
   const setMp3Duration = useCallback(
-    (durationSec: number) => setSkidmarksMp3Duration(durationSec),
+    (attachId: string, durationSec: number) => setSkidmarksMp3Duration(attachId, durationSec),
     []
   );
 
