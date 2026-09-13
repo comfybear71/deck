@@ -64,6 +64,9 @@ function SegmentRow({
   onSetPlateStill,
   onAddPlate,
   onRemovePlate,
+  renderLocked,
+  onRenderStart,
+  onRenderEnd,
 }: {
   segment: SkidmarksClipSegment;
   band: SkidmarksBand;
@@ -83,6 +86,13 @@ function SegmentRow({
   onSetPlateStill: (plateId: string, still: SkidmarksPlateStill | null) => void;
   onAddPlate: () => void;
   onRemovePlate: (plateId: string) => void;
+  /** Whether a *different* clip on this timeline is currently rendering
+   * a real video — see `SkidmarksClipTimeline`'s `renderingSegmentId`
+   * state and `SkidmarksClipRender`'s doc comment for the "one render
+   * at a time" cost lock this enforces. */
+  renderLocked: boolean;
+  onRenderStart: () => void;
+  onRenderEnd: () => void;
 }) {
   const meta = SKIDMARKS_SEGMENT_LABEL_META[segment.label];
 
@@ -128,6 +138,9 @@ function SegmentRow({
             onSetPlateStill={onSetPlateStill}
             onAddPlate={onAddPlate}
             onRemovePlate={onRemovePlate}
+            renderLocked={renderLocked}
+            onRenderStart={onRenderStart}
+            onRenderEnd={onRenderEnd}
           />
         </div>
       )}
@@ -205,17 +218,25 @@ function timelineNote(
  * continuity reference — but never touches either itself. The whole
  * section can also collapse, same pattern as `ControlPlaneDemo`.
  *
- * **Phase note**: this is the clip-stub UI only. The footer's
- * "Generate Clips" button is a **stub** — tapping it never calls a real
- * Comfy MCP / LTX render anywhere in this file or
- * `SkidmarksClipStub`; it only shows a "stub, not wired" message,
- * surfaced in an always-mounted `role="status"` + `aria-live` line so
- * assistive tech reaches it too, not just sighted users. **This is
- * where the real cost lives, per Stuart**: a real plate *still* image
- * (one frame) is cheap; a real *video render/animate* pass (this
- * button, or Seedance's multi-angle clip generation) is the expensive
- * part, so this button — and any Seedance call — stays stubbed in this
- * PR regardless of whether plate stills themselves ever become real.
+ * **Phase note**: the footer's **"Generate Clips" button below stays a
+ * deliberate stub** — tapping it never calls a real render for the whole
+ * song; it only shows a "stub, not wired" message, surfaced in an
+ * always-mounted `role="status"` + `aria-live` line so assistive tech
+ * reaches it too, not just sighted users. That's a different thing from
+ * each individual clip's own render control, though: `SkidmarksClipStub`
+ * (via `components/SkidmarksClipRender.tsx`) now offers a real, opt-in,
+ * one-clip-at-a-time video render off a clip's already-generated/
+ * uploaded plate still(s) — see that component's doc comment and
+ * `app/api/skidmarks/generate-clip/route.ts`. **This is where the real
+ * cost lives, per Stuart**: a real plate *still* image (one frame) is
+ * cheap; a real *video render/animate* pass is the expensive part —
+ * which is exactly why this footer button (render the *entire song* in
+ * one tap, no confirm) stays stubbed regardless of the per-clip control
+ * existing, and why that per-clip control is cost-capped (fixed 5s/480p)
+ * and gated behind an explicit two-tap confirm rather than reachable
+ * from here. Seedance's multi-angle clip generation specifically also
+ * stays entirely unwired either way — this render pass only ever calls
+ * xAI, never Seedance.
  */
 export function SkidmarksClipTimeline({
   segments,
@@ -232,6 +253,11 @@ export function SkidmarksClipTimeline({
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [stubMessage, setStubMessage] = useState<string | null>(null);
   const stubMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Which single clip (if any) is currently mid-render — the literal
+  // enforcement of Stuart's "one render at a time" cost lock across the
+  // *whole* timeline, not just within one clip's own panel. See
+  // `SkidmarksClipRender`'s doc comment.
+  const [renderingSegmentId, setRenderingSegmentId] = useState<string | null>(null);
 
   const toggleExpanded = (id: string) => {
     setExpandedIds((prev) => {
@@ -291,6 +317,9 @@ export function SkidmarksClipTimeline({
                   onSetPlateStill={(plateId, still) => onSetClipPlateStill(segment.id, plateId, still)}
                   onAddPlate={() => onAddClipPlate(segment.id)}
                   onRemovePlate={(plateId) => onRemoveClipPlate(segment.id, plateId)}
+                  renderLocked={renderingSegmentId !== null && renderingSegmentId !== segment.id}
+                  onRenderStart={() => setRenderingSegmentId(segment.id)}
+                  onRenderEnd={() => setRenderingSegmentId((current) => (current === segment.id ? null : current))}
                 />
               );
             })}

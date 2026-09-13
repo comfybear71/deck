@@ -87,9 +87,19 @@
  * either a photo Stuart uploaded or a real image
  * `lib/plateGeneration.ts` generated via xAI's Grok Imagine API
  * (`app/api/skidmarks/generate-still/route.ts`) — see that module's doc
- * comment for what's actually wired vs. still a stub (the *video*
- * render pass stays a stub everywhere in this build; only the one-frame
- * still is real). **A clip can hold more than one plate slot** — a
+ * comment for what's actually wired vs. still a stub. **The clip *video*
+ * pass now has one real, opt-in slice too** —
+ * `components/SkidmarksClipRender.tsx` (rendered inside
+ * `SkidmarksClipStub`) calls a real xAI Grok Imagine *video* endpoint
+ * (`app/api/skidmarks/generate-clip/route.ts`) against a clip's already-
+ * generated/uploaded plate still(s), one clip at a time, always behind an
+ * explicit two-tap confirm — this is deliberately *not* the same thing as
+ * the whole-song "Generate Clips" button (`SkidmarksClipTimeline`), which
+ * stays a stub (see that component's doc comment for why: "render every
+ * clip in the song" is exactly the auto-fire-everything cost risk Stuart
+ * ruled out, where the new per-clip control is a small, explicit,
+ * opt-in render of one clip Stuart already has a still for). **A clip
+ * can hold more than one plate slot** — a
  * "+" control on the expanded panel appends another empty slot to that
  * same clip's horizontal strip (`addSkidmarksClipPlate`), so one long
  * Instrumental clip (the 40s-door problem) can get a door plate, a
@@ -113,13 +123,17 @@
  * across a reload, but an *in-progress* one can't resume — `normalizeState`
  * below turns a stale `"analyzing"` status into an honest `"failed"` one
  * on load rather than hanging forever. Also explicitly out of scope for
- * this build: voice, animate, and stitch, and any actual clip *video*
- * rendering ("Generate Clips" is a stub button — see
- * `SkidmarksClipTimeline`) — the flow stops dead after the clip
- * timeline's plate strip + shared shot-prompt tag per clip
+ * this build: voice and in-app stitch, and any *automatic* or whole-song
+ * clip *video* rendering ("Generate Clips" is still a stub button — see
+ * `SkidmarksClipTimeline`) — but a clip's own plate strip
  * (`SkidmarksClipStub`; each plate's still is real — upload or
- * generate, see `lib/plateGeneration.ts` — the *video* pass past it is
- * not). Camera angle and the location-plate picker are both **gone
+ * generate, see `lib/plateGeneration.ts`) now has a real, explicit,
+ * one-clip-at-a-time *animate* path past it too (see
+ * `components/SkidmarksClipRender.tsx` and
+ * `app/api/skidmarks/generate-clip/route.ts`) — Stuart opts into
+ * rendering one clip's still(s) into a real short video, on the same xAI
+ * key stills already use; nothing renders on its own. Camera angle and
+ * the location-plate picker are both **gone
  * outright** — see the QA fix that removed the multi-card plate
  * carousel — and the model row went with them: `SKIDMARKS_MODELS`
  * (LTX/Grok/H3/Seedance) and the cost-locked `defaultSegmentModel`
@@ -336,12 +350,18 @@ export const SKIDMARKS_SEGMENT_LABEL_META: Record<SkidmarksSegmentLabel, Skidmar
  *
  * **Where the actual cost lives, per Stuart**: a real plate *still*
  * (one static frame) is cheap — this lock isn't about stills. A real
- * *video render/animate* pass is the expensive part — Seedance's
- * multi-angle clip generation specifically, and the stub "Generate
- * Clips" button generally (see `SkidmarksClipTimeline`'s doc comment).
- * Both stay stubbed in this build regardless of whether plate stills
- * themselves ever get a real generator; nothing here calls a real
- * model of any kind yet. */
+ * *video render/animate* pass is the expensive part. The whole-song
+ * stub "Generate Clips" button (see `SkidmarksClipTimeline`'s doc
+ * comment) and Seedance's multi-angle clip generation specifically both
+ * still stay unwired in this build. **This `model` tag is not what the
+ * new one-clip-at-a-time real video render reads, though** — see
+ * `components/SkidmarksClipRender.tsx` and
+ * `app/api/skidmarks/generate-clip/route.ts` — that path always calls
+ * xAI's Grok Imagine *video* API regardless of whether a clip is tagged
+ * LTX/Grok/H3/Seedance, the same way `lib/plateGeneration.ts`'s real
+ * *still* generation already ignores this tag for which API to call
+ * (see `routingFramingHint`) — this field only ever steers prompt
+ * phrasing for either real generator, never which backend answers. */
 export type SkidmarksModelId = "ltx-lipsync" | "grok" | "h3" | "seedance";
 
 export interface SkidmarksModelMeta {
@@ -458,7 +478,12 @@ export function remapLegacySkidmarksModel(modelId: string, vocal: boolean): Skid
  * plate is enough (each generated still already bakes in whatever the
  * prompt said *at generation time* — the prompt itself doesn't need to
  * be remembered per plate afterward), so a per-plate prompt field would
- * just be a second form control repeating the same idea. Always has at
+ * just be a second form control repeating the same idea. **Also the one
+ * field `components/SkidmarksClipRender.tsx`'s real, opt-in clip-video
+ * render reads for its motion prompt** — one more reason not to split it
+ * per plate; the same shared text drives both the still-generation
+ * "Generate" flow and the newer per-clip "Render"/"Animate" flow rather
+ * than needing its own separate field. Always has at
  * least one slot (`buildBlankPlateSlot`) — a clip is never left with a
  * pate strip; see `addSkidmarksClipPlate`/`removeSkidmarksClipPlate` for
  * how the strip grows/shrinks and `MAX_PLATES_PER_CLIP` for its cap. */

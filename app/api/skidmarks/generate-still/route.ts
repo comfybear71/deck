@@ -13,11 +13,16 @@ import { NextResponse } from "next/server";
  * xAI's `image`/`images` fields are mutually exclusive, so this route
  * picks whichever one fits the request it received) with model
  * `grok-imagine-image-2.0` by default. There's exactly one image backend
- * wired in this build — the clip timeline's LTX/Grok/H3/Seedance tags
- * (`lib/skidmarks.ts`'s `SkidmarksModelId`) never select a different real
- * API here; they only steer this same call's prompt phrasing (see
- * `lib/plateGeneration.ts`'s `routingFramingHint`) and, separately, still
- * govern the (stubbed) *video* render pass everywhere else in this build.
+ * wired *image* backend in this build — the clip timeline's LTX/Grok/H3/
+ * Seedance tags (`lib/skidmarks.ts`'s `SkidmarksModelId`) never select a
+ * different real API here; they only steer this same call's prompt
+ * phrasing (see `lib/plateGeneration.ts`'s `routingFramingHint`). Those
+ * same tags also don't select which *video* backend answers a clip's
+ * real, opt-in render (`app/api/skidmarks/generate-clip/route.ts`) — that
+ * path always calls xAI's Grok Imagine *video* API regardless of tag,
+ * same "tag steers phrasing, not backend" rule as here. The whole-song
+ * "Generate Clips" button (`SkidmarksClipTimeline`) is the one piece that
+ * still stays a stub.
  *
  * **Response format**: always requests `response_format: "b64_json"` and
  * returns a single `data:` URL to the client (`{ dataUrl }`) — never a
@@ -237,6 +242,15 @@ async function callXaiImageApi(
 
 interface GenerateStillRequestBody {
   prompt?: unknown;
+  /** Stuart's own, unmodified shot-prompt text \u2014 see
+   * `lib/plateGeneration.ts`'s `PlateGenerationRequest.shotPrompt` doc
+   * comment for why this is validated against `MAX_PROMPT_LENGTH`
+   * instead of `prompt` (which also carries auto-injected routing/
+   * continuity/character-lock text Stuart never typed). Optional so an
+   * older/hand-rolled caller that only ever sent `prompt` still works
+   * (see the length check below's fallback) \u2014 this route doesn't
+   * hard-require the split. */
+  shotPrompt?: unknown;
   referenceImageDataUrls?: unknown;
 }
 
@@ -274,9 +288,21 @@ export async function POST(request: Request) {
   if (!prompt) {
     return NextResponse.json({ error: "Missing `prompt`.", code: "invalid_request" }, { status: 400 });
   }
-  if (prompt.length > MAX_PROMPT_LENGTH) {
+  // Only the *user-authored* shot prompt counts against
+  // `MAX_PROMPT_LENGTH` \u2014 not the auto-injected model-routing framing,
+  // continuity/identity reference notes, or (for a locked character like
+  // Jack Ash) several hundred characters of hallmark/negative-cue text
+  // `lib/plateGeneration.ts`'s `buildPlateGenerationRequest` appends on
+  // top of it. Checking the full merged `prompt` here instead would
+  // reject a legitimately short shot prompt just because the character
+  // lock it triggered happens to be long \u2014 rejecting text Stuart never
+  // typed a word of. Falls back to checking `prompt` itself when a
+  // caller doesn't send `shotPrompt` (e.g. a hand-rolled request), same
+  // as this route's previous behavior.
+  const shotPromptForLengthCheck = typeof body.shotPrompt === "string" ? body.shotPrompt.trim() : prompt;
+  if (shotPromptForLengthCheck.length > MAX_PROMPT_LENGTH) {
     return NextResponse.json(
-      { error: `Prompt is too long \u2014 over ${MAX_PROMPT_LENGTH} characters.`, code: "invalid_request" },
+      { error: `Shot prompt is too long \u2014 over ${MAX_PROMPT_LENGTH} characters.`, code: "invalid_request" },
       { status: 400 }
     );
   }

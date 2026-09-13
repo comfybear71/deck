@@ -19,6 +19,7 @@ import {
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
+import { SkidmarksClipRender } from "./SkidmarksClipRender";
 
 interface SkidmarksClipStubProps {
   segment: SkidmarksClipSegment;
@@ -32,6 +33,12 @@ interface SkidmarksClipStubProps {
   onSetPlateStill: (plateId: string, still: SkidmarksPlateStill | null) => void;
   onAddPlate: () => void;
   onRemovePlate: (plateId: string) => void;
+  /** Threaded straight through to `SkidmarksClipRender` \u2014 see that
+   * component's doc comment and `SkidmarksClipTimeline`'s "one render at
+   * a time" state. */
+  renderLocked: boolean;
+  onRenderStart: () => void;
+  onRenderEnd: () => void;
 }
 
 const SHOT_PROMPT_MAX_LENGTH = 500;
@@ -729,6 +736,9 @@ export function SkidmarksClipStub({
   onSetPlateStill,
   onAddPlate,
   onRemovePlate,
+  renderLocked,
+  onRenderStart,
+  onRenderEnd,
 }: SkidmarksClipStubProps) {
   const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label].vocal;
   // Resolved regardless of `vocal` now — an Instrumental/B-roll clip
@@ -781,6 +791,15 @@ export function SkidmarksClipStub({
         maxLength={SHOT_PROMPT_MAX_LENGTH}
         aria-label="Shot prompt"
         className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] leading-relaxed text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
+      />
+
+      <SkidmarksClipRender
+        shotPrompt={segment.shotPrompt}
+        bandName={band.name}
+        plateStillDataUrls={segment.plates.flatMap((p) => (p.still ? [p.still.dataUrl] : []))}
+        locked={renderLocked}
+        onRenderStart={onRenderStart}
+        onRenderEnd={onRenderEnd}
       />
     </div>
   );

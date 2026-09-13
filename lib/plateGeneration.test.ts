@@ -112,6 +112,52 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt.startsWith("a door creaks open in an empty hallway")).toBe(true);
   });
 
+  it("returns `shotPrompt` as just Stuart's own (trimmed) text, distinct from the longer merged `prompt`", () => {
+    const { prompt, shotPrompt } = buildPlateGenerationRequest({
+      shotPrompt: "  Jack seated in a dim room, feet apart, backlit.  ",
+      vocal: false,
+      model: "grok",
+      bandName: BAND_NAME,
+      vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
+    });
+    expect(shotPrompt).toBe("Jack seated in a dim room, feet apart, backlit.");
+    // The full merged prompt carries the character lock text on top \u2014
+    // meaningfully longer than the raw shot prompt alone (this is
+    // exactly why the server validates `shotPrompt`'s length, not
+    // `prompt`'s \u2014 see `app/api/skidmarks/generate-still/route.ts`).
+    expect(prompt.length).toBeGreaterThan(shotPrompt.length + 200);
+  });
+
+  it("reproduces Stuart's exact bug report: a ~400-char shot prompt + Jack Ash lock + 'Use last plate' pushes the merged prompt past 2000 chars on its own \u2014 shotPrompt itself stays well under", () => {
+    // Stuart's literal report: cleared the shot-prompt box, pasted ~400
+    // characters for Jack Ash with "Use last plate" checked (continuity),
+    // and got "Prompt is too long \u2014 over 2000 characters" even though
+    // his own visible text was nowhere near 2000. This is the exact
+    // shape that triggers it: a real ~400-char shot prompt, Jack Ash as
+    // the resolved vocalist/cast member (his lock is real and lengthy),
+    // and `continuityStillDataUrl` set (what "Use last plate" produces).
+    const fourHundredCharShotPrompt = "Jack seated in a dim room, backlit, feet apart. ".repeat(9).slice(0, 400);
+    expect(fourHundredCharShotPrompt.length).toBe(400);
+
+    const { prompt, shotPrompt } = buildPlateGenerationRequest({
+      shotPrompt: fourHundredCharShotPrompt,
+      vocal: false,
+      model: "grok",
+      bandName: BAND_NAME,
+      vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
+      continuityStillDataUrl: "data:image/jpeg;base64,previousPlateBytes",
+    });
+
+    // The bug, confirmed: the merged prompt alone clears 2000 chars from
+    // *only* 400 real user characters \u2014 the old check (against
+    // `prompt.length`) would have rejected this outright.
+    expect(prompt.length).toBeGreaterThan(2000);
+    // The fix: `shotPrompt` \u2014 what the server now actually validates
+    // \u2014 is exactly Stuart's own text, comfortably under the cap.
+    expect(shotPrompt).toBe(fourHundredCharShotPrompt);
+    expect(shotPrompt.length).toBeLessThan(2000);
+  });
+
   it("an Instrumental/B-roll clip has no vocalist mention and no reference images at all", () => {
     const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
       shotPrompt: "a door creaks open in an empty hallway",
@@ -396,7 +442,11 @@ describe("generatePlateStill", () => {
   it("returns a real success with the dataUrl the route reported", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { dataUrl: "data:image/jpeg;base64,AAAA" }));
 
-    const outcome = await generatePlateStill({ prompt: "a desert highway at night", referenceImageDataUrls: [] });
+    const outcome = await generatePlateStill({
+      prompt: "a desert highway at night",
+      shotPrompt: "a desert highway at night",
+      referenceImageDataUrls: [],
+    });
 
     expect(outcome).toEqual({ ok: true, dataUrl: "data:image/jpeg;base64,AAAA" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -404,6 +454,7 @@ describe("generatePlateStill", () => {
     expect(url).toBe("/api/skidmarks/generate-still");
     expect(JSON.parse(init.body as string)).toEqual({
       prompt: "a desert highway at night",
+      shotPrompt: "a desert highway at night",
       referenceImageDataUrls: [],
     });
   });
@@ -413,7 +464,7 @@ describe("generatePlateStill", () => {
       jsonResponse(501, { error: "XAI_API_KEY is not set on the server.", code: "missing_api_key" })
     );
 
-    const outcome = await generatePlateStill({ prompt: "x", referenceImageDataUrls: [] });
+    const outcome = await generatePlateStill({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: [] });
 
     expect(outcome).toEqual({
       ok: false,
@@ -427,7 +478,7 @@ describe("generatePlateStill", () => {
       jsonResponse(401, { error: "xAI Grok Imagine returned 401: Incorrect API key provided.", code: "auth_error" })
     );
 
-    const outcome = await generatePlateStill({ prompt: "x", referenceImageDataUrls: [] });
+    const outcome = await generatePlateStill({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: [] });
 
     expect(outcome).toEqual({
       ok: false,
@@ -439,7 +490,7 @@ describe("generatePlateStill", () => {
   it("reports a real network error honestly (no fetch success to parse)", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
 
-    const outcome = await generatePlateStill({ prompt: "x", referenceImageDataUrls: [] });
+    const outcome = await generatePlateStill({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: [] });
 
     expect(outcome).toEqual({ ok: false, unconfigured: false, message: "Failed to fetch" });
   });
@@ -447,7 +498,7 @@ describe("generatePlateStill", () => {
   it("reports a real failure if a 200 response is somehow missing dataUrl", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
 
-    const outcome = await generatePlateStill({ prompt: "x", referenceImageDataUrls: [] });
+    const outcome = await generatePlateStill({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: [] });
 
     expect(outcome).toEqual({
       ok: false,
