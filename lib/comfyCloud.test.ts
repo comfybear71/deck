@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import LTX_23_IA2V_TEMPLATE from "@/workflow/LTX_2.3_IA2V_Cloud.json";
 import {
-  buildLtxAudioToVideoWorkflow,
-  DEFAULT_LTX_MODEL,
+  buildLtx23Ia2vWorkflow,
+  DEFAULT_LTX_FILENAME_PREFIX,
   downloadComfyCloudOutput,
+  pickComfyCloudVideo,
+  pollComfyCloudJob,
   resolveComfyCloudCredentials,
   submitComfyCloudWorkflow,
   uploadComfyCloudInput,
-  waitForComfyCloudCompletion,
-  type MinimalWebSocket,
 } from "./comfyCloud";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -34,12 +35,6 @@ describe("resolveComfyCloudCredentials", () => {
     vi.stubEnv("COMFY_CLOUD_API_KEY", "abc");
     vi.stubEnv("COMFY_URL", "https://my-comfy.example.com/");
     expect(resolveComfyCloudCredentials()).toEqual({ apiKey: "abc", baseUrl: "https://my-comfy.example.com" });
-  });
-});
-
-describe("DEFAULT_LTX_MODEL", () => {
-  it("is the cheaper LTX-2.5 (Fast) tier, hardcoded (no env override \u2014 not a confirmed Comfy key name)", () => {
-    expect(DEFAULT_LTX_MODEL).toBe("LTX-2.5 (Fast)");
   });
 });
 
@@ -93,7 +88,7 @@ describe("submitComfyCloudWorkflow", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("submits to /api/prompt with the workflow and the partner-node api key in extra_data", async () => {
+  it("submits to /api/prompt with a body of just { prompt } \u2014 no extra_data.api_key_comfy_org (no partner nodes any more)", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { prompt_id: "job-1" }));
     const workflow = { "1": { class_type: "LoadImage", inputs: {} } };
     const outcome = await submitComfyCloudWorkflow(workflow, CREDS);
@@ -102,10 +97,9 @@ describe("submitComfyCloudWorkflow", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://cloud.comfy.org/api/prompt");
     expect(init.headers).toEqual({ "X-API-Key": "test-comfy-key", "Content-Type": "application/json" });
-    expect(JSON.parse(init.body as string)).toEqual({
-      prompt: workflow,
-      extra_data: { api_key_comfy_org: "test-comfy-key" },
-    });
+    const parsedBody = JSON.parse(init.body as string);
+    expect(parsedBody).toEqual({ prompt: workflow });
+    expect(JSON.stringify(parsedBody)).not.toContain("api_key_comfy_org");
   });
 
   it("treats a 200 body carrying its own `error` field as a rejected workflow", async () => {
@@ -135,100 +129,121 @@ describe("submitComfyCloudWorkflow", () => {
   });
 });
 
-/** A fake `MinimalWebSocket` the test drives directly — records what
- * `waitForComfyCloudCompletion` assigned to each handler and exposes a
- * way to fire them from the test body, so this suite never needs a
- * real socket/network. */
-class FakeWebSocket implements MinimalWebSocket {
-  static instances: FakeWebSocket[] = [];
-  static shouldThrow = false;
-  url: string;
-  closed = false;
-  onopen: (() => void) | null = null;
-  onmessage: ((event: { data: unknown }) => void) | null = null;
-  onerror: ((event: unknown) => void) | null = null;
-  onclose: (() => void) | null = null;
-
-  constructor(url: string) {
-    if (FakeWebSocket.shouldThrow) throw new Error("boom");
-    this.url = url;
-    FakeWebSocket.instances.push(this);
-  }
-  close() {
-    this.closed = true;
-  }
-  emit(msgType: string, data: Record<string, unknown> = {}) {
-    this.onmessage?.({ data: JSON.stringify({ type: msgType, data }) });
-  }
-}
-
-describe("waitForComfyCloudCompletion", () => {
+describe("pollComfyCloudJob", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
   beforeEach(() => {
-    FakeWebSocket.instances = [];
-    FakeWebSocket.shouldThrow = false;
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
   });
-  afterEach(() => vi.useRealTimers());
-
-  it("resolves with the video output once execution_success lands for this exact prompt_id", async () => {
-    const promise = waitForComfyCloudCompletion("job-1", CREDS, 5000, FakeWebSocket);
-    const ws = FakeWebSocket.instances[0];
-    // A message for a *different* job first — must be ignored.
-    ws.emit("executed", { prompt_id: "job-other", node: "4", output: { video: [{ filename: "other.mp4" }] } });
-    ws.emit("executed", { prompt_id: "job-1", node: "4", output: { video: [{ filename: "clip.mp4", type: "output" }] } });
-    ws.emit("execution_success", { prompt_id: "job-1" });
-
-    const outcome = await promise;
-    expect(outcome).toEqual({ ok: true, videoFile: { filename: "clip.mp4", type: "output" } });
-    expect(ws.closed).toBe(true);
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
-  it("reports an honest upstream_error on execution_error", async () => {
-    const promise = waitForComfyCloudCompletion("job-2", CREDS, 5000, FakeWebSocket);
-    const ws = FakeWebSocket.instances[0];
-    ws.emit("execution_error", { prompt_id: "job-2", exception_message: "OOMError" });
+  it("polls GET /api/jobs/{promptId} — plural jobs, never /api/history/{id}", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { status: "completed", outputs: { "341": { images: [{ filename: "clip.mp4", subfolder: "video", type: "output" }] } } })
+    );
 
-    const outcome = await promise;
+    const outcome = await pollComfyCloudJob("job-1", CREDS, 60_000, 0);
+
+    expect(outcome).toEqual({ ok: true, videoFile: { filename: "clip.mp4", subfolder: "video", type: "output" } });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://cloud.comfy.org/api/jobs/job-1");
+    expect(url).not.toContain("/api/history/");
+    expect(init.method).toBe("GET");
+    expect(init.headers).toEqual({ "X-API-Key": "test-comfy-key" });
+  });
+
+  it("reads SaveVideo's `images` output key — the one PreviewVideo.as_dict() actually emits", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { status: "success", outputs: { "341": { images: [{ filename: "skidmarks_ltx_00001.mp4", subfolder: "video" }] } } })
+    );
+    const outcome = await pollComfyCloudJob("job-images", CREDS, 60_000, 0);
+    expect(outcome).toMatchObject({ ok: true, videoFile: { filename: "skidmarks_ltx_00001.mp4" } });
+  });
+
+  it("keeps polling while the job is still queued/running, then resolves when it completes", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: "pending" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: "running" }));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { status: "completed", outputs: { "341": { images: [{ filename: "clip.mp4" }] } } })
+    );
+
+    const outcome = await pollComfyCloudJob("job-2", CREDS, 60_000, 0);
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("surfaces execution_error.exception_message verbatim on a failed job", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { status: "failed", execution_error: { exception_message: "CUDA out of memory" } })
+    );
+    const outcome = await pollComfyCloudJob("job-3", CREDS, 60_000, 0);
     expect(outcome).toMatchObject({ ok: false, code: "upstream_error" });
-    expect((outcome as { error: string }).error).toContain("OOMError");
+    expect((outcome as { error: string }).error).toContain("CUDA out of memory");
   });
 
-  it("reports no_video_output if execution_success lands without ever seeing a video output", async () => {
-    const promise = waitForComfyCloudCompletion("job-3", CREDS, 5000, FakeWebSocket);
-    const ws = FakeWebSocket.instances[0];
-    ws.emit("execution_success", { prompt_id: "job-3" });
+  it("treats error and cancelled as failures too, not as still-running", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: "error", error: "node blew up" }));
+    expect(await pollComfyCloudJob("job-4", CREDS, 60_000, 0)).toMatchObject({ ok: false, code: "upstream_error" });
 
-    const outcome = await promise;
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: "cancelled" }));
+    expect(await pollComfyCloudJob("job-5", CREDS, 60_000, 0)).toMatchObject({ ok: false, code: "upstream_error" });
+  });
+
+  it("reports no_video_output when a completed job carries no mp4 at all", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: "completed", outputs: {} }));
+    const outcome = await pollComfyCloudJob("job-6", CREDS, 60_000, 0);
     expect(outcome).toMatchObject({ ok: false, code: "no_video_output" });
   });
 
   it("gives up honestly once the deadline passes, without pretending the render finished", async () => {
-    vi.useFakeTimers();
-    const promise = waitForComfyCloudCompletion("job-4", CREDS, 5000, FakeWebSocket);
-    await vi.advanceTimersByTimeAsync(5001);
-
-    const outcome = await promise;
+    fetchMock.mockResolvedValue(jsonResponse(200, { status: "running" }));
+    const outcome = await pollComfyCloudJob("job-7", CREDS, 10, 1000);
     expect(outcome).toMatchObject({ ok: false, code: "timeout" });
-    expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 
-  it("reports network_error when the socket itself errors", async () => {
-    const promise = waitForComfyCloudCompletion("job-5", CREDS, 5000, FakeWebSocket);
-    const ws = FakeWebSocket.instances[0];
-    ws.onerror?.(new Error("connection reset"));
+  it("classifies an HTTP failure while polling, rather than looping on it forever", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(401, {}));
+    const outcome = await pollComfyCloudJob("job-8", CREDS, 60_000, 0);
+    expect(outcome).toMatchObject({ ok: false, status: 401, code: "auth_error" });
+  });
 
-    const outcome = await promise;
+  it("reports a real network error honestly", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const outcome = await pollComfyCloudJob("job-9", CREDS, 60_000, 0);
     expect(outcome).toMatchObject({ ok: false, code: "network_error" });
   });
+});
 
-  it("reports network_error when the WebSocket constructor itself throws", async () => {
-    FakeWebSocket.shouldThrow = true;
-    const outcome = await waitForComfyCloudCompletion("job-6", CREDS, 5000, FakeWebSocket);
-    expect(outcome).toMatchObject({ ok: false, code: "network_error" });
+describe("pickComfyCloudVideo", () => {
+  it("accepts images, video, videos and gifs, filtering non-mp4 entries out of images/gifs", () => {
+    const picked = pickComfyCloudVideo({
+      "100": { images: [{ filename: "preview.png" }, { filename: "a.mp4" }] },
+    });
+    expect(picked).toEqual({ filename: "a.mp4" });
+
+    expect(pickComfyCloudVideo({ "1": { video: [{ filename: "b.mp4" }] } })).toEqual({ filename: "b.mp4" });
+    expect(pickComfyCloudVideo({ "1": { videos: [{ filename: "c.mp4" }] } })).toEqual({ filename: "c.mp4" });
+    expect(pickComfyCloudVideo({ "1": { gifs: [{ filename: "d.gif" }, { filename: "d.mp4" }] } })).toEqual({
+      filename: "d.mp4",
+    });
   });
 
-  it("reports no_websocket when no WebSocket implementation is available at all", async () => {
-    const outcome = await waitForComfyCloudCompletion("job-7", CREDS, 5000, null);
-    expect(outcome).toMatchObject({ ok: false, code: "no_websocket" });
+  it("returns null when nothing in the outputs is an mp4", () => {
+    expect(pickComfyCloudVideo({ "1": { images: [{ filename: "still.png" }] } })).toBeNull();
+    expect(pickComfyCloudVideo({})).toBeNull();
+    expect(pickComfyCloudVideo(null)).toBeNull();
+  });
+
+  it("prefers an output whose path looks like the LTX/video one when several exist", () => {
+    const picked = pickComfyCloudVideo({
+      "1": { images: [{ filename: "scratch.mp4", subfolder: "" }] },
+      "341": { images: [{ filename: "skidmarks_ltx_00001.mp4", subfolder: "video" }] },
+    });
+    expect(picked).toEqual({ filename: "skidmarks_ltx_00001.mp4", subfolder: "video" });
   });
 });
 
@@ -282,41 +297,99 @@ describe("downloadComfyCloudOutput", () => {
   });
 });
 
-describe("buildLtxAudioToVideoWorkflow", () => {
-  it("wires LoadImage/LoadAudio into LtxApi25AudioToVideo into SaveVideo, matching each node's documented input names", () => {
-    const workflow = buildLtxAudioToVideoWorkflow({
-      imageFilename: "still.png",
-      audioFilename: "clip.mp3",
-      prompt: "slow push in, singing directly to camera",
-      model: "LTX-2.5 (Fast)",
-    });
+describe("buildLtx23Ia2vWorkflow", () => {
+  const PATCHED_NODE_IDS = ["269", "276", "340:319", "340:331", "341"];
 
-    expect(workflow["1"]).toEqual({ class_type: "LoadImage", inputs: { image: "still.png" } });
-    expect(workflow["2"]).toEqual({ class_type: "LoadAudio", inputs: { audio: "clip.mp3" } });
-    expect(workflow["3"]).toEqual({
-      class_type: "LtxApi25AudioToVideo",
-      inputs: {
-        audio: ["2", 0],
-        image: ["1", 0],
-        model: "LTX-2.5 (Fast)",
-        prompt: "slow push in, singing directly to camera",
-        seed: 42,
-      },
+  function build(overrides: Partial<Parameters<typeof buildLtx23Ia2vWorkflow>[0]> = {}) {
+    return buildLtx23Ia2vWorkflow({
+      imageFilename: "plate.png",
+      audioFilename: "vocal.mp3",
+      prompt: "Jack sings straight to camera, neon-blue lips",
+      durationSec: 12,
+      ...overrides,
     });
-    expect(workflow["4"]).toEqual({
-      class_type: "SaveVideo",
-      inputs: { video: ["3", 0], filename_prefix: "skidmarks_ltx" },
-    });
+  }
+
+  it("patches exactly the five documented node inputs", () => {
+    const graph = build();
+
+    expect((graph["269"] as { inputs: { image: string } }).inputs.image).toBe("plate.png");
+    expect((graph["276"] as { inputs: { audio: string } }).inputs.audio).toBe("vocal.mp3");
+    expect((graph["340:319"] as { inputs: { value: string } }).inputs.value).toBe(
+      "Jack sings straight to camera, neon-blue lips"
+    );
+    expect((graph["340:331"] as { inputs: { value: number } }).inputs.value).toBe(12);
+    expect((graph["341"] as { inputs: { filename_prefix: string } }).inputs.filename_prefix).toBe(
+      DEFAULT_LTX_FILENAME_PREFIX
+    );
+    expect(DEFAULT_LTX_FILENAME_PREFIX).toBe("video/skidmarks_ltx");
   });
 
-  it("honors an explicit seed instead of always defaulting to 42", () => {
-    const workflow = buildLtxAudioToVideoWorkflow({
-      imageFilename: "a.png",
-      audioFilename: "a.mp3",
-      prompt: "x",
-      model: "LTX-2.5 (Pro)",
-      seed: 7,
-    });
-    expect((workflow["3"] as { inputs: { seed: number } }).inputs.seed).toBe(7);
+  it("leaves every other node byte-identical to the verified template", () => {
+    const graph = build();
+    const template = LTX_23_IA2V_TEMPLATE as unknown as Record<string, unknown>;
+
+    // Same node set, no additions or removals.
+    expect(Object.keys(graph).sort()).toEqual(Object.keys(template).sort());
+
+    const differing = Object.keys(template).filter(
+      (id) => JSON.stringify(graph[id]) !== JSON.stringify(template[id])
+    );
+    expect(differing.sort()).toEqual([...PATCHED_NODE_IDS].sort());
+  });
+
+  it("keeps the talkvid-3k ID LoRA that holds a face through motion", () => {
+    const graph = build();
+    expect(JSON.stringify(graph)).toContain("talkvid-3k");
+  });
+
+  it("never mutates the imported template between calls", () => {
+    const before = JSON.stringify(LTX_23_IA2V_TEMPLATE);
+
+    const first = build({ imageFilename: "one.png", prompt: "first", durationSec: 7 });
+    const second = build({ imageFilename: "two.png", prompt: "second", durationSec: 9 });
+
+    expect(JSON.stringify(LTX_23_IA2V_TEMPLATE)).toBe(before);
+    // Each call gets its own graph — a concurrent request can't patch
+    // another's.
+    expect((first["269"] as { inputs: { image: string } }).inputs.image).toBe("one.png");
+    expect((second["269"] as { inputs: { image: string } }).inputs.image).toBe("two.png");
+    expect((first["340:331"] as { inputs: { value: number } }).inputs.value).toBe(7);
+    expect((second["340:331"] as { inputs: { value: number } }).inputs.value).toBe(9);
+  });
+
+  it("passes a 30s duration through untouched — no hosted-node 20s cap on this graph", () => {
+    const graph = build({ durationSec: 30 });
+    expect((graph["340:331"] as { inputs: { value: number } }).inputs.value).toBe(30);
+  });
+
+  it("submits neither LtxApi25AudioToVideo nor a model.resolution key", () => {
+    const serialised = JSON.stringify(build());
+    expect(serialised).not.toContain("LtxApi25AudioToVideo");
+    expect(serialised).not.toContain("model.resolution");
+  });
+
+  it("honors an explicit filename prefix", () => {
+    const graph = build({ filenamePrefix: "video/custom_prefix" });
+    expect((graph["341"] as { inputs: { filename_prefix: string } }).inputs.filename_prefix).toBe(
+      "video/custom_prefix"
+    );
+  });
+
+  it("throws loudly if the template and this code have drifted apart", () => {
+    const template = LTX_23_IA2V_TEMPLATE as unknown as Record<string, unknown>;
+    for (const id of PATCHED_NODE_IDS) {
+      expect(template[id], `template is missing node ${id}`).toBeTruthy();
+    }
+    // Guard the failure mode itself: a graph missing one of the five
+    // must fail at build time, never submit unpatched.
+    expect(() =>
+      buildLtx23Ia2vWorkflow.call(null, {
+        imageFilename: "a",
+        audioFilename: "b",
+        prompt: "c",
+        durationSec: 5,
+      })
+    ).not.toThrow();
   });
 });

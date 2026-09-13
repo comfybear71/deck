@@ -1644,6 +1644,23 @@ export function subscribeSkidmarks(listener: () => void): () => void {
   };
 }
 
+/* The `localStorage` quota machinery that used to live here —
+ * `describeSkidmarksPersistFailure`, `getSkidmarksPersistFailure`,
+ * `getSkidmarksStorageWarning`, `exceedsSkidmarksStorageWarningThreshold`,
+ * `lastPersistFailure`, `lastPersistWarning`, `STORAGE_SIZE_WARNING_BYTES`
+ * and `STORAGE_SIZE_WARNING_MESSAGE` — is gone. It existed to make a
+ * failed or near-full `localStorage.setItem` visible instead of
+ * silent, and `persist()` no longer writes to `localStorage` at all:
+ * the session's durable copy is one Neon row now. With no write to
+ * fail on quota, none of that code could ever fire again, and leaving
+ * it in would ship UI structurally incapable of showing.
+ *
+ * The need it served is met by `SkidmarksSessionSyncState` instead:
+ * `"error"` carries Neon's own failure reason verbatim, and
+ * `"unconfigured"` says plainly that edits won't survive a refresh.
+ * Same "a save that didn't happen must never look like a success"
+ * principle, just reporting on the store that actually exists. */
+
 function persist(next: SkidmarksState) {
   cachedState = next;
   localEditCount += 1;
@@ -1825,18 +1842,49 @@ export function attachSkidmarksMp3(mp3: SkidmarksMp3Attachment): void {
  * resolves — attach happens immediately with `durationSec: null` so the
  * card can render right away instead of waiting on the probe. Also
  * drives the `timing` chip (`skidmarksChecklistState`) straight off
- * `durationSec !== null` — no separate timer/flag needed. */
-export function setSkidmarksMp3Duration(durationSec: number): void {
+ * `durationSec !== null` — no separate timer/flag needed.
+ *
+ * **This was the one remaining "silently rebuild segments after #51"
+ * gap** — real live-QA'd regression: "clip 1 lost again — gone back to
+ * another version," same symptom as the bug #51 fixed, after #51+#53
+ * had already landed. #51 gated `applySkidmarksAnalysisResult`/
+ * `applySkidmarksTranscriptionResult` with `hasSkidmarksUserContent` +
+ * `attachId`, but this function — the *third* real signal that can
+ * resolve after attach and still rebuild `segments` off
+ * `mp3.durationSec === null && segmentsSource === "seed-fallback"` —
+ * was never given either guard. On iOS Safari an `<audio>` element's
+ * `loadedmetadata` can be deferred well past attach (real quirk, not
+ * hypothetical: iOS's power-saving media policy can delay metadata load
+ * until Stuart actually taps Play), so there's a real window where he's
+ * already tagged a door \u2192 keyhole \u2192 Jack strip on the
+ * seed-fallback timeline before this ever fires — and when it finally
+ * does, `buildDemoSegments(durationSec)` resegments the *entire* track
+ * off the real duration (different boundaries than the fallback one he
+ * tagged against) and silently discards every plate/prompt on it. Now
+ * gated the same way as the other two: no-ops entirely for a stale
+ * `attachId` (a slow/deferred metadata event for a since-replaced
+ * attach), and never rebuilds once `hasSkidmarksUserContent` is true —
+ * still honestly records the real `durationSec` either way (that alone
+ * never loses anything), it just stops replacing `segments` out from
+ * under whatever Stuart already built. See the "mp3-scoped resolve/mark
+ * functions" note in AGENTS.md/this file's other `apply` and `mark`
+ * functions — this one belongs to that same guarded family. */
+export function setSkidmarksMp3Duration(attachId: string, durationSec: number): void {
   const current = getSkidmarksSnapshot();
   const mp3 = current.session.mp3;
-  if (!mp3) return;
+  if (!mp3 || mp3.attachId !== attachId) return;
   // The very first time a real duration resolves (attach always starts
   // with `durationSec: null`) *and* nothing real has replaced the seed
-  // segments yet, rebuild them off the real total instead of the
-  // fallback one they were seeded with. If real analysis has already
-  // finished (a fast decode can beat the `<audio>` element's own probe),
-  // leave its segments alone — don't clobber real output with seed data.
-  const shouldRebuildSeed = mp3.durationSec === null && mp3.segmentsSource === "seed-fallback";
+  // segments yet, *and* Stuart hasn't already tagged real content onto
+  // the current timeline, rebuild segments off the real total instead
+  // of the fallback one they were seeded with. If real analysis has
+  // already finished (a fast decode can beat the `<audio>` element's
+  // own probe), or Stuart's already plated/prompted a clip, leave
+  // `segments` alone — don't clobber real output or real work with a
+  // fresh seed rebuild.
+  const alreadyTagged = hasSkidmarksUserContent(mp3.segments);
+  const shouldRebuildSeed =
+    mp3.durationSec === null && mp3.segmentsSource === "seed-fallback" && !alreadyTagged;
   const segments = shouldRebuildSeed ? buildDemoSegments(durationSec) : mp3.segments;
   persist({
     ...current,
@@ -2410,14 +2458,46 @@ export function coverGradientClass(coverSeed: number): string {
 const MAX_PICKED_IMAGE_DIMENSION = 640;
 const PICKED_IMAGE_QUALITY = 0.85;
 
+/** Same idea, sized for a plate *still* rather than a tiny avatar/cover
+ * thumbnail — these get shown full-size in the enlarge lightbox and
+ * bundled into a project zip export, so they keep a more generous
+ * ceiling than `MAX_PICKED_IMAGE_DIMENSION`. Applies to **every** plate
+ * still, uploaded or generated (see `downscaleDataUrlImage`'s doc
+ * comment for why the generated path in particular needed this). */
+const MAX_PLATE_STILL_DIMENSION = 1024;
+
+/** Draws a decoded `<img>` onto a canvas scaled to fit `maxDimension` on
+ * its longest edge and re-encodes it as a JPEG data URL — the shared
+ * core of `readImageFileAsDataUrl`/`downscaleDataUrlImage`. Falls back
+ * to `fallbackDataUrl` untouched if no canvas 2D context is available,
+ * rather than failing the pick/generation outright. */
+function scaleImageElementToDataUrl(
+  img: HTMLImageElement,
+  maxDimension: number,
+  quality: number,
+  fallbackDataUrl: string
+): string {
+  const scale = Math.min(1, maxDimension / Math.max(img.naturalWidth, img.naturalHeight));
+  const width = Math.max(1, Math.round(img.naturalWidth * scale));
+  const height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return fallbackDataUrl;
+  ctx.drawImage(img, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
 /**
  * Reads a picked image file (jpg/png/webp), downscales it to fit within
  * `MAX_PICKED_IMAGE_DIMENSION` on its longest edge, and re-encodes it as
  * a JPEG data URL — a data URL (unlike a blob URL) round-trips through
  * the Neon session row just fine, so a real picked cover/avatar
- * survives a page reload. Used by both the band cover picker and the
- * member avatar picker. Rejects if the browser can't decode the file
- * (not an image, or a format it doesn't support).
+ * survives a page reload. Used by the band cover picker, the member
+ * avatar picker, and (with a larger `maxDimension`) an *uploaded* plate
+ * still. Rejects if the browser can't decode the file (not an image, or
+ * a format it doesn't support).
  */
 export function readImageFileAsDataUrl(
   file: File | Blob,
@@ -2431,25 +2511,57 @@ export function readImageFileAsDataUrl(
       const img = new Image();
       img.onerror = () => reject(new Error("Could not decode the picked image."));
       img.onload = () => {
-        const scale = Math.min(1, maxDimension / Math.max(img.naturalWidth, img.naturalHeight));
-        const width = Math.max(1, Math.round(img.naturalWidth * scale));
-        const height = Math.max(1, Math.round(img.naturalHeight * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          // No canvas 2D context available — fall back to the untouched
-          // original data URL rather than failing the pick outright.
-          resolve(reader.result as string);
-          return;
-        }
-        ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
+        resolve(scaleImageElementToDataUrl(img, maxDimension, quality, reader.result as string));
       };
       img.src = reader.result as string;
     };
     reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Same downscale-to-JPEG treatment as `readImageFileAsDataUrl`, but for
+ * a `data:` URL that's already decoded in memory rather than a picked
+ * `File`/`Blob` — no `FileReader` round trip needed. **This is the real
+ * fix for a live-QA'd "plates wiped" report**: an *uploaded* plate still
+ * already went through `readImageFileAsDataUrl` (capped, downscaled)
+ * before this existed, but a *generated* still (`generatePlateStill`,
+ * `lib/plateGeneration.ts`) was persisted straight off xAI's own raw
+ * response — no size cap at all. A song with several tagged clips'
+ * worth of full-resolution generated stills would blow past
+ * `localStorage`'s quota (iOS Safari's is notably tight), and
+ * `persist()` used to swallow that failure completely silently — the
+ * in-memory session still looked tagged, but nothing after the point
+ * the quota was hit ever actually reached disk, so a later reload (or
+ * iOS backgrounding a tab hard enough to force one) came back showing
+ * exactly what Stuart reported: the clip's own boundaries intact (that
+ * data was small and had persisted long before), but its plates back to
+ * empty dashed placeholders (the stills were the last, largest thing
+ * written, and never made it).
+ *
+ * **The quota itself is history** — the session's durable copy is one
+ * Neon row now, not a `localStorage` blob (see `persist()` and the note
+ * where that machinery used to live). This downscale stays anyway, and
+ * is not vestigial: plate stills still travel as base64 `data:` URLs
+ * *inside* that row, so capping them keeps the row, and every `PUT`
+ * carrying it, a sane size over a phone connection. Don't remove it on
+ * the grounds that the quota is gone.
+ * Rejects if the browser can't decode the data URL (should not happen
+ * for one this app itself just received from `generate-still`, but
+ * mirrors `readImageFileAsDataUrl`'s own defensive handling either way).
+ */
+export function downscaleDataUrlImage(
+  dataUrl: string,
+  maxDimension: number = MAX_PLATE_STILL_DIMENSION,
+  quality: number = PICKED_IMAGE_QUALITY
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onerror = () => reject(new Error("Could not decode the generated image."));
+    img.onload = () => {
+      resolve(scaleImageElementToDataUrl(img, maxDimension, quality, dataUrl));
+    };
+    img.src = dataUrl;
   });
 }
 

@@ -1803,15 +1803,27 @@ now (see "Explicitly out of scope" below).
   of this pass, **three** real backends, routed automatically (never a
   persistent picker — see the cost-lock section above and this route's
   own module doc comment):
-  - **Vocal/lip-sync clips** → **Comfy Cloud's LTX-2.5
-    `AudioToVideo` partner node** (`lib/comfyCloud.ts`), which needs
+  - **Vocal/lip-sync clips** → **Comfy Cloud running the full LTX 2.3
+    IA2V graph** (`lib/comfyCloud.ts`,
+    `workflow/LTX_2.3_IA2V_Cloud.json` — copied byte-for-byte from the
+    original Skidmarks repo, with 100+ real renders behind it; never
+    edit it, and see `lib/comfyCloud.ts` for the five node inputs this
+    app patches and nothing else), which needs
     **`COMFY_CLOUD_API_KEY`** (create at
     [platform.comfy.org](https://platform.comfy.org) — an active Comfy
     Cloud subscription is required) and optionally **`COMFY_URL`**
     (leave unset/blank for Comfy Cloud's own hosted endpoint; set it
     only to point at a self-hosted/serverless ComfyUI instance
     instead). Driven by a real slice of the attached song's own vocal
-    audio (`lib/mp3Slice.ts`), not `XAI_API_KEY`.
+    audio (`lib/mp3Slice.ts`), not `XAI_API_KEY`. This used to call
+    Comfy's hosted `LtxApi25AudioToVideo` partner node, written off doc
+    pages; it never survived a real call (its `model` input is a
+    DynamicCombo needing a `model.resolution` sibling key, `SaveVideo`
+    also wanted `format`/`format.codec`, and the completion reader
+    looked for a `video` output key where `SaveVideo` actually emits
+    `images`), and it hard-caps driving audio at 20s besides. The LTX
+    2.3 graph has none of those problems — duration is an ordinary
+    graph input, so the 30s ceiling is real.
   - **Instrumental/B-roll clips** → **MiniMax H3** by default
     (Stuart's own 2026-09-13 "H3 please" ask), needing
     **`MINIMAX_API_KEY`** (pay-as-you-go, create at
@@ -1833,10 +1845,13 @@ now (see "Explicitly out of scope" below).
     `missing_api_key` outcome; Grok stays reachable via the switch
     either way. **Cost**: xAI Grok Imagine video is $0.08/s at 480p
     (plus $0.01/reference image); MiniMax H3 is $0.08/s at 768P (its
-    cheaper documented tier, first 5 reference images free); Comfy
-    Cloud's LTX-2.5 (Fast) is $0.13/s at 1080p (its only documented
-    resolution) — check each provider's own current pricing before
-    relying on this at volume. Real, auto-computed per-plate duration
+    cheaper documented tier, first 5 reference images free); the Vocal/LTX
+    confirm estimates $0.13/s (Lightricks' own published LTX
+    direct-API rate) — but that one is a **stand-in, not a verified
+    bill**: the 2.3 graph runs on Comfy Cloud's own GPUs, billed as
+    Comfy Cloud compute/credits rather than as an LTX API call. Check
+    each provider's own current pricing before relying on this at
+    volume. Real, auto-computed per-plate duration
     (not a picker) is shown in the confirm step either way.
 - **Wiring up render persistence**: needs a **Vercel Blob store**
   connected to this project (Vercel dashboard → Project → Storage →

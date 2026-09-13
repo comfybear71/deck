@@ -100,6 +100,12 @@ export function useSkidmarksStudio() {
     () => LOADING_SESSION_SYNC_STATE
   );
 
+  /* The `persistFailure` and `storageWarning` subscriptions that used
+   * to sit here are gone — they reported on `localStorage` quota, and
+   * `persist()` no longer writes to `localStorage` (see
+   * `lib/skidmarks.ts`). `sessionSync` above covers the same need
+   * against the store that actually exists now. */
+
   const analysisTokenRef = useRef(0);
 
   const selectProjectKind = useCallback(
@@ -233,7 +239,7 @@ export function useSkidmarksStudio() {
   }, []);
 
   const setMp3Duration = useCallback(
-    (durationSec: number) => setSkidmarksMp3Duration(durationSec),
+    (attachId: string, durationSec: number) => setSkidmarksMp3Duration(attachId, durationSec),
     []
   );
 

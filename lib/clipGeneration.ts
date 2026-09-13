@@ -80,23 +80,28 @@
  * frame-cut from `mp3.audioUrl` — the durable Blob URL, never the
  * ephemeral in-tab `File`/object URL, since a server route has no
  * access to a browser `File` at all) instead of an automatic push-in/
- * zoom. That node's own output duration is *set by* the input audio's
- * length, not a separate parameter — `MIN_LTX_CLIP_DURATION_SEC`/
+ * zoom. The graph's duration input (node `340:331` of
+ * `workflow/LTX_2.3_IA2V_Cloud.json`) is fed that slice's own real,
+ * frame-aligned length, so the sliced audio and the rendered clip run
+ * the same time — `MIN_LTX_CLIP_DURATION_SEC`/
  * `MAX_LTX_CLIP_DURATION_SEC` below bound how long that sliced audio
  * (and so the rendered clip) is allowed to be.
  *
- * **History of this ceiling, both revisions real and live-QA'd, not
- * guessed**: this shipped first at `[5, 20]` — a partner-node doc page
- * listed `LtxApi25AudioToVideo`'s driving audio as `2-20s`, erroring
- * outside that range, which read as the real hard ceiling at the time.
- * Two real bugs followed from trusting that number too literally: (1)
- * Stuart's live usage (many real ~30s LTX renders already produced on
- * his own Comfy Cloud account) showed that documented `20s` figure was
- * simply too conservative for his actual workflow — the real ceiling
- * he can reach in practice is **~30s**, so `MAX_LTX_CLIP_DURATION_SEC`
- * is `30` now, not `20`; (2) independent of that number, a plate
- * requested at *exactly* the ceiling could still get rejected — xAI/
- * Comfy audio must be frame-aligned, and `lib/mp3Slice.ts`'s
+ * **History of this ceiling**: this shipped first at `[5, 20]`,
+ * because the Vocal path then called Comfy's hosted
+ * `LtxApi25AudioToVideo` partner node, which really does hard-reject
+ * driving audio outside `2-20s` in its own `execute()`. That was a
+ * real cap on that node — but it was never the cap on Stuart's actual
+ * workflow, which produces ~30s LTX renders routinely on his own Comfy
+ * Cloud account, because that workflow never used that node. The Vocal
+ * path now submits the full LTX 2.3 IA2V graph
+ * (`lib/comfyCloud.ts`, `workflow/LTX_2.3_IA2V_Cloud.json`), where
+ * duration is an ordinary graph input with no such ceiling, so
+ * `MAX_LTX_CLIP_DURATION_SEC` is `30` — matching his demonstrated
+ * usage, not a doc page. A second, separate real bug also came out of
+ * that first pass: a plate
+ * a plate requested at *exactly* the ceiling could still get rejected
+ * — the audio must be frame-aligned, and `lib/mp3Slice.ts`'s
  * `sliceMp3ToTimeRange` rounds **outward** to the nearest real MP3
  * frame boundary to fully cover the requested window, so a request for
  * exactly `20.0s` could round out to `~20.02s`, which displayed as
@@ -172,22 +177,20 @@ export function estimateClipRenderCostUsd(durationSec: number, referenceImageCou
   return durationSec * CLIP_SECOND_RATE_USD + referenceImageCount * PER_REFERENCE_IMAGE_USD;
 }
 
-/** LTX-2.5 (Fast) at 1080p — the only resolution tier
- * `LtxApi25AudioToVideo` offers (`"1920x1080"`/`"1080x1920"`, tied to
- * the chosen model, not a separate picker) — per Lightricks' own
- * published direct-API pricing (docs.ltx.io/pricing,
- * ltx.io/model/api/pricing, checked while building this feature):
- * $0.13/s for Fast at 1080p ($0.17/s for Pro — not used by default,
- * see `lib/comfyCloud.ts`'s `DEFAULT_LTX_MODEL`; no env override for
- * this, per the "don't invent other Comfy key names" lock). **Honesty
- * note**: this is the provider's own published *direct*-API rate, the
- * same basis `app/api/skidmarks/generate-clip/route.ts`'s existing
- * Grok cost estimate uses for xAI — Comfy Cloud's own account-level
- * credit conversion for this partner node isn't independently
- * confirmed here (no `COMFY_CLOUD_API_KEY` to check it against), so
- * this is the most honest real number available, not a verified final
- * bill. No per-reference-image surcharge, unlike Grok — LTX's own
- * pricing page states plainly "no request fees or per-asset charges." */
+/** Per-second estimate shown in the Vocal render confirm, on
+ * Lightricks' own published LTX direct-API rate ($0.13/s, docs.ltx.io/
+ * pricing / ltx.io/model/api/pricing, checked while building this
+ * feature). **Honesty note, and it matters more since the 2.3 port**:
+ * the Vocal path no longer calls a hosted LTX partner node at all — it
+ * runs `workflow/LTX_2.3_IA2V_Cloud.json` on Comfy Cloud's own GPUs,
+ * billed as Comfy Cloud compute/credits, not as an LTX API call. This
+ * rate is therefore an order-of-magnitude stand-in so the confirm step
+ * still shows Stuart a real number instead of nothing, not a verified
+ * bill; no `COMFY_CLOUD_API_KEY` is available in this sandbox to check
+ * the real credit burn against. If Stuart's actual Comfy Cloud
+ * statement after a few real renders says otherwise, this constant is
+ * the one place to correct. No per-reference-image surcharge, unlike
+ * Grok. */
 const LTX_SECOND_RATE_USD = 0.13;
 
 export function estimateLtxClipRenderCostUsd(durationSec: number): number {

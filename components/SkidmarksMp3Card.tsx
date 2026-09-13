@@ -13,7 +13,12 @@ interface SkidmarksMp3CardProps {
    * attachment record *and* kicks off real vocal/instrumental analysis
    * against this same file (see `analyzeVocalActivity`). */
   onAttach: (file: File) => void;
-  onDurationResolved: (durationSec: number) => void;
+  /** `attachId` is this card's own live `mp3.attachId`, captured at the
+   * moment `loadedmetadata` actually fires — see
+   * `setSkidmarksMp3Duration`'s doc comment for why this guard matters:
+   * a deferred/late metadata resolve (a real iOS Safari quirk) must
+   * never land on a since-replaced attach. */
+  onDurationResolved: (attachId: string, durationSec: number) => void;
   onRemove: () => void;
 }
 
@@ -154,9 +159,10 @@ export function SkidmarksMp3Card({
   };
 
   const handleLoadedMetadata = () => {
+    if (!mp3) return;
     const duration = audioRef.current?.duration;
     if (duration && Number.isFinite(duration)) {
-      onDurationResolved(duration);
+      onDurationResolved(mp3.attachId, duration);
     }
   };
 
