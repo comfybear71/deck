@@ -14,6 +14,7 @@ import {
   normalizeSkidmarksSegment,
   removeSkidmarksClipPlate,
   resetSkidmarksSessionAfterArchive,
+  resolveInstrumentalVideoModel,
   resolveSelectedPlateId,
   restoreSkidmarksArchivedSession,
   SKIDMARKS_MODELS,
@@ -21,6 +22,7 @@ import {
   setSkidmarksClipPlateMotionPrompt,
   setSkidmarksClipPlateStill,
   setSkidmarksMp3AudioUrl,
+  setSkidmarksSegmentInstrumentalVideoModel,
   setSkidmarksSegmentModel,
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
@@ -495,6 +497,40 @@ describe("normalizeSkidmarksSegment", () => {
     expect(normalizeSkidmarksSegment(seedanceLegacy).model).toBe("seedance");
   });
 
+  it("preserves a valid stored instrumentalVideoModel across a reload, and drops an invalid one", () => {
+    const withGrok = {
+      id: "seg-h3-1",
+      startSec: 0,
+      endSec: 30,
+      label: "instrumental",
+      model: "grok",
+      shotPrompt: "",
+      instrumentalVideoModel: "grok",
+    } as unknown as SkidmarksClipSegment;
+    expect(normalizeSkidmarksSegment(withGrok).instrumentalVideoModel).toBe("grok");
+
+    const withStale = {
+      id: "seg-h3-2",
+      startSec: 0,
+      endSec: 30,
+      label: "instrumental",
+      model: "grok",
+      shotPrompt: "",
+      instrumentalVideoModel: "seedance", // never a valid value for this field
+    } as unknown as SkidmarksClipSegment;
+    expect(normalizeSkidmarksSegment(withStale).instrumentalVideoModel).toBeUndefined();
+
+    const withNone = {
+      id: "seg-h3-3",
+      startSec: 0,
+      endSec: 30,
+      label: "instrumental",
+      model: "grok",
+      shotPrompt: "",
+    } as unknown as SkidmarksClipSegment;
+    expect(normalizeSkidmarksSegment(withNone).instrumentalVideoModel).toBeUndefined();
+  });
+
   it("backfills exactly one blank plate slot for a pre-plate-stills session with no still at all", () => {
     const legacy = {
       id: "seg-5",
@@ -681,6 +717,44 @@ describe("setSkidmarksSegmentSelectedPlate / setSkidmarksClipPlateMotionPrompt",
     const after = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
     expect(after.plates.find((p) => p.id === first.id)?.motionPrompt).toBe("slow zoom into keyhole");
     expect(after.plates.find((p) => p.id === second.id)?.motionPrompt).toBeUndefined();
+  });
+});
+
+describe("resolveInstrumentalVideoModel", () => {
+  it("defaults to h3 \u2014 Stuart's 2026-09-13 lock", () => {
+    expect(resolveInstrumentalVideoModel(undefined)).toBe("h3");
+    expect(resolveInstrumentalVideoModel(null)).toBe("h3");
+    expect(resolveInstrumentalVideoModel("")).toBe("h3");
+  });
+
+  it("returns grok only for the literal stored value 'grok'", () => {
+    expect(resolveInstrumentalVideoModel("grok")).toBe("grok");
+  });
+
+  it("falls back to h3 for any other stored value, including a stale/invalid one", () => {
+    expect(resolveInstrumentalVideoModel("h3")).toBe("h3");
+    expect(resolveInstrumentalVideoModel("seedance")).toBe("h3");
+    expect(resolveInstrumentalVideoModel("ltx-lipsync")).toBe("h3");
+  });
+});
+
+describe("setSkidmarksSegmentInstrumentalVideoModel", () => {
+  beforeEach(() => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("track.mp3", 120));
+  });
+
+  it("sets instrumentalVideoModel on the segment, and doesn't touch the still-image model field", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    setSkidmarksSegmentInstrumentalVideoModel(segment.id, "grok");
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.instrumentalVideoModel).toBe("grok");
+    expect(updated.model).toBe(segment.model);
+  });
+
+  it("is the only way this field ever changes \u2014 unset until explicitly set", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    expect(segment.instrumentalVideoModel).toBeUndefined();
   });
 });
 
