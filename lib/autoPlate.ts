@@ -165,10 +165,21 @@ const CONCRETE_OPENER_SHOTS = [
  * cycled deterministically (not randomly, so this stays testable) by a
  * plate's overall position, so a song with many empty plates doesn't
  * get the exact same line repeated verbatim on every one. */
+// Live-QA fix (2026-09-13, "every fucking image is staring straight out
+// the camera"): these three used to read as soft front performance
+// shots ("Close-up performance shot of {band}'s vocalist mid-lyric…"),
+// with nothing steering the framing away from a camera-facing stare.
+// Reworded to explicitly off-axis angles (¾ / profile / over-the-
+// shoulder, face or gaze turned away from the lens) — this pool only
+// ever fires for a band with no master still set (see this module's own
+// doc comment's "Master-still routing" section), so it's the one path
+// where a locked character's own camera-angle lock (`lib/plateGeneration
+// .ts`'s `SKIDMARKS_CHARACTER_LOCKS`) isn't reinforcing this on top —
+// the template text itself has to carry the off-axis instruction.
 const VOCAL_SHOT_TEMPLATES = [
-  "Close-up performance shot of {band}'s vocalist mid-lyric, dramatic stage lighting, music-video still.",
-  "Medium shot of the vocalist mid-performance, moody colored stage lighting, cinematic music-video framing.",
-  "Wide performance shot of {band} on stage, atmospheric haze and colored lighting, strong sense of scale.",
+  "Close, angled \u00be view of {band}'s vocalist mid-lyric, face turned away from the lens, dramatic stage lighting, music-video still.",
+  "Medium profile shot of the vocalist mid-performance, gaze off to the side rather than toward camera, moody colored stage lighting, cinematic music-video framing.",
+  "Wide over-the-shoulder shot of {band} on stage, vocalist facing away from camera into the crowd, atmospheric haze and colored lighting.",
 ];
 
 const INSTRUMENTAL_SHOT_TEMPLATES = [

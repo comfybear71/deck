@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPlateGenerationRequest,
+  buildSirayCharacterPrompt,
   generatePlateStill,
   getSkidmarksCharacterLock,
   resolveVocalistForPrompt,
@@ -63,6 +64,16 @@ describe("getSkidmarksCharacterLock", () => {
     expect(lock?.negativeCues?.toLowerCase()).toContain("bare head with no fedora");
     expect(lock?.negativeCues?.toLowerCase()).toContain("recognizable facial features visible in light");
     expect(lock?.negativeCues?.toLowerCase()).toContain("generic-looking person");
+    // Live-QA fix (2026-09-13, "every fucking image is staring straight
+    // out the camera"): the lock now also bans a front-facing/camera
+    // stare explicitly, on top of the pre-existing face-in-shadow rule —
+    // a fedora'd but square-to-camera shot violated the brief just as
+    // much as a lit face did.
+    expect(lock?.promptHallmarks.toLowerCase()).toContain("never turned");
+    expect(lock?.promptHallmarks.toLowerCase()).toContain("toward the camera");
+    expect(lock?.negativeCues?.toLowerCase()).toContain("staring straight into the camera");
+    expect(lock?.negativeCues?.toLowerCase()).toContain("direct");
+    expect(lock?.negativeCues?.toLowerCase()).toContain("lens");
   });
 
   it("returns undefined for any member without an explicit lock", () => {
@@ -355,7 +366,14 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt.toLowerCase()).toContain("neon blue");
   });
 
-  it("routes a Vocal + LTX Lip-sync clip to tight camera-facing framing", () => {
+  it("routes a Vocal + LTX Lip-sync clip to tight, off-axis framing — never a camera-facing stare", () => {
+    // Live-QA fix (2026-09-13): this framing hint used to end in
+    // ", camera-facing, " — an affirmative style instruction telling
+    // the model to point the vocalist's eyes at the lens, which fought
+    // directly against a locked character's own no-stare lock. Reworded
+    // to an angled ¾/profile framing instead, and must never contain
+    // the literal phrases "camera-facing"/"looking at camera"/
+    // "straight-on portrait" even in passing.
     const { prompt } = buildPlateGenerationRequest({
       shotPrompt: "singing into a vintage microphone",
       vocal: true,
@@ -366,6 +384,11 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt).toContain("Tight cinematic close/medium framing");
     expect(prompt).toContain("lip-sync-ready");
     expect(prompt).toContain("Feature Rio, the vocalist, in the scene.");
+    expect(prompt.toLowerCase()).not.toContain("camera-facing");
+    expect(prompt.toLowerCase()).not.toContain("looking at camera");
+    expect(prompt.toLowerCase()).not.toContain("straight-on portrait");
+    expect(prompt.toLowerCase()).toMatch(/\u00be|profile/);
+    expect(prompt.toLowerCase()).toContain("away from the lens");
   });
 
   it("does not apply the tight lip-sync framing to a Vocal clip manually set to a non-lip-sync model", () => {
@@ -489,6 +512,55 @@ describe("buildPlateGenerationRequest", () => {
       bandName: "Solar Rebel",
     });
     expect(prompt).toContain("Music video for Solar Rebel.");
+  });
+});
+
+describe("buildSirayCharacterPrompt", () => {
+  // Live-QA fix (2026-09-13): `generatePlateStillViaSiray` used to send
+  // Siray nothing but the bare camera-position sentence from
+  // `lib/sirayPositions.ts` — zero identity-lock/hallmark/negative-cue
+  // text — which is exactly why Auto-plate's Siray-routed Jack Ash
+  // fills drifted off-identity ("not even Jack Ash, some white cunt")
+  // and stared into the lens with nothing telling them not to.
+  // `buildSirayCharacterPrompt` is the fix: it merges the same lock text
+  // `buildPlateGenerationRequest` already injects for the xAI path.
+  const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR });
+
+  it("merges Jack Ash's hallmarks and negative cues (including the no-stare camera rule) onto a bare position prompt", () => {
+    const merged = buildSirayCharacterPrompt("Front MCU — chest-up, mouth readable.", jackAsh);
+    expect(merged.startsWith("Front MCU — chest-up, mouth readable.")).toBe(true);
+    expect(merged.toLowerCase()).toContain("neon blue");
+    expect(merged.toLowerCase()).toContain("hidden in deep shadow at all times");
+    expect(merged).toContain("Do not show:");
+    expect(merged.toLowerCase()).toContain("staring straight into the camera");
+    expect(merged.toLowerCase()).toContain("fully lit face");
+  });
+
+  it("merges the lock onto every position, including an off-mouth/from-behind one", () => {
+    const merged = buildSirayCharacterPrompt("Straight back.", jackAsh);
+    expect(merged.startsWith("Straight back.")).toBe(true);
+    expect(merged.toLowerCase()).toContain("fedora");
+  });
+
+  it("is a no-op for a vocalist with no explicit character lock", () => {
+    const nova = member({ id: "solar-rebel-vocals", name: "Nova", avatarImage: "data:image/jpeg;base64,novaBytes" });
+    expect(buildSirayCharacterPrompt("Profile left — lips still readable.", nova)).toBe(
+      "Profile left — lips still readable."
+    );
+  });
+
+  it("is a no-op when no vocalist is resolved at all", () => {
+    expect(buildSirayCharacterPrompt("Overhead.", undefined)).toBe("Overhead.");
+  });
+
+  it("stays comfortably under app/api/skidmarks/generate-still-siray/route.ts's own 2000-char prompt cap", () => {
+    // That route's own `MAX_PROMPT_LENGTH` validates the merged prompt
+    // directly (unlike the xAI route, Siray gets one plain `prompt`
+    // field, no separate raw-shotPrompt split) — Jack Ash's hallmarks +
+    // negative cues alone run over a thousand characters, so this is a
+    // real constraint, not a hypothetical one.
+    const merged = buildSirayCharacterPrompt("Front MCU — chest-up, mouth readable.", jackAsh);
+    expect(merged.length).toBeLessThan(2000);
   });
 });
 

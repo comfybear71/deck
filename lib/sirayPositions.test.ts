@@ -28,41 +28,62 @@ describe("SIRAY_17_POSITIONS", () => {
   });
 });
 
+// Stuart's explicit ban, live-QA'd 2026-09-13 ("every fucking image is
+// staring straight out the camera") — `pickSirayPosition` must never
+// auto-pick any of these, since every Siray-routed still shows a
+// character in frame by design (see `lib/plateGeneration.ts`'s
+// `buildSirayCharacterPrompt` doc comment).
+const FRONT_FACING_INDEXES = [1, 2, 3, 4, 12, 17];
+
 describe("pickSirayPosition", () => {
-  it("picks from the wide group for the first clip's first empty slot", () => {
+  it("never auto-picks a front-facing position, for any real combination of inputs", () => {
+    for (const vocal of [true, false]) {
+      for (const isFirstClip of [true, false]) {
+        for (const isFirstEmptySlotInClip of [true, false]) {
+          for (let rotationIndex = 0; rotationIndex < 10; rotationIndex += 1) {
+            const p = pickSirayPosition({ vocal, isFirstClip, isFirstEmptySlotInClip, rotationIndex });
+            expect(FRONT_FACING_INDEXES).not.toContain(p.index);
+          }
+        }
+      }
+    }
+  });
+
+  it("falls back to an off-axis mouth-on position for the first clip's first empty slot — the wide group (1/2) is itself all front-facing", () => {
     const p = pickSirayPosition({ vocal: false, isFirstClip: true, isFirstEmptySlotInClip: true, rotationIndex: 0 });
-    expect([1, 2]).toContain(p.index);
+    expect([5, 6, 7, 8]).toContain(p.index);
   });
 
-  it("picks from the mouth-on group for a Vocal clip, not the first-clip-opener case", () => {
+  it("picks from the off-axis mouth-on group (5/6/7/8) for a Vocal clip, not the first-clip-opener case", () => {
     const p = pickSirayPosition({ vocal: true, isFirstClip: false, isFirstEmptySlotInClip: false, rotationIndex: 0 });
-    expect([3, 4, 5, 6, 7, 8, 12]).toContain(p.index);
+    expect([5, 6, 7, 8]).toContain(p.index);
   });
 
-  it("picks from the off-mouth group for an Instrumental clip", () => {
+  it("picks from the off-mouth group for an Instrumental clip — unaffected by the front-facing ban", () => {
     const p = pickSirayPosition({ vocal: false, isFirstClip: false, isFirstEmptySlotInClip: false, rotationIndex: 0 });
     expect([9, 10, 11, 14, 15, 16]).toContain(p.index);
   });
 
-  it("a Vocal first clip's first slot still gets a wide master, not a mouth-on one", () => {
+  it("a Vocal first clip's first slot also falls back to the off-axis mouth-on subset, not a front wide master", () => {
     const p = pickSirayPosition({ vocal: true, isFirstClip: true, isFirstEmptySlotInClip: true, rotationIndex: 0 });
-    expect([1, 2]).toContain(p.index);
+    expect([5, 6, 7, 8]).toContain(p.index);
   });
 
   it("cycles deterministically through the pool rather than repeating the same position", () => {
-    const picks = Array.from({ length: 7 }, (_, i) =>
+    const picks = Array.from({ length: 4 }, (_, i) =>
       pickSirayPosition({ vocal: true, isFirstClip: false, isFirstEmptySlotInClip: false, rotationIndex: i }).index
     );
-    // 7 mouth-on positions exist — one full cycle should hit each once.
-    expect(new Set(picks).size).toBe(7);
-    // And wraps back to the start on the 8th.
-    const eighth = pickSirayPosition({
+    // 4 off-axis mouth-on positions exist (5/6/7/8) — one full cycle
+    // should hit each once.
+    expect(new Set(picks).size).toBe(4);
+    // And wraps back to the start on the 5th.
+    const fifth = pickSirayPosition({
       vocal: true,
       isFirstClip: false,
       isFirstEmptySlotInClip: false,
-      rotationIndex: 7,
+      rotationIndex: 4,
     });
-    expect(eighth.index).toBe(picks[0]);
+    expect(fifth.index).toBe(picks[0]);
   });
 
   it("handles a negative rotationIndex without throwing or returning undefined", () => {

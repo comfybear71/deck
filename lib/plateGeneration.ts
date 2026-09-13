@@ -139,12 +139,17 @@ export const SKIDMARKS_CHARACTER_LOCKS: Record<string, SkidmarksCharacterLock> =
       "feature that breaks through that darkness is his mouth: his lips glow a vivid neon blue, clearly visible " +
       "even though every other facial feature stays completely unlit and unseen. This lock is not optional and " +
       "applies to every plate he appears in, Vocal or Instrumental: he must match this exact reference photo's " +
-      "build, wardrobe, and silhouette \u2014 never a different or generic-looking man, and never bare-headed.",
+      "build, wardrobe, and silhouette \u2014 never a different or generic-looking man, and never bare-headed. " +
+      "Camera angle is locked too, every plate: he is shot from an angled \u00be view, profile, over-the-" +
+      "shoulder, or looking-away framing \u2014 never square-on to the lens \u2014 with his eyes never turned " +
+      "toward the camera, even in a shot where his mouth and neon lips are readable.",
     negativeCues:
       "Jack Ash's face lit or visible, his eyes, brow, nose, cheeks, or jawline visible or out of shadow, no " +
       "fedora, his lips a normal skin tone instead of glowing neon blue, a fully lit face, a bare head with no " +
       "fedora, any recognizable facial features visible in light, a different or generic-looking person instead " +
-      "of matching the reference photo's identity",
+      "of matching the reference photo's identity, him staring straight into the camera, his eyes making direct " +
+      "contact with the lens, a square-on stare toward camera, passport- or headshot-style framing centered on " +
+      "his face toward the lens",
   },
 };
 
@@ -203,17 +208,31 @@ export function resolveVocalistForPrompt(members: SkidmarksMember[]): SkidmarksM
  * this build has exactly one real image backend (xAI, above), so a
  * clip's LTX/Grok/H3 tag doesn't select a *different* API here, it only
  * steers this same call's prompt phrasing toward that model's usual
- * framing style. Vocal clips tagged LTX Lip-sync get a tight,
- * camera-facing framing hint (lip-sync-oriented, per the product ask);
- * clips tagged H3 ("simple stills" per the product ask) get a plainer,
+ * framing style. Vocal clips tagged LTX Lip-sync get a tight, angled
+ * off-axis framing hint (lip-sync-oriented \u2014 mouth stays readable
+ * \u2014 but never a straight-on camera stare, per the 2026-09-13
+ * live-QA fix below); clips tagged H3 ("simple stills" per the product
+ * ask) get a plainer,
  * single-subject hint; everything else (Grok, the instrumental/B-roll
  * default, or a manually-set Seedance) gets a wider, dynamic
  * establishing-shot hint. */
 function routingFramingHint(vocal: boolean, model: SkidmarksModelId): string {
   if (vocal && isLipSyncModel(model)) {
+    // Live-QA fix (2026-09-13, "every fucking image is staring straight
+    // out the camera"): this used to end in ", camera-facing, " \u2014 an
+    // affirmative style instruction telling the model to point the
+    // vocalist's eyes straight at the lens, which fought directly
+    // against Jack Ash's own directorNote ("never a lens stare") and
+    // its negative cues below. Reworded to an angled, off-axis framing
+    // instead \u2014 still tight/lip-sync-ready (mouth stays readable),
+    // just never square-on to camera. Deliberately avoids the literal
+    // phrases "camera-facing"/"looking at camera"/"straight-on
+    // portrait" here, even in passing, so nothing in this *style*
+    // sentence itself reads as an instruction toward a lens stare.
     return (
-      "Tight cinematic close/medium framing centered on the vocalist's face and upper body, camera-facing, " +
-      "lip-sync-ready composition, music-video still."
+      "Tight cinematic close/medium framing on the vocalist's mouth and upper body, shot at an angled \u00be " +
+      "or profile angle with the eyes turned away from the lens \u2014 lip-sync-ready composition, music-video " +
+      "still."
     );
   }
   if (model === "h3") {
@@ -498,6 +517,40 @@ export async function resolvePlateReferenceDataUrl(src: string): Promise<string>
   return readImageFileAsDataUrl(blob);
 }
 
+/**
+ * Siray sibling of `buildPlateGenerationRequest`'s character-lock merge
+ * (above) — **live-QA fix**: `generatePlateStillViaSiray` (below) used
+ * to send Siray nothing but the bare camera-position sentence straight
+ * out of `lib/sirayPositions.ts` ("Front MCU \u2014 chest-up, mouth
+ * readable."), with zero identity-lock/hallmark/negative-cue text at
+ * all. Siray's ref2i model, given only a generic framing instruction
+ * plus a reference image, drifted off-identity on live QA (Stuart's
+ * report: "not even Jack Ash, some white cunt") and had nothing at all
+ * steering it away from a front, camera-facing stare either \u2014 the
+ * xAI path's `buildPlateGenerationRequest` always injected this text,
+ * the Siray path never did. This merges the same hallmark + negative-
+ * cue text (including the no-front-stare camera rule) onto a Siray
+ * position prompt so every Siray-routed still of a locked character
+ * gets the same identity + no-stare guarantee a manually-typed/
+ * xAI-routed shot already had. A no-op (returns `positionPrompt`
+ * unchanged) for a vocalist with no explicit lock, or no vocalist at
+ * all \u2014 nothing here invents a look for an un-locked member, and
+ * this must never be called for a genuinely person-less plate (the
+ * scripted door/keyhole shots never reach this function \u2014 they
+ * return before the Siray branch even runs, see `lib/autoPlate.ts`'s
+ * `planAutoPlateFill`).
+ */
+export function buildSirayCharacterPrompt(positionPrompt: string, vocalist?: SkidmarksMember): string {
+  const lock = vocalist ? getSkidmarksCharacterLock(vocalist.id) : undefined;
+  if (!lock) return positionPrompt;
+  const parts = [positionPrompt.trim(), lock.promptHallmarks];
+  if (lock.negativeCues) parts.push(`Do not show: ${lock.negativeCues}.`);
+  return parts
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+    .join(" ");
+}
+
 const GENERATE_STILL_SIRAY_ENDPOINT = "/api/skidmarks/generate-still-siray";
 
 /**
@@ -505,9 +558,13 @@ const GENERATE_STILL_SIRAY_ENDPOINT = "/api/skidmarks/generate-still-siray";
  * positions" sibling of `generatePlateStill` above, for the one case
  * `lib/autoPlate.ts` routes there: a real camera-position prompt
  * (`lib/sirayPositions.ts`) plus a character's master reference still.
- * Same honest-outcome shape as `generatePlateStill` (never throws, a
- * thrown `fetch` is caught and reported the same as any other real
- * failure) so a caller doesn't need a second code path to handle it.
+ * **Callers must pre-merge a locked character's hallmarks/negative
+ * cues onto `prompt` themselves via `buildSirayCharacterPrompt` above
+ * before calling this** \u2014 this function itself sends whatever
+ * `prompt` string it's given, unmodified. Same honest-outcome shape as
+ * `generatePlateStill` (never throws, a thrown `fetch` is caught and
+ * reported the same as any other real failure) so a caller doesn't
+ * need a second code path to handle it.
  */
 export async function generatePlateStillViaSiray(
   prompt: string,

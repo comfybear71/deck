@@ -161,14 +161,20 @@ describe("planAutoPlateFill — master-still routing (Siray)", () => {
     expect(targets[0].shotPrompt).toContain("door");
   });
 
-  it("gives the first clip's first empty slot a wide-master position, not a mouth-on/off-mouth one", () => {
+  it("gives the first clip's first empty slot an off-axis position, never the front-facing wide master (1/2)", () => {
+    // Live-QA fix (2026-09-13, "every fucking image is staring straight
+    // out the camera"): "Front wide"/"Front ¾" (1/2) are themselves
+    // front-facing per Stuart's explicit ban — `pickSirayPosition` now
+    // falls back to the off-axis mouth-on subset (5–8: "¾"/profile) for
+    // this slot instead. See `lib/sirayPositions.test.ts` for the
+    // dedicated pool-level coverage of this fallback.
     const segments = withPlateCount(buildDemoSegments(210), [2]).slice(0, 1);
     const targets = planAutoPlateFill(segments, "", "Jack Ash", "", MASTER_STILL);
-    // Wide positions are "Front wide"/"Front ¾" per lib/sirayPositions.ts.
-    expect(targets[0].shotPrompt).toMatch(/Front wide|Front ¾/);
+    expect(targets[0].shotPrompt).not.toMatch(/Front wide|Front ¾/);
+    expect(targets[0].shotPrompt.toLowerCase()).toMatch(/\u00be|profile/);
   });
 
-  it("routes a Vocal clip's later slots to mouth-on framing language", () => {
+  it("routes a Vocal clip's later slots to off-axis mouth-on framing language, never a front position", () => {
     // buildDemoSegments' own seed cadence: index 0 is instrumental,
     // index 1 ("verse") is vocal — used at array index 1 (not the
     // "first clip" slot) so this exercises the plain vocal branch, not
@@ -178,7 +184,8 @@ describe("planAutoPlateFill — master-still routing (Siray)", () => {
     const targets = planAutoPlateFill(segments, "", "Jack Ash", "", MASTER_STILL);
     const target = targets.find((t) => t.segmentId === segments[1].id);
     expect(target).toBeDefined();
-    expect(target!.shotPrompt.toLowerCase()).toMatch(/mouth|cu|mcu|profile|low front/);
+    expect(target!.shotPrompt.toLowerCase()).toMatch(/\u00be|profile/);
+    expect(target!.shotPrompt.toLowerCase()).not.toMatch(/front mcu|front cu|low front/);
   });
 
   it("routes an Instrumental clip's slots to off-mouth framing language", () => {
