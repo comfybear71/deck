@@ -153,6 +153,38 @@ to Vercel Blob (JSON metadata + JSON snapshot + media), never
 in this repo (see Env vars) — when it lands, it should replace *all* of
 this `localStorage` session state, not just the archive.
 
+**A `localStorage` write failure (quota exceeded — real risk on iOS
+Safari's notably tight per-origin limit) must never be silently
+invisible either.** Real live-QA'd report: a clip's own timing stayed
+correct (small, persisted early) while its plates reverted to empty
+dashed placeholders — `persist()` (`lib/skidmarks.ts`) used to swallow
+a failed `localStorage.setItem` completely silently; the in-memory
+session still looked tagged, but nothing past the point the quota was
+hit had actually reached disk, so a later reload (or iOS backgrounding
+a tab hard enough to force one) came back showing exactly that. Two
+independent fixes, both real gaps, not just one: (1) an *uploaded*
+plate still already went through `readImageFileAsDataUrl`'s downscale-
+to-640px pass before this, but a *generated* still
+(`generatePlateStill`) was persisted straight off xAI's raw response
+with no size cap at all — now downscaled the same way via
+`downscaleDataUrlImage` (1024px ceiling, matching the lightbox/zip-
+export use case) right where `SkidmarksClipStub`'s Generate flow
+receives it. (2) `persist()` now records *any* write failure
+(`lastPersistFailure`/`getSkidmarksPersistFailure`, with
+`describeSkidmarksPersistFailure` giving quota errors their own
+specific message) and `SkidmarksDetailSheet` shows it as a persistent,
+distinctly-bordered banner the moment it happens — the same "must never
+look like a quiet success" principle as the paid-render alert above,
+just for local persistence instead of a paid API call. Downscaling
+closes the size gap that made hitting the quota this easy in the first
+place; the honest banner is the backstop for whatever residual risk
+remains (many clips, many plates, still adds up). Also hardened
+`SkidmarksAutoPlate`'s execution loop to re-check the *live* store
+(not its own stale, planned-up-front `segments` snapshot) immediately
+before writing each still back, so a plate Stuart fills manually
+mid-run can't be silently overwritten by that same run's now-stale
+plan for the same slot once its turn comes up.
+
 **A slow real API result must never silently overwrite already-tagged
 plates/prompts, or land on a different attach than the one it was for.**
 Real live-QA'd bug, reported right after #49 merged: "all Vocal plates
