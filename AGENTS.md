@@ -81,7 +81,7 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Plate *still* generation | **Real** — xAI Grok Imagine *image* API | `app/api/skidmarks/generate-still/route.ts`, `lib/plateGeneration.ts` |
 | Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to `localStorage` (the existing session-state mirror — see the "no `localStorage`" note below for what's actually exempt from that) | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `components/SkidmarksClipStub.tsx` |
 | Per-plate select + tick | **Real** — a small corner control on each filled plate tile (radio-style, one plate selected per clip at a time) plus a filled/empty tick for "already has a saved render"; see `lib/skidmarks.ts`'s `resolveSelectedPlateId` | `components/SkidmarksClipStub.tsx` |
-| Per-plate opt-in *video* render | **Real, three backends now, routed by Vocal vs. Instrumental, plus a real H3/Grok switch on Instrumental — no persistent picker.** Vocal clips → **Comfy Cloud's LTX-2.5 `AudioToVideo` partner node** (`COMFY_CLOUD_API_KEY`), driven by a real frame-sliced (`lib/mp3Slice.ts`) window of the attached song's own vocal audio (`mp3.audioUrl`), 5–20s — unchanged, no switch. Instrumental/B-roll clips → **MiniMax H3** (`MINIMAX_API_KEY`, optional `MINIMAX_GROUP_ID`) **by default** (Stuart's 2026-09-13 "H3 please, for this smoke" lock, superseding the older "never auto-assign H3" *still-image* cost lock below — the two are separate fields, see `SkidmarksInstrumentalVideoModel`'s doc comment), 5–15s, first-frame (optionally first+last-frame) image-to-video; **xAI Grok Imagine video** stays fully wired one tap away, same 5–15s range — a small H3/Grok switch lives *inside* the existing two-tap Render confirm, added on Stuart's own explicit ask ("a single H3 \| Grok choice inside the existing two-tap Render confirm"), persisted per clip (`SkidmarksClipSegment.instrumentalVideoModel`). Either way: animates **the one selected plate's own still only**, one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`). **Honesty note**: neither the Comfy/LTX nor the MiniMax H3 path is live-verified in this sandbox (no `COMFY_CLOUD_API_KEY`/`MINIMAX_API_KEY` available here) — see `lib/comfyCloud.ts`'s and `lib/minimaxH3.ts`'s own module doc comments; the H3 request/response shapes are mirrored from the original Skidmarks repo's own real H3 client, not invented. | `app/api/skidmarks/generate-clip/route.ts`, `lib/comfyCloud.ts`, `lib/minimaxH3.ts`, `lib/mp3Slice.ts`, `lib/clipGeneration.ts`, `lib/skidmarks.ts`, `components/SkidmarksClipRender.tsx` |
+| Per-plate opt-in *video* render | **Real, three backends now, routed by Vocal vs. Instrumental, plus a real H3/Grok switch on Instrumental — no persistent picker.** Vocal clips → **Comfy Cloud's LTX-2.5 `AudioToVideo` partner node** (`COMFY_CLOUD_API_KEY`), driven by a real frame-sliced (`lib/mp3Slice.ts`) window of the attached song's own vocal audio (`mp3.audioUrl`), 5–30s (raised from an initial 20s — see the "Real, auto-computed per-plate duration" cost-rule entry below for why, and for the frame-rounding trim fix that keeps a plate at exactly the ceiling from erroring) — no switch. Instrumental/B-roll clips → **MiniMax H3** (`MINIMAX_API_KEY`, optional `MINIMAX_GROUP_ID`) **by default** (Stuart's 2026-09-13 "H3 please, for this smoke" lock, superseding the older "never auto-assign H3" *still-image* cost lock below — the two are separate fields, see `SkidmarksInstrumentalVideoModel`'s doc comment), 5–15s, first-frame (optionally first+last-frame) image-to-video; **xAI Grok Imagine video** stays fully wired one tap away, same 5–15s range — a small H3/Grok switch lives *inside* the existing two-tap Render confirm, added on Stuart's own explicit ask ("a single H3 \| Grok choice inside the existing two-tap Render confirm"), persisted per clip (`SkidmarksClipSegment.instrumentalVideoModel`). Either way: animates **the one selected plate's own still only**, one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`). **Honesty note**: neither the Comfy/LTX nor the MiniMax H3 path is live-verified in this sandbox (no `COMFY_CLOUD_API_KEY`/`MINIMAX_API_KEY` available here) — see `lib/comfyCloud.ts`'s and `lib/minimaxH3.ts`'s own module doc comments; the H3 request/response shapes are mirrored from the original Skidmarks repo's own real H3 client, not invented. | `app/api/skidmarks/generate-clip/route.ts`, `lib/comfyCloud.ts`, `lib/minimaxH3.ts`, `lib/mp3Slice.ts`, `lib/clipGeneration.ts`, `lib/skidmarks.ts`, `components/SkidmarksClipRender.tsx` |
 | Per-plate render duration | **Real, auto-computed** — `segmentLengthSec / plateCount`, clamped to `[5, 15]`s (Grok's documented ceiling), no UI picker | `lib/clipGeneration.ts`'s `computePlateDurationSec` |
 | Render persistence | **Real**, per-**plate** now (not per-clip — see the pathname migration note below) — saved to durable Vercel Blob storage, survives a refresh; download uses a numeric (lettered once a clip has >1 plate) filename for Resolve. **Exactly one render per `(segmentId, plateId)` is an enforced invariant, not just a convention** — see the "exactly-one-render" note below | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
 | Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**, cards laid out in one `overflow-x-auto` horizontal strip (not a vertical stack) so a phone with several renders doesn't turn into one huge scroll; "download all" zip/sequential-fallback stays reachable underneath the strip. Each card also has a **Remove** control — deletes that plate's persisted Blob render(s) and clears its tick, never touches the plate's still/shot/motion prompts (those are separate, `localStorage`-only state) | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts`, `lib/clipRenders.ts`'s `deletePersistedClipRender` |
@@ -360,13 +360,38 @@ the request, and validate length against `shotPrompt` only.
   = `[5, 15]` seconds for both Instrumental backends (Grok's documented
   ceiling; MiniMax H3's own real ceiling is `[4, 15]`, looser, so this
   app's existing Grok range already sits safely inside it — no separate
-  H3 duration bounds needed), or `[5, 20]` for Vocal/Comfy-LTX,
+  H3 duration bounds needed), or `[5, 30]` for Vocal/Comfy-LTX,
   computed by `lib/clipGeneration.ts`'s `computePlateDurationSec`/
-  `computeLtxPlateDurationSec`. **Still not a UI picker or an env
-  var** — Stuart never gets a duration field to type into; the number is
-  derived from the clip's own real length and plate count, shown to him
-  read-only in the confirm step. If a future task asks for a manual
-  override, that's a fresh, explicit, code-reviewed ask — this rework
+  `computeLtxPlateDurationSec`. **The Vocal ceiling was `20`, briefly,
+  and is `30` now** — a partner-node doc page listed
+  `LtxApi25AudioToVideo`'s driving audio as `2-20s`, but Stuart's own
+  real, live Comfy Cloud usage (many actual ~30s LTX renders already
+  produced there) showed that number was too conservative for his real
+  workflow, so this app's product ceiling now matches his demonstrated
+  usage instead of that doc page. **A raw `segmentLengthSec /
+  plateCount` past either ceiling must never throw — it always clamps**,
+  and the confirm step always shows that *clamped* number, never the
+  raw pre-clamp one. A second, related real bug (also fixed in the same
+  pass): frame-aligned audio slicing (`lib/mp3Slice.ts`'s
+  `sliceMp3ToTimeRange`) always rounds **outward** to fully cover the
+  requested window, so a plate clamped to *exactly* the ceiling could
+  still get sliced a hair past it — Stuart hit this live at the old 20s
+  ceiling (`"This plate's audio slice is 20.0s"`, rejected, even though
+  the request had already been correctly clamped to 20). Fixed by
+  passing the ceiling into `sliceMp3ToTimeRange` as its own
+  `maxDurationSec`, which now trims whole frames off the *end* of an
+  over-long slice instead of erroring — `app/api/skidmarks/generate-
+  clip/route.ts`'s Vocal branch has no upper-bound rejection at all
+  anymore, only a floor check for genuinely too-little-audio-left. If
+  you touch `computePlateDurationSec`/`computeLtxPlateDurationSec`,
+  `sliceMp3ToTimeRange`, or the Vocal branch of `generate-clip/
+  route.ts`, keep both fixes — the clamp prevents an unreasonable
+  *request*, the trim prevents a reasonable one from failing on
+  rounding alone. **Still not a UI picker or an env var** — Stuart never
+  gets a duration field to type into; the number is derived from the
+  clip's own real length and plate count, shown to him read-only in the
+  confirm step. If a future task asks for a manual override, that's a
+  fresh, explicit, code-reviewed ask — this rework
   didn't add one.
 - **Resolution stays hardcoded** per backend (480p for Grok, 768P for
   MiniMax H3, 1080p for LTX-2.5 — each backend's own cheapest
