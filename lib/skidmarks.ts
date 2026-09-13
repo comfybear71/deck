@@ -1368,13 +1368,72 @@ export function subscribeSkidmarks(listener: () => void): () => void {
   };
 }
 
+/** One honest, human-readable line for why a `persist()` write to
+ * `localStorage` just failed — pure and exported so it's directly unit
+ * testable without needing a real (or quota-limited) `localStorage`.
+ * `QuotaExceededError` (Safari's own `DOMException` name/code for this,
+ * confirmed against MDN — code 22, or the legacy Firefox name
+ * `"NS_ERROR_DOM_QUOTA_REACHED"`) gets its own specific, actionable
+ * message; anything else (private-mode Safari throwing on `setItem`
+ * itself, a disabled storage permission) gets a generic but still
+ * honest one. */
+export function describeSkidmarksPersistFailure(err: unknown): string {
+  const isQuotaError =
+    err instanceof DOMException &&
+    (err.name === "QuotaExceededError" || err.code === 22 || err.name === "NS_ERROR_DOM_QUOTA_REACHED");
+  if (isQuotaError) {
+    return (
+      "Storage is full \u2014 this song's plate stills/renders no longer fit in this browser's local " +
+      "storage. Your most recent changes are only in memory right now and will be lost on a refresh or " +
+      "if this tab reloads. Archive this song (Blob storage, not local) or remove a few plate stills to " +
+      "free up room, then keep editing."
+    );
+  }
+  return (
+    "Couldn't save your latest changes locally " +
+    `(${err instanceof Error ? err.message : "unknown storage error"}). They're only in memory right ` +
+    "now and will be lost on a refresh or if this tab reloads."
+  );
+}
+
+/** Set the moment a `persist()` write to `localStorage` fails, cleared
+ * the moment one next succeeds — **not** itself persisted (it's a
+ * report *about* persistence failing, so it can only ever live in
+ * memory). This is the fix for a real gap: before this, a failed write
+ * was caught and silently dropped, with the in-memory `cachedState`
+ * looking exactly as successful as a real one — Stuart had no way to
+ * know his session was one refresh/reload away from losing whatever
+ * hadn't actually made it to disk. iOS Safari's `localStorage` quota is
+ * small (real-world reports put it well under desktop's, sometimes a
+ * few MB) and this feature stores plate stills as raw base64 `data:`
+ * URLs (see `SkidmarksPlateStill.dataUrl`'s doc comment) — a handful of
+ * generated stills across a song's clip list is a real, plausible way
+ * to hit it. See `getSkidmarksPersistFailure`/
+ * `SkidmarksChecklistChips`'s consumer for how this actually reaches
+ * Stuart. */
+let lastPersistFailure: { at: number; message: string } | null = null;
+
+/** Read-only snapshot of the current persist-failure state (or `null` if
+ * the most recent write succeeded) — `useSkidmarksStudio` exposes this
+ * via the same `subscribeSkidmarks` notify cycle every other store
+ * change already uses, so the UI re-renders the moment a write fails or
+ * recovers without any separate polling. */
+export function getSkidmarksPersistFailure(): { at: number; message: string } | null {
+  return lastPersistFailure;
+}
+
 function persist(next: SkidmarksState) {
   cachedState = next;
   if (isBrowser()) {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // localStorage unavailable (e.g. private mode) — in-memory only for this session.
+      lastPersistFailure = null;
+    } catch (err) {
+      // Deliberately not "unavailable (e.g. private mode) — in-memory
+      // only for this session" as a silent comment anymore — see
+      // `lastPersistFailure`'s own doc comment for why that used to be
+      // a real, invisible data-loss risk.
+      lastPersistFailure = { at: Date.now(), message: describeSkidmarksPersistFailure(err) };
     }
   }
   notify();
@@ -2169,14 +2228,46 @@ export function coverGradientClass(coverSeed: number): string {
 const MAX_PICKED_IMAGE_DIMENSION = 640;
 const PICKED_IMAGE_QUALITY = 0.85;
 
+/** Same idea, sized for a plate *still* rather than a tiny avatar/cover
+ * thumbnail — these get shown full-size in the enlarge lightbox and
+ * bundled into a project zip export, so they keep a more generous
+ * ceiling than `MAX_PICKED_IMAGE_DIMENSION`. Applies to **every** plate
+ * still, uploaded or generated (see `downscaleDataUrlImage`'s doc
+ * comment for why the generated path in particular needed this). */
+const MAX_PLATE_STILL_DIMENSION = 1024;
+
+/** Draws a decoded `<img>` onto a canvas scaled to fit `maxDimension` on
+ * its longest edge and re-encodes it as a JPEG data URL — the shared
+ * core of `readImageFileAsDataUrl`/`downscaleDataUrlImage`. Falls back
+ * to `fallbackDataUrl` untouched if no canvas 2D context is available,
+ * rather than failing the pick/generation outright. */
+function scaleImageElementToDataUrl(
+  img: HTMLImageElement,
+  maxDimension: number,
+  quality: number,
+  fallbackDataUrl: string
+): string {
+  const scale = Math.min(1, maxDimension / Math.max(img.naturalWidth, img.naturalHeight));
+  const width = Math.max(1, Math.round(img.naturalWidth * scale));
+  const height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return fallbackDataUrl;
+  ctx.drawImage(img, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
 /**
  * Reads a picked image file (jpg/png/webp), downscales it to fit within
  * `MAX_PICKED_IMAGE_DIMENSION` on its longest edge, and re-encodes it as
  * a JPEG data URL — a data URL (unlike a blob URL) round-trips through
  * `localStorage` just fine, so a real picked cover/avatar survives a
- * page reload. Used by both the band cover picker and the member avatar
- * picker. Rejects if the browser can't decode the file (not an image,
- * or a format it doesn't support).
+ * page reload. Used by the band cover picker, the member avatar picker,
+ * and (with a larger `maxDimension`) an *uploaded* plate still. Rejects
+ * if the browser can't decode the file (not an image, or a format it
+ * doesn't support).
  */
 export function readImageFileAsDataUrl(
   file: File | Blob,
@@ -2190,25 +2281,54 @@ export function readImageFileAsDataUrl(
       const img = new Image();
       img.onerror = () => reject(new Error("Could not decode the picked image."));
       img.onload = () => {
-        const scale = Math.min(1, maxDimension / Math.max(img.naturalWidth, img.naturalHeight));
-        const width = Math.max(1, Math.round(img.naturalWidth * scale));
-        const height = Math.max(1, Math.round(img.naturalHeight * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          // No canvas 2D context available — fall back to the untouched
-          // original data URL rather than failing the pick outright.
-          resolve(reader.result as string);
-          return;
-        }
-        ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
+        resolve(scaleImageElementToDataUrl(img, maxDimension, quality, reader.result as string));
       };
       img.src = reader.result as string;
     };
     reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Same downscale-to-JPEG treatment as `readImageFileAsDataUrl`, but for
+ * a `data:` URL that's already decoded in memory rather than a picked
+ * `File`/`Blob` — no `FileReader` round trip needed. **This is the real
+ * fix for a live-QA'd "plates wiped" report**: an *uploaded* plate still
+ * already went through `readImageFileAsDataUrl` (capped, downscaled)
+ * before this existed, but a *generated* still (`generatePlateStill`,
+ * `lib/plateGeneration.ts`) was persisted straight off xAI's own raw
+ * response — no size cap at all. A song with several tagged clips'
+ * worth of full-resolution generated stills is a real, plausible way to
+ * blow past `localStorage`'s quota (iOS Safari's is notably tight), and
+ * `persist()` used to swallow that failure completely silently — the
+ * in-memory session still looked tagged, but nothing after the point
+ * the quota was hit ever actually reached disk, so a later reload (or
+ * iOS backgrounding a tab hard enough to force one) would come back
+ * showing exactly what Stuart reported: the clip's own boundaries
+ * intact (that data was small and had persisted long before), but its
+ * plates back to empty dashed placeholders (the stills were the last,
+ * largest thing written, and never made it). Downscaling every
+ * generated still the same way an upload already was closes the size
+ * gap that made hitting the quota this easy; `getSkidmarksPersistFailure`
+ * (see its own doc comment) is the second, independent half of this
+ * fix — surfacing it plainly the moment (if ever) it still happens,
+ * rather than only after a reload has already discarded the work.
+ * Rejects if the browser can't decode the data URL (should not happen
+ * for one this app itself just received from `generate-still`, but
+ * mirrors `readImageFileAsDataUrl`'s own defensive handling either way).
+ */
+export function downscaleDataUrlImage(
+  dataUrl: string,
+  maxDimension: number = MAX_PLATE_STILL_DIMENSION,
+  quality: number = PICKED_IMAGE_QUALITY
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onerror = () => reject(new Error("Could not decode the generated image."));
+    img.onload = () => {
+      resolve(scaleImageElementToDataUrl(img, maxDimension, quality, dataUrl));
+    };
+    img.src = dataUrl;
   });
 }
 

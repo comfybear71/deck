@@ -41,6 +41,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const {
     bands,
     session,
+    persistFailure,
     selectProjectKind,
     selectBand,
     createBand,
@@ -218,6 +219,14 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             </button>
           </div>
         </div>
+
+        {persistFailure && (
+          <div className="mx-4 mb-2 shrink-0 rounded-lg border border-rose-400/40 bg-rose-400/10 p-2.5">
+            <p role="alert" className="text-[11px] font-medium leading-snug text-rose-200">
+              {persistFailure.message}
+            </p>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto px-5 pb-5">
           <div className="flex flex-col gap-8 pt-2">

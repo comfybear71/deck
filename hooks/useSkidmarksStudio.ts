@@ -14,6 +14,7 @@ import {
   clearSkidmarksMp3,
   createMp3Attachment,
   createSkidmarksBand,
+  getSkidmarksPersistFailure,
   getSkidmarksSnapshot,
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
@@ -79,6 +80,18 @@ export function useSkidmarksStudio() {
     subscribeSkidmarks,
     getSkidmarksSnapshot,
     () => EMPTY_STATE
+  );
+
+  /** Non-null only while the *most recent* `persist()` write to
+   * `localStorage` actually failed (e.g. quota exceeded) — see
+   * `getSkidmarksPersistFailure`'s doc comment. Shares the same
+   * `subscribeSkidmarks` notify cycle as `state` above, so this updates
+   * the instant a write fails or a later one recovers, no separate
+   * polling needed. */
+  const persistFailure = useSyncExternalStore(
+    subscribeSkidmarks,
+    getSkidmarksPersistFailure,
+    () => null
   );
 
   const analysisTokenRef = useRef(0);
@@ -293,6 +306,7 @@ export function useSkidmarksStudio() {
     bands: state.bands,
     session: state.session,
     removedSeedBandIds: state.removedSeedBandIds,
+    persistFailure,
     selectProjectKind,
     selectBand,
     createBand,

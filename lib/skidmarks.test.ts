@@ -6,6 +6,8 @@ import {
   attachSkidmarksMp3,
   createMp3Attachment,
   defaultSegmentModel,
+  describeSkidmarksPersistFailure,
+  getSkidmarksPersistFailure,
   getSkidmarksSnapshot,
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
@@ -415,6 +417,58 @@ describe("setSkidmarksMp3Duration", () => {
     const mp3 = getSkidmarksSnapshot().session.mp3!;
     expect(mp3.segmentsSource).toBe("analysis");
     expect(mp3.segments).toEqual(analysisSegments);
+  });
+});
+
+/**
+ * `describeSkidmarksPersistFailure`/`getSkidmarksPersistFailure` —
+ * the honest-failure half of the "plates wiped again" fix. Real
+ * live-QA'd report: a segment's own timing stayed correct (small,
+ * persisted early) while its plates reverted to empty dashed
+ * placeholders (large `data:` URLs, persisted later, most likely to
+ * actually hit `localStorage`'s quota on iOS Safari) — `persist()`
+ * used to swallow that write failure completely silently, so nothing
+ * ever told Stuart his most recent tagging was one reload away from
+ * being lost. These tests only exercise the pure message-formatting
+ * function directly, since `isBrowser()` is always `false` under
+ * Vitest's `node` environment (see this file's own doc comment above)
+ * — `persist()`'s own `try { localStorage.setItem(...) }` branch never
+ * actually runs in this suite, the same pre-existing constraint that
+ * already leaves `readImageFileAsDataUrl`/`downscaleDataUrlImage`
+ * untested here (both need a real `Image`/`canvas`).
+ */
+describe("describeSkidmarksPersistFailure", () => {
+  it("gives quota-exceeded failures their own specific, actionable message", () => {
+    const quotaError = new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    const message = describeSkidmarksPersistFailure(quotaError);
+    expect(message).toContain("Storage is full");
+    expect(message).toContain("lost on a refresh");
+  });
+
+  it("recognizes the legacy Firefox quota-error name too, not just the DOMException code", () => {
+    const legacyQuotaError = new DOMException("quota reached", "NS_ERROR_DOM_QUOTA_REACHED");
+    expect(describeSkidmarksPersistFailure(legacyQuotaError)).toContain("Storage is full");
+  });
+
+  it("still gives an honest, non-quota message for any other storage failure (e.g. private-mode Safari)", () => {
+    const message = describeSkidmarksPersistFailure(new Error("The operation is not supported."));
+    expect(message).not.toContain("Storage is full");
+    expect(message).toContain("operation is not supported");
+    expect(message).toContain("lost on a refresh");
+  });
+
+  it("handles a non-Error thrown value without crashing", () => {
+    expect(() => describeSkidmarksPersistFailure("a plain string throw")).not.toThrow();
+    expect(describeSkidmarksPersistFailure("a plain string throw")).toContain("unknown storage error");
+  });
+});
+
+describe("getSkidmarksPersistFailure", () => {
+  it("reads null by default \u2014 under Vitest's node environment persist() never touches localStorage, so no failure is ever recorded", () => {
+    // Sanity check that the getter itself is wired up and doesn't throw
+    // even though this suite can never actually trigger a real write
+    // failure (see the describe block's own doc comment).
+    expect(getSkidmarksPersistFailure()).toBeNull();
   });
 });
 
