@@ -1514,21 +1514,35 @@ now (see "Explicitly out of scope" below).
     (`hooks/useSkidmarksClipRenders.ts`, lifted up to
     `SkidmarksDetailSheet` so neither has to re-fetch independently).
 
-  - **MP3 audio → Vercel Blob ("play survives a refresh")**: the
-    attached MP3's raw `File` never persisted (still true — a `File`
-    can't round-trip through `localStorage`, and this build still
-    doesn't try). What's new: the moment a file's attached,
-    `lib/mp3Blob.ts` uploads its actual audio bytes to Vercel Blob,
-    client-side-direct via `@vercel/blob/client`'s `upload()` (bypasses
-    this app's own serverless function entirely, so a real song-length
-    file never risks Vercel's ~4.5MB request-body cap). The resulting
-    durable URL (`SkidmarksMp3Attachment.audioUrl`) becomes
-    `SkidmarksMp3Card`'s playback fallback once the session's own local
-    object URL is gone (i.e. after a reload) — `resolveAudioSrc` prefers
-    the local one when it's there, the durable one otherwise.
-    Honestly labeled either way: an unconfigured Blob store or a real
-    upload failure never breaks *this session's* playback, it just means
-    playback won't survive a refresh, and the card says so.
+  - **MP3 audio → Vercel Blob ("play survives a refresh"), with no
+    `localStorage` involved at any point**: the attached MP3's raw
+    `File` never persisted (still true — a `File` can't round-trip
+    through `localStorage`, and this build still doesn't try). What's
+    new: the moment a file's attached, `lib/mp3Blob.ts` uploads its
+    actual audio bytes to Vercel Blob, client-side-direct via
+    `@vercel/blob/client`'s `upload()` (bypasses this app's own
+    serverless function entirely, so a real song-length file never
+    risks Vercel's ~4.5MB request-body cap). **The resulting Blob URL is
+    never written into `lib/skidmarks.ts`'s `localStorage`-mirrored
+    session object** — per Stuart's own explicit reiteration of the "no
+    `localStorage` for Skidmarks media" lock, not even the *pointer* to
+    durable media may depend on `localStorage`. Instead,
+    `SkidmarksMp3Attachment` carries only a small, inert `audioId`
+    routing key (`lib/mp3AudioPath.ts`), and `SkidmarksMp3Card` resolves
+    the real playable URL **fresh, straight from Blob**
+    (`fetchSkidmarksMp3AudioUrl`, hitting the new `GET
+    /api/skidmarks/mp3-audio` route's live `list()` lookup) every time
+    it needs a fallback source — i.e. once the session's own local
+    object URL is gone (after a reload). This mirrors
+    `lib/clipRenders.ts`'s existing "never trust a cached copy, always
+    ask Blob" pattern for persisted clip renders, applied to the MP3's
+    own audio. Honestly labeled either way: an unconfigured Blob store
+    or a real upload failure never breaks *this session's* playback, it
+    just means playback won't survive a refresh, and the card says so.
+    The finished-song archive (below) resolves this same live URL at
+    archive time and carries the *resolved* URL forward into the
+    archived song's own metadata — safe to do there, since that record
+    already lives in Vercel Blob JSON, not `localStorage`.
 
   - **Auto-plate from a short brief, then stop**: a slim brief field
     plus one **Auto-plate** control sits above the per-clip rows
