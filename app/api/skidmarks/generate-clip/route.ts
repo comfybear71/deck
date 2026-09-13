@@ -10,6 +10,13 @@ import {
   uploadComfyCloudInput,
   waitForComfyCloudCompletion,
 } from "@/lib/comfyCloud";
+import {
+  downloadMinimaxH3Video,
+  pollMinimaxH3Video,
+  resolveMinimaxCredentials,
+  submitMinimaxH3Video,
+  type MinimaxCredentials,
+} from "@/lib/minimaxH3";
 import { sliceMp3ToTimeRange } from "@/lib/mp3Slice";
 
 /**
@@ -26,29 +33,47 @@ import { sliceMp3ToTimeRange } from "@/lib/mp3Slice";
  * route backs a much smaller, explicit, one-clip-at-a-time control
  * (`components/SkidmarksClipRender.tsx`) instead.
  *
- * **Two real video backends now, routed automatically by `vocal` \u2014
- * never a model picker (Stuart lock, 2026-09-13).** This route used to
- * call xAI's Grok Imagine video API for every render, full stop \u2014 the
- * README's "Skidmarks node" section named Comfy MCP/Seedance/LTX only
- * as an aspirational long-term backend, with no wired call anywhere.
- * That's no longer true for **Vocal** clips specifically:
- * - `vocal: false` (Instrumental/B-roll/opener) \u2014 unchanged: **xAI's
- *   Grok Imagine video API**, the same `XAI_API_KEY` plate *stills*
- *   already use (`app/api/skidmarks/generate-still/route.ts`). See
- *   below for this path's full, still-accurate live-verification story.
- * - `vocal: true` (Vocal/lip-sync performance) \u2014 **Comfy Cloud's
- *   LTX-2.5 `AudioToVideo` partner node** (`lib/comfyCloud.ts`,
+ * **Three real video backends now \u2014 routed by `vocal` for Vocal vs.
+ * Instrumental, plus a real, opt-in H3/Grok switch on the Instrumental
+ * side (Stuart lock, 2026-09-13, updated same day).** This route used
+ * to call xAI's Grok Imagine video API for every render, full stop.
+ * Then it split on `vocal` alone, no picker at all. As of this pass:
+ * - `vocal: true` (Vocal/lip-sync performance) \u2014 unchanged: **Comfy
+ *   Cloud's LTX-2.5 `AudioToVideo` partner node** (`lib/comfyCloud.ts`,
  *   `COMFY_CLOUD_API_KEY`), driven by a real slice of the attached
  *   song's own vocal audio (`lib/mp3Slice.ts`) instead of an automatic
  *   push-in/zoom \u2014 see `handleVocalComfyLtxRender` below and
  *   `lib/comfyCloud.ts`'s module doc comment for that path's own
- *   honesty story (real, documented endpoints; not live-verified in
- *   this sandbox, unlike the Grok path immediately below).
+ *   honesty story. No switch on this path \u2014 Stuart never asked for
+ *   one here.
+ * - `vocal: false` (Instrumental/B-roll/opener) \u2014 now **two** real
+ *   backends, chosen by the request's own `videoBackend` field (never
+ *   trusted blindly \u2014 anything other than the literal `"h3"` falls
+ *   back to Grok, the original/back-compat default; see the routing
+ *   code in `POST` below):
+ *   - `videoBackend: "h3"` \u2014 **MiniMax H3** (`lib/minimaxH3.ts`,
+ *     `MINIMAX_API_KEY`), first-frame (optionally first+last-frame)
+ *     image-to-video. This is the *client's own* new default \u2014 see
+ *     `lib/skidmarks.ts`'s `resolveInstrumentalVideoModel` \u2014 not a
+ *     server-side default; a request that omits `videoBackend`
+ *     entirely (an older caller, a hand-rolled request) still gets
+ *     Grok, unchanged, so nothing already calling this route without
+ *     the new field silently starts spending against a different
+ *     provider.
+ *   - anything else (including `"grok"` or the field simply missing)
+ *     \u2014 unchanged: **xAI's Grok Imagine video API**, the same
+ *     `XAI_API_KEY` plate *stills* already use
+ *     (`app/api/skidmarks/generate-still/route.ts`). See below for
+ *     this path's full, still-accurate live-verification story.
  *
- * Nothing here invents a third backend, and nothing here lets Stuart
- * pick between the two by hand \u2014 `vocal` is the same boolean
- * `lib/skidmarks.ts`'s `SKIDMARKS_SEGMENT_LABEL_META` already derives
- * from a clip's own label, threaded straight through by
+ * Nothing here lets Stuart pick a backend from a persistent pill/badge
+ * \u2014 `vocal` is the same boolean `lib/skidmarks.ts`'s
+ * `SKIDMARKS_SEGMENT_LABEL_META` already derives from a clip's own
+ * label; `videoBackend` is the clip's own stored H3/Grok choice
+ * (`SkidmarksClipSegment.instrumentalVideoModel`), surfaced only as a
+ * small switch *inside* `components/SkidmarksClipRender.tsx`'s
+ * existing two-tap Render confirm, per Stuart's own "no model pill
+ * farm" ask \u2014 both threaded straight through by
  * `lib/clipGeneration.ts`'s `buildClipGenerationRequest`.
  *
  * **The rest of this doc comment describes the Grok/Instrumental path
@@ -274,6 +299,19 @@ export const POLL_DEADLINE_MS = 240_000;
  * instead of xAI's REST poll loop. */
 export const COMFY_POLL_DEADLINE_MS = 240_000;
 const COMFY_AUDIO_FETCH_TIMEOUT_MS = 30_000;
+/** Same shape/reasoning as `POLL_DEADLINE_MS`/`COMFY_POLL_DEADLINE_MS`,
+ * for MiniMax H3's own `GET /v2/query/video_generation/{taskId}` REST
+ * poll loop (`pollMinimaxH3JobUntilDone` below). Not tuned against a
+ * real H3 render's actual latency (no `MINIMAX_API_KEY` in this
+ * sandbox \u2014 see `lib/minimaxH3.ts`'s module doc comment); reusing the
+ * same conservative ceiling this route's other two backends already
+ * use is the honest default until real timing data says otherwise. */
+export const MINIMAX_POLL_DEADLINE_MS = 240_000;
+/** H3's own accepted image count \u2014 first frame, optionally plus a
+ * last frame (`lib/minimaxH3.ts`'s `submitMinimaxH3Video`). Distinct
+ * from `MAX_REFERENCE_IMAGES` (3, the Grok path's own multi-reference
+ * ceiling) \u2014 H3 has no third role to put an extra image in. */
+const MAX_H3_REFERENCE_IMAGES = 2;
 
 function resolveXaiApiKey(): string | null {
   return process.env[XAI_API_KEY_ENV_VAR] || null;
@@ -589,6 +627,15 @@ interface GenerateClipRequestBody {
    * filename. */
   audioStartSec?: unknown;
   audioEndSec?: unknown;
+  /** Only read when `vocal` is falsy \u2014 picks the Instrumental video
+   * backend: the literal string `"h3"` routes to MiniMax H3
+   * (`handleInstrumentalH3Render` below); anything else (including
+   * `"grok"`, or the field simply missing \u2014 an older caller) keeps
+   * the original xAI Grok path. See this file's module doc comment's
+   * "Three real video backends" note for why the *server's* own
+   * default here stays Grok even though the *client's* new default is
+   * H3 (`lib/skidmarks.ts`'s `resolveInstrumentalVideoModel`). */
+  videoBackend?: unknown;
 }
 
 interface RenderPersistenceTarget {
@@ -1014,6 +1061,141 @@ function bufferToDataUrl(bytes: Uint8Array, mimeType: string): string {
   return `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`;
 }
 
+/**
+ * Polls MiniMax's H3 job to completion — the server-side loop wrapper
+ * around `lib/minimaxH3.ts`'s single-tick `pollMinimaxH3Video`, same
+ * "collapse async start+poll into one request/response" shape as
+ * `pollXaiVideoJob` above (and the same "no resume-after-timeout"
+ * honesty note: past `MINIMAX_POLL_DEADLINE_MS`, this returns an
+ * honest `timeout` outcome and drops the `taskId` — MiniMax may still
+ * finish the job server-side, but nothing here checks back on it
+ * later).
+ */
+async function pollMinimaxH3JobUntilDone(
+  taskId: string,
+  creds: MinimaxCredentials
+): Promise<{ ok: true; videoUrl: string } | { ok: false; status: number; code: string; error: string }> {
+  const deadline = Date.now() + MINIMAX_POLL_DEADLINE_MS;
+  while (true) {
+    const tick = await pollMinimaxH3Video(taskId, creds);
+    if (!tick.ok) return tick;
+    if (tick.status === "done") return { ok: true, videoUrl: tick.videoUrl };
+
+    if (Date.now() + POLL_INTERVAL_MS > deadline) {
+      return {
+        ok: false,
+        status: 504,
+        code: "timeout",
+        error:
+          `MiniMax's H3 render was still processing after ${Math.round(MINIMAX_POLL_DEADLINE_MS / 1000)}s \u2014 ` +
+          "this route stopped waiting. The render may still finish on MiniMax's side, but this app has no way " +
+          "to check back on it; try again in a bit.",
+      };
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * The Instrumental/MiniMax-H3 render path — see this file's module doc
+ * comment's "Three real video backends" note. Structurally the
+ * simplest of this route's three backends: unlike the Vocal/Comfy-LTX
+ * path, H3 needs no separate upload step (its `content` array takes a
+ * `data:` URL directly — see `lib/minimaxH3.ts`'s module doc comment)
+ * and no driving-audio slice (the plate's own `shotPrompt`/
+ * `motionPrompt`-derived `prompt` and still are the only real inputs,
+ * same shape as the Grok path's own image-to-video call); it's
+ * structurally closer to the Grok path than to Comfy/LTX, just against
+ * a different provider.
+ */
+async function handleInstrumentalH3Render(
+  body: GenerateClipRequestBody,
+  prompt: string,
+  referenceImageDataUrls: string[],
+  requestedDurationSec: number
+): Promise<Response> {
+  const creds = resolveMinimaxCredentials();
+  if (!creds) {
+    return NextResponse.json(
+      {
+        error:
+          "MINIMAX_API_KEY is not set on the server \u2014 H3 clip rendering is unavailable here. Create a " +
+          "pay-as-you-go key at platform.minimax.io and set it as this project's MINIMAX_API_KEY (MINIMAX_GROUP_ID " +
+          "only if your key's account still asks for one). If you just added it, Vercel only applies environment " +
+          "variable changes to new deployments \u2014 redeploy the project for this function to see it. Grok still " +
+          "works for this clip in the meantime \u2014 flip the H3/Grok switch inside the Render confirm.",
+        code: "missing_api_key",
+      },
+      { status: 501 }
+    );
+  }
+
+  // H3 only has two roles to fill (first frame, optional last frame) —
+  // the route-wide check above already caps the Grok path at 3, so this
+  // catches the one extra case H3 itself can't accept.
+  if (referenceImageDataUrls.length > MAX_H3_REFERENCE_IMAGES) {
+    return NextResponse.json(
+      {
+        error: "MiniMax's H3 node accepts at most two reference images (a first frame, and an optional last frame).",
+        code: "invalid_request",
+      },
+      { status: 400 }
+    );
+  }
+
+  const submitResult = await submitMinimaxH3Video(
+    {
+      prompt,
+      firstImageUrl: referenceImageDataUrls[0],
+      lastImageUrl: referenceImageDataUrls[1],
+      durationSec: requestedDurationSec,
+    },
+    creds
+  );
+  if (!submitResult.ok) {
+    return NextResponse.json({ error: submitResult.error, code: submitResult.code }, { status: submitResult.status });
+  }
+
+  const pollResult = await pollMinimaxH3JobUntilDone(submitResult.taskId, creds);
+  if (!pollResult.ok) {
+    return NextResponse.json({ error: pollResult.error, code: pollResult.code }, { status: pollResult.status });
+  }
+
+  const downloadResult = await downloadMinimaxH3Video(pollResult.videoUrl);
+  if (!downloadResult.ok) {
+    return NextResponse.json({ error: downloadResult.error, code: downloadResult.code }, { status: downloadResult.status });
+  }
+
+  const persistenceTarget = resolvePersistenceTarget(body);
+  if (!persistenceTarget) {
+    // No (or no valid) segmentId/clipIndex/startSec/endSec. Same
+    // reasoning as the Comfy/LTX path above for returning a `data:`
+    // URL here rather than MiniMax's own returned `videoUrl`: whether
+    // that link stays reachable after this request isn't confirmed
+    // (not live-tested — see `lib/minimaxH3.ts`'s module doc comment),
+    // so this never risks handing back a link that goes dead later.
+    return NextResponse.json({
+      videoUrl: bufferToDataUrl(downloadResult.bytes, "video/mp4"),
+      durationSec: requestedDurationSec,
+    });
+  }
+
+  const persistOutcome = await persistRenderBytesToBlob(downloadResult.bytes, persistenceTarget);
+  if (persistOutcome.ok) {
+    return NextResponse.json({ videoUrl: persistOutcome.url, durationSec: requestedDurationSec, persisted: true });
+  }
+
+  // Persistence failed — still return the render Stuart already paid
+  // for, honestly flagged as not saved (same "never claims a render is
+  // saved when it isn't" rule as the other two backends).
+  return NextResponse.json({
+    videoUrl: bufferToDataUrl(downloadResult.bytes, "video/mp4"),
+    durationSec: requestedDurationSec,
+    persisted: false,
+    persistError: persistOutcome.reason,
+  });
+}
+
 export async function POST(request: Request) {
   let body: GenerateClipRequestBody;
   try {
@@ -1025,11 +1207,18 @@ export async function POST(request: Request) {
     );
   }
 
-  // Routing decision \u2014 read before either backend's own key check, so
-  // a Vocal request checks `COMFY_CLOUD_API_KEY` and an Instrumental one
-  // checks `XAI_API_KEY`, never the other's. See this file's module doc
-  // comment's "Two real video backends" note.
+  // Routing decision \u2014 read before any backend's own key check, so a
+  // Vocal request checks `COMFY_CLOUD_API_KEY`, an Instrumental H3
+  // request checks `MINIMAX_API_KEY`, and an Instrumental Grok request
+  // checks `XAI_API_KEY` \u2014 never a backend this exact request isn't
+  // actually going to call. See this file's module doc comment's
+  // "Three real video backends" note. `videoBackend` is only ever read
+  // when `vocal` is falsy; anything other than the literal `"h3"`
+  // (including `"grok"`, or the field simply missing) keeps this
+  // route's original Grok behavior \u2014 the *server's* own default stays
+  // Grok even though the *client's* new default is H3.
   const vocal = body.vocal === true;
+  const instrumentalBackend: "h3" | "grok" = !vocal && body.videoBackend === "h3" ? "h3" : "grok";
 
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   if (!prompt) {
@@ -1097,6 +1286,24 @@ export async function POST(request: Request) {
     return handleVocalComfyLtxRender(body, prompt, rawReferences[0]);
   }
 
+  // Real per-plate duration, shared by both Instrumental backends \u2014
+  // H3's own real ceiling ([4, 15]s) is looser than Grok's cost-locked
+  // [5, 15]s, so this app's existing Grok range already sits safely
+  // inside H3's, and both backends can share one clamp with no
+  // separate H3 duration bounds needed.
+  const requestedDurationSecRaw =
+    typeof body.durationSec === "number" && Number.isFinite(body.durationSec)
+      ? body.durationSec
+      : DEFAULT_CLIP_DURATION_SEC;
+  const requestedDurationSec = Math.min(
+    MAX_CLIP_DURATION_SEC,
+    Math.max(MIN_CLIP_DURATION_SEC, Math.round(requestedDurationSecRaw))
+  );
+
+  if (instrumentalBackend === "h3") {
+    return handleInstrumentalH3Render(body, prompt, rawReferences, requestedDurationSec);
+  }
+
   const apiKey = resolveXaiApiKey();
   if (!apiKey) {
     return NextResponse.json(
@@ -1111,15 +1318,6 @@ export async function POST(request: Request) {
       { status: 501 }
     );
   }
-
-  const requestedDurationSecRaw =
-    typeof body.durationSec === "number" && Number.isFinite(body.durationSec)
-      ? body.durationSec
-      : DEFAULT_CLIP_DURATION_SEC;
-  const requestedDurationSec = Math.min(
-    MAX_CLIP_DURATION_SEC,
-    Math.max(MIN_CLIP_DURATION_SEC, Math.round(requestedDurationSecRaw))
-  );
 
   const startResult = await startXaiVideoJob(
     prompt,

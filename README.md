@@ -1755,6 +1755,46 @@ now (see "Explicitly out of scope" below).
   confirm and fixed cost cap rather than living on this same "just
   tap Generate" flow. This build makes one generation/edit call per tap
   of Generate — no polling, no automatic retry.
+- **Wiring up the real per-clip video render** (`app/api/skidmarks/
+  generate-clip/route.ts`, `components/SkidmarksClipRender.tsx`) — as
+  of this pass, **three** real backends, routed automatically (never a
+  persistent picker — see the cost-lock section above and this route's
+  own module doc comment):
+  - **Vocal/lip-sync clips** → **Comfy Cloud's LTX-2.5
+    `AudioToVideo` partner node** (`lib/comfyCloud.ts`), which needs
+    **`COMFY_CLOUD_API_KEY`** (create at
+    [platform.comfy.org](https://platform.comfy.org) — an active Comfy
+    Cloud subscription is required) and optionally **`COMFY_URL`**
+    (leave unset/blank for Comfy Cloud's own hosted endpoint; set it
+    only to point at a self-hosted/serverless ComfyUI instance
+    instead). Driven by a real slice of the attached song's own vocal
+    audio (`lib/mp3Slice.ts`), not `XAI_API_KEY`.
+  - **Instrumental/B-roll clips** → **MiniMax H3** by default
+    (Stuart's own 2026-09-13 "H3 please" ask), needing
+    **`MINIMAX_API_KEY`** (pay-as-you-go, create at
+    [platform.minimax.io](https://platform.minimax.io)) and optionally
+    **`MINIMAX_GROUP_ID`** (only some MiniMax accounts still ask for
+    one) — request/response shapes mirrored from the original
+    Skidmarks repo's own real H3 client, see `lib/minimaxH3.ts`'s
+    module doc comment. **xAI Grok Imagine video** (the same
+    `XAI_API_KEY` plate stills already use, above) stays fully wired
+    as the one-tap-away alternative — a small H3/Grok switch lives
+    *inside* `SkidmarksClipRender`'s existing two-tap Render confirm
+    step, per Stuart's own "no model pill farm" ask; the choice
+    persists per clip (`SkidmarksClipSegment.instrumentalVideoModel`,
+    the existing `localStorage` session mirror, same as
+    `motionPrompt`/`selectedPlateId`).
+  - None of the three keys blocks the other two paths — a Vocal render
+    with no `COMFY_CLOUD_API_KEY` and an Instrumental render with no
+    `MINIMAX_API_KEY` each fail with their own honest
+    `missing_api_key` outcome; Grok stays reachable via the switch
+    either way. **Cost**: xAI Grok Imagine video is $0.08/s at 480p
+    (plus $0.01/reference image); MiniMax H3 is $0.08/s at 768P (its
+    cheaper documented tier, first 5 reference images free); Comfy
+    Cloud's LTX-2.5 (Fast) is $0.13/s at 1080p (its only documented
+    resolution) — check each provider's own current pricing before
+    relying on this at volume. Real, auto-computed per-plate duration
+    (not a picker) is shown in the confirm step either way.
 - **Wiring up render persistence**: needs a **Vercel Blob store**
   connected to this project (Vercel dashboard → Project → Storage →
   create/connect a Blob store), which sets **`BLOB_READ_WRITE_TOKEN`**

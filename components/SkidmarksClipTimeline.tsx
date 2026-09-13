@@ -7,6 +7,7 @@ import {
   type SkidmarksAnalysisStatus,
   type SkidmarksBand,
   type SkidmarksClipSegment,
+  type SkidmarksInstrumentalVideoModel,
   type SkidmarksPlateStill,
   type SkidmarksSegmentsSource,
   type SkidmarksTranscriptionStatus,
@@ -53,6 +54,9 @@ interface SkidmarksClipTimelineProps {
   onRemoveClipPlate: (segmentId: string, plateId: string) => void;
   onSelectClipPlate: (segmentId: string, plateId: string) => void;
   onSetClipPlateMotionPrompt: (segmentId: string, plateId: string, motionPrompt: string) => void;
+  /** The H3/Grok switch inside `SkidmarksClipRender`'s Render confirm —
+   * see `lib/skidmarks.ts`'s `SkidmarksInstrumentalVideoModel`. */
+  onSetClipInstrumentalModel: (segmentId: string, model: SkidmarksInstrumentalVideoModel) => void;
 }
 
 const STUB_FEEDBACK_TIMEOUT_MS = 3200;
@@ -88,6 +92,7 @@ function SegmentRow({
   onRemovePlate,
   onSelectPlate,
   onSetPlateMotionPrompt,
+  onSetInstrumentalModel,
   renderedPlateIds,
   renderLocked,
   onRenderStart,
@@ -116,6 +121,7 @@ function SegmentRow({
   onRemovePlate: (plateId: string) => void;
   onSelectPlate: (plateId: string) => void;
   onSetPlateMotionPrompt: (plateId: string, motionPrompt: string) => void;
+  onSetInstrumentalModel: (model: SkidmarksInstrumentalVideoModel) => void;
   renderedPlateIds: ReadonlySet<string>;
   /** Whether a *different* plate anywhere on this timeline is currently
    * rendering a real video — see `SkidmarksClipTimeline`'s
@@ -176,6 +182,7 @@ function SegmentRow({
             onRemovePlate={onRemovePlate}
             onSelectPlate={onSelectPlate}
             onSetPlateMotionPrompt={onSetPlateMotionPrompt}
+            onSetClipInstrumentalModel={onSetInstrumentalModel}
             renderedPlateIds={renderedPlateIds}
             renderLocked={renderLocked}
             onRenderStart={onRenderStart}
@@ -287,6 +294,7 @@ export function SkidmarksClipTimeline({
   onRemoveClipPlate,
   onSelectClipPlate,
   onSetClipPlateMotionPrompt,
+  onSetClipInstrumentalModel,
 }: SkidmarksClipTimelineProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -370,6 +378,7 @@ export function SkidmarksClipTimeline({
                   onSetPlateMotionPrompt={(plateId, motionPrompt) =>
                     onSetClipPlateMotionPrompt(segment.id, plateId, motionPrompt)
                   }
+                  onSetInstrumentalModel={(model) => onSetClipInstrumentalModel(segment.id, model)}
                   renderedPlateIds={renderedPlateIds}
                   renderLocked={
                     renderingKey !== null &&

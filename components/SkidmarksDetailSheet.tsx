@@ -60,6 +60,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     removeClipPlate,
     selectClipPlate,
     setClipPlateMotionPrompt,
+    setClipInstrumentalModel,
     restoreArchivedSession,
     clearSessionAfterArchive,
   } = useSkidmarksStudio();
@@ -308,6 +309,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 onRemoveClipPlate={removeClipPlate}
                 onSelectClipPlate={selectClipPlate}
                 onSetClipPlateMotionPrompt={setClipPlateMotionPrompt}
+                onSetClipInstrumentalModel={setClipInstrumentalModel}
               />
             )}
 

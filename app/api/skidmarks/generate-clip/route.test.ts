@@ -1184,3 +1184,267 @@ describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) rende
     expect(submittedBody.prompt["3"].inputs.model).toBe("LTX-2.5 (Fast)");
   });
 });
+
+describe("POST /api/skidmarks/generate-clip \u2014 Instrumental MiniMax H3 render path", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("MINIMAX_API_KEY", "test-minimax-key");
+    vi.stubEnv("MINIMAX_GROUP_ID", "");
+    putMock.mockReset();
+    listMock.mockReset();
+    delMock.mockReset();
+    listMock.mockResolvedValue({ blobs: [] });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  function h3Request(overrides: Record<string, unknown> = {}): Request {
+    return postRequest({
+      prompt: "a door creaks open, slow zoom",
+      shotPrompt: "a door creaks open, slow zoom",
+      referenceImageDataUrls: [TINY_DATA_URL],
+      videoBackend: "h3",
+      durationSec: 8,
+      ...overrides,
+    });
+  }
+
+  it("reports the honest missing_api_key outcome and never calls fetch when MINIMAX_API_KEY is unset", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    const res = await POST(h3Request());
+    const body = await res.json();
+
+    expect(res.status).toBe(501);
+    expect(body.code).toBe("missing_api_key");
+    expect(body.error).toContain("MINIMAX_API_KEY");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps calling xAI Grok, never MiniMax, when videoBackend is omitted \u2014 the server's own back-compat default (Do NOT break #49)", async () => {
+    vi.stubEnv("XAI_API_KEY", "test-xai-key");
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { request_id: "req-fallback" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          status: "done",
+          video: { url: "https://vidgen.x.ai/clip.mp4", duration: 8, respect_moderation: true },
+        })
+      );
+
+    const res = await POST(postRequest({ prompt: "x", referenceImageDataUrls: [TINY_DATA_URL] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.videoUrl).toBe("https://vidgen.x.ai/clip.mp4");
+    const [startUrl] = fetchMock.mock.calls[0];
+    expect(startUrl).toBe("https://api.x.ai/v1/videos/generations");
+  });
+
+  it("keeps calling xAI Grok when videoBackend is explicitly \"grok\"", async () => {
+    vi.stubEnv("XAI_API_KEY", "test-xai-key");
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { request_id: "req-grok" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          status: "done",
+          video: { url: "https://vidgen.x.ai/g.mp4", duration: 8, respect_moderation: true },
+        })
+      );
+
+    const res = await POST(h3Request({ videoBackend: "grok" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.videoUrl).toBe("https://vidgen.x.ai/g.mp4");
+    const [startUrl] = fetchMock.mock.calls[0];
+    expect(startUrl).toBe("https://api.x.ai/v1/videos/generations");
+  });
+
+  it("submits to MiniMax's /v2/video_generation with the documented content shape, polls, downloads, and returns a data: URL when no persistence target is given", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { task_id: "task-1" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { task: { status: "success", content: { url: "https://cdn.minimax.io/clip.mp4" } } })
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+
+    const res = await POST(h3Request());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.durationSec).toBe(8);
+    expect(body.videoUrl).toBe(`data:video/mp4;base64,${Buffer.from([1, 2, 3]).toString("base64")}`);
+    expect(body.persisted).toBeUndefined();
+
+    const [submitUrl, submitInit] = fetchMock.mock.calls[0];
+    expect(submitUrl).toBe("https://api.minimax.io/v2/video_generation");
+    const sentBody = JSON.parse(submitInit.body as string);
+    expect(sentBody.model).toBe("MiniMax-H3");
+    expect(sentBody.duration).toBe(8);
+    expect(sentBody.resolution).toBe("768P");
+    expect(sentBody.content).toEqual([
+      { type: "text", text: "a door creaks open, slow zoom" },
+      { type: "image_url", image_url: { url: TINY_DATA_URL }, role: "first_frame" },
+    ]);
+
+    const [pollUrl] = fetchMock.mock.calls[1];
+    expect(pollUrl).toBe("https://api.minimax.io/v2/query/video_generation/task-1");
+
+    const [downloadUrl] = fetchMock.mock.calls[2];
+    expect(downloadUrl).toBe("https://cdn.minimax.io/clip.mp4");
+  });
+
+  it("sends an optional last_frame image when a second reference is given", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { task_id: "task-2" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { task: { status: "success", content: { url: "https://cdn.minimax.io/c2.mp4" } } })
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array([1]), { status: 200 }));
+
+    await POST(h3Request({ referenceImageDataUrls: [TINY_DATA_URL, SECOND_DATA_URL] }));
+
+    const [, submitInit] = fetchMock.mock.calls[0];
+    const sentBody = JSON.parse(submitInit.body as string);
+    expect(sentBody.content).toHaveLength(3);
+    expect(sentBody.content[2]).toEqual({
+      type: "image_url",
+      image_url: { url: SECOND_DATA_URL },
+      role: "last_frame",
+    });
+  });
+
+  it("rejects more than two reference images \u2014 H3 only has first/last-frame roles, unlike Grok's up-to-3", async () => {
+    const res = await POST(
+      h3Request({ referenceImageDataUrls: [TINY_DATA_URL, SECOND_DATA_URL, THIRD_DATA_URL] })
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.code).toBe("invalid_request");
+    expect(body.error.toLowerCase()).toContain("at most two reference images");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("re-uploads a successful render to Vercel Blob under this plate's stable pathname when a persistence target is given", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { task_id: "task-3" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { task: { status: "success", content: { url: "https://cdn.minimax.io/c3.mp4" } } })
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array([9, 9, 9]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
+    putMock.mockResolvedValueOnce({
+      url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
+    });
+
+    const res = await POST(
+      h3Request({ segmentId: "seg-1", plateId: "plate-1", clipIndex: 1, startSec: 0, endSec: 40 })
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({
+      videoUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
+      durationSec: 8,
+      persisted: true,
+    });
+    expect(putMock).toHaveBeenCalledTimes(1);
+    const [pathname] = putMock.mock.calls[0];
+    expect(pathname).toBe("skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4");
+  });
+
+  it("still returns the render (as a data: URL), honestly flagged unsaved, when Blob persistence fails", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { task_id: "task-4" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { task: { status: "success", content: { url: "https://cdn.minimax.io/c4.mp4" } } })
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array([7, 7]), { status: 200 }));
+    putMock.mockRejectedValueOnce(new Error("Vercel Blob: No token found."));
+
+    const res = await POST(
+      h3Request({ segmentId: "seg-1", plateId: "plate-1", clipIndex: 1, startSec: 0, endSec: 40 })
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.persisted).toBe(false);
+    expect(body.persistError).toContain("Vercel Blob: No token found.");
+    expect(body.videoUrl.startsWith("data:video/mp4;base64,")).toBe(true);
+  });
+
+  it("surfaces a real MiniMax submit failure verbatim", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: "invalid api key" }));
+
+    const res = await POST(h3Request());
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.code).toBe("auth_error");
+    expect(body.error).toContain("invalid api key");
+  });
+
+  it("surfaces a real MiniMax job failure honestly", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { task_id: "task-5" }))
+      .mockResolvedValueOnce(jsonResponse(200, { task: { status: "failed", error: "content moderation rejected" } }));
+
+    const res = await POST(h3Request());
+    const body = await res.json();
+
+    expect(res.status).toBe(502);
+    expect(body.code).toBe("upstream_error");
+    expect(body.error).toContain("content moderation rejected");
+  });
+
+  it("keeps polling across pending responses before returning the finished video", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { task_id: "task-6" }))
+      .mockResolvedValueOnce(jsonResponse(200, { task: { status: "processing" } }))
+      .mockResolvedValueOnce(jsonResponse(200, { task: { status: "processing" } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { task: { status: "success", content: { url: "https://cdn.minimax.io/final.mp4" } } })
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array([1]), { status: 200 }));
+
+    const resultPromise = POST(h3Request());
+    await advanceOnePoll();
+    await advanceOnePoll();
+    await advanceOnePoll();
+
+    const res = await resultPromise;
+
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+
+    vi.useRealTimers();
+  });
+
+  it("gives up honestly once the poll deadline passes, without pretending the render finished", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { task_id: "task-7" }));
+    fetchMock.mockResolvedValue(jsonResponse(200, { task: { status: "processing" } }));
+
+    const resultPromise = POST(h3Request());
+    for (let i = 0; i < 62; i++) {
+      await advanceOnePoll();
+    }
+
+    const res = await resultPromise;
+    const body = await res.json();
+
+    expect(res.status).toBe(504);
+    expect(body.code).toBe("timeout");
+    expect(body.error.toLowerCase()).toContain("still processing");
+
+    vi.useRealTimers();
+  });
+});

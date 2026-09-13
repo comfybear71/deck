@@ -5,6 +5,7 @@ import {
   computePlateDurationSec,
   computePlateTimeRange,
   estimateClipRenderCostUsd,
+  estimateH3ClipRenderCostUsd,
   estimateLtxClipRenderCostUsd,
   generateSkidmarksClip,
   MAX_CLIP_DURATION_SEC,
@@ -257,6 +258,54 @@ describe("buildClipGenerationRequest", () => {
     expect(JSON.stringify(request)).not.toContain("segmentId");
   });
 
+  describe("Instrumental videoBackend (H3/Grok switch)", () => {
+    it("defaults to h3 when instrumentalVideoModel is omitted \u2014 Stuart's 2026-09-13 default", () => {
+      const request = buildClipGenerationRequest({
+        vocal: false,
+        shotPrompt: "a door creaks open",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,door",
+        durationSec: 5,
+      });
+      expect(request.videoBackend).toBe("h3");
+    });
+
+    it("honors an explicit grok pick", () => {
+      const request = buildClipGenerationRequest({
+        vocal: false,
+        shotPrompt: "a door creaks open",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,door",
+        durationSec: 5,
+        instrumentalVideoModel: "grok",
+      });
+      expect(request.videoBackend).toBe("grok");
+    });
+
+    it("falls back to h3 for any stored value other than the literal grok", () => {
+      const request = buildClipGenerationRequest({
+        vocal: false,
+        shotPrompt: "x",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,x",
+        durationSec: 5,
+        instrumentalVideoModel: "h3",
+      });
+      expect(request.videoBackend).toBe("h3");
+    });
+
+    it("never sets videoBackend on a Vocal (Comfy LTX) request", () => {
+      const request = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "singing directly to camera",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,jack",
+        durationSec: 10,
+      });
+      expect(request.videoBackend).toBeUndefined();
+    });
+  });
+
   it("always names the band and asks for no on-screen text/watermark", () => {
     const { prompt } = buildClipGenerationRequest({
       vocal: false,
@@ -415,6 +464,17 @@ describe("estimateClipRenderCostUsd", () => {
 
   it("defaults referenceImageCount to 1 \u2014 a render is always exactly one plate's still now", () => {
     expect(estimateClipRenderCostUsd(5)).toBeCloseTo(estimateClipRenderCostUsd(5, 1), 5);
+  });
+});
+
+describe("estimateH3ClipRenderCostUsd", () => {
+  it("scales with real duration at MiniMax H3's published 768P $0.08/s rate, no per-image surcharge", () => {
+    expect(estimateH3ClipRenderCostUsd(5)).toBeCloseTo(0.4, 5);
+    expect(estimateH3ClipRenderCostUsd(15)).toBeCloseTo(1.2, 5);
+  });
+
+  it("is slightly cheaper than the Grok estimate at the same duration \u2014 no $0.01 reference-image charge", () => {
+    expect(estimateH3ClipRenderCostUsd(10)).toBeLessThan(estimateClipRenderCostUsd(10, 1));
   });
 });
 

@@ -396,6 +396,43 @@ export const SKIDMARKS_MODELS: SkidmarksModelMeta[] = [
  * carve-out — it's removed outright (no subscription). */
 export const SKIDMARKS_UNCENSORED_STILLS_LABEL = "SIRAY \u2014 Uncensored plate stills";
 
+/** The two real backends `app/api/skidmarks/generate-clip/route.ts`
+ * calls for an **Instrumental/B-roll** clip's video render — kept as
+ * its own narrow type, deliberately separate from `SkidmarksModelId`
+ * (LTX/Grok/H3/Seedance): that field only ever steers *still*-
+ * generation prompt phrasing (`lib/plateGeneration.ts`'s
+ * `routingFramingHint`) and stays locked to auto-assigning LTX/Grok
+ * only, never H3/Seedance — reusing it here to *also* mean "which
+ * video backend a Render tap calls" would conflate two genuinely
+ * different concerns and quietly change every fresh Instrumental
+ * clip's still-image framing hint as a side effect of a video-backend
+ * default. `undefined` on a segment means "no explicit pick yet" —
+ * `resolveInstrumentalVideoModel` below is the one place that resolves
+ * that into a real choice. Never read on a Vocal clip — that always
+ * routes to Comfy Cloud LTX, unchanged, no switch. */
+export type SkidmarksInstrumentalVideoModel = "h3" | "grok";
+
+/** **Stuart lock (2026-09-13)**: MiniMax H3 (`MINIMAX_API_KEY`) is now
+ * the *default* Instrumental/B-roll video-render backend — explicitly
+ * requested "for this smoke," superseding (for video renders only) the
+ * older "H3 is a selectable pill, never auto-assigned" cost lock
+ * documented on `SkidmarksModelId` above (that lock is about the
+ * *still-image* `model` tag, which stays untouched here — see
+ * `SkidmarksInstrumentalVideoModel`'s own doc comment for why the two
+ * are separate fields). Grok (`XAI_API_KEY`) stays fully wired and one
+ * tap away — see `components/SkidmarksClipRender.tsx`'s H3/Grok
+ * switch, added inside the existing two-tap Render confirm per
+ * Stuart's own "no model pill farm" ask, never a persistent badge.
+ * Falls back to `"h3"` for any stored value other than the literal
+ * `"grok"` (covers `undefined`, a stale/invalid value from a hand-
+ * edited session, and a fresh segment that's never had this field
+ * touched at all). */
+export function resolveInstrumentalVideoModel(
+  value: SkidmarksInstrumentalVideoModel | string | null | undefined
+): SkidmarksInstrumentalVideoModel {
+  return value === "grok" ? "grok" : "h3";
+}
+
 export function skidmarksModelLabel(id: SkidmarksModelId): string {
   return SKIDMARKS_MODELS.find((m) => m.id === id)?.label ?? id;
 }
@@ -523,6 +560,15 @@ export interface SkidmarksClipSegment {
    * tapping a plate's own corner select control
    * (`components/SkidmarksClipStub.tsx`). */
   selectedPlateId?: string | null;
+  /** Which real backend this clip's Render control calls when it's
+   * Instrumental/B-roll — see `SkidmarksInstrumentalVideoModel`'s doc
+   * comment for why this is its own field, separate from `model`.
+   * `undefined` until Stuart explicitly taps the H3/Grok switch inside
+   * the Render confirm, in which case `resolveInstrumentalVideoModel`
+   * resolves the default (`"h3"`, per Stuart's 2026-09-13 lock). Never
+   * read on a Vocal clip. Set via
+   * `setSkidmarksSegmentInstrumentalVideoModel`. */
+  instrumentalVideoModel?: SkidmarksInstrumentalVideoModel;
 }
 
 /** One slot in a clip's plate strip — either the empty dashed
@@ -1098,6 +1144,14 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
   // hand-edited `localStorage` blob (wrong type) both normalize to a
   // clean `null` instead of `undefined` leaking through inconsistently.
   const selectedPlateId = typeof r.selectedPlateId === "string" ? r.selectedPlateId : null;
+  // A stored `"h3"`/`"grok"` survives a reload untouched; anything else
+  // (never set, a stale/invalid value) is dropped back to `undefined`
+  // — `resolveInstrumentalVideoModel` is what turns that into the real
+  // `"h3"` default at read time, same "normalize the type/presence
+  // here, resolve the honest fallback there" split `selectedPlateId`
+  // already uses above.
+  const instrumentalVideoModel: SkidmarksInstrumentalVideoModel | undefined =
+    r.instrumentalVideoModel === "h3" || r.instrumentalVideoModel === "grok" ? r.instrumentalVideoModel : undefined;
   return {
     id: raw.id,
     startSec: raw.startSec,
@@ -1108,6 +1162,7 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
     uncensoredPlateStills,
     plates,
     selectedPlateId,
+    instrumentalVideoModel,
   };
 }
 
@@ -1800,6 +1855,21 @@ function updateSkidmarksSegment(
  * becomes worth surfacing. */
 export function setSkidmarksSegmentModel(segmentId: string, model: SkidmarksModelId): void {
   updateSkidmarksSegment(segmentId, (s) => ({ ...s, model }));
+}
+
+/** The H3/Grok switch inside the Render confirm
+ * (`components/SkidmarksClipRender.tsx`) — the *only* way a clip's
+ * Instrumental video-render backend choice ever changes; nothing in
+ * this file flips it on its own initiative. Distinct from
+ * `setSkidmarksSegmentModel` above — see
+ * `SkidmarksInstrumentalVideoModel`'s doc comment for why these stay
+ * two separate fields rather than one. No-ops if the segment doesn't
+ * exist. */
+export function setSkidmarksSegmentInstrumentalVideoModel(
+  segmentId: string,
+  model: SkidmarksInstrumentalVideoModel
+): void {
+  updateSkidmarksSegment(segmentId, (s) => ({ ...s, instrumentalVideoModel: model }));
 }
 
 /** The plain-language "what happens in this shot" field on the expanded

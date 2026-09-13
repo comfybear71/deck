@@ -47,46 +47,62 @@
  * clip render is roughly a megabyte, nowhere near that store's small
  * shared quota).
  *
- * **Vocal -> Comfy Cloud LTX, Instrumental -> Grok, automatic, no model
- * picker (Stuart lock, 2026-09-13).** This module used to build exactly
- * one kind of request (always xAI Grok Imagine video). It now builds
- * one of *two*, chosen purely from `vocal` (the same `vocal` boolean
- * `lib/skidmarks.ts`'s `SKIDMARKS_SEGMENT_LABEL_META` already derives
- * from a clip's label, not a new field Stuart has to set) — never a
- * tap surface, per AGENTS.md's "no model picker in the UI" lock:
- * - `vocal: false` (Instrumental/B-roll/opener) — unchanged: xAI Grok
- *   Imagine video, 5-15s, one plate still as the image-to-video
- *   reference. See this module's doc comment above for that path's
- *   full, live-verified story.
- * - `vocal: true` (Vocal/lip-sync performance) — routes to
+ * **Vocal -> Comfy Cloud LTX (unchanged); Instrumental -> H3 by
+ * default, one tap away from Grok (Stuart lock, 2026-09-13, updated).**
+ * This module used to build exactly one kind of request (always xAI
+ * Grok Imagine video), then two (Vocal vs. Instrumental, `vocal`-routed,
+ * no picker at all). It now builds one of *three* real shapes:
+ * - `vocal: true` (Vocal/lip-sync performance) — unchanged, routes to
  *   **Comfy Cloud's LTX-2.5 `AudioToVideo` partner node**
- *   (`lib/comfyCloud.ts`), which drives the generated video's motion
- *   (chiefly mouth movement) off a real **slice of the attached
- *   song's own vocal performance** for this exact plate
- *   (`lib/mp3Slice.ts`, frame-cut from `mp3.audioUrl` — the durable
- *   Blob URL, never the ephemeral in-tab `File`/object URL, since a
- *   server route has no access to a browser `File` at all) instead of
- *   an automatic push-in/zoom. That node's own documented duration
- *   range is 2-20s (its output duration is *set by* the input audio's
- *   length, not a separate parameter) — `MIN_LTX_CLIP_DURATION_SEC`/
- *   `MAX_LTX_CLIP_DURATION_SEC` below use a 5-20s window instead (5s
- *   floor to match this feature's existing floor everywhere else,
- *   20s the node's real ceiling). **Note**: Stuart's own initial ask
- *   was "clamp up to ~30s" — the real `LtxApi25AudioToVideo` node caps
- *   hard at 20s and documents that it errors outside `[2, 20]`, so
- *   this module honors the *real* technical ceiling instead of
- *   quietly sending a request already known to fail past it; flagged
- *   explicitly here and in this PR's description rather than silently
- *   picking one number over the other.
+ *   (`lib/comfyCloud.ts`). No switch here — Stuart never asked for one
+ *   on the Vocal path.
+ * - `vocal: false` (Instrumental/B-roll/opener) — now **two** real
+ *   backends Stuart can switch between per clip, via the small H3/Grok
+ *   toggle inside `components/SkidmarksClipRender.tsx`'s existing
+ *   two-tap Render confirm (never a persistent pill/badge — see
+ *   AGENTS.md's "no model picker" lock, and
+ *   `lib/skidmarks.ts`'s `SkidmarksInstrumentalVideoModel`/
+ *   `resolveInstrumentalVideoModel` for where the choice is stored and
+ *   defaulted): **MiniMax H3** (`lib/minimaxH3.ts`, `MINIMAX_API_KEY`)
+ *   is the new default — Stuart's own explicit "H3 please, for this
+ *   smoke" ask — first-frame (and optionally last-frame) image-to-
+ *   video, same `[5, 15]`s duration window as Grok (H3's own real
+ *   ceiling is `[4, 15]`, so this app's existing 5s floor already sits
+ *   inside it — no new duration constant needed). **xAI Grok Imagine
+ *   video** stays fully wired underneath — one tap on the toggle
+ *   switches back, same duration range, same one-reference-image
+ *   shape as before this pass.
  *
- * **Never claims Comfy/LTX is live-verified** the way the Grok path
- * is — see `lib/comfyCloud.ts`'s own module doc comment for exactly
- * what's real-and-documented vs. not live-tested (no
- * `COMFY_CLOUD_API_KEY` is available in this sandbox).
+ * **The Vocal/Comfy-LTX path's own fuller story** (unchanged by this
+ * pass): drives the generated video's motion (chiefly mouth movement)
+ * off a real **slice of the attached song's own vocal performance**
+ * for this exact plate (`lib/mp3Slice.ts`, frame-cut from
+ * `mp3.audioUrl` — the durable Blob URL, never the ephemeral in-tab
+ * `File`/object URL, since a server route has no access to a browser
+ * `File` at all) instead of an automatic push-in/zoom. That node's own
+ * documented duration range is 2-20s (its output duration is *set by*
+ * the input audio's length, not a separate parameter) —
+ * `MIN_LTX_CLIP_DURATION_SEC`/`MAX_LTX_CLIP_DURATION_SEC` below use a
+ * 5-20s window instead (5s floor to match this feature's existing
+ * floor everywhere else, 20s the node's real ceiling). **Note**:
+ * Stuart's own initial ask was "clamp up to ~30s" — the real
+ * `LtxApi25AudioToVideo` node caps hard at 20s and documents that it
+ * errors outside `[2, 20]`, so this module honors the *real* technical
+ * ceiling instead of quietly sending a request already known to fail
+ * past it.
+ *
+ * **Neither Comfy/LTX nor MiniMax H3 is live-verified** the way the
+ * Grok path is — see `lib/comfyCloud.ts`'s and `lib/minimaxH3.ts`'s
+ * own module doc comments for exactly what's real-and-documented vs.
+ * not live-tested (no `COMFY_CLOUD_API_KEY`/`MINIMAX_API_KEY` is
+ * available in this sandbox). The H3 request/response shapes below are
+ * mirrored from the original Skidmarks repo's own real H3 client
+ * (`comfybear71/skidmarks`, `src/lib/minimaxVideo.ts`), not invented —
+ * see `lib/minimaxH3.ts`'s module doc comment.
  */
 
 import { getSkidmarksCharacterLock } from "./plateGeneration";
-import type { SkidmarksMember } from "./skidmarks";
+import { resolveInstrumentalVideoModel, type SkidmarksInstrumentalVideoModel, type SkidmarksMember } from "./skidmarks";
 
 /** Per-plate render duration range — Grok's documented ceiling is 15s;
  * 5s is the floor this feature has always used. Real per-plate duration
@@ -151,6 +167,22 @@ const LTX_SECOND_RATE_USD = 0.13;
 
 export function estimateLtxClipRenderCostUsd(durationSec: number): number {
   return durationSec * LTX_SECOND_RATE_USD;
+}
+
+/** MiniMax-H3 at 768P — the cheaper of its two documented output
+ * resolutions ($0.08/s vs. 2K's $0.13/s, per MiniMax's own published
+ * pay-as-you-go pricing, platform.minimax.io/docs/guides/pricing-paygo,
+ * checked while building this feature) — same "cheapest documented
+ * tier by default, hardcoded not a picker" cost lock as Grok's 480p and
+ * LTX's Fast tier above. No per-reference-image surcharge in this
+ * estimate — MiniMax's own pricing gives the first 5 reference images
+ * free ($0.04 each past that), and this feature never sends more than
+ * 2 (first frame + optional last frame — see `lib/minimaxH3.ts`'s
+ * module doc comment). */
+const H3_SECOND_RATE_USD = 0.08;
+
+export function estimateH3ClipRenderCostUsd(durationSec: number): number {
+  return durationSec * H3_SECOND_RATE_USD;
 }
 
 /**
@@ -327,6 +359,13 @@ export interface ClipGenerationRequest {
    * filename, unchanged). */
   audioStartSec?: number;
   audioEndSec?: number;
+  /** Which real backend `app/api/skidmarks/generate-clip/route.ts`
+   * calls when `vocal` is `false` — `"h3"` (MiniMax H3, the default —
+   * see `lib/skidmarks.ts`'s `resolveInstrumentalVideoModel`) or
+   * `"grok"` (xAI Grok Imagine video, unchanged). Never set — and
+   * never read by the route — on a Vocal request; that path always
+   * means Comfy Cloud LTX regardless of this field. */
+  videoBackend?: "h3" | "grok";
 }
 
 export interface BuildClipGenerationRequestParams {
@@ -388,6 +427,13 @@ export interface BuildClipGenerationRequestParams {
   clipIndex?: number;
   startSec?: number;
   endSec?: number;
+  /** Only meaningful when `vocal` is `false` — the clip's own stored
+   * H3/Grok choice (`lib/skidmarks.ts`'s `SkidmarksClipSegment
+   * .instrumentalVideoModel`, resolved via `resolveInstrumentalVideoModel`
+   * before it reaches here — see that function's doc comment for the
+   * `"h3"` default). Ignored entirely on a Vocal request; that path
+   * always means Comfy Cloud LTX. */
+  instrumentalVideoModel?: SkidmarksInstrumentalVideoModel;
 }
 
 /**
@@ -456,6 +502,13 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     endSec: params.endSec,
     vocal: params.vocal,
   };
+
+  if (!params.vocal) {
+    // `resolveInstrumentalVideoModel` is also the fallback used here
+    // when a caller doesn't resolve it first — see that function's doc
+    // comment for why an unset/invalid value means `"h3"`, not `"grok"`.
+    request.videoBackend = resolveInstrumentalVideoModel(params.instrumentalVideoModel);
+  }
 
   if (params.vocal) {
     request.mp3AudioUrl = params.mp3AudioUrl;
