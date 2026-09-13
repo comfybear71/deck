@@ -139,6 +139,14 @@ export function SkidmarksClipRender({
   const [confirming, setConfirming] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** True only for the "xAI succeeded (Stuart was charged) but the save
+   * step afterward failed" case — a real live-QA'd risk of a *silent*
+   * paid loss if this ever looked like an ordinary dismissible error.
+   * Drives a distinctly bordered/backgrounded alert box instead of the
+   * plain text line every other error here uses, so a paid-but-unsaved
+   * render is impossible to miss or mistake for a free validation
+   * error. */
+  const [paidButNotSaved, setPaidButNotSaved] = useState(false);
   const [justPersisted, setJustPersisted] = useState(false);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -181,6 +189,7 @@ export function SkidmarksClipRender({
     }
     setGenerating(true);
     setError(null);
+    setPaidButNotSaved(false);
     setJustPersisted(false);
     onRenderStart(plateId);
     try {
@@ -210,10 +219,14 @@ export function SkidmarksClipRender({
           onPersisted({ segmentId, plateId, url: outcome.videoUrl, filename, clipIndex, startSec, endSec });
           setJustPersisted(true);
         } else {
+          // Real money was already spent on this render (xAI itself
+          // succeeded) — this can never read like an ordinary, free
+          // validation error. See `paidButNotSaved`'s doc comment.
+          setPaidButNotSaved(true);
           setError(
             outcome.persistError
-              ? `Rendered, but not saved — ${outcome.persistError}`
-              : "Rendered, but not saved this time — it won't show up in the shelf below or survive a refresh."
+              ? `The render finished and you were charged (~$${estimatedCost.toFixed(2)}), but saving it failed: ${outcome.persistError} It won't show up in the shelf below or survive a refresh unless you try again.`
+              : `The render finished and you were charged (~$${estimatedCost.toFixed(2)}), but it wasn't saved this time. It won't show up in the shelf below or survive a refresh.`
           );
         }
       } else {
@@ -303,7 +316,15 @@ export function SkidmarksClipRender({
         </p>
       )}
 
-      {error && (
+      {error && paidButNotSaved && (
+        <p
+          role="alert"
+          className="rounded-lg border border-rose-400/40 bg-rose-400/10 p-2 text-[11px] font-medium leading-snug text-rose-200"
+        >
+          {error}
+        </p>
+      )}
+      {error && !paidButNotSaved && (
         <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
           {error}
         </p>

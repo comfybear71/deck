@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildClipRenderFilename,
   buildClipRenderPathname,
+  buildClipRenderPlatePrefix,
   CLIP_RENDER_PATH_PREFIX,
   isSafeSegmentId,
   parseClipRenderPathname,
@@ -100,5 +101,34 @@ describe("buildClipRenderPathname / parseClipRenderPathname", () => {
   it("returns null when the parsed segment or plate id would itself be unsafe (defensive — build never emits this today)", () => {
     expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}bad;id/plate_xyz/01_0000-0040_render.mp4`)).toBeNull();
     expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}segment_abc/bad;id/01_0000-0040_render.mp4`)).toBeNull();
+  });
+});
+
+describe("buildClipRenderPlatePrefix", () => {
+  it("returns this plate's own directory prefix, independent of clipIndex/startSec/endSec/plateLetterIndex", () => {
+    expect(buildClipRenderPlatePrefix("segment_abc123", "plate_xyz")).toBe(
+      `${CLIP_RENDER_PATH_PREFIX}segment_abc123/plate_xyz/`
+    );
+  });
+
+  it("is a real prefix of every pathname built for the same plate, however the filename varies", () => {
+    const prefix = buildClipRenderPlatePrefix("segment_abc123", "plate_xyz");
+    // Same plate, but the filename drifted (a reordered timeline
+    // changed clipIndex, a plate count change added a letter suffix) —
+    // this is exactly the case `pruneStaleRendersForPlate`
+    // (`app/api/skidmarks/generate-clip/route.ts`) has to catch both of.
+    const before = buildClipRenderPathname("segment_abc123", "plate_xyz", 1, 0, 40);
+    const after = buildClipRenderPathname("segment_abc123", "plate_xyz", 2, 40, 90, 1);
+    expect(before.startsWith(prefix)).toBe(true);
+    expect(after.startsWith(prefix)).toBe(true);
+    expect(before).not.toBe(after);
+  });
+
+  it("never matches a different plate's or segment's prefix", () => {
+    const prefix = buildClipRenderPlatePrefix("segment_abc123", "plate_xyz");
+    const otherPlate = buildClipRenderPathname("segment_abc123", "plate_other", 1, 0, 40);
+    const otherSegment = buildClipRenderPathname("segment_other", "plate_xyz", 1, 0, 40);
+    expect(otherPlate.startsWith(prefix)).toBe(false);
+    expect(otherSegment.startsWith(prefix)).toBe(false);
   });
 });

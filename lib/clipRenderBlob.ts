@@ -95,10 +95,13 @@ export function buildClipRenderFilename(
 }
 
 /** Builds this plate's one persisted-render pathname — stable across
- * repeated renders of the *same* plate (same `segmentId`/`plateId`/
- * `clipIndex`/`startSec`/`endSec`/`plateLetterIndex` always resolves to
- * the same path), which is what lets `allowOverwrite: true` replace the
- * previous take instead of accumulating one Blob object per render. */
+ * repeated renders of the *same* plate **as long as `clipIndex`/
+ * `startSec`/`endSec`/`plateLetterIndex` don't themselves shift between
+ * two renders** (`allowOverwrite: true` only replaces the blob already
+ * sitting at this *exact* pathname — see this module's doc comment and
+ * `buildClipRenderPlatePrefix`'s doc comment for what covers the case
+ * where one of those *does* shift, e.g. the timeline reordering or a
+ * plate count changing between takes). */
 export function buildClipRenderPathname(
   segmentId: string,
   plateId: string,
@@ -108,6 +111,30 @@ export function buildClipRenderPathname(
   plateLetterIndex?: number
 ): string {
   return `${CLIP_RENDER_PATH_PREFIX}${segmentId}/${plateId}/${buildClipRenderFilename(clipIndex, startSec, endSec, plateLetterIndex)}`;
+}
+
+/**
+ * This plate's own directory prefix — everything before the filename in
+ * `buildClipRenderPathname`'s output. **The real, position-independent
+ * identity of "this plate's one persisted render"**: `clipIndex`/
+ * `startSec`/`endSec`/`plateLetterIndex` all feed into the *filename*
+ * (so a download/Resolve-friendly name can encode a clip's numeric
+ * position), but none of them are supposed to change what counts as
+ * "the same plate's render" — a live bug report showed they sometimes
+ * do drift between two renders of what's still the same plate (a
+ * timeline re-sort, a plate added/removed elsewhere in the same clip's
+ * strip shifting `plateIndex`/`plateCount`), which changes the
+ * *filename* and therefore the full pathname `allowOverwrite` keys off
+ * of \u2014 producing a second, orphaned blob under this same prefix
+ * instead of genuinely overwriting the first. `app/api/skidmarks/
+ * generate-clip/route.ts` uses this prefix right after a successful
+ * `put()` to actively delete every *other* blob already sitting under
+ * it, so "exactly one persisted render per `(segmentId, plateId)`" is a
+ * real invariant enforced at write time, not just true in the common
+ * case where nothing else happened to shift in between.
+ */
+export function buildClipRenderPlatePrefix(segmentId: string, plateId: string): string {
+  return `${CLIP_RENDER_PATH_PREFIX}${segmentId}/${plateId}/`;
 }
 
 export interface ParsedClipRenderPathname {

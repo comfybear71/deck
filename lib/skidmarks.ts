@@ -569,6 +569,30 @@ export interface SkidmarksPlateStill {
   dataUrl: string;
   source: "upload" | "generated";
   createdAt: number;
+  /** Whether *this* still is already known to feature a locked character
+   * (Jack Ash today — `lib/plateGeneration.ts`'s `SKIDMARKS_CHARACTER_LOCKS`)
+   * — the exact fact `buildPlateGenerationRequest` resolved as
+   * `characterInFrame` when this still was generated. Only ever set on a
+   * *generated* still (a fresh upload carries no such signal — nothing
+   * here guesses whether an uploaded photo happens to show him); `true`
+   * only when the still's own shot prompt actually named him, or the
+   * plate it continued from was itself already `true`.
+   *
+   * **Why this exists**: an Instrumental/B-roll clip's "continue from
+   * the plate before it" signal (`buildPlateGenerationRequest`'s
+   * `continuityFeaturesLockedCharacter` param) must only carry Jack
+   * Ash's identity reference + hallmark lock forward when the plate
+   * being continued *from* actually featured him — not from *any*
+   * continuity reference regardless of what it shows. A live-QA'd real
+   * bug: the door \u2192 keyhole \u2192 Jack sequence's *keyhole* plate
+   * (empty of people, prompt never names him) continued from the
+   * *door* plate (also empty of people) via "Use last plate," and the
+   * old, cruder "any continuity image at all" signal wrongly injected
+   * Jack's silhouette/neon lips into that empty keyhole shot. Tracking
+   * this per-still fact is what lets the chain tell "continuing a shot
+   * that already had him" apart from "continuing a shot that never
+   * did." */
+  featuresLockedCharacter?: boolean;
 }
 
 /** Fallback total (3:30) used to seed segments before the browser's real

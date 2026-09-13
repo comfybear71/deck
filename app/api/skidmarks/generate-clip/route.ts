@@ -1,6 +1,6 @@
-import { put } from "@vercel/blob";
+import { del, list, put } from "@vercel/blob";
 import { NextResponse } from "next/server";
-import { buildClipRenderPathname, isSafeSegmentId } from "@/lib/clipRenderBlob";
+import { buildClipRenderPathname, buildClipRenderPlatePrefix, isSafeSegmentId } from "@/lib/clipRenderBlob";
 
 /**
  * POST /api/skidmarks/generate-clip — the first real (non-stub) slice of
@@ -568,13 +568,49 @@ export function resolvePersistenceTarget(body: GenerateClipRequestBody): RenderP
 type PersistRenderOutcome = { ok: true; url: string } | { ok: false; reason: string };
 
 /**
+ * Deletes every blob already sitting under this plate's own directory
+ * prefix (`lib/clipRenderBlob.ts`'s `buildClipRenderPlatePrefix`)
+ * *except* the one just written \u2014 the actual enforcement of "exactly
+ * one persisted render per `(segmentId, plateId)`," a live-QA'd real
+ * gap: `allowOverwrite: true` alone only replaces a blob sitting at the
+ * *exact same pathname*, and the pathname's own filename bakes in
+ * `clipIndex`/`startSec`/`endSec`/a plate-count-dependent letter suffix
+ * (see `buildClipRenderPathname`) \u2014 none of which are guaranteed
+ * stable between two renders of what Stuart still considers "the same
+ * plate" (the timeline re-sorting, a plate added to/removed from the
+ * same clip's strip in between). Without this cleanup, a re-render
+ * under a *different* filename left the old take sitting there as an
+ * orphaned, still-listed blob \u2014 a ghost entry alongside the new one
+ * in both the `GET /api/skidmarks/clip-renders` listing and the
+ * rendered-clips shelf. Best-effort and never fatal: a failed cleanup
+ * here doesn't undo or fail the render Stuart already paid for and
+ * successfully saved under the new pathname; it just risks a leftover
+ * orphan blob (a storage-hygiene issue, not a cost or correctness one
+ * \u2014 see AGENTS.md's "Persisting a render to Vercel Blob is a storage
+ * cost, not a per-tap xAI spend risk").
+ */
+async function pruneStaleRendersForPlate(segmentId: string, plateId: string, keepPathname: string): Promise<void> {
+  try {
+    const { blobs } = await list({ prefix: buildClipRenderPlatePrefix(segmentId, plateId) });
+    const stale = blobs.filter((b) => b.pathname !== keepPathname).map((b) => b.pathname);
+    if (stale.length > 0) await del(stale);
+  } catch {
+    // Best-effort \u2014 see this function's doc comment.
+  }
+}
+
+/**
  * Re-downloads the just-finished render from xAI's temporary URL and
  * re-uploads it to Vercel Blob under this clip's stable pathname (see
  * `lib/clipRenderBlob.ts`), overwriting any earlier render already
- * saved for the same clip. Never throws \u2014 every real failure mode
- * (the re-download failing, Blob not being configured, the upload
- * itself failing) comes back as an honest `{ ok: false, reason }` so
- * the route can still return the render Stuart already paid for.
+ * saved for the same clip, then prunes any other stale blob left under
+ * this same plate's prefix (`pruneStaleRendersForPlate` above) so a
+ * plate can never accumulate more than one persisted render even when
+ * its computed filename has drifted since the last take. Never throws
+ * \u2014 every real failure mode (the re-download failing, Blob not being
+ * configured, the upload itself failing) comes back as an honest
+ * `{ ok: false, reason }` so the route can still return the render
+ * Stuart already paid for.
  */
 export async function persistClipRenderToBlob(
   sourceVideoUrl: string,
@@ -615,6 +651,7 @@ export async function persistClipRenderToBlob(
       addRandomSuffix: false,
       allowOverwrite: true,
     });
+    await pruneStaleRendersForPlate(target.segmentId, target.plateId, pathname);
     return { ok: true, url: blob.url };
   } catch (err) {
     return {

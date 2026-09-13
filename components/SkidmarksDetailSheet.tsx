@@ -68,7 +68,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const [openMemberId, setOpenMemberId] = useState<string | null>(null);
   const openMember = activeBand?.members.find((m) => m.id === openMemberId);
 
-  const { renders, addRender } = useSkidmarksClipRenders(session.mp3?.segments ?? []);
+  const { renders, addRender, removeRender } = useSkidmarksClipRenders(session.mp3?.segments ?? []);
 
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
@@ -310,7 +310,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
               />
             )}
 
-            {session.mp3 && activeBand && <SkidmarksRenderedClipsShelf renders={renders} />}
+            {session.mp3 && activeBand && (
+              <SkidmarksRenderedClipsShelf renders={renders} onRemoved={removeRender} />
+            )}
 
             <SkidmarksArchiveShelf onOpenInEditor={handleOpenInEditor} refreshToken={archiveRefreshToken} />
           </div>

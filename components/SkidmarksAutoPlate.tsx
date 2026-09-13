@@ -79,7 +79,7 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
     setRunning(true);
     setProgress({ done: 0, total: targets.length });
 
-    const generatedStills = new Map<string, string>();
+    const generatedStills = new Map<string, { dataUrl: string; featuresLockedCharacter?: boolean }>();
     let successCount = 0;
     let stoppedEarly: string | null = null;
 
@@ -104,8 +104,21 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
       }
 
       const previousPlateId = plateIndex > 0 ? segment.plates[plateIndex - 1].id : undefined;
+      const previousGeneratedThisRun = previousPlateId ? generatedStills.get(previousPlateId) : undefined;
+      const previousPersistedStill = previousPlateId ? segment.plates[plateIndex - 1].still : undefined;
       const continuityStillDataUrl = target.continueFromPreviousPlate
-        ? generatedStills.get(previousPlateId ?? "") ?? (previousPlateId ? segment.plates[plateIndex - 1].still?.dataUrl : undefined)
+        ? (previousGeneratedThisRun?.dataUrl ?? previousPersistedStill?.dataUrl)
+        : undefined;
+      // Live-QA fix: only carries the locked-character lock forward when
+      // the plate actually continued from *itself* already featured him
+      // — see `lib/skidmarks.ts`'s `SkidmarksPlateStill
+      // .featuresLockedCharacter` doc comment. Prefers this same run's
+      // freshly-generated fact over a persisted still's (a target this
+      // run just filled in strip order, e.g. the scripted opener's door
+      // plate feeding its keyhole plate) so the chain stays correct
+      // within one Auto-plate pass, not just across separate sessions.
+      const continuityFeaturesLockedCharacter = target.continueFromPreviousPlate
+        ? (previousGeneratedThisRun?.featuresLockedCharacter ?? previousPersistedStill?.featuresLockedCharacter)
         : undefined;
 
       const request = buildPlateGenerationRequest({
@@ -115,15 +128,20 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
         bandName: band.name,
         vocalist,
         continuityStillDataUrl,
+        continuityFeaturesLockedCharacter,
       });
 
       const outcome = await generatePlateStill(request);
       if (outcome.ok) {
-        generatedStills.set(target.plateId, outcome.dataUrl);
+        generatedStills.set(target.plateId, {
+          dataUrl: outcome.dataUrl,
+          featuresLockedCharacter: request.featuresLockedCharacter,
+        });
         onSetClipPlateStill(target.segmentId, target.plateId, {
           dataUrl: outcome.dataUrl,
           source: "generated",
           createdAt: Date.now(),
+          featuresLockedCharacter: request.featuresLockedCharacter,
         });
         successCount += 1;
       } else if (outcome.unconfigured) {

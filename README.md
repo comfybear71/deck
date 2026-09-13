@@ -1374,10 +1374,18 @@ now (see "Explicitly out of scope" below).
        **always** fully hidden in deep shadow — no eyes/brow/nose/
        cheeks/jawline ever lit or visible, even in close-up — with
        glowing neon-blue lips as the one feature breaking through that
-       darkness. Whenever Jack Ash resolves as the vocalist on a Vocal
-       clip, this hallmark text (and an explicit "do not show" negative
-       cue — xAI's API has no dedicated negative-prompt field, so this
-       is woven into the same prompt string) is injected automatically;
+       darkness. Injected whenever he's genuinely "in frame":
+       automatically whenever Jack Ash resolves as the vocalist on a
+       **Vocal** clip, *and* on an **Instrumental/B-roll** clip when
+       either (a) Stuart's own shot prompt names him directly
+       (`shotPromptMentionsLockedCharacter`, matches "Jack" as a whole
+       word), or (b) the plate continues from a plate that *itself*
+       already featured him ("Use last plate", gated on the *source*
+       still's own resolved `featuresLockedCharacter` fact — see below
+       — never on "some continuity image is attached" alone). This
+       hallmark text (and an explicit "do not show" negative cue —
+       xAI's API has no dedicated negative-prompt field, so this is
+       woven into the same prompt string) is injected automatically;
        his `avatarImage` is also passed as a real identity/likeness
        reference to xAI's `/images/edits` endpoint. **Verified live, not
        just written**: a real `/images/edits` call in this sandbox,
@@ -1389,6 +1397,27 @@ now (see "Explicitly out of scope" below).
        every future generation lands equally on-character. No new
        character-sheet UI shipped for this — it reuses the existing
        avatar-photo field/picker outright.
+       - **Two real reported bugs, both fixed**: first, this lock only
+         ever applied on a Vocal clip's auto-included vocalist, so an
+         Instrumental clip that explicitly named Jack Ash in its own
+         shot prompt (his "door → keyhole → Jack seated" case) silently
+         dropped both the identity reference and the hallmark lock —
+         fixed by adding signal (a) above. Second, once continuity
+         ("Use last plate") was *also* wired as a trigger, it fired on
+         *any* continuity reference regardless of what the source plate
+         actually showed: the keyhole plate (empty of people, its own
+         prompt never names him) continues from the door plate (also
+         empty of people), and the cruder "any continuity image at all"
+         signal wrongly injected his silhouette/neon lips into that
+         person-less shot purely because the band happens to be Jack
+         Ash. Fixed by tracking whether a still is itself already known
+         to feature the locked character
+         (`SkidmarksPlateStill.featuresLockedCharacter` in
+         `lib/skidmarks.ts`, set from `buildPlateGenerationRequest`'s
+         own resolved `featuresLockedCharacter` whenever a still is
+         *generated* — never guessed for an uploaded photo) and gating
+         signal (b) on that fact, not on continuity alone. Door and
+         keyhole opener plates stay empty of people either way.
      - **Continuity: "Use last plate"** — when generating, if the
        *previous* clip in the timeline already has a still, a small
        "Use last plate" checkbox appears in the Generate popover,
@@ -1404,7 +1433,9 @@ now (see "Explicitly out of scope" below).
        combination was implemented from xAI's own documented request
        shape but wasn't separately live-tested (each real call costs
        real money) — see `lib/plateGeneration.ts`'s module doc comment
-       for exactly what was and wasn't verified live.
+       for exactly what was and wasn't verified live. Note that
+       continuity itself never implies the character lock — see the
+       "two real reported bugs" note just above for exactly what does.
 
      **Auto-assignment is still cost-locked in code**
      (`defaultSegmentModel` in `lib/skidmarks.ts`) — Stuart: "be very
@@ -1499,6 +1530,29 @@ now (see "Explicitly out of scope" below).
      same real backend plate stills already use, not a new provider.
      **The player/download itself no longer renders inside this panel**
      — see "Rendered-clips shelf" below for where it moved and why.
+     - **Real reported bug, now fixed: "exactly one render per plate"
+       wasn't actually enforced.** The persisted filename bakes in
+       `clipIndex`/`startSec`/`endSec`/a plate-count-dependent letter
+       suffix — none of which are guaranteed stable between two renders
+       of what Stuart still considers "the same plate" (the timeline
+       reordering, a plate added to/removed from the same clip's strip
+       in between) — so `allowOverwrite: true` alone could leave a
+       *second*, differently-named blob under the same plate's own
+       prefix instead of genuinely replacing the first: a ghost/
+       duplicate entry in the shelf, or "I paid for a re-render and the
+       old clip is still there." Fixed with two layers: the route
+       actively deletes every *other* blob under that plate's own
+       prefix right after a successful save
+       (`pruneStaleRendersForPlate`), and the read side defensively
+       keeps only the most-recently-uploaded blob per plate
+       (`GET /api/skidmarks/clip-renders`) in case a prune ever didn't
+       run. **A paid render's success is never silently invisible
+       either** — if xAI's call itself succeeds (money spent) but the
+       save step afterward fails, `SkidmarksClipRender` shows a
+       distinctly bordered/backgrounded alert stating plainly that the
+       render finished, that Stuart was charged, and that it won't show
+       up in the shelf or survive a refresh — never just a quiet
+       "Rendered ✓" tick with nothing to show for it.
 
   - **Rendered-clips shelf (declutter)**: every rendered plate's real
     `<video>` player and download link used to sit directly under each
@@ -1524,6 +1578,26 @@ now (see "Explicitly out of scope" below).
     download link stays under each card, and the "download all" zip
     control (falling back to sequential per-clip downloads if the zip
     step fails) stays reachable underneath the whole strip.
+    - **Order lock**: the shelf's visible order is always
+      `sortPersistedRenders`'s (`lib/clipRenders.ts`) timeline/plate-
+      position sort — clip index, then start/end time, then the
+      lettered filename — recomputed fresh from each render's own
+      fields every render, never from `Map` insertion order or a "last
+      updated" timestamp. A re-render of an already-rendered plate only
+      replaces that plate's `url` at its existing key
+      (`hooks/useSkidmarksClipRenders.ts`'s `addRender`), so it can
+      never jump to the front/back of the strip just because it's the
+      one Stuart most recently tapped Render on.
+    - **Per-card Remove**: Stuart's explicit ask — a small "Remove"
+      control on each card deletes that one plate's persisted Blob
+      render(s) (`DELETE /api/skidmarks/clip-renders`) and clears its
+      shelf row/timeline tick, entirely without touching that plate's
+      still, shot prompt, or motion text (all separate, `localStorage`-
+      only state in `lib/skidmarks.ts`). The shelf only clears the row
+      locally *after* the real delete call succeeds — a failed delete
+      leaves the card and its tick exactly where they were, with an
+      honest inline error, rather than pretending a render is gone when
+      it might still be sitting in Blob.
 
   - **MP3 audio → Vercel Blob ("play survives a refresh")**: the
     attached MP3's raw `File` never persisted (still true — a `File`

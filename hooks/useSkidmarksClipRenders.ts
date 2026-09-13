@@ -58,5 +58,23 @@ export function useSkidmarksClipRenders(segments: SkidmarksClipSegment[]) {
     });
   };
 
-  return { renders, addRender };
+  /** The local-state half of Stuart's "remove old MP4s from the shelf"
+   * ask — `SkidmarksRenderedClipsShelf` calls this only *after* the real
+   * `DELETE /api/skidmarks/clip-renders` call
+   * (`lib/clipRenders.ts`'s `deletePersistedClipRender`) actually
+   * succeeds, so a real delete failure never silently clears a tick/
+   * shelf row for a render that's still sitting there. Purely a Map
+   * removal — this never touches `lib/skidmarks.ts`'s plate/prompt
+   * state, which is what keeps the still + shot/motion text untouched. */
+  const removeRender = (segmentId: string, plateId: string) => {
+    setRenders((prev) => {
+      const key = persistedRenderKey(segmentId, plateId);
+      if (!prev.has(key)) return prev;
+      const next = new Map(prev);
+      next.delete(key);
+      return next;
+    });
+  };
+
+  return { renders, addRender, removeRender };
 }

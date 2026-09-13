@@ -445,6 +445,32 @@ function TickIcon() {
  * independent facts about a plate) — an unrendered, unselected plate
  * shows a faint empty ring, per Stuart's "empty mark = not rendered
  * yet" ask.
+ *
+ * **Live-QA hit-target fix**: Stuart reported that tapping this corner
+ * opened the enlarge lightbox instead of selecting the plate — and, on
+ * an already-filled plate, sometimes cleared the still entirely instead
+ * of selecting it. Root-caused by actually reproducing the exact DOM/
+ * CSS shape in a headless-browser click test (a precise tap dead-center
+ * on the control already routed correctly to *this* button, not the
+ * tile beneath it, even before this fix — the two are DOM *siblings*,
+ * not nested, so the tile's own `onClick` was never reachable via
+ * bubbling from here regardless of `stopPropagation`). The real gap:
+ * this control's actual tappable box was only the ~20px visible dot —
+ * well under Apple's ~44pt HIG minimum touch target — sitting right at
+ * the tile's own extreme corner, exactly where a thumb's contact point
+ * is least precise. A tap that missed by even a few px landed on the
+ * tile *underneath* instead: a short miss opened the lightbox (a plain
+ * tap on the tile); a miss held a beat too long — very easy while a
+ * thumb hunts for a tiny corner target — fired the tile's own
+ * press-and-hold-to-clear timer instead, deleting the still. Both of
+ * Stuart's symptoms are explained by the one same root cause. The fix
+ * is a real, `h-10 w-10` (~40px) invisible hit area anchored flush in
+ * the tile's own corner — comfortably inside its `h-24 w-32` bounds, so
+ * it never spills into a neighboring plate tile in the horizontal strip
+ * — wrapping the *same* small, unchanged-size visible dot/tick as an
+ * inner `<span>`. `stopPropagation` stays on the click handler as
+ * defense-in-depth against a future refactor that nests these
+ * differently, even though it isn't what's fixing today's bug.
  */
 function SkidmarksPlateSelectControl({
   selected,
@@ -462,6 +488,13 @@ function SkidmarksPlateSelectControl({
         e.stopPropagation();
         onSelect();
       }}
+      onPointerDown={(e) => {
+        // Belt-and-suspenders: a tap that starts here should never be
+        // able to also start the tile's own press-and-hold-clear timer
+        // underneath, however these two elements get nested in the
+        // future.
+        e.stopPropagation();
+      }}
       aria-pressed={selected}
       aria-label={
         rendered
@@ -472,16 +505,20 @@ function SkidmarksPlateSelectControl({
             ? "Selected for Render"
             : "Tap to select this plate for Render"
       }
-      className={[
-        "absolute bottom-1.5 right-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full ring-1 transition-colors",
-        rendered
-          ? "bg-emerald-400/90 text-zinc-950 ring-emerald-300/60"
-          : selected
-            ? "bg-rose-400 text-zinc-950 ring-rose-300/60"
-            : "bg-black/60 text-white/40 ring-white/20 hover:text-white/70",
-      ].join(" ")}
+      className="absolute bottom-0 right-0 z-10 flex h-10 w-10 items-center justify-center"
     >
-      {rendered ? <TickIcon /> : selected ? <SelectDotIcon /> : null}
+      <span
+        className={[
+          "flex h-5 w-5 items-center justify-center rounded-full ring-1 transition-colors",
+          rendered
+            ? "bg-emerald-400/90 text-zinc-950 ring-emerald-300/60"
+            : selected
+              ? "bg-rose-400 text-zinc-950 ring-rose-300/60"
+              : "bg-black/60 text-white/40 ring-white/20",
+        ].join(" ")}
+      >
+        {rendered ? <TickIcon /> : selected ? <SelectDotIcon /> : null}
+      </span>
     </button>
   );
 }
@@ -617,18 +654,29 @@ function SkidmarksPlateBox({
         resolvedVocalist = { ...vocalist, avatarImage: identityDataUrl };
       }
 
+      const continuityStillDataUrl = useLastPlate ? previousStill?.dataUrl : undefined;
       const request = buildPlateGenerationRequest({
         shotPrompt: trimmedPrompt,
         vocal,
         model,
         bandName,
         vocalist: resolvedVocalist,
-        continuityStillDataUrl: useLastPlate ? previousStill?.dataUrl : undefined,
+        continuityStillDataUrl,
+        // Live-QA fix: only carry the locked-character lock forward from
+        // continuity when the plate being continued from *itself*
+        // already featured him — see `lib/skidmarks.ts`'s
+        // `SkidmarksPlateStill.featuresLockedCharacter` doc comment.
+        continuityFeaturesLockedCharacter: continuityStillDataUrl ? previousStill?.featuresLockedCharacter : undefined,
       });
 
       const outcome = await generatePlateStill(request);
       if (outcome.ok) {
-        onSetStill({ dataUrl: outcome.dataUrl, source: "generated", createdAt: Date.now() });
+        onSetStill({
+          dataUrl: outcome.dataUrl,
+          source: "generated",
+          createdAt: Date.now(),
+          featuresLockedCharacter: request.featuresLockedCharacter,
+        });
         closeMenu();
       } else {
         setError(outcome.message);

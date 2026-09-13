@@ -222,22 +222,91 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt.toLowerCase()).toContain("generic-looking person");
   });
 
-  it("follow-up fix, signal 2: an Instrumental plate that continues from the plate before it locks the character even without re-naming him", () => {
+  it("follow-up fix, signal 2: an Instrumental plate that continues from a plate that itself already featured him locks the character even without re-naming him", () => {
     // A later beat in the same story ("he stands, still in shadow") that
-    // never re-says "Jack" but is chained via "Use last plate" shouldn't
-    // silently drop the lock either.
+    // never re-says "Jack" but is chained via "Use last plate" — from a
+    // plate that itself already featured him — shouldn't silently drop
+    // the lock either.
     const previousPlate = "data:image/jpeg;base64,previousPlateBytes";
-    const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
+    const { prompt, referenceImageDataUrls, featuresLockedCharacter } = buildPlateGenerationRequest({
       shotPrompt: "he rises slowly from the chair and turns toward the window",
       vocal: false,
       model: "grok",
       bandName: BAND_NAME,
       vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
       continuityStillDataUrl: previousPlate,
+      continuityFeaturesLockedCharacter: true,
     });
     expect(referenceImageDataUrls).toEqual([previousPlate, JACK_ASH_AVATAR]);
     expect(prompt).toContain("Do not show:");
     expect(prompt.toLowerCase()).toContain("neon blue");
+    expect(featuresLockedCharacter).toBe(true);
+  });
+
+  it("live bug repro: a door -> keyhole continuity chain must NOT inherit the lock when the plate it continues from never featured him", () => {
+    // Stuart's exact live-QA report: plate 2 (an explicit, keyhole-only
+    // prompt naming no one) continued from plate 1 (the door, also
+    // empty of people) via "Use last plate," and the old "any
+    // continuity image at all" signal wrongly injected Jack's
+    // silhouette/neon lips into this person-less shot just because the
+    // band happens to be Jack Ash.
+    const doorPlate = "data:image/jpeg;base64,doorPlateBytes";
+    const { prompt, referenceImageDataUrls, featuresLockedCharacter } = buildPlateGenerationRequest({
+      shotPrompt: "Looking through the door's keyhole into a dim room beyond, neon-blue light spilling around the edges of the frame.",
+      vocal: false,
+      model: "grok",
+      bandName: BAND_NAME,
+      vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
+      continuityStillDataUrl: doorPlate,
+      // The door plate never featured him — this is the exact fact
+      // `lib/skidmarks.ts`'s `SkidmarksPlateStill.featuresLockedCharacter`
+      // would resolve to `false`/`undefined` for it.
+      continuityFeaturesLockedCharacter: false,
+    });
+    // Continuity reference only — never the identity photo, never the
+    // hallmark/negative-cue lock, for a shot that never named or showed him.
+    expect(referenceImageDataUrls).toEqual([doorPlate]);
+    expect(prompt).not.toContain("Do not show:");
+    expect(prompt.toLowerCase()).not.toContain("neon blue");
+    expect(prompt.toLowerCase()).not.toContain("fedora");
+    expect(featuresLockedCharacter).toBe(false);
+  });
+
+  it("continuity alone (continuityFeaturesLockedCharacter omitted/undefined) never invents the lock on its own", () => {
+    const doorPlate = "data:image/jpeg;base64,doorPlateBytes";
+    const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
+      shotPrompt: "Looking through the keyhole, an empty dim room beyond.",
+      vocal: false,
+      model: "grok",
+      bandName: BAND_NAME,
+      vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
+      continuityStillDataUrl: doorPlate,
+      // No explicit `continuityFeaturesLockedCharacter` at all — the
+      // default (falsy) must never be treated as "yes, he's in frame."
+    });
+    expect(referenceImageDataUrls).toEqual([doorPlate]);
+    expect(prompt).not.toContain("Do not show:");
+    expect(prompt.toLowerCase()).not.toContain("neon blue");
+  });
+
+  it("featuresLockedCharacter is true whenever a Vocal clip auto-includes the locked vocalist, false on a plain Instrumental clip that never mentions or continues from him", () => {
+    const vocalCase = buildPlateGenerationRequest({
+      shotPrompt: "singing into a vintage microphone",
+      vocal: true,
+      model: "grok",
+      bandName: BAND_NAME,
+      vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
+    });
+    expect(vocalCase.featuresLockedCharacter).toBe(true);
+
+    const plainInstrumentalCase = buildPlateGenerationRequest({
+      shotPrompt: "a door creaks open in an empty hallway",
+      vocal: false,
+      model: "grok",
+      bandName: BAND_NAME,
+      vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
+    });
+    expect(plainInstrumentalCase.featuresLockedCharacter).toBe(false);
   });
 
   it("signal 2 does not apply to an un-locked member — plain continuity alone never invents a lock", () => {
