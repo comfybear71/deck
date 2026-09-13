@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  downscaleDataUrlImage,
   MAX_PLATES_PER_CLIP,
   readImageFileAsDataUrl,
   resolveInstrumentalVideoModel,
@@ -685,8 +686,22 @@ function SkidmarksPlateBox({
 
       const outcome = await generatePlateStill(request);
       if (outcome.ok) {
+        // xAI's own raw response has no size cap — see
+        // `downscaleDataUrlImage`'s doc comment for why this app never
+        // used to bound it the way an *uploaded* still already was
+        // (`readImageFileAsDataUrl`), and why that gap is the real fix
+        // for a live-QA'd "plates wiped" report. Falls back to the
+        // untouched original if downscaling itself fails for any
+        // reason — a still Stuart just paid for should never be
+        // dropped over a client-side re-encode hiccup.
+        let dataUrl = outcome.dataUrl;
+        try {
+          dataUrl = await downscaleDataUrlImage(outcome.dataUrl);
+        } catch {
+          // Keep the original, full-size dataUrl — see comment above.
+        }
         onSetStill({
-          dataUrl: outcome.dataUrl,
+          dataUrl,
           source: "generated",
           createdAt: Date.now(),
           featuresLockedCharacter: request.featuresLockedCharacter,
