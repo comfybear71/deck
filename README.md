@@ -107,7 +107,8 @@ total.
   `SkidmarksDetailSheet` (plus `SkidmarksLandingTiles` /
   `SkidmarksBandPicker` / `SkidmarksMembersModule` / `SkidmarksGeneratePopup`
   / `SkidmarksMp3Card` / `SkidmarksChecklistChips` / `SkidmarksClipTimeline`
-  / `SkidmarksClipStub` / `SkidmarksClipRender` / `SkidmarksAutoPlate` /
+  / `SkidmarksClipStub` / `SkidmarksClipTimingNudge` / `SkidmarksClipRender` /
+  `SkidmarksAutoPlate` /
   `SkidmarksRenderedClipsShelf` / `SkidmarksArchiveShelf`) — the Skidmarks vibe-director node's face
   and its locked, one-scroll Music-video flow through the clip timeline's
   real upload/generate plate-still + multi-line shot-prompt tags — see
@@ -1371,6 +1372,72 @@ now (see "Explicitly out of scope" below).
          "Split" control anywhere in this build. Per-plate prompts were
          also considered and set aside in favor of the one shared
          prompt above.
+
+     **Clip start/end nudge** (added 2026-09-13, Stuart's explicit ask):
+     ElevenLabs Scribe's real word-level timing lands "mostly right but
+     sometimes 3-4 seconds off," and Stuart wants to slip a clip's cut
+     earlier/later to keep it with the music — a **lightweight trim/
+     slip, not a heavy NLE**; the real fine-cut still happens in
+     DaVinci Resolve. `SkidmarksClipTimingNudge` is now the very first
+     thing in a clip's expanded panel, right above the plate strip: two
+     compact groups (**Start**, **End**), each a small "−" button, the
+     current time read-only in between, and a "+" button —
+     `SEGMENT_NUDGE_STEP_SEC` (1s) per tap, no editable `mm:ss` text
+     field (per Stuart's chrome lock, a stepper needs no keyboard, no
+     parsing/validation of typed time text, and a handful of taps
+     corrects a typical 3-4s miss just as fast as typing would).
+       - **Segments are always contiguous** — every real source this
+         store ever builds (the seed cadence, and the energy-heuristic/
+         transcription-derived timelines alike) walks a cursor forward
+         with no gaps, so `segments[i].endSec === segments[i +
+         1].startSec` always holds going in. Nudging a clip's start/end
+         is really nudging the **shared cut point** with its neighbor:
+         `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary` moves both
+         sides of that cut together — the previous clip's `endSec` on a
+         start-nudge, or the next clip's `startSec` on an end-nudge, by
+         the exact same amount — so the timeline can never end up with
+         a gap or an overlap. This was the deliberate pick between the
+         two options the original ask itself called out ("clamp so
+         clips don't overlap" vs. "gently adjust the adjacent
+         boundary") — a clamp-only design (only ever touching the one
+         segment being nudged) either opens a silent gap or lets two
+         clips overlap the moment the nudged edge crosses into the
+         neighbor's own span; moving the shared cut point can't do
+         either. Only the *immediate* neighbor at the moved cut ever
+         changes — there's no "ripple the whole rest of the timeline"
+         mode.
+       - **Free edit within the song's own bounds**, not a fixed
+         ±few-seconds cap — nothing stops Stuart from tapping repeatedly
+         past a "typical" 3-4s miss if a cut is further off than that.
+         Clamped only by `MIN_NUDGE_SEGMENT_SEC` (1s — neither the
+         nudged clip nor the neighbor it borrows from/lends to can be
+         nudged shorter than this) and the song's own real bounds (`0`
+         at the very start; the mp3's own probed `durationSec` at the
+         very end, unbounded above while that's still `null` — e.g. the
+         brief window before the `<audio>` duration probe resolves).
+         `SkidmarksClipTimeline` disables whichever of the four buttons
+         would be a no-op (`lib/skidmarks.ts`'s
+         `canNudgeSkidmarksSegmentBoundary`, the exact same clamp math
+         the real nudge commits with) rather than letting a tap silently
+         do nothing.
+       - **Never re-runs ElevenLabs Scribe or the energy heuristic, and
+         never touches `segmentsSource`** — a nudge only ever edits the
+         already-resolved `startSec`/`endSec` values already sitting on
+         `session.mp3.segments`, whichever real signal (or seed
+         fallback) originally produced them; the Lyrics/Timing/Ready
+         chips and the timeline's honesty caption keep reporting exactly
+         what they did before a nudge. It also never touches a clip's
+         `plates`, `shotPrompt`, or `model` — same "one field, one job"
+         discipline as `setSkidmarksSegmentShotPrompt` never touching
+         `model`. Persisted the same `localStorage` way every other
+         segment field already is, so a nudge survives a refresh.
+       - **Feeds plate audio slices and render duration for free** —
+         `lib/clipGeneration.ts`'s `computePlateDurationSec`/
+         `computePlateTimeRange` (and the Vocal/Comfy-LTX audio-slice
+         math built on top of it) already read a clip's `startSec`/
+         `endSec` straight off `segment` at render time, so a render or
+         plate-audio-slice made *after* a nudge automatically reflects
+         the corrected cut with no separate propagation step.
 
      **Model routing, vocalist auto-include, and Jack Ash's character
      lock** (`lib/plateGeneration.ts`) — all automatic, no picker/toggle

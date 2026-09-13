@@ -87,6 +87,7 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**, cards laid out in one `overflow-x-auto` horizontal strip (not a vertical stack) so a phone with several renders doesn't turn into one huge scroll; "download all" zip/sequential-fallback stays reachable underneath the strip. Each card has an explicit small **Download** pill (same `rounded-full` shape/size as Remove, tiny download icon — still the existing `buildForceDownloadUrl`/Blob `?download=1` mechanism and numeric/lettered filename, never the native `<video>` share/⋯ menu) plus a **Remove** control — deletes that plate's persisted Blob render(s) and clears its tick, never touches the plate's still/shot/motion prompts (those are separate, `localStorage`-only state) | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts`, `lib/clipRenders.ts`'s `deletePersistedClipRender`/`buildForceDownloadUrl` |
 | MP3 audio → Vercel Blob | **Real** — the attached MP3's own audio bytes upload client-side-direct to Blob at attach time so **playback survives a refresh**, honestly labeled when unconfigured/failed | `lib/mp3Blob.ts`, `components/SkidmarksMp3Card.tsx` |
 | Auto-plate from a short brief | **Real** — fills *empty* plate slots across the whole clip list with real xAI-generated stills off a small heuristic planner (never an LLM call against the brief), **then stops**; never overwrites a filled plate, never renders video | `lib/autoPlate.ts`, `components/SkidmarksAutoPlate.tsx` |
+| Clip start/end nudge | **Real** — a compact −1s/+1s stepper (`SkidmarksClipTimingNudge`) at the top of each clip's expanded panel lets Stuart slip that clip's `startSec`/`endSec` after transcription/analysis lands, since ElevenLabs Scribe timing is "mostly right but sometimes 3-4 seconds off." Segments are always contiguous, so a nudge moves the **shared cut point** with the neighboring clip — the previous clip's `endSec` (start-nudge) or next clip's `startSec` (end-nudge) shifts by the same amount, which is what keeps the whole timeline gap-free/overlap-free automatically; see `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary` doc comment for why that beat a clamp-only design. Clamped to `[0, durationSec]` and a `MIN_NUDGE_SEGMENT_SEC` (1s) floor on either side of the moved boundary; free-edit within those bounds, not a fixed ±few-seconds cap. **Never re-runs ElevenLabs Scribe or the energy heuristic** — only edits the already-resolved segment times already in `session.mp3.segments`, and never touches `segmentsSource`/plates/shot prompt/model. Persisted the same `localStorage` way every other segment field already is. | `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentBoundary`/`nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd`, `components/SkidmarksClipTimingNudge.tsx`, `components/SkidmarksClipTimeline.tsx`, `components/SkidmarksClipStub.tsx` |
 | Finished-song archive | **Real** — "Archive" snapshots the live band+mp3 (segments, plates, prompts, motion text) to Vercel Blob JSON + carries forward the mp3's own audio URL, lists in a page-bottom shelf, "Open in editor" restores it (auto-archiving whatever's currently live first), "Download project zip" bundles prompts/stills/renders/audio "as practical." No Neon — not patterned anywhere in this repo yet (see Env vars) | `lib/skidmarksArchive.ts`, `app/api/skidmarks/archive/route.ts`, `app/api/skidmarks/blob-upload/route.ts`, `components/SkidmarksArchiveShelf.tsx` |
 | Whole-song **"Generate Clips"** button | **Stub, deliberately** — never auto-renders every clip in the song | `components/SkidmarksClipTimeline.tsx` |
 | Voice, in-app stitch | Not built | — |
@@ -276,6 +277,74 @@ promise for a *different*, since-replaced attach.
   same test: is this the smallest possible surface, or is it turning
   into a button farm? Prefer reusing an existing field/gesture over
   adding a second one.
+
+## Clip start/end nudge (`lib/skidmarks.ts`, added 2026-09-13)
+
+Stuart's explicit ask: ElevenLabs Scribe timing lands "mostly right but
+sometimes 3-4 seconds off," and he wants to slip a clip's cut earlier/
+later without a heavy NLE and without re-running Scribe.
+
+- **A compact −1s/+1s stepper, not editable `mm:ss` text fields.**
+  `SkidmarksClipTimingNudge` renders two small groups (Start, End) —
+  each a "−" button, the current time read-only in between, a "+"
+  button — at the very top of a clip's expanded panel, right above the
+  plate strip. No keyboard, no `mm:ss` parsing/validation to get wrong;
+  a handful of taps corrects a typical 3-4s miss. Per the "smallest
+  possible surface, no button farm" chrome lock above, don't upgrade
+  this to a draggable timeline/scrubber or a bigger step size without
+  a fresh explicit ask.
+- **Segments are always contiguous** — every real segment source this
+  store ever builds (`buildDemoSegments`, and
+  `buildSegmentsFromVocalRanges` off either the energy heuristic or
+  real transcription) walks a cursor forward with no gaps, so
+  `segments[i].endSec === segments[i + 1].startSec` always holds.
+  Nudging one clip's start/end is really nudging the **shared cut
+  point** with its neighbor — `nudgeSkidmarksSegmentBoundary` moves
+  both sides of that cut together (the previous clip's `endSec` on a
+  start-nudge, the next clip's `startSec` on an end-nudge), so the
+  timeline can never end up with a gap or an overlap. This was the
+  deliberate pick between the two options the original ask called out
+  ("clamp so clips don't overlap" vs. "gently adjust the adjacent
+  boundary") — a clamp-only design either opens a silent gap or lets
+  two clips overlap the moment the nudged edge crosses into the
+  neighbor's own span; moving the shared cut point can't do either.
+  **Don't build a second "adjust every other clip to compensate"
+  ripple mode** without a fresh explicit ask — only the *immediate*
+  neighbor at the moved cut ever changes.
+- **Free edit within the song's own bounds, not a fixed ±few-seconds
+  cap.** Each tap is `SEGMENT_NUDGE_STEP_SEC` (1s); nothing stops
+  Stuart from tapping repeatedly to slip a clip by more than the
+  "typical 3-4s miss" if a cut is further off than that. Clamped only
+  by `MIN_NUDGE_SEGMENT_SEC` (1s — neither the nudged clip nor the
+  neighbor it borrows from/lends to can be nudged below this) and the
+  song's own real bounds (`0` at the very start, the mp3's own probed
+  `durationSec` at the very end — unbounded above while that's still
+  `null`, e.g. the brief window before the `<audio>` duration probe
+  resolves).
+- **Never re-runs ElevenLabs Scribe or the energy heuristic, and never
+  touches `segmentsSource`.** A nudge only ever edits the already-
+  resolved `startSec`/`endSec` values already sitting on
+  `session.mp3.segments` — whichever real signal (or seed fallback)
+  originally produced them. It also never touches a clip's `plates`,
+  `shotPrompt`, or `model` — same "one field, one job" spirit as
+  `setSkidmarksSegmentShotPrompt` never touching `model`.
+- **Feeds plate audio slices / render duration for free, no extra
+  wiring needed.** `lib/clipGeneration.ts`'s
+  `computePlateDurationSec`/`computePlateTimeRange` (and the Vocal/
+  Comfy-LTX audio-slice math built on top of it) already read a
+  clip's `startSec`/`endSec` straight off `segment` at render time —
+  a nudge just changes what those already-live reads see, so a
+  render/plate-audio-slice made after a nudge automatically reflects
+  the corrected timing without any separate propagation step.
+- **UI locations**: the stepper's disabled-state flags
+  (`canNudge*`) are computed once, in `SkidmarksClipTimeline` (the one
+  component holding both the full `segments` array and the mp3's own
+  `durationSec`), via `lib/skidmarks.ts`'s
+  `canNudgeSkidmarksSegmentBoundary` — the exact same clamp math the
+  real nudge commits with. `SegmentRow`/`SkidmarksClipStub` just
+  forward those flags and taps; neither re-derives a bound itself. If
+  you touch either of those two components, keep that split — don't
+  let a bound decision drift into two places.
 
 ## Jack Ash's character lock (`lib/plateGeneration.ts`, `SKIDMARKS_CHARACTER_LOCKS`)
 
