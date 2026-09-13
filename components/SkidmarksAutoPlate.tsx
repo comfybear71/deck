@@ -17,6 +17,7 @@ import {
 } from "@/lib/plateGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import {
+  flushSkidmarksSessionNow,
   getSkidmarksSnapshot,
   SKIDMARKS_SEGMENT_LABEL_META,
   type SkidmarksBand,
@@ -263,6 +264,16 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
           createdAt,
           featuresLockedCharacter,
         });
+        // Real live bug (2026-09-14): Stuart ran Auto-plate, then did a
+        // "cold restart" shortly after, and several real plates it just
+        // filled were gone on reload — consistent with those writes
+        // still sitting in the session's normal 600ms-debounced save
+        // when his phone/Safari actually died. Flushing after *every*
+        // plate this run fills (not just once at the end) means a run
+        // interrupted partway through never loses more than the one
+        // still that was still mid-flight — every plate already written
+        // is already durably saved by the time the next one starts.
+        flushSkidmarksSessionNow();
         successCount += 1;
       } else if (outcome.unconfigured) {
         // Every remaining target on *this* engine would fail the same

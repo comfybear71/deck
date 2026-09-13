@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   downscaleDataUrlImage,
+  flushSkidmarksSessionNow,
   MAX_PLATES_PER_CLIP,
   resolveInstrumentalVideoModel,
   resolveSelectedPlateId,
@@ -651,6 +652,14 @@ function SkidmarksPlateBox({
         return;
       }
       onSetStill({ dataUrl: outcome.url, source: "upload", createdAt: Date.now() });
+      // Real live bug (2026-09-14): Stuart generated real plates, then
+      // did a "cold restart" shortly after, and they were gone on
+      // reload — consistent with this write still sitting in the
+      // session's normal 600ms-debounced save when his phone/Safari
+      // actually died. Flushing right now, rather than waiting on that
+      // debounce or on backgrounding to fire it, shrinks that window to
+      // as close to zero as this app can get.
+      flushSkidmarksSessionNow();
       closeMenu();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not read that image.");
@@ -738,6 +747,10 @@ function SkidmarksPlateBox({
         if (!uploadOutcome.ok) {
           setError(`Generated, but couldn't save it for persistence yet — ${uploadOutcome.message}`);
         }
+        // See the matching comment in `handleFileChange` above — flush
+        // immediately rather than trust the debounce/backgrounding flush
+        // to catch a real still before a "cold restart."
+        flushSkidmarksSessionNow();
         closeMenu();
       } else {
         setError(outcome.message);
