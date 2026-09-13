@@ -1,13 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildClipGenerationRequest,
+  computeLtxPlateDurationSec,
   computePlateDurationSec,
+  computePlateTimeRange,
   estimateClipRenderCostUsd,
+  estimateLtxClipRenderCostUsd,
   generateSkidmarksClip,
   MAX_CLIP_DURATION_SEC,
+  MAX_LTX_CLIP_DURATION_SEC,
   MIN_CLIP_DURATION_SEC,
+  MIN_LTX_CLIP_DURATION_SEC,
   MAX_MOTION_PROMPT_LENGTH,
 } from "./clipGeneration";
+import type { SkidmarksMember } from "./skidmarks";
+
+function member(overrides: Partial<SkidmarksMember>): SkidmarksMember {
+  return { id: "member-id", name: "", emoji: "", looks: [], ...overrides };
+}
 
 describe("computePlateDurationSec", () => {
   it("matches the task's own 40s / 3 plates \u2248 13 + 13 + 14 example exactly", () => {
@@ -33,9 +43,67 @@ describe("computePlateDurationSec", () => {
   });
 });
 
+describe("computeLtxPlateDurationSec", () => {
+  it("clamps into LTX's real [5, 20] range \u2014 not Grok's [5, 15]", () => {
+    expect(computeLtxPlateDurationSec(60, 1, 0)).toBe(MAX_LTX_CLIP_DURATION_SEC);
+    expect(computeLtxPlateDurationSec(2, 1, 0)).toBe(MIN_LTX_CLIP_DURATION_SEC);
+  });
+
+  it("gives an 18s share a real, unclamped pass-through (would have been clamped under Grok's 15s ceiling)", () => {
+    expect(computeLtxPlateDurationSec(18, 1, 0)).toBe(18);
+  });
+
+  it("still splits evenly across multiple plates the same way as the Grok range", () => {
+    expect(computeLtxPlateDurationSec(40, 3, 0)).toBe(13);
+    expect(computeLtxPlateDurationSec(40, 3, 2)).toBe(14);
+  });
+});
+
+describe("computePlateTimeRange", () => {
+  it("gives a single plate the whole clip's own time range, when it already fits the bounds", () => {
+    expect(computePlateTimeRange(100, 110, 1, 0)).toEqual({ startSec: 100, endSec: 110 });
+  });
+
+  it("walks each earlier plate's own computed duration to find this plate's absolute start", () => {
+    // 40s clip, 3 plates -> 13 + 13 + 14 (matches computePlateDurationSec's own example).
+    expect(computePlateTimeRange(0, 40, 3, 0)).toEqual({ startSec: 0, endSec: 13 });
+    expect(computePlateTimeRange(0, 40, 3, 1)).toEqual({ startSec: 13, endSec: 26 });
+    expect(computePlateTimeRange(0, 40, 3, 2)).toEqual({ startSec: 26, endSec: 40 });
+  });
+
+  it("offsets correctly when the clip itself doesn't start at 0", () => {
+    expect(computePlateTimeRange(100, 140, 2, 0)).toEqual({ startSec: 100, endSec: 115 });
+    expect(computePlateTimeRange(100, 140, 2, 1)).toEqual({ startSec: 115, endSec: 130 });
+  });
+
+  it("respects the LTX bounds when explicitly given, instead of clamping down to Grok's tighter ceiling", () => {
+    const ltxBounds = { min: MIN_LTX_CLIP_DURATION_SEC, max: MAX_LTX_CLIP_DURATION_SEC };
+    expect(computePlateTimeRange(100, 140, 2, 0, ltxBounds)).toEqual({ startSec: 100, endSec: 120 });
+    expect(computePlateTimeRange(100, 140, 2, 1, ltxBounds)).toEqual({ startSec: 120, endSec: 140 });
+  });
+
+  it("every plate's own endSec - startSec matches computePlateDurationSec for the same inputs, under either bounds", () => {
+    for (const bounds of [undefined, { min: MIN_LTX_CLIP_DURATION_SEC, max: MAX_LTX_CLIP_DURATION_SEC }] as const) {
+      const range = computePlateTimeRange(0, 40, 3, 1, bounds);
+      const expectedDuration = bounds
+        ? computeLtxPlateDurationSec(40, 3, 1)
+        : computePlateDurationSec(40, 3, 1);
+      expect(range.endSec - range.startSec).toBe(expectedDuration);
+    }
+  });
+});
+
+describe("estimateLtxClipRenderCostUsd", () => {
+  it("scales with real duration at LTX-2.5 (Fast)'s published $0.13/s 1080p rate, no per-image surcharge", () => {
+    expect(estimateLtxClipRenderCostUsd(5)).toBeCloseTo(0.65, 5);
+    expect(estimateLtxClipRenderCostUsd(20)).toBeCloseTo(2.6, 5);
+  });
+});
+
 describe("buildClipGenerationRequest", () => {
   it("always leads with the clip's own shot prompt, verbatim", () => {
     const { prompt } = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "a door creaks open in an empty hallway",
       bandName: "Jack Ash",
       plateStillDataUrl: "data:image/jpeg;base64,door",
@@ -46,6 +114,7 @@ describe("buildClipGenerationRequest", () => {
 
   it("returns `shotPrompt` as just the clip's own (trimmed) text, distinct from the longer merged `prompt`", () => {
     const { prompt, shotPrompt } = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "  door, then keyhole, then Jack seated  ",
       bandName: "Jack Ash",
       plateStillDataUrl: "data:image/jpeg;base64,door",
@@ -58,6 +127,7 @@ describe("buildClipGenerationRequest", () => {
 
   it("always sends exactly the one selected plate's still as the reference image", () => {
     const { referenceImageDataUrls } = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
       plateStillDataUrl: "data:image/jpeg;base64,door",
@@ -68,6 +138,7 @@ describe("buildClipGenerationRequest", () => {
 
   it("uses the automatic single-image push-in motion hint when no motionPrompt is given", () => {
     const { prompt } = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
       plateStillDataUrl: "data:image/jpeg;base64,door",
@@ -78,6 +149,7 @@ describe("buildClipGenerationRequest", () => {
 
   it("lets an explicit motionPrompt override the automatic motion hint outright, not append alongside it", () => {
     const { prompt } = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
       plateStillDataUrl: "data:image/jpeg;base64,door",
@@ -90,6 +162,7 @@ describe("buildClipGenerationRequest", () => {
 
   it("preserves a multi-line motionPrompt verbatim (aside from trimming) — this is a multi-line field, not single-line", () => {
     const { prompt } = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
       plateStillDataUrl: "data:image/jpeg;base64,door",
@@ -101,6 +174,7 @@ describe("buildClipGenerationRequest", () => {
 
   it("trims a motionPrompt and falls back to the automatic hint when it's blank/whitespace-only", () => {
     const { prompt } = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
       plateStillDataUrl: "data:image/jpeg;base64,door",
@@ -114,6 +188,7 @@ describe("buildClipGenerationRequest", () => {
     const long = "pan ".repeat(60).trim();
     expect(long.length).toBeGreaterThan(MAX_MOTION_PROMPT_LENGTH);
     const { prompt } = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
       plateStillDataUrl: "data:image/jpeg;base64,door",
@@ -127,6 +202,7 @@ describe("buildClipGenerationRequest", () => {
   it("clamps durationSec into [MIN_CLIP_DURATION_SEC, MAX_CLIP_DURATION_SEC]", () => {
     expect(
       buildClipGenerationRequest({
+      vocal: false,
         shotPrompt: "x",
         bandName: "Jack Ash",
         plateStillDataUrl: "data:image/jpeg;base64,x",
@@ -135,6 +211,7 @@ describe("buildClipGenerationRequest", () => {
     ).toBe(MIN_CLIP_DURATION_SEC);
     expect(
       buildClipGenerationRequest({
+      vocal: false,
         shotPrompt: "x",
         bandName: "Jack Ash",
         plateStillDataUrl: "data:image/jpeg;base64,x",
@@ -145,6 +222,7 @@ describe("buildClipGenerationRequest", () => {
 
   it("passes the persistence fields (segmentId/plateId/plateIndex/plateCount/clipIndex/startSec/endSec) straight through when given", () => {
     const request = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
       plateStillDataUrl: "data:image/jpeg;base64,door",
@@ -168,6 +246,7 @@ describe("buildClipGenerationRequest", () => {
 
   it("leaves the persistence fields unset (not e.g. an explicit null) when the caller doesn't provide them", () => {
     const request = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "a door creaks open",
       bandName: "Jack Ash",
       plateStillDataUrl: "data:image/jpeg;base64,door",
@@ -180,6 +259,7 @@ describe("buildClipGenerationRequest", () => {
 
   it("always names the band and asks for no on-screen text/watermark", () => {
     const { prompt } = buildClipGenerationRequest({
+      vocal: false,
       shotPrompt: "a keyhole, lit from behind",
       bandName: "Solar Rebel",
       plateStillDataUrl: "data:image/jpeg;base64,keyhole",
@@ -187,6 +267,142 @@ describe("buildClipGenerationRequest", () => {
     });
     expect(prompt).toContain("Music video for Solar Rebel.");
     expect(prompt).toContain("no on-screen text, no watermark");
+  });
+
+  describe("vocal (Comfy Cloud LTX) requests", () => {
+    it("sets vocal:true on the built request", () => {
+      const request = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "singing directly to camera",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,jack",
+        durationSec: 10,
+      });
+      expect(request.vocal).toBe(true);
+    });
+
+    it("clamps durationSec into LTX's [5, 20] range, not Grok's [5, 15]", () => {
+      expect(
+        buildClipGenerationRequest({
+          vocal: true,
+          shotPrompt: "x",
+          bandName: "Jack Ash",
+          plateStillDataUrl: "data:image/jpeg;base64,x",
+          durationSec: 18,
+        }).durationSec
+      ).toBe(18);
+      expect(
+        buildClipGenerationRequest({
+          vocal: true,
+          shotPrompt: "x",
+          bandName: "Jack Ash",
+          plateStillDataUrl: "data:image/jpeg;base64,x",
+          durationSec: 99,
+        }).durationSec
+      ).toBe(MAX_LTX_CLIP_DURATION_SEC);
+    });
+
+    it("passes mp3AudioUrl straight through", () => {
+      const request = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "x",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,x",
+        durationSec: 10,
+        mp3AudioUrl: "https://blob.vercel-storage.com/skidmarks/mp3-audio/abc.mp3",
+      });
+      expect(request.mp3AudioUrl).toBe("https://blob.vercel-storage.com/skidmarks/mp3-audio/abc.mp3");
+    });
+
+    it("computes this plate's own audioStartSec/audioEndSec from the clip's time range and plate geometry", () => {
+      const request = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "x",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,x",
+        durationSec: 13,
+        plateIndex: 1,
+        plateCount: 3,
+        startSec: 0,
+        endSec: 40,
+      });
+      expect(request.audioStartSec).toBe(13);
+      expect(request.audioEndSec).toBe(26);
+    });
+
+    it("leaves audioStartSec/audioEndSec unset when the plate geometry isn't fully given", () => {
+      const request = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "x",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,x",
+        durationSec: 10,
+      });
+      expect(request.audioStartSec).toBeUndefined();
+      expect(request.audioEndSec).toBeUndefined();
+    });
+
+    it("never sets mp3AudioUrl/audioStartSec/audioEndSec on a non-vocal (Grok) request", () => {
+      const request = buildClipGenerationRequest({
+        vocal: false,
+        shotPrompt: "x",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,x",
+        durationSec: 10,
+        mp3AudioUrl: "https://blob.vercel-storage.com/should-be-ignored.mp3",
+        plateIndex: 0,
+        plateCount: 1,
+        startSec: 0,
+        endSec: 10,
+      });
+      expect(request.mp3AudioUrl).toBeUndefined();
+      expect(request.audioStartSec).toBeUndefined();
+      expect(request.audioEndSec).toBeUndefined();
+    });
+
+    it("injects Jack Ash's locked hallmarks/negative cues plus the video-specific 'mouth in frame' note when he's the vocalist", () => {
+      const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
+      const { prompt } = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "singing directly to camera",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,jack",
+        durationSec: 10,
+        vocalist: jackAsh,
+      });
+      expect(prompt.toLowerCase()).toContain("neon blue");
+      expect(prompt.toLowerCase()).toContain("shadow");
+      expect(prompt).toContain("Do not show:");
+      expect(prompt.toLowerCase()).toContain("watchable stare");
+      expect(prompt.toLowerCase()).toContain("mouth is actually");
+    });
+
+    it("never injects a character lock for a vocalist with no registered lock", () => {
+      const nova = member({ id: "solar-rebel-vocals", name: "Nova", role: "Vocals" });
+      const { prompt } = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "singing directly to camera",
+        bandName: "Solar Rebel",
+        plateStillDataUrl: "data:image/jpeg;base64,nova",
+        durationSec: 10,
+        vocalist: nova,
+      });
+      expect(prompt.toLowerCase()).not.toContain("neon blue");
+      expect(prompt).not.toContain("Do not show:");
+    });
+
+    it("never injects the locked-character note on a Grok/Instrumental request even for a locked vocalist", () => {
+      const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
+      const { prompt } = buildClipGenerationRequest({
+        vocal: false,
+        shotPrompt: "a door creaks open",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,door",
+        durationSec: 5,
+        vocalist: jackAsh,
+      });
+      expect(prompt.toLowerCase()).not.toContain("neon blue");
+    });
   });
 });
 

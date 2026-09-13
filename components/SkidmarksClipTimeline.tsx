@@ -33,6 +33,13 @@ interface SkidmarksClipTimelineProps {
    * `SkidmarksAutoPlate` as a fallback hint for the scripted
    * concrete-opener trigger (see `lib/autoPlate.ts`). */
   mp3FileName?: string;
+  /** The attached song's own durable Blob URL
+   * (`SkidmarksMp3Attachment.audioUrl`) — threaded straight through to
+   * `SkidmarksClipStub`/`SkidmarksClipRender` for the Vocal/Comfy-LTX
+   * render path, which needs a real slice of it server-side
+   * (`lib/mp3Slice.ts`). `undefined` until that upload finishes (or if
+   * it never configures/succeeds) — see `lib/mp3Blob.ts`. */
+  mp3AudioUrl?: string;
   /** Every plate across the whole song that already has a saved
    * render, keyed by `persistedRenderKey` — lifted up to
    * `SkidmarksDetailSheet`'s `useSkidmarksClipRenders` so
@@ -87,6 +94,7 @@ function SegmentRow({
   onRenderEnd,
   clipIndex,
   onPersisted,
+  mp3AudioUrl,
 }: {
   segment: SkidmarksClipSegment;
   band: SkidmarksBand;
@@ -120,6 +128,7 @@ function SegmentRow({
    * `SkidmarksClipStub`'s doc comment for what it's used for. */
   clipIndex: number;
   onPersisted: (render: PersistedClipRender) => void;
+  mp3AudioUrl?: string;
 }) {
   const meta = SKIDMARKS_SEGMENT_LABEL_META[segment.label];
 
@@ -173,6 +182,7 @@ function SegmentRow({
             onRenderEnd={onRenderEnd}
             clipIndex={clipIndex}
             onPersisted={onPersisted}
+            mp3AudioUrl={mp3AudioUrl}
           />
         </div>
       )}
@@ -268,6 +278,7 @@ export function SkidmarksClipTimeline({
   transcriptionStatus,
   band,
   mp3FileName,
+  mp3AudioUrl,
   renders,
   onPersisted,
   onSetSegmentShotPrompt,
@@ -370,6 +381,7 @@ export function SkidmarksClipTimeline({
                   }}
                   clipIndex={i + 1}
                   onPersisted={onPersisted}
+                  mp3AudioUrl={mp3AudioUrl}
                 />
               );
             })}

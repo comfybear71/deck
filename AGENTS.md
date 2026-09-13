@@ -81,7 +81,7 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Plate *still* generation | **Real** — xAI Grok Imagine *image* API | `app/api/skidmarks/generate-still/route.ts`, `lib/plateGeneration.ts` |
 | Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to `localStorage` (the existing session-state mirror — see the "no `localStorage`" note below for what's actually exempt from that) | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `components/SkidmarksClipStub.tsx` |
 | Per-plate select + tick | **Real** — a small corner control on each filled plate tile (radio-style, one plate selected per clip at a time) plus a filled/empty tick for "already has a saved render"; see `lib/skidmarks.ts`'s `resolveSelectedPlateId` | `components/SkidmarksClipStub.tsx` |
-| Per-plate opt-in *video* render | **Real** — xAI Grok Imagine *video* API, animates **the one selected plate's own still only** (not multi-reference continuity across the whole strip anymore), one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`) | `app/api/skidmarks/generate-clip/route.ts`, `components/SkidmarksClipRender.tsx` |
+| Per-plate opt-in *video* render | **Real, two backends, routed by Vocal vs. Instrumental — no picker.** Vocal clips → **Comfy Cloud's LTX-2.5 `AudioToVideo` partner node** (`COMFY_CLOUD_API_KEY`), driven by a real frame-sliced (`lib/mp3Slice.ts`) window of the attached song's own vocal audio (`mp3.audioUrl`), 5–20s. Instrumental/B-roll clips → unchanged xAI Grok Imagine *video* API, 5–15s. Either way: animates **the one selected plate's own still only**, one plate at a time across the whole timeline, explicit two-tap confirm, real per-plate camera-motion text (`SkidmarksClipPlateSlot.motionPrompt`). **Honesty note**: the Comfy/LTX path is real and documented but not live-verified in this sandbox (no `COMFY_CLOUD_API_KEY` available here) — see `lib/comfyCloud.ts`'s module doc comment. | `app/api/skidmarks/generate-clip/route.ts`, `lib/comfyCloud.ts`, `lib/mp3Slice.ts`, `lib/clipGeneration.ts`, `components/SkidmarksClipRender.tsx` |
 | Per-plate render duration | **Real, auto-computed** — `segmentLengthSec / plateCount`, clamped to `[5, 15]`s (Grok's documented ceiling), no UI picker | `lib/clipGeneration.ts`'s `computePlateDurationSec` |
 | Render persistence | **Real**, per-**plate** now (not per-clip — see the pathname migration note below) — saved to durable Vercel Blob storage, survives a refresh; download uses a numeric (lettered once a clip has >1 plate) filename for Resolve. **Exactly one render per `(segmentId, plateId)` is an enforced invariant, not just a convention** — see the "exactly-one-render" note below | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
 | Rendered-clips shelf | **Real** — every rendered plate's player/download moved out from under the pink Render button into one page-bottom collapsible shelf, **default open**, cards laid out in one `overflow-x-auto` horizontal strip (not a vertical stack) so a phone with several renders doesn't turn into one huge scroll; "download all" zip/sequential-fallback stays reachable underneath the strip. Each card also has a **Remove** control — deletes that plate's persisted Blob render(s) and clears its tick, never touches the plate's still/shot/motion prompts (those are separate, `localStorage`-only state) | `components/SkidmarksRenderedClipsShelf.tsx`, `hooks/useSkidmarksClipRenders.ts`, `lib/clipRenders.ts`'s `deletePersistedClipRender` |
@@ -322,7 +322,26 @@ the request, and validate length against `shotPrompt` only.
 - `XAI_IMAGE_MODEL` (optional) — overrides the default
   `grok-imagine-image-2.0` still-image model.
 - `XAI_VIDEO_MODEL` (optional) — overrides the default
-  `grok-imagine-video-1.5` video model.
+  `grok-imagine-video-1.5` video model. Only used for Instrumental/
+  B-roll clips now (see the next entry for Vocal clips).
+- `COMFY_CLOUD_API_KEY` — required for **Vocal**/lip-sync clip video
+  render only (`app/api/skidmarks/generate-clip/route.ts`'s Comfy/LTX
+  branch, `lib/comfyCloud.ts`). Create at platform.comfy.org (an active
+  Comfy Cloud subscription is required to run workflows via this API).
+  Used both as the `X-API-Key` header and forwarded a second time in
+  `extra_data.api_key_comfy_org` (LTX-2.5 is a Comfy "Partner Node").
+  Missing it never blocks Instrumental clips (still xAI Grok, above) —
+  only Vocal renders get the honest `missing_api_key` outcome.
+- `COMFY_URL` (optional) — leave unset/blank to use Comfy Cloud's own
+  hosted endpoint (the common case); set it to point at a self-hosted/
+  serverless ComfyUI instance instead.
+- These are the **only two** Comfy-related env vars — confirmed
+  against the original Skidmarks repo's own `.env.example`, not
+  invented here. No model-override var (the LTX tier is hardcoded to
+  `LTX-2.5 (Fast)`, the cheaper of Comfy's two documented tiers) and no
+  "workflow id"/deployment id var — this app submits the full workflow
+  graph itself on each call (`POST /api/prompt`), unlike a deployment-
+  id-based API.
 - `ELEVENLABS_API_KEY` (or `ELEVEN_LABS_API_KEY` as a fallback name) —
   required for real word-level transcription
   (`app/api/skidmarks/transcribe/route.ts`); missing it falls back to

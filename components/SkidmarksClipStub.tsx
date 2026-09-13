@@ -20,7 +20,7 @@ import {
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
-import { computePlateDurationSec } from "@/lib/clipGeneration";
+import { computeLtxPlateDurationSec, computePlateDurationSec } from "@/lib/clipGeneration";
 import { SkidmarksClipRender } from "./SkidmarksClipRender";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 
@@ -61,6 +61,13 @@ interface SkidmarksClipStubProps {
    * `segment.startSec`/`endSec`) is already on `segment`. */
   clipIndex: number;
   onPersisted: (render: PersistedClipRender) => void;
+  /** The attached song's own durable Blob URL
+   * (`SkidmarksMp3Attachment.audioUrl`) — threaded straight through to
+   * `SkidmarksClipRender` for the Vocal/Comfy-LTX render path, which
+   * needs a real slice of it (`lib/mp3Slice.ts`, server-side). `undefined`
+   * until that upload finishes (or if it never configures/succeeds) —
+   * see `lib/mp3Blob.ts`. Unused on an Instrumental clip's Grok render. */
+  mp3AudioUrl?: string;
 }
 
 const SHOT_PROMPT_MAX_LENGTH = 500;
@@ -920,6 +927,7 @@ export function SkidmarksClipStub({
   onRenderEnd,
   clipIndex,
   onPersisted,
+  mp3AudioUrl,
 }: SkidmarksClipStubProps) {
   const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label].vocal;
   // Resolved regardless of `vocal` now — an Instrumental/B-roll clip
@@ -940,11 +948,12 @@ export function SkidmarksClipStub({
   const selectedPlateIndex = segment.plates.findIndex((p) => p.id === selectedPlateId);
   const selectedPlate = selectedPlateIndex >= 0 ? segment.plates[selectedPlateIndex] : undefined;
   const plateCount = segment.plates.length;
-  const durationSec = computePlateDurationSec(
-    segment.endSec - segment.startSec,
-    plateCount,
-    Math.max(0, selectedPlateIndex)
-  );
+  // Vocal clips route to Comfy Cloud LTX (real [5, 20]s ceiling);
+  // Instrumental ones keep Grok's real [5, 15]s ceiling — see
+  // `lib/clipGeneration.ts`'s module doc comment for why these differ.
+  const durationSec = vocal
+    ? computeLtxPlateDurationSec(segment.endSec - segment.startSec, plateCount, Math.max(0, selectedPlateIndex))
+    : computePlateDurationSec(segment.endSec - segment.startSec, plateCount, Math.max(0, selectedPlateIndex));
 
   return (
     <div className="flex flex-col gap-2.5 border-t border-white/[0.06] pt-3">
@@ -1008,6 +1017,9 @@ export function SkidmarksClipStub({
           motionPrompt={selectedPlate.motionPrompt ?? ""}
           onSetMotionPrompt={(value) => onSetPlateMotionPrompt(selectedPlate.id, value)}
           durationSec={durationSec}
+          vocal={vocal}
+          vocalist={vocalist}
+          mp3AudioUrl={mp3AudioUrl}
           locked={renderLocked}
           onRenderStart={onRenderStart}
           onRenderEnd={onRenderEnd}

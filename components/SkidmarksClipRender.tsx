@@ -4,11 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import {
   buildClipGenerationRequest,
   estimateClipRenderCostUsd,
+  estimateLtxClipRenderCostUsd,
   generateSkidmarksClip,
   MAX_MOTION_PROMPT_LENGTH,
 } from "@/lib/clipGeneration";
 import { buildClipRenderFilename } from "@/lib/clipRenderBlob";
 import type { PersistedClipRender } from "@/lib/clipRenders";
+import type { SkidmarksMember } from "@/lib/skidmarks";
 
 interface SkidmarksClipRenderProps {
   /** The clip's shared shot-prompt text — same field
@@ -27,8 +29,26 @@ interface SkidmarksClipRenderProps {
   motionPrompt: string;
   onSetMotionPrompt: (value: string) => void;
   /** This plate's real, auto-computed render length — see
-   * `lib/clipGeneration.ts`'s `computePlateDurationSec`. */
+   * `lib/clipGeneration.ts`'s `computePlateDurationSec`/
+   * `computeLtxPlateDurationSec`. */
   durationSec: number;
+  /** `true` routes this render to Comfy Cloud's LTX-2.5 `AudioToVideo`
+   * node instead of xAI Grok — the same `vocal` boolean
+   * `SkidmarksClipStub` already derives from the clip's own label, not
+   * a separate control. Drives the duration range, cost estimate, and
+   * whether `mp3AudioUrl` is required before Render can even be
+   * confirmed. See `lib/clipGeneration.ts`'s module doc comment. */
+  vocal: boolean;
+  /** The resolved vocalist for this clip's band, if any — forwarded to
+   * `buildClipGenerationRequest` on the Vocal path only, so a locked
+   * character's (Jack Ash today) hallmarks carry into the video prompt
+   * the same way they already do for stills. */
+  vocalist?: SkidmarksMember;
+  /** The attached song's own durable Blob URL — required on the Vocal
+   * path (Comfy Cloud slices a real window of it server-side); Render
+   * stays disabled with an honest reason until it's set. Unused on the
+   * Instrumental/Grok path. */
+  mp3AudioUrl?: string;
   /** True when a *different* plate anywhere on this timeline is
    * currently rendering — Stuart's cost lock ("one render at a time"),
    * enforced across the whole timeline by `SkidmarksClipTimeline`, not
@@ -77,12 +97,21 @@ function Spinner() {
 /**
  * The real, opt-in per-plate clip *video* render control — see
  * `app/api/skidmarks/generate-clip/route.ts`'s module doc comment for
- * the full server-side contract (xAI's Grok Imagine video API,
- * `XAI_API_KEY`, cost-capped 480p, live-verified image-to-video path,
- * durable Vercel Blob persistence). Deliberately **not** the "Generate
- * Clips" button (`SkidmarksClipTimeline`) — that stays the honest
- * whole-song stub; this animates exactly one already-selected plate at
- * a time.
+ * the full server-side contract of **both** backends this now calls:
+ * xAI's Grok Imagine video API (`XAI_API_KEY`, Instrumental clips) or
+ * Comfy Cloud's LTX-2.5 `AudioToVideo` node (`COMFY_CLOUD_API_KEY`,
+ * Vocal clips) — chosen automatically by this component's own `vocal`
+ * prop, never a picker here. Deliberately **not** the "Generate Clips"
+ * button (`SkidmarksClipTimeline`) — that stays the honest whole-song
+ * stub; this animates exactly one already-selected plate at a time.
+ *
+ * **Vocal plates need real audio, not just a text prompt.** When
+ * `vocal` is true, Render stays disabled (with an honest inline
+ * reason, never a silent no-op) until `mp3AudioUrl` is set — Comfy
+ * Cloud's LTX node is driven by a real slice of the attached song's
+ * vocal performance, sliced server-side from that durable Blob URL
+ * (`lib/mp3Slice.ts`); there's no automatic push-in/zoom fallback the
+ * way the Instrumental/Grok path has.
  *
  * **Per-plate select rework**: this used to animate *every* plate on a
  * clip's strip at once (multi-reference continuity in one xAI call).
@@ -96,12 +125,14 @@ function Spinner() {
  * "no clutter before there's something to animate" rule as before, just
  * scoped to one plate now instead of the whole strip.
  *
- * **Real, auto-computed duration** — `durationSec` (from
- * `lib/clipGeneration.ts`'s `computePlateDurationSec`, `segmentLengthSec
- * / plateCount` clamped to 5–15s) is shown, alongside a real per-render
- * dollar estimate, in the confirm step; nothing here lets Stuart type a
- * duration in — it's derived, not a picker, per AGENTS.md's "no
- * duration/resolution knob in the UI" lock.
+ * **Real, auto-computed duration** — `durationSec` (`segmentLengthSec /
+ * plateCount`, clamped to Grok's real 5–15s ceiling on an Instrumental
+ * clip via `computePlateDurationSec`, or Comfy/LTX's real 5–20s
+ * ceiling on a Vocal one via `computeLtxPlateDurationSec`) is shown,
+ * alongside a real per-render dollar estimate for whichever backend
+ * this render actually calls, in the confirm step; nothing here lets
+ * Stuart type a duration in — it's derived, not a picker, per
+ * AGENTS.md's "no duration/resolution knob in the UI" lock.
  *
  * **Cost-aware, explicit two-tap confirm**: the first tap never fires a
  * real request — it only reveals a "Confirm — real xAI video call,
@@ -123,6 +154,9 @@ export function SkidmarksClipRender({
   motionPrompt,
   onSetMotionPrompt,
   durationSec,
+  vocal,
+  vocalist,
+  mp3AudioUrl,
   locked,
   onRenderStart,
   onRenderEnd,
@@ -158,7 +192,12 @@ export function SkidmarksClipRender({
 
   if (!plateStillDataUrl) return null;
 
-  const estimatedCost = estimateClipRenderCostUsd(durationSec, 1);
+  const estimatedCost = vocal ? estimateLtxClipRenderCostUsd(durationSec) : estimateClipRenderCostUsd(durationSec, 1);
+  // Carried-forward directive: never let Render fire (even the
+  // confirm step) on a Vocal plate with no real durable audio to
+  // slice \u2014 an honest, disabled state instead of a request the
+  // server would have to reject anyway.
+  const missingAudio = vocal && !mp3AudioUrl;
 
   const clearConfirmTimer = () => {
     if (confirmTimer.current) {
@@ -168,7 +207,7 @@ export function SkidmarksClipRender({
   };
 
   const startConfirm = () => {
-    if (locked || generating) return;
+    if (locked || generating || missingAudio) return;
     setError(null);
     setConfirming(true);
     clearConfirmTimer();
@@ -199,6 +238,9 @@ export function SkidmarksClipRender({
         plateStillDataUrl,
         motionPrompt,
         durationSec,
+        vocal,
+        vocalist,
+        mp3AudioUrl,
         segmentId,
         plateId,
         plateIndex,
@@ -271,11 +313,11 @@ export function SkidmarksClipRender({
         <button
           type="button"
           onClick={startConfirm}
-          disabled={locked}
-          aria-disabled={locked}
+          disabled={locked || missingAudio}
+          aria-disabled={locked || missingAudio}
           className={[
             "rounded-full px-4 py-2.5 text-center text-[13px] font-semibold transition-colors",
-            locked
+            locked || missingAudio
               ? "cursor-not-allowed bg-white/[0.04] text-white/30"
               : "bg-rose-400 text-zinc-950 hover:bg-rose-300 active:bg-rose-400/85",
           ].join(" ")}
@@ -291,7 +333,9 @@ export function SkidmarksClipRender({
             onClick={handleConfirm}
             className="flex-1 rounded-full bg-rose-400 px-3.5 py-2.5 text-center text-[12px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/85"
           >
-            {`Confirm — real xAI video call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`}
+            {vocal
+              ? `Confirm — real Comfy Cloud LTX call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
+              : `Confirm — real xAI video call, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`}
           </button>
           <button
             type="button"
@@ -313,6 +357,12 @@ export function SkidmarksClipRender({
       {locked && !generating && (
         <p className="text-[10px] leading-snug text-white/35">
           Only one plate renders at a time — finish the other one first.
+        </p>
+      )}
+
+      {missingAudio && !locked && !generating && (
+        <p className="text-[10px] leading-snug text-white/35">
+          {"Waiting on the attached MP3\u2019s audio to finish uploading \u2014 this Vocal plate\u2019s render needs a real slice of the song, not just a text prompt."}
         </p>
       )}
 
