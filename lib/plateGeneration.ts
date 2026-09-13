@@ -71,7 +71,14 @@ import {
  * `resolveVocalistForPrompt`) — Stuart's ask was that a generic "person
  * singing" prompt must never quietly drop a character's non-negotiable
  * idiosyncrasies, so this isn't optional/toggle-gated, it's baked in
- * whenever that member is in frame.
+ * whenever that member is in frame. **Follow-up**: also injected on an
+ * *Instrumental/B-roll* clip when either (a) Stuart's own shot prompt
+ * names the locked character directly, or (b) the plate continues from
+ * the one right before it (his "door → keyhole → Jack seated" case is
+ * Instrumental, not Vocal, and its later plates lean on both signals —
+ * see `buildPlateGenerationRequest`'s `characterInFrame`); a generic
+ * Instrumental clip that never triggers either signal still
+ * auto-features/locks no one, unchanged from the original lock.
  *
  * This is a small, hand-authored list, not an inferred one — a member
  * with no entry here (every member on every band except this one, today)
@@ -110,19 +117,51 @@ export interface SkidmarksCharacterLock {
 export const SKIDMARKS_CHARACTER_LOCKS: Record<string, SkidmarksCharacterLock> = {
   "jack-ash-frontman": {
     promptHallmarks:
-      "Jack Ash's signature look, locked: a mysterious noir silhouette wearing a wide-brim fedora and a suit, " +
-      "desert-noir atmosphere. His face stays entirely hidden in deep shadow at all times \u2014 no eyes, brow, " +
-      "nose, cheeks, or jawline are ever lit or visible, even in close-up; he reads as a true silhouette. The one " +
+      "Jack Ash's signature look, locked, non-negotiable: a mysterious noir silhouette wearing a wide-brim " +
+      "black fedora and a suit, desert-noir atmosphere. His face stays entirely hidden in deep shadow at all " +
+      "times \u2014 no eyes, brow, nose, cheeks, or jawline are ever lit or visible, even in close-up, even in " +
+      "a brightly lit or backlit scene; he reads as a true silhouette, never as a normally-lit person. The one " +
       "feature that breaks through that darkness is his mouth: his lips glow a vivid neon blue, clearly visible " +
-      "even though every other facial feature stays completely unlit and unseen.",
+      "even though every other facial feature stays completely unlit and unseen. This lock is not optional and " +
+      "applies to every plate he appears in, Vocal or Instrumental: he must match this exact reference photo's " +
+      "build, wardrobe, and silhouette \u2014 never a different or generic-looking man, and never bare-headed.",
     negativeCues:
       "Jack Ash's face lit or visible, his eyes, brow, nose, cheeks, or jawline visible or out of shadow, no " +
-      "fedora, his lips a normal skin tone instead of glowing neon blue",
+      "fedora, his lips a normal skin tone instead of glowing neon blue, a fully lit face, a bare head with no " +
+      "fedora, any recognizable facial features visible in light, a different or generic-looking person instead " +
+      "of matching the reference photo's identity",
   },
 };
 
 export function getSkidmarksCharacterLock(memberId: string): SkidmarksCharacterLock | undefined {
   return SKIDMARKS_CHARACTER_LOCKS[memberId];
+}
+
+/**
+ * Follow-up fix, signal 1 of 2 (see `buildPlateGenerationRequest`'s
+ * `characterInFrame` for signal 2, plate continuity): whether a
+ * **locked** character (Jack Ash today) is named in Stuart's own
+ * free-text shot prompt for a clip — used to carry his identity
+ * reference + hallmark lock onto an *Instrumental* plate that features
+ * him (his "door \u2192 keyhole \u2192 Jack seated" case is a 40-second
+ * Instrumental clip, not a Vocal one; the live bug this fixes: Stuart
+ * typed "Looking through the keyhole \u2026 we can see Jack Ash sitting
+ * in a dim room \u2026", generated plate 3, and got back a fully-lit,
+ * fedora-less, wrong-looking face — the first pass at this only ever
+ * locked a Vocal clip's auto-included vocalist, so this exact
+ * Instrumental plate silently dropped the lock and the identity photo
+ * both). Matches on the character's first name as a whole word,
+ * case-insensitively, since that's how Stuart actually phrases it ("Jack
+ * seated, backlit"), not always the full "Jack Ash". Gated on the member
+ * actually having a lock, so a generic Instrumental clip naming an
+ * un-locked member is unaffected.
+ */
+export function shotPromptMentionsLockedCharacter(shotPrompt: string, member: SkidmarksMember): boolean {
+  if (!getSkidmarksCharacterLock(member.id)) return false;
+  const firstName = member.name.trim().split(/\s+/)[0];
+  if (!firstName) return false;
+  const escaped = firstName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i").test(shotPrompt);
 }
 
 /**
@@ -187,10 +226,16 @@ export interface BuildPlateGenerationRequestParams {
   vocal: boolean;
   model: SkidmarksModelId;
   bandName: string;
-  /** The resolved vocalist (`resolveVocalistForPrompt`), if any \u2014 only
-   * mentioned/locked when `vocal` is also true (an Instrumental/B-roll
-   * clip can omit the artist entirely, per the product lock, even for a
-   * band with an obvious single vocalist). */
+  /** The resolved vocalist (`resolveVocalistForPrompt`), if any. Only
+   * "featured"/mentioned by name (the "Feature X, the vocalist" line)
+   * when `vocal` is also true (an Instrumental/B-roll clip can still
+   * omit the artist entirely, per the product lock, even for a band
+   * with an obvious single vocalist) — *except* that a **locked**
+   * character (Jack Ash) still gets his identity reference + hallmark
+   * lock on an Instrumental clip either naming him directly or
+   * continuing from the plate before it (the "door \u2192 keyhole \u2192
+   * Jack seated" follow-up fix — see `buildPlateGenerationRequest`'s
+   * `characterInFrame`). */
   vocalist?: SkidmarksMember;
   /** The previous clip's still, only when "Use last plate" is checked
    * (or there's nothing else to continue from) \u2014 passed as an
@@ -217,15 +262,40 @@ export function buildPlateGenerationRequest(
 ): PlateGenerationRequest {
   const { shotPrompt, vocal, model, bandName, vocalist, continuityStillDataUrl } = params;
 
+  // "In frame" for identity/lock purposes: a Vocal clip's auto-included
+  // vocalist always counts (unchanged). An Instrumental/B-roll clip only
+  // counts when a *locked* character (Jack Ash today) is genuinely part
+  // of this shot — two signals, either one is enough:
+  //  1. Stuart's own shot prompt names them directly (the "door \u2192
+  //     keyhole \u2192 Jack seated" case \u2014 see
+  //     `shotPromptMentionsLockedCharacter`'s doc comment).
+  //  2. This plate continues from the plate right before it ("Use last
+  //     plate" checked \u2014 `continuityStillDataUrl` set) \u2014 a later
+  //     shot in the same story beat ("he stands, still in shadow") that
+  //     never re-says the name shouldn't silently drop the lock either.
+  // Both signals are gated on the character actually having a lock, so
+  // a generic Instrumental clip for an un-locked member/band still never
+  // auto-features/locks anyone \u2014 the lock text only *constrains* how
+  // that character looks if he's the subject, it never forces him into a
+  // shot that wasn't going to feature anyone, so applying it on signal 2
+  // alone (no literal name mention yet) costs nothing on a shot that
+  // truly has no one in it.
+  const lockedVocalist = vocalist && getSkidmarksCharacterLock(vocalist.id) ? vocalist : undefined;
+  const instrumentalCastMention =
+    !vocal &&
+    !!lockedVocalist &&
+    (shotPromptMentionsLockedCharacter(shotPrompt, lockedVocalist) || Boolean(continuityStillDataUrl));
+  const characterInFrame = (vocal && !!vocalist) || instrumentalCastMention;
+
   const references: { role: "continuity" | "identity"; dataUrl: string }[] = [];
   if (continuityStillDataUrl) {
     references.push({ role: "continuity", dataUrl: continuityStillDataUrl });
   }
-  // Identity reference only for a resolved vocalist who's actually in
-  // frame (`vocal`) and who has a real picked photo (`avatarImage` \u2014
-  // never a generated `look`, which is just a color swatch stand-in, not
-  // real image data \u2014 see `SkidmarksLook` in `lib/skidmarks.ts`).
-  if (vocal && vocalist?.avatarImage) {
+  // Identity reference for whichever member is "in frame" above, as long
+  // as they have a real picked photo (`avatarImage` \u2014 never a
+  // generated `look`, which is just a color swatch stand-in, not real
+  // image data \u2014 see `SkidmarksLook` in `lib/skidmarks.ts`).
+  if (characterInFrame && vocalist?.avatarImage) {
     references.push({ role: "identity", dataUrl: vocalist.avatarImage });
   }
 
@@ -241,13 +311,21 @@ export function buildPlateGenerationRequest(
     } else {
       parts.push(
         `Use ${tagPrefix(index)}as the exact likeness/identity reference for ${vocalist?.name ?? "the vocalist"} ` +
-          "\u2014 match their appearance precisely."
+          "\u2014 match their appearance, build, and wardrobe precisely; this is a specific person, not a " +
+          "generic stand-in."
       );
     }
   });
 
   if (vocal && vocalist) {
     parts.push(`Feature ${vocalist.name}, the vocalist, in the scene.`);
+  }
+  // The character lock itself applies whenever they're "in frame" per
+  // `characterInFrame` above \u2014 Vocal-clip vocalist (as before) *or*
+  // an Instrumental clip that names a locked character \u2014 not just
+  // the Vocal case the "Feature \u2026 the vocalist" line above is
+  // scoped to.
+  if (characterInFrame && vocalist) {
     const lock = getSkidmarksCharacterLock(vocalist.id);
     if (lock) {
       parts.push(lock.promptHallmarks);

@@ -80,11 +80,132 @@ function Spinner() {
   );
 }
 
-function CloseIcon() {
+function CloseIcon({ className = "h-4 w-4" }: { className?: string }) {
   return (
-    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className={className}>
       <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
+  );
+}
+
+function UploadIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className={className}>
+      <path
+        d="M10 13.5V4.5M6.25 8.25 10 4.5l3.75 3.75"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M4.5 14v1.1c0 .77.62 1.4 1.4 1.4h8.2c.77 0 1.4-.63 1.4-1.4V14"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+interface SkidmarksPlatePopoverProps {
+  /** `"sm"` for the tiny popover anchored on a strip tile, `"md"` for
+   * the roomier one inside the lightbox — same layout, just tuned for
+   * the space available in each spot. */
+  size?: "sm" | "md";
+  previousStill?: SkidmarksPlateStill;
+  useLastPlate: boolean;
+  onSetUseLastPlate: (value: boolean) => void;
+  onUpload: () => void;
+  onGenerate: () => void;
+  onDismiss: () => void;
+}
+
+/**
+ * Shared Upload/Generate popover — used both for an *empty* plate tile's
+ * inline menu and for the lightbox's "Replace" panel (same choice, same
+ * shape, so they don't drift). Per Stuart's redesign: a top bar with the
+ * dismiss "×" on the left and Upload (icon-only) on the right, opposite
+ * each other; "Use last plate" (only when there's a still to continue
+ * from) sits below that; Generate is the one primary action, centered on
+ * its own row. The surface itself is a **fully opaque** `bg-zinc-950` —
+ * no `/95` alpha, no `backdrop-blur` — specifically because the previous
+ * translucent+blurred version let whatever sat behind it (the shot
+ * prompt textarea, other tiles) bleed/ghost through.
+ */
+function SkidmarksPlatePopover({
+  size = "md",
+  previousStill,
+  useLastPlate,
+  onSetUseLastPlate,
+  onUpload,
+  onGenerate,
+  onDismiss,
+}: SkidmarksPlatePopoverProps) {
+  const dense = size === "sm";
+  return (
+    <div
+      role="menu"
+      onClick={(e) => e.stopPropagation()}
+      className={[
+        "flex w-full flex-col rounded-xl bg-zinc-950 ring-1 ring-white/10",
+        dense ? "gap-1.5 p-1.5" : "gap-2 p-2.5",
+      ].join(" ")}
+    >
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Close"
+          className={[
+            "flex items-center justify-center rounded-full text-white/50 transition-colors hover:bg-white/10 hover:text-white",
+            dense ? "h-5 w-5" : "h-6 w-6",
+          ].join(" ")}
+        >
+          <CloseIcon className={dense ? "h-3 w-3" : "h-3.5 w-3.5"} />
+        </button>
+        <button
+          type="button"
+          onClick={onUpload}
+          aria-label="Upload a still"
+          className={[
+            "flex items-center justify-center rounded-full text-white/50 transition-colors hover:bg-white/10 hover:text-white",
+            dense ? "h-5 w-5" : "h-6 w-6",
+          ].join(" ")}
+        >
+          <UploadIcon className={dense ? "h-3 w-3" : "h-3.5 w-3.5"} />
+        </button>
+      </div>
+
+      {previousStill && (
+        <label
+          className={[
+            "flex items-center justify-center gap-1.5 text-white/60",
+            dense ? "text-[10px]" : "text-[11px]",
+          ].join(" ")}
+        >
+          <input
+            type="checkbox"
+            checked={useLastPlate}
+            onChange={(e) => onSetUseLastPlate(e.target.checked)}
+            className="h-3 w-3 accent-rose-400"
+          />
+          Use last plate
+        </label>
+      )}
+
+      <button
+        type="button"
+        onClick={onGenerate}
+        className={[
+          "mx-auto rounded-full bg-rose-400 font-semibold text-zinc-950 transition-colors hover:bg-rose-300",
+          dense ? "px-4 py-1.5 text-[11px]" : "px-5 py-2 text-[12px]",
+        ].join(" ")}
+      >
+        Generate
+      </button>
+    </div>
   );
 }
 
@@ -139,11 +260,15 @@ function SkidmarksPlateLightbox({
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      {/* Solid, fully opaque scrim — no alpha, no blur. The previous
+          `bg-black/90 backdrop-blur-sm` still let the sheet/strip behind
+          it show through as a ghosted, blurred strip (Stuart's report);
+          a flat `bg-black` covers it completely instead. */}
       <button
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 bg-black/90 backdrop-blur-sm"
+        className="absolute inset-0 bg-black"
       />
 
       <div
@@ -179,35 +304,15 @@ function SkidmarksPlateLightbox({
 
         {!generating &&
           (replaceOpen ? (
-            <div className="flex w-full flex-col gap-1.5 rounded-xl bg-zinc-950/95 p-2.5 ring-1 ring-white/10">
-              {previousStill && (
-                <label className="flex items-center gap-1.5 px-1 text-[11px] text-white/60">
-                  <input
-                    type="checkbox"
-                    checked={useLastPlate}
-                    onChange={(e) => onSetUseLastPlate(e.target.checked)}
-                    className="h-3 w-3 accent-rose-400"
-                  />
-                  Use last plate
-                </label>
-              )}
-              <div className="flex gap-1.5">
-                <button
-                  type="button"
-                  onClick={onUpload}
-                  className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-[12px] font-medium text-white transition-colors hover:bg-white/15"
-                >
-                  Upload
-                </button>
-                <button
-                  type="button"
-                  onClick={onGenerate}
-                  className="flex-1 rounded-lg bg-rose-400 px-3 py-2 text-[12px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300"
-                >
-                  Generate
-                </button>
-              </div>
-            </div>
+            <SkidmarksPlatePopover
+              size="md"
+              previousStill={previousStill}
+              useLastPlate={useLastPlate}
+              onSetUseLastPlate={onSetUseLastPlate}
+              onUpload={onUpload}
+              onGenerate={onGenerate}
+              onDismiss={onToggleReplace}
+            />
           ) : (
             <div className="flex w-full gap-2">
               <button
@@ -368,9 +473,12 @@ function SkidmarksPlateBox({
       // `lib/skidmarks.ts`) rather than an already-a-`data:` URL upload;
       // `buildPlateGenerationRequest` only ever forwards `avatarImage` as
       // a reference verbatim, so it has to already be a real `data:` URL
-      // by the time it gets there.
+      // by the time it gets there. Resolved regardless of `vocal` — an
+      // Instrumental clip naming a locked character needs this too (see
+      // `characterInFrame` in `buildPlateGenerationRequest`); resolving
+      // an already-`data:` URL is a fast no-op either way.
       let resolvedVocalist = vocalist;
-      if (vocal && vocalist?.avatarImage) {
+      if (vocalist?.avatarImage) {
         const identityDataUrl = await resolvePlateReferenceDataUrl(vocalist.avatarImage);
         resolvedVocalist = { ...vocalist, avatarImage: identityDataUrl };
       }
@@ -490,38 +598,16 @@ function SkidmarksPlateBox({
             the lightbox instead (`menuOpen` doubles as that panel's
             open state there too — see the lightbox render below). */}
         {!hasStill && menuOpen && !generating && (
-          <div
-            role="menu"
-            onClick={(e) => e.stopPropagation()}
-            className="absolute inset-x-1.5 bottom-1.5 z-10 flex flex-col gap-1.5 rounded-xl bg-zinc-950/95 p-1.5 ring-1 ring-white/10 backdrop-blur-sm"
-          >
-            {previousStill && (
-              <label className="flex items-center gap-1.5 px-1 text-[10px] text-white/60">
-                <input
-                  type="checkbox"
-                  checked={useLastPlate}
-                  onChange={(e) => setUseLastPlate(e.target.checked)}
-                  className="h-3 w-3 accent-rose-400"
-                />
-                Use last plate
-              </label>
-            )}
-            <div className="flex gap-1.5">
-              <button
-                type="button"
-                onClick={handleUploadClick}
-                className="flex-1 rounded-lg bg-white/10 px-2 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-white/15"
-              >
-                Upload
-              </button>
-              <button
-                type="button"
-                onClick={handleGenerate}
-                className="flex-1 rounded-lg bg-rose-400 px-2 py-1.5 text-[11px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300"
-              >
-                Generate
-              </button>
-            </div>
+          <div className="absolute inset-x-1.5 bottom-1.5 z-10">
+            <SkidmarksPlatePopover
+              size="sm"
+              previousStill={previousStill}
+              useLastPlate={useLastPlate}
+              onSetUseLastPlate={setUseLastPlate}
+              onUpload={handleUploadClick}
+              onGenerate={handleGenerate}
+              onDismiss={closeMenu}
+            />
           </div>
         )}
       </div>
@@ -628,7 +714,13 @@ export function SkidmarksClipStub({
   onRemovePlate,
 }: SkidmarksClipStubProps) {
   const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label].vocal;
-  const vocalist = vocal ? resolveVocalistForPrompt(band.members) : undefined;
+  // Resolved regardless of `vocal` now — an Instrumental/B-roll clip
+  // that names a *locked* character (Jack Ash) in its own shot prompt
+  // still needs this to carry his identity ref + hallmark lock (see
+  // `buildPlateGenerationRequest`'s `characterInFrame`); a generic
+  // Instrumental clip that never names a locked character still never
+  // auto-features/locks anyone, so resolving this here is harmless.
+  const vocalist = resolveVocalistForPrompt(band.members);
   const canAddPlate = segment.plates.length < MAX_PLATES_PER_CLIP;
 
   return (
