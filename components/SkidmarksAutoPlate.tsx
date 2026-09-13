@@ -8,8 +8,10 @@ import {
 } from "@/lib/autoPlate";
 import {
   buildPlateGenerationRequest,
+  buildSirayCharacterPrompt,
   generatePlateStill,
   generatePlateStillViaSiray,
+  getSkidmarksCharacterLock,
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
@@ -157,15 +159,33 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
       let featuresLockedCharacter: boolean | undefined;
 
       if (target.siray) {
-        // Siray's ref2i model keeps the reference subject on its own —
-        // no injected framing/character-lock text needed the way xAI's
-        // plain text-to-image call does. A missing/failed identity
-        // reference here means there's genuinely nothing to send.
+        // Live-QA fix (2026-09-13): this used to send Siray nothing but
+        // the bare camera-position sentence — "Siray's ref2i model
+        // keeps the reference subject on its own" turned out false in
+        // practice (Stuart's report: identity drifted to "some white
+        // cunt," and every shot stared straight into the lens with
+        // nothing telling it not to). `buildSirayCharacterPrompt` merges
+        // the same hallmark/negative-cue lock text (including the
+        // no-front-stare camera rule) `buildPlateGenerationRequest`
+        // already gives the xAI path, whenever the resolved vocalist has
+        // one — a no-op for a member with no explicit lock. A missing/
+        // failed identity reference here means there's genuinely nothing
+        // to send.
         if (!vocalist?.avatarImage) {
           setProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
           continue;
         }
-        outcome = await generatePlateStillViaSiray(target.shotPrompt, vocalist.avatarImage);
+        // Every Siray-routed still shows this resolved vocalist by
+        // design (a new camera angle of the same master-still
+        // character) — so whenever they carry an explicit character
+        // lock, this still genuinely features them, the same fact
+        // `buildPlateGenerationRequest.featuresLockedCharacter` records
+        // for the xAI path. This used to stay `undefined` for every
+        // Siray target, silently dropping the lock the moment a later
+        // plate continued from it via "Use last plate".
+        featuresLockedCharacter = Boolean(getSkidmarksCharacterLock(vocalist.id));
+        const sirayPrompt = buildSirayCharacterPrompt(target.shotPrompt, vocalist);
+        outcome = await generatePlateStillViaSiray(sirayPrompt, vocalist.avatarImage);
       } else {
         const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label]?.vocal ?? false;
         const previousPlateId = plateIndex > 0 ? segment.plates[plateIndex - 1].id : undefined;

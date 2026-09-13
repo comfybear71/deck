@@ -72,18 +72,46 @@ const MOUTH_ON_POSITIONS = SIRAY_17_POSITIONS.filter((p) => p.group === "mouth-o
 const OFF_MOUTH_POSITIONS = SIRAY_17_POSITIONS.filter((p) => p.group === "off-mouth");
 
 /**
+ * Positions Stuart explicitly banned from auto-pick, live-QA'd
+ * 2026-09-13 ("every fucking image is staring straight out the
+ * camera"): 1/2 are literally "Front wide"/"Front ¾", 3/4/12 are the
+ * front-on mouth-on angles ("Front MCU", "Front CU", "Low front —
+ * looking up"), and 17 is an extreme mouth/jaw close-up that's
+ * inherently camera-facing too (it was already ungrouped/unpickable —
+ * listed here for completeness in case a future grouping pass ever
+ * considers it). These remain real, valid entries in Stuart's own
+ * numbered pack for manual reference/typing elsewhere — this only
+ * removes them from what `pickSirayPosition` can *auto*-pick, since
+ * every Siray-routed still shows the character in frame by design (see
+ * `lib/plateGeneration.ts`'s `buildSirayCharacterPrompt` doc comment),
+ * so an auto-picked front position is always a face-toward-camera risk.
+ */
+const FRONT_FACING_INDEXES = new Set([1, 2, 3, 4, 12, 17]);
+
+const NON_FRONT_WIDE_POSITIONS = WIDE_POSITIONS.filter((p) => !FRONT_FACING_INDEXES.has(p.index));
+const NON_FRONT_MOUTH_ON_POSITIONS = MOUTH_ON_POSITIONS.filter((p) => !FRONT_FACING_INDEXES.has(p.index));
+
+/**
  * Picks one position for an Auto-plate empty slot — pure, deterministic
  * (cycled by `rotationIndex`, not random, so this stays testable and a
  * song with many empty plates doesn't repeat the exact same angle back
  * to back), mirroring `lib/autoPlate.ts`'s existing `genericShotPrompt`
  * rotation shape.
  *
- * - `isFirstClip && isFirstEmptySlot` → a wide master (1–2) — the same
- *   "open on something establishing" instinct the scripted door/keyhole
- *   opener already encodes for its own specific brief.
- * - `vocal` → a mouth-on position (3/4/5/6/7/8/12) — these are the ones
- *   Stuart said are meant to end up on LTX.
- * - otherwise (Instrumental) → an off-mouth position (9–11/14–16).
+ * - `isFirstClip && isFirstEmptySlot` → an off-axis "wide master" pick
+ *   — the same "open on something establishing" instinct the scripted
+ *   door/keyhole opener already encodes for its own specific brief.
+ *   **Both real wide-group entries (1/2) are themselves front-on**
+ *   (`FRONT_FACING_INDEXES` above), so this pool is always empty after
+ *   filtering — falls back to the off-axis mouth-on subset (5–8) rather
+ *   than ever silently reintroducing a front position just because the
+ *   wide group ran out of non-front options.
+ * - `vocal` → an off-axis mouth-on position (5/6/7/8 — "¾"/profile,
+ *   lips still readable) — these are the ones Stuart said are meant to
+ *   end up on LTX, minus the front-on 3/4/12.
+ * - otherwise (Instrumental) → an off-mouth position (9–11/14–16) —
+ *   unaffected by the front-facing ban, since none of that group was on
+ *   Stuart's banned list to begin with.
  */
 export function pickSirayPosition(opts: {
   vocal: boolean;
@@ -91,11 +119,12 @@ export function pickSirayPosition(opts: {
   isFirstEmptySlotInClip: boolean;
   rotationIndex: number;
 }): SirayPosition {
+  const widePool = NON_FRONT_WIDE_POSITIONS.length > 0 ? NON_FRONT_WIDE_POSITIONS : NON_FRONT_MOUTH_ON_POSITIONS;
   const pool =
     opts.isFirstClip && opts.isFirstEmptySlotInClip
-      ? WIDE_POSITIONS
+      ? widePool
       : opts.vocal
-        ? MOUTH_ON_POSITIONS
+        ? NON_FRONT_MOUTH_ON_POSITIONS
         : OFF_MOUTH_POSITIONS;
   const i = ((opts.rotationIndex % pool.length) + pool.length) % pool.length;
   return pool[i];
