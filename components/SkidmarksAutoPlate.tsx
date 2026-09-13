@@ -12,7 +12,13 @@ import {
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
-import { SKIDMARKS_SEGMENT_LABEL_META, type SkidmarksBand, type SkidmarksClipSegment, type SkidmarksPlateStill } from "@/lib/skidmarks";
+import {
+  getSkidmarksSnapshot,
+  SKIDMARKS_SEGMENT_LABEL_META,
+  type SkidmarksBand,
+  type SkidmarksClipSegment,
+  type SkidmarksPlateStill,
+} from "@/lib/skidmarks";
 
 interface SkidmarksAutoPlateProps {
   segments: SkidmarksClipSegment[];
@@ -87,6 +93,22 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
       const segment = segments.find((s) => s.id === target.segmentId);
       const plateIndex = segment?.plates.findIndex((p) => p.id === target.plateId) ?? -1;
       if (!segment || plateIndex < 0) {
+        setProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
+        continue;
+      }
+
+      // This run's `targets` were planned once, up front, off the
+      // `segments` snapshot at that moment — but this loop spans
+      // several real network calls, real time Stuart could spend
+      // manually filling a plate himself. Re-check the *live* store
+      // (not this stale `segments` prop/closure) right before writing
+      // back, so a plate he already filled mid-run can never be
+      // silently overwritten by this same run's own later, now-stale
+      // plan for that same slot.
+      const livePlate = getSkidmarksSnapshot()
+        .session.mp3?.segments.find((s) => s.id === target.segmentId)
+        ?.plates.find((p) => p.id === target.plateId);
+      if (livePlate?.still) {
         setProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
         continue;
       }
