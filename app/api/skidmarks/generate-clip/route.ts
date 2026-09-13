@@ -1,6 +1,16 @@
 import { del, list, put } from "@vercel/blob";
 import { NextResponse } from "next/server";
 import { buildClipRenderPathname, buildClipRenderPlatePrefix, isSafeSegmentId } from "@/lib/clipRenderBlob";
+import {
+  buildLtxAudioToVideoWorkflow,
+  downloadComfyCloudOutput,
+  resolveComfyCloudCredentials,
+  resolveComfyCloudLtxModel,
+  submitComfyCloudWorkflow,
+  uploadComfyCloudInput,
+  waitForComfyCloudCompletion,
+} from "@/lib/comfyCloud";
+import { sliceMp3ToTimeRange } from "@/lib/mp3Slice";
 
 /**
  * POST /api/skidmarks/generate-clip — the first real (non-stub) slice of
@@ -16,22 +26,38 @@ import { buildClipRenderPathname, buildClipRenderPlatePrefix, isSafeSegmentId } 
  * route backs a much smaller, explicit, one-clip-at-a-time control
  * (`components/SkidmarksClipRender.tsx`) instead.
  *
- * **xAI's Grok Imagine *video* API, and nothing else.** Reuses the exact
- * same `XAI_API_KEY` this app already has wired for plate *stills*
- * (`app/api/skidmarks/generate-still/route.ts`) \u2014 no new key, no new
- * provider, no new "lane" (see the README's "The four lanes": xAI is
- * already one of Stuart's real paid accounts). This is deliberately the
- * *only* real video backend considered: the README's "Skidmarks node"
- * section names Comfy MCP / Seedance / LTX as the aspirational
- * long-term backend, but none of those have a wired API call, request
- * shape, or confirmed key name anywhere in this codebase \u2014 inventing
- * one here would be exactly the "fake success" this task explicitly
- * rules out. xAI's video endpoint, by contrast, is real, documented
- * (https://docs.x.ai/developers/model-capabilities/video/generation,
- * .../video/image-to-video, .../video/reference-to-video), and \u2014
- * unlike the still-image route above, where the two live verification
- * calls predate this PR \u2014 **verified live in this exact sandbox while
- * building this route**: a real `POST /v1/videos/generations` call
+ * **Two real video backends now, routed automatically by `vocal` \u2014
+ * never a model picker (Stuart lock, 2026-09-13).** This route used to
+ * call xAI's Grok Imagine video API for every render, full stop \u2014 the
+ * README's "Skidmarks node" section named Comfy MCP/Seedance/LTX only
+ * as an aspirational long-term backend, with no wired call anywhere.
+ * That's no longer true for **Vocal** clips specifically:
+ * - `vocal: false` (Instrumental/B-roll/opener) \u2014 unchanged: **xAI's
+ *   Grok Imagine video API**, the same `XAI_API_KEY` plate *stills*
+ *   already use (`app/api/skidmarks/generate-still/route.ts`). See
+ *   below for this path's full, still-accurate live-verification story.
+ * - `vocal: true` (Vocal/lip-sync performance) \u2014 **Comfy Cloud's
+ *   LTX-2.5 `AudioToVideo` partner node** (`lib/comfyCloud.ts`,
+ *   `COMFY_CLOUD_API_KEY`), driven by a real slice of the attached
+ *   song's own vocal audio (`lib/mp3Slice.ts`) instead of an automatic
+ *   push-in/zoom \u2014 see `handleVocalComfyLtxRender` below and
+ *   `lib/comfyCloud.ts`'s module doc comment for that path's own
+ *   honesty story (real, documented endpoints; not live-verified in
+ *   this sandbox, unlike the Grok path immediately below).
+ *
+ * Nothing here invents a third backend, and nothing here lets Stuart
+ * pick between the two by hand \u2014 `vocal` is the same boolean
+ * `lib/skidmarks.ts`'s `SKIDMARKS_SEGMENT_LABEL_META` already derives
+ * from a clip's own label, threaded straight through by
+ * `lib/clipGeneration.ts`'s `buildClipGenerationRequest`.
+ *
+ * **The rest of this doc comment describes the Grok/Instrumental path
+ * only** \u2014 real, documented (https://docs.x.ai/developers/model-
+ * capabilities/video/generation, .../video/image-to-video, .../video/
+ * reference-to-video), and \u2014 unlike the still-image route above, where
+ * the two live verification calls predate this PR \u2014 **verified live
+ * in this exact sandbox while building this route** (before the Comfy/
+ * LTX split existed): a real `POST /v1/videos/generations` call
  * (`grok-imagine-video-1.5`, a single `image` reference, `duration: 3`,
  * `resolution: "480p"`) returned a real `request_id`; polling
  * `GET /v1/videos/{request_id}` every ~6s reached `status: "done"` after
@@ -208,6 +234,27 @@ const DEFAULT_CLIP_DURATION_SEC = 5;
 export const MIN_CLIP_DURATION_SEC = 5;
 export const MAX_CLIP_DURATION_SEC = 15;
 
+/** Vocal/Comfy-LTX duration range \u2014 mirrors
+ * `lib/clipGeneration.ts`'s `MIN_LTX_CLIP_DURATION_SEC`/
+ * `MAX_LTX_CLIP_DURATION_SEC` (duplicated here on purpose, same "each
+ * Skidmarks API route stays self-contained" convention as the Grok
+ * constants above \u2014 nothing enforces the two staying in sync
+ * automatically). `20` is `LtxApi25AudioToVideo`'s own real, documented
+ * ceiling (it errors outside `[2, 20]`) \u2014 not Stuart's initial "~30s"
+ * ask; see `lib/clipGeneration.ts`'s module doc comment for why this
+ * route honors the node's real limit instead. */
+export const MIN_LTX_CLIP_DURATION_SEC = 5;
+export const MAX_LTX_CLIP_DURATION_SEC = 20;
+/** `LtxApi25AudioToVideo`'s own documented technical floor for its
+ * driving audio (2s) \u2014 looser than `MIN_LTX_CLIP_DURATION_SEC` (this
+ * app's own product floor, which nothing normally sends below); this
+ * sanity-checks the *actual*, frame-aligned sliced-audio length
+ * (`lib/mp3Slice.ts`'s `sliceMp3ToTimeRange` rounds outward to frame
+ * boundaries, so it can land slightly outside the requested range)
+ * before spending a real Comfy Cloud submit call on something the node
+ * would just reject anyway. */
+const MIN_LTX_AUDIO_INPUT_SEC = 2;
+
 const START_TIMEOUT_MS = 20_000;
 const POLL_TIMEOUT_MS = 20_000;
 /** Kept short \u2014 this is a cheap `HEAD` sanity check right after our own
@@ -222,6 +269,11 @@ export const POLL_INTERVAL_MS = 4_000;
  * being killed mid-request. See this file's module doc comment's "no
  * resume-after-timeout" note. */
 export const POLL_DEADLINE_MS = 240_000;
+/** Same shape/reasoning as `POLL_DEADLINE_MS`, for the Comfy Cloud
+ * WebSocket wait (`lib/comfyCloud.ts`'s `waitForComfyCloudCompletion`)
+ * instead of xAI's REST poll loop. */
+export const COMFY_POLL_DEADLINE_MS = 240_000;
+const COMFY_AUDIO_FETCH_TIMEOUT_MS = 30_000;
 
 function resolveXaiApiKey(): string | null {
   return process.env[XAI_API_KEY_ENV_VAR] || null;
@@ -518,6 +570,25 @@ interface GenerateClipRequestBody {
   clipIndex?: unknown;
   startSec?: unknown;
   endSec?: unknown;
+  /** `true` for a Vocal/lip-sync clip \u2014 routes this request to Comfy
+   * Cloud's LTX-2.5 `AudioToVideo` node instead of xAI Grok. See this
+   * file's module doc comment's "Two real video backends" note.
+   * `false`/omitted keeps the existing Grok path exactly as before this
+   * field existed. */
+  vocal?: unknown;
+  /** Required (together with `audioStartSec`/`audioEndSec`) when
+   * `vocal` is true \u2014 the attached song's own durable Blob URL
+   * (`SkidmarksMp3Attachment.audioUrl`), fetched and sliced
+   * (`lib/mp3Slice.ts`) into this plate's own driving audio track.
+   * Ignored on the Grok/Instrumental path. */
+  mp3AudioUrl?: unknown;
+  /** This plate's own absolute audio window within the full song \u2014
+   * see `lib/clipGeneration.ts`'s `computePlateTimeRange`. Only read
+   * when `vocal` is true; distinct from `startSec`/`endSec` above,
+   * which stay the *clip's* whole time range for the download
+   * filename. */
+  audioStartSec?: unknown;
+  audioEndSec?: unknown;
 }
 
 interface RenderPersistenceTarget {
@@ -604,42 +675,17 @@ async function pruneStaleRendersForPlate(segmentId: string, plateId: string, kee
 }
 
 /**
- * Re-downloads the just-finished render from xAI's temporary URL and
- * re-uploads it to Vercel Blob under this clip's stable pathname (see
- * `lib/clipRenderBlob.ts`), overwriting any earlier render already
- * saved for the same clip, then prunes any other stale blob left under
- * this same plate's prefix (`pruneStaleRendersForPlate` above) so a
- * plate can never accumulate more than one persisted render even when
- * its computed filename has drifted since the last take. Never throws
- * \u2014 every real failure mode (the re-download failing, Blob not being
- * configured, the upload itself failing) comes back as an honest
- * `{ ok: false, reason }` so the route can still return the render
- * Stuart already paid for.
+ * The actual `put()` + HEAD-verify + prune sequence, factored out of
+ * `persistClipRenderToBlob` so the Comfy/LTX path
+ * (`handleVocalComfyLtxRender` below) \u2014 which already has the
+ * finished render's raw bytes from `downloadComfyCloudOutput`, with no
+ * second "temporary hosted URL" to re-download from the way xAI's
+ * `video.url` gives the Grok path \u2014 can persist directly without a
+ * redundant re-download-from-self round trip. Never throws; see
+ * `persistClipRenderToBlob`'s doc comment for the full behavior this
+ * shares (HEAD-verify gap, pruning, honest failure shape).
  */
-export async function persistClipRenderToBlob(
-  sourceVideoUrl: string,
-  target: RenderPersistenceTarget
-): Promise<PersistRenderOutcome> {
-  let videoRes: Response;
-  try {
-    videoRes = await fetch(sourceVideoUrl, { signal: AbortSignal.timeout(START_TIMEOUT_MS) });
-  } catch (err) {
-    return {
-      ok: false,
-      reason: `Could not download the finished render to save it: ${err instanceof Error ? err.message : "network error"}.`,
-    };
-  }
-  if (!videoRes.ok) {
-    return { ok: false, reason: `Downloading the finished render to save it returned HTTP ${videoRes.status}.` };
-  }
-
-  let bytes: ArrayBuffer;
-  try {
-    bytes = await videoRes.arrayBuffer();
-  } catch {
-    return { ok: false, reason: "Could not read the finished render's bytes to save it." };
-  }
-
+async function persistRenderBytesToBlob(bytes: Uint8Array, target: RenderPersistenceTarget): Promise<PersistRenderOutcome> {
   const pathname = buildClipRenderPathname(
     target.segmentId,
     target.plateId,
@@ -702,26 +748,273 @@ export async function persistClipRenderToBlob(
   }
 }
 
+/**
+ * Re-downloads the just-finished render from xAI's temporary URL and
+ * re-uploads it to Vercel Blob under this clip's stable pathname (see
+ * `lib/clipRenderBlob.ts`), overwriting any earlier render already
+ * saved for the same clip, then prunes any other stale blob left under
+ * this same plate's prefix (`pruneStaleRendersForPlate` above) so a
+ * plate can never accumulate more than one persisted render even when
+ * its computed filename has drifted since the last take. Never throws
+ * \u2014 every real failure mode (the re-download failing, Blob not being
+ * configured, the upload itself failing) comes back as an honest
+ * `{ ok: false, reason }` so the route can still return the render
+ * Stuart already paid for.
+ */
+export async function persistClipRenderToBlob(
+  sourceVideoUrl: string,
+  target: RenderPersistenceTarget
+): Promise<PersistRenderOutcome> {
+  let videoRes: Response;
+  try {
+    videoRes = await fetch(sourceVideoUrl, { signal: AbortSignal.timeout(START_TIMEOUT_MS) });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `Could not download the finished render to save it: ${err instanceof Error ? err.message : "network error"}.`,
+    };
+  }
+  if (!videoRes.ok) {
+    return { ok: false, reason: `Downloading the finished render to save it returned HTTP ${videoRes.status}.` };
+  }
+
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await videoRes.arrayBuffer();
+  } catch {
+    return { ok: false, reason: "Could not read the finished render's bytes to save it." };
+  }
+
+  return persistRenderBytesToBlob(new Uint8Array(bytes), target);
+}
+
 function isReferenceDataUrl(value: unknown): value is string {
   return typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,.+/.test(value);
 }
 
-export async function POST(request: Request) {
-  const apiKey = resolveXaiApiKey();
-  if (!apiKey) {
+/** A plate still is always `data:image/...`, but the audio slice this
+ * route sends to Comfy Cloud is raw bytes it produced itself
+ * (`lib/mp3Slice.ts`), never a data URL on the wire \u2014 no matching
+ * validator needed for it. */
+function decodeDataUrl(dataUrl: string): { bytes: Uint8Array; mimeType: string } | null {
+  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+  if (!match) return null;
+  try {
+    return { bytes: new Uint8Array(Buffer.from(match[2], "base64")), mimeType: match[1] };
+  } catch {
+    return null;
+  }
+}
+
+/** Fetches the attached song's own durable Blob audio (never the
+ * ephemeral in-tab `File`/object URL \u2014 a server route can't reach
+ * that at all), honestly, without ever pretending success on a
+ * network/HTTP failure. */
+async function fetchMp3AudioBytes(url: string): Promise<{ ok: true; bytes: Uint8Array } | { ok: false; error: string }> {
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(COMFY_AUDIO_FETCH_TIMEOUT_MS) });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Could not fetch the attached song's audio to slice it: ${err instanceof Error ? err.message : "network error"}.`,
+    };
+  }
+  if (!res.ok) {
+    return { ok: false, error: `Fetching the attached song's audio returned HTTP ${res.status}.` };
+  }
+  try {
+    return { ok: true, bytes: new Uint8Array(await res.arrayBuffer()) };
+  } catch {
+    return { ok: false, error: "Could not read the attached song's audio bytes." };
+  }
+}
+
+/**
+ * The Vocal/Comfy-LTX render path \u2014 see this file's module doc
+ * comment's "Two real video backends" note and `lib/comfyCloud.ts`'s
+ * module doc comment for the full honesty story on what's real/
+ * documented here vs. not live-tested. Carries forward the prior
+ * session's own hypothesis, verified true in this codebase: at render
+ * time the attached MP3's raw browser `File` is long gone (this is a
+ * server route) \u2014 the only real source for its audio is
+ * `mp3.audioUrl`, the durable Vercel Blob URL
+ * `lib/mp3Blob.ts`/`SkidmarksMp3Attachment.audioUrl` uploads at attach
+ * time. If that's missing (upload never finished, Blob unconfigured),
+ * this returns an honest `missing_audio_url` error \u2014 **never** a fake
+ * success with an automatic motion hint standing in for real audio.
+ *
+ * Steps, each with its own honest failure exit: resolve
+ * `COMFY_CLOUD_API_KEY` \u2192 validate `mp3AudioUrl`/`audioStartSec`/
+ * `audioEndSec` \u2192 fetch the full song's bytes \u2192 frame-slice this
+ * plate's own window (`lib/mp3Slice.ts`) \u2192 decode the plate still's
+ * data URL \u2192 upload both to Comfy Cloud \u2192 submit the
+ * `LtxApi25AudioToVideo` workflow \u2192 wait for completion over its
+ * WebSocket \u2192 download the finished video \u2192 persist to Vercel Blob
+ * (or fall back to a `data:` URL when no persistence target was given
+ * \u2014 unlike the Grok path, Comfy's own signed download URL is a
+ * one-shot, so there's no second "temporary hosted URL" to hand back
+ * the way xAI's `video.url` gives; a real result Stuart already paid
+ * for must never be silently dropped just because persistence wasn't
+ * requested or failed).
+ */
+async function handleVocalComfyLtxRender(
+  body: GenerateClipRequestBody,
+  prompt: string,
+  referenceImageDataUrl: string
+): Promise<Response> {
+  const creds = resolveComfyCloudCredentials();
+  if (!creds) {
     return NextResponse.json(
       {
         error:
-          `${XAI_API_KEY_ENV_VAR} is not set on the server \u2014 clip video rendering is unavailable here. ` +
-          "This is the same xAI Grok Imagine key plate-still generation already uses (from console.x.ai). If " +
-          "you just added it, Vercel only applies environment variable changes to new deployments \u2014 " +
-          "redeploy the project for this function to see it.",
+          "COMFY_CLOUD_API_KEY is not set on the server \u2014 Vocal clip rendering (Comfy Cloud LTX) is " +
+          "unavailable here. Create a key at platform.comfy.org (an active Comfy Cloud subscription is " +
+          "required to run workflows via this API) and set it as this project's COMFY_CLOUD_API_KEY. If you " +
+          "just added it, Vercel only applies environment variable changes to new deployments \u2014 redeploy " +
+          "the project for this function to see it.",
         code: "missing_api_key",
       },
       { status: 501 }
     );
   }
 
+  // Carried-forward directive: an audio-less "success" is never
+  // acceptable here \u2014 see this function's doc comment.
+  const mp3AudioUrl = typeof body.mp3AudioUrl === "string" ? body.mp3AudioUrl.trim() : "";
+  if (!mp3AudioUrl) {
+    return NextResponse.json(
+      {
+        error:
+          "This clip has no durable audio to animate from \u2014 the attached MP3's audio hasn't finished " +
+          "uploading to Vercel Blob yet (or Blob storage isn't configured here). Comfy Cloud's LTX node needs " +
+          "a real slice of the vocal performance, not just a text prompt.",
+        code: "missing_audio_url",
+      },
+      { status: 400 }
+    );
+  }
+  const audioStartSec = typeof body.audioStartSec === "number" ? body.audioStartSec : NaN;
+  const audioEndSec = typeof body.audioEndSec === "number" ? body.audioEndSec : NaN;
+  if (!Number.isFinite(audioStartSec) || !Number.isFinite(audioEndSec) || audioEndSec <= audioStartSec || audioStartSec < 0) {
+    return NextResponse.json(
+      {
+        error: "Missing or invalid audioStartSec/audioEndSec \u2014 can't slice this plate's audio window.",
+        code: "invalid_request",
+      },
+      { status: 400 }
+    );
+  }
+
+  const audioFetch = await fetchMp3AudioBytes(mp3AudioUrl);
+  if (!audioFetch.ok) {
+    return NextResponse.json({ error: audioFetch.error, code: "upstream_error" }, { status: 502 });
+  }
+
+  const sliceOutcome = sliceMp3ToTimeRange(audioFetch.bytes, audioStartSec, audioEndSec);
+  if (!sliceOutcome.ok) {
+    return NextResponse.json({ error: sliceOutcome.error, code: "invalid_audio" }, { status: 422 });
+  }
+  const actualDurationSec = sliceOutcome.actualEndSec - sliceOutcome.actualStartSec;
+  if (actualDurationSec < MIN_LTX_AUDIO_INPUT_SEC || actualDurationSec > MAX_LTX_CLIP_DURATION_SEC) {
+    return NextResponse.json(
+      {
+        error:
+          `This plate's audio slice is ${actualDurationSec.toFixed(1)}s \u2014 Comfy Cloud's LTX node only ` +
+          `accepts a ${MIN_LTX_AUDIO_INPUT_SEC}-${MAX_LTX_CLIP_DURATION_SEC}s driving audio track.`,
+        code: "invalid_request",
+      },
+      { status: 422 }
+    );
+  }
+
+  const decodedImage = decodeDataUrl(referenceImageDataUrl);
+  if (!decodedImage) {
+    return NextResponse.json(
+      { error: "Could not decode the plate still's data URL.", code: "invalid_request" },
+      { status: 400 }
+    );
+  }
+
+  const imageUpload = await uploadComfyCloudInput(
+    decodedImage.bytes,
+    `skidmarks-plate-${Date.now()}.png`,
+    decodedImage.mimeType,
+    creds
+  );
+  if (!imageUpload.ok) {
+    return NextResponse.json({ error: imageUpload.error, code: imageUpload.code }, { status: imageUpload.status });
+  }
+
+  const audioUpload = await uploadComfyCloudInput(
+    sliceOutcome.bytes,
+    `skidmarks-vocal-${Date.now()}.mp3`,
+    "audio/mpeg",
+    creds
+  );
+  if (!audioUpload.ok) {
+    return NextResponse.json({ error: audioUpload.error, code: audioUpload.code }, { status: audioUpload.status });
+  }
+
+  const workflow = buildLtxAudioToVideoWorkflow({
+    imageFilename: imageUpload.name,
+    audioFilename: audioUpload.name,
+    prompt,
+    model: resolveComfyCloudLtxModel(),
+  });
+
+  const submitResult = await submitComfyCloudWorkflow(workflow, creds);
+  if (!submitResult.ok) {
+    return NextResponse.json({ error: submitResult.error, code: submitResult.code }, { status: submitResult.status });
+  }
+
+  const completionResult = await waitForComfyCloudCompletion(submitResult.promptId, creds, COMFY_POLL_DEADLINE_MS);
+  if (!completionResult.ok) {
+    return NextResponse.json({ error: completionResult.error, code: completionResult.code }, { status: completionResult.status });
+  }
+
+  const downloadResult = await downloadComfyCloudOutput(completionResult.videoFile, creds);
+  if (!downloadResult.ok) {
+    return NextResponse.json({ error: downloadResult.error, code: downloadResult.code }, { status: downloadResult.status });
+  }
+
+  const persistenceTarget = resolvePersistenceTarget(body);
+  if (!persistenceTarget) {
+    // No (or no valid) segmentId/clipIndex/startSec/endSec. Unlike the
+    // Grok path, Comfy's own download URL is a one-shot signed link, so
+    // there's no second "temporary hosted URL" left to hand back once
+    // we've already read its bytes \u2014 a plain `data:` URL keeps this
+    // real result usable (playable, downloadable) without inventing a
+    // persistence Stuart didn't ask for. See this function's doc
+    // comment.
+    return NextResponse.json({
+      videoUrl: bufferToDataUrl(downloadResult.bytes, "video/mp4"),
+      durationSec: actualDurationSec,
+    });
+  }
+
+  const persistOutcome = await persistRenderBytesToBlob(downloadResult.bytes, persistenceTarget);
+  if (persistOutcome.ok) {
+    return NextResponse.json({ videoUrl: persistOutcome.url, durationSec: actualDurationSec, persisted: true });
+  }
+
+  // Persistence failed \u2014 still return the render Stuart already paid
+  // for, honestly flagged as not saved (same "never claims a render is
+  // saved when it isn't" rule as the Grok path). See the no-target
+  // branch above for why a `data:` URL, not a temporary hosted one.
+  return NextResponse.json({
+    videoUrl: bufferToDataUrl(downloadResult.bytes, "video/mp4"),
+    durationSec: actualDurationSec,
+    persisted: false,
+    persistError: persistOutcome.reason,
+  });
+}
+
+function bufferToDataUrl(bytes: Uint8Array, mimeType: string): string {
+  return `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`;
+}
+
+export async function POST(request: Request) {
   let body: GenerateClipRequestBody;
   try {
     body = await request.json();
@@ -731,6 +1024,12 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+
+  // Routing decision \u2014 read before either backend's own key check, so
+  // a Vocal request checks `COMFY_CLOUD_API_KEY` and an Instrumental one
+  // checks `XAI_API_KEY`, never the other's. See this file's module doc
+  // comment's "Two real video backends" note.
+  const vocal = body.vocal === true;
 
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   if (!prompt) {
@@ -761,7 +1060,21 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  if (rawReferences.length > MAX_REFERENCE_IMAGES) {
+  // Comfy Cloud's `LtxApi25AudioToVideo` node only ever accepts a
+  // single optional `image` \u2014 no multi-reference continuity mode like
+  // xAI's `reference_images` (this feature's own UI never sends more
+  // than one plate still anyway; see `lib/clipGeneration.ts`'s module
+  // doc comment).
+  if (vocal && rawReferences.length !== 1) {
+    return NextResponse.json(
+      {
+        error: "Comfy Cloud's LTX node accepts exactly one plate still to animate \u2014 not more, not fewer.",
+        code: "invalid_request",
+      },
+      { status: 400 }
+    );
+  }
+  if (!vocal && rawReferences.length > MAX_REFERENCE_IMAGES) {
     return NextResponse.json(
       {
         error: `Too many reference images \u2014 this route accepts at most ${MAX_REFERENCE_IMAGES}.`,
@@ -777,6 +1090,25 @@ export async function POST(request: Request) {
         code: "invalid_request",
       },
       { status: 400 }
+    );
+  }
+
+  if (vocal) {
+    return handleVocalComfyLtxRender(body, prompt, rawReferences[0]);
+  }
+
+  const apiKey = resolveXaiApiKey();
+  if (!apiKey) {
+    return NextResponse.json(
+      {
+        error:
+          `${XAI_API_KEY_ENV_VAR} is not set on the server \u2014 clip video rendering is unavailable here. ` +
+          "This is the same xAI Grok Imagine key plate-still generation already uses (from console.x.ai). If " +
+          "you just added it, Vercel only applies environment variable changes to new deployments \u2014 " +
+          "redeploy the project for this function to see it.",
+        code: "missing_api_key",
+      },
+      { status: 501 }
     );
   }
 

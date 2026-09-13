@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Mp3Encoder } from "@breezystack/lamejs";
 
 const putMock = vi.fn();
 const listMock = vi.fn();
@@ -17,6 +18,35 @@ import {
   POST,
   resolvePersistenceTarget,
 } from "./route";
+
+/** Same real-encoder fixture helper as `lib/mp3Slice.test.ts` \u2014
+ * duplicated rather than imported across test files (this repo's test
+ * files don't share helpers today), so the Vocal/Comfy-LTX route tests
+ * below exercise a real MP3 the same way `sliceMp3ToTimeRange` itself
+ * is tested. */
+function encodeTestMp3(durationSec: number, sampleRate: number = 22050, bitrateKbps: number = 64): Uint8Array {
+  const encoder = new Mp3Encoder(1, sampleRate, bitrateKbps);
+  const totalSamples = Math.round(durationSec * sampleRate);
+  const pcm = new Int16Array(totalSamples);
+  for (let i = 0; i < totalSamples; i++) {
+    pcm[i] = Math.round(Math.sin((2 * Math.PI * 440 * i) / sampleRate) * 0.5 * 0x7fff);
+  }
+  const chunks: Uint8Array[] = [];
+  for (let i = 0; i < pcm.length; i += 1152) {
+    const encoded = encoder.encodeBuffer(pcm.subarray(i, i + 1152));
+    if (encoded.length > 0) chunks.push(encoded);
+  }
+  const flushed = encoder.flush();
+  if (flushed.length > 0) chunks.push(flushed);
+  const total = chunks.reduce((sum, c) => sum + c.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.length;
+  }
+  return out;
+}
 
 describe("extractXaiErrorMessage", () => {
   it("parses the OpenAI-compatible { error: { message } } shape", () => {
@@ -853,5 +883,306 @@ describe("resolvePersistenceTarget", () => {
     expect(
       resolvePersistenceTarget({ segmentId: "seg-1", plateId: "plate-1", clipIndex: 1, startSec: -5, endSec: 40 })
     ).toBeNull();
+  });
+});
+
+/** A fake `MinimalWebSocket` (`lib/comfyCloud.ts`) driven directly by
+ * these tests \u2014 same shape/spirit as `lib/comfyCloud.test.ts`'s own
+ * `FakeWebSocket`, duplicated here since the route calls
+ * `waitForComfyCloudCompletion` with its default (global `WebSocket`)
+ * constructor, which these tests stub globally rather than injecting a
+ * test double through the route's own (non-existent) extra parameter. */
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = [];
+  url: string;
+  closed = false;
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  onerror: ((event: unknown) => void) | null = null;
+  onclose: (() => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+    FakeWebSocket.instances.push(this);
+  }
+  close() {
+    this.closed = true;
+  }
+  emit(msgType: string, data: Record<string, unknown> = {}) {
+    this.onmessage?.({ data: JSON.stringify({ type: msgType, data }) });
+  }
+}
+
+describe("POST /api/skidmarks/generate-clip \u2014 Vocal (Comfy Cloud LTX) render path", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+    vi.stubEnv("COMFY_CLOUD_API_KEY", "test-comfy-key");
+    vi.stubEnv("COMFY_CLOUD_BASE_URL", "");
+    vi.stubEnv("COMFY_CLOUD_LTX_MODEL", "");
+    FakeWebSocket.instances = [];
+    putMock.mockReset();
+    listMock.mockReset();
+    delMock.mockReset();
+    listMock.mockResolvedValue({ blobs: [] });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  function vocalRequest(overrides: Record<string, unknown> = {}): Request {
+    return postRequest({
+      vocal: true,
+      prompt: "singing directly to camera, slow push in",
+      shotPrompt: "singing directly to camera, slow push in",
+      referenceImageDataUrls: [TINY_DATA_URL],
+      durationSec: 10,
+      mp3AudioUrl: "https://blob.vercel-storage.com/skidmarks/mp3-audio/song.mp3",
+      audioStartSec: 0,
+      audioEndSec: 5,
+      segmentId: "seg-1",
+      plateId: "plate-1",
+      clipIndex: 1,
+      startSec: 0,
+      endSec: 5,
+      ...overrides,
+    });
+  }
+
+  it("reports the honest missing_api_key outcome and never calls fetch when COMFY_CLOUD_API_KEY is unset", async () => {
+    vi.stubEnv("COMFY_CLOUD_API_KEY", "");
+    const res = await POST(vocalRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(501);
+    expect(body.code).toBe("missing_api_key");
+    expect(body.error).toContain("COMFY_CLOUD_API_KEY");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Vocal request that doesn't send exactly one reference image", async () => {
+    const res = await POST(
+      vocalRequest({ referenceImageDataUrls: [TINY_DATA_URL, SECOND_DATA_URL] })
+    );
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.error.toLowerCase()).toContain("exactly one plate still");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports missing_audio_url honestly when mp3AudioUrl is blank \u2014 never a fake success", async () => {
+    const res = await POST(vocalRequest({ mp3AudioUrl: "" }));
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.code).toBe("missing_audio_url");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing/invalid audioStartSec/audioEndSec", async () => {
+    const res = await POST(vocalRequest({ audioStartSec: 5, audioEndSec: 5 }));
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.error.toLowerCase()).toContain("audiostartsec/audioendsec");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a real fetch failure honestly when the attached song's audio can't be downloaded", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
+    const res = await POST(vocalRequest());
+    const body = await res.json();
+    expect(res.status).toBe(502);
+    expect(body.error).toContain("404");
+  });
+
+  it("reports an honest slice failure for audio bytes that aren't a real MP3, never a fake success", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 }));
+    const res = await POST(vocalRequest());
+    const body = await res.json();
+    expect(res.status).toBe(422);
+    expect(body.code).toBe("invalid_audio");
+    expect(body.error).toContain("Could not find any valid MP3");
+  });
+
+  function mockAudioFetch(mp3Bytes: Uint8Array) {
+    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array(mp3Bytes), { status: 200 }));
+  }
+  function mockUploads(imageName = "plate.png", audioName = "clip.mp3") {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ name: imageName, subfolder: "" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ name: audioName, subfolder: "" }), { status: 200 }));
+  }
+  function mockSubmit(promptId = "job-1") {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: promptId }), { status: 200 }));
+  }
+  function mockDownload(videoBytes: Uint8Array) {
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(null, { status: 302, headers: { location: "https://storage.example.com/signed/clip.mp4" } })
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array(videoBytes), { status: 200 }));
+  }
+
+  it("runs the full real pipeline end to end and persists the result to Vercel Blob", async () => {
+    const mp3Bytes = encodeTestMp3(6);
+    const videoBytes = new Uint8Array([1, 2, 3, 4, 5]);
+
+    mockAudioFetch(mp3Bytes);
+    mockUploads();
+    mockSubmit("job-1");
+    mockDownload(videoBytes);
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
+    putMock.mockResolvedValueOnce({
+      url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0005_render.mp4",
+    });
+
+    const resultPromise = POST(vocalRequest());
+    // Let the fetch-driven steps (audio fetch, both uploads, submit) run
+    // before the WebSocket exists to drive to completion.
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    expect(ws.url).toContain("wss://cloud.comfy.org/ws");
+    expect(ws.url).toContain("token=test-comfy-key");
+    ws.emit("executed", { prompt_id: "job-1", node: "4", output: { video: [{ filename: "out.mp4" }] } });
+    ws.emit("execution_success", { prompt_id: "job-1" });
+
+    const res = await resultPromise;
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.videoUrl).toBe(
+      "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0005_render.mp4"
+    );
+    // Frame-aligned actual duration (see `lib/mp3Slice.ts`) rounds
+    // outward to the nearest real MP3 frame boundary \u2014 never exactly
+    // the requested 5s, but always close to it.
+    expect(body.durationSec).toBeGreaterThanOrEqual(5);
+    expect(body.durationSec).toBeLessThan(5.1);
+    expect(body.persisted).toBe(true);
+
+    // The workflow submitted to Comfy Cloud names both uploaded files
+    // and forwards the partner-node api key.
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const submittedBody = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string);
+    expect(submittedBody.prompt["1"].inputs.image).toBe("plate.png");
+    expect(submittedBody.prompt["2"].inputs.audio).toBe("clip.mp3");
+    expect(submittedBody.prompt["3"].inputs.model).toBe("LTX-2.5 (Fast)");
+    expect(submittedBody.extra_data.api_key_comfy_org).toBe("test-comfy-key");
+  });
+
+  it("falls back to a data: URL (never silently drops a paid render) when no persistence target is given", async () => {
+    const mp3Bytes = encodeTestMp3(6);
+    const videoBytes = new Uint8Array([9, 9, 9]);
+
+    mockAudioFetch(mp3Bytes);
+    mockUploads();
+    mockSubmit("job-2");
+    mockDownload(videoBytes);
+
+    const resultPromise = POST(
+      postRequest({
+        vocal: true,
+        prompt: "x",
+        referenceImageDataUrls: [TINY_DATA_URL],
+        durationSec: 5,
+        mp3AudioUrl: "https://blob.vercel-storage.com/song.mp3",
+        audioStartSec: 0,
+        audioEndSec: 5,
+      })
+    );
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("executed", { prompt_id: "job-2", node: "4", output: { video: [{ filename: "out.mp4" }] } });
+    ws.emit("execution_success", { prompt_id: "job-2" });
+
+    const res = await resultPromise;
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.videoUrl.startsWith("data:video/mp4;base64,")).toBe(true);
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it("still returns the render (as a data: URL), honestly flagged unsaved, when Blob persistence fails", async () => {
+    const mp3Bytes = encodeTestMp3(6);
+    const videoBytes = new Uint8Array([7, 7, 7]);
+
+    mockAudioFetch(mp3Bytes);
+    mockUploads();
+    mockSubmit("job-3");
+    mockDownload(videoBytes);
+    putMock.mockRejectedValueOnce(new Error("Vercel Blob: No token found."));
+
+    const resultPromise = POST(vocalRequest());
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("executed", { prompt_id: "job-3", node: "4", output: { video: [{ filename: "out.mp4" }] } });
+    ws.emit("execution_success", { prompt_id: "job-3" });
+
+    const res = await resultPromise;
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.persisted).toBe(false);
+    expect(body.persistError).toContain("Vercel Blob: No token found.");
+    expect(body.videoUrl.startsWith("data:video/mp4;base64,")).toBe(true);
+  });
+
+  it("surfaces a real Comfy Cloud submit failure verbatim", async () => {
+    const mp3Bytes = encodeTestMp3(6);
+    mockAudioFetch(mp3Bytes);
+    mockUploads();
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "Invalid node graph" }), { status: 200 }));
+
+    const res = await POST(vocalRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(422);
+    expect(body.code).toBe("invalid_request");
+    expect(body.error).toContain("Invalid node graph");
+  });
+
+  it("surfaces a real Comfy Cloud execution_error verbatim", async () => {
+    const mp3Bytes = encodeTestMp3(6);
+    mockAudioFetch(mp3Bytes);
+    mockUploads();
+    mockSubmit("job-4");
+
+    const resultPromise = POST(vocalRequest());
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("execution_error", { prompt_id: "job-4", exception_message: "OOMError" });
+
+    const res = await resultPromise;
+    const body = await res.json();
+
+    expect(res.status).toBe(502);
+    expect(body.error).toContain("OOMError");
+  });
+
+  it("honors a COMFY_CLOUD_LTX_MODEL override", async () => {
+    vi.stubEnv("COMFY_CLOUD_LTX_MODEL", "LTX-2.5 (Pro)");
+    const mp3Bytes = encodeTestMp3(6);
+    mockAudioFetch(mp3Bytes);
+    mockUploads();
+    mockSubmit("job-5");
+    mockDownload(new Uint8Array([1]));
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
+    putMock.mockResolvedValueOnce({ url: "https://abc.public.blob.vercel-storage.com/x.mp4" });
+
+    const resultPromise = POST(vocalRequest());
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("executed", { prompt_id: "job-5", node: "4", output: { video: [{ filename: "out.mp4" }] } });
+    ws.emit("execution_success", { prompt_id: "job-5" });
+    await resultPromise;
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const submittedBody = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string);
+    expect(submittedBody.prompt["3"].inputs.model).toBe("LTX-2.5 (Pro)");
   });
 });
