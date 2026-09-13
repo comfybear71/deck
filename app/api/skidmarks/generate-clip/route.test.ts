@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const putMock = vi.fn();
+vi.mock("@vercel/blob", () => ({
+  put: (...args: unknown[]) => putMock(...args),
+}));
+
 import {
   classifyXaiVideoHttpFailure,
   classifyXaiVideoJobError,
   extractXaiErrorMessage,
   POLL_INTERVAL_MS,
   POST,
+  resolvePersistenceTarget,
 } from "./route";
 
 describe("extractXaiErrorMessage", () => {
@@ -96,6 +103,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.stubEnv("XAI_API_KEY", "test-key");
     vi.stubEnv("XAI_VIDEO_MODEL", "");
+    putMock.mockReset();
   });
 
   afterEach(() => {
@@ -388,5 +396,157 @@ describe("POST /api/skidmarks/generate-clip", () => {
     expect(res.status).toBe(504);
     expect(body.code).toBe("timeout");
     expect(body.error.toLowerCase()).toContain("still processing");
+  });
+
+  describe("persisting a successful render to Vercel Blob", () => {
+    function mockSuccessfulRender(videoUrl: string) {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(200, { request_id: "req-persist" }))
+        .mockResolvedValueOnce(
+          jsonResponse(200, { status: "done", video: { url: videoUrl, duration: 5, respect_moderation: true } })
+        );
+    }
+
+    it("skips persistence entirely (same response shape as before this feature existed) when no segmentId is sent", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+
+      const res = await POST(postRequest({ prompt: "slow zoom", referenceImageDataUrls: [TINY_DATA_URL] }));
+      const body = await res.json();
+
+      expect(body).toEqual({ videoUrl: "https://vidgen.x.ai/clip.mp4", durationSec: 5 });
+      expect(putMock).not.toHaveBeenCalled();
+      // Only the start + one poll call \u2014 no third fetch to re-download for persistence.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("re-downloads the finished render and uploads it to Blob under this clip's stable pathname, returning the durable URL", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+      fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      putMock.mockResolvedValueOnce({ url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/01_0000-0040_render.mp4" });
+
+      const res = await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body).toEqual({
+        videoUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/01_0000-0040_render.mp4",
+        durationSec: 5,
+        persisted: true,
+      });
+
+      expect(putMock).toHaveBeenCalledTimes(1);
+      const [pathname, , options] = putMock.mock.calls[0];
+      expect(pathname).toBe("skidmarks/clip-renders/seg-1/01_0000-0040_render.mp4");
+      expect(options).toMatchObject({
+        access: "public",
+        contentType: "video/mp4",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      });
+
+      // The re-download hit xAI's own temporary URL, not the Blob one.
+      const [redownloadUrl] = fetchMock.mock.calls[2];
+      expect(redownloadUrl).toBe("https://vidgen.x.ai/clip.mp4");
+    });
+
+    it("still returns the render (xAI's temporary URL), honestly flagged as unsaved, when Blob upload itself fails", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+      fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      putMock.mockRejectedValueOnce(new Error("Vercel Blob: No token found."));
+
+      const res = await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.videoUrl).toBe("https://vidgen.x.ai/clip.mp4");
+      expect(body.durationSec).toBe(5);
+      expect(body.persisted).toBe(false);
+      expect(body.persistError).toContain("Vercel Blob: No token found.");
+    });
+
+    it("still returns the render, honestly flagged as unsaved, when re-downloading the finished video itself fails", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 502 }));
+
+      const res = await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.videoUrl).toBe("https://vidgen.x.ai/clip.mp4");
+      expect(body.persisted).toBe(false);
+      expect(body.persistError.toLowerCase()).toContain("502");
+      expect(putMock).not.toHaveBeenCalled();
+    });
+
+    it("skips persistence when the given persistence fields are malformed, without failing the whole request", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+
+      const res = await POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "../not/safe",
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body).toEqual({ videoUrl: "https://vidgen.x.ai/clip.mp4", durationSec: 5 });
+      expect(putMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("resolvePersistenceTarget", () => {
+  it("returns a normalized target when all four fields are valid", () => {
+    expect(resolvePersistenceTarget({ segmentId: "seg-1", clipIndex: 1.6, startSec: 0.4, endSec: 39.6 })).toEqual({
+      segmentId: "seg-1",
+      clipIndex: 2,
+      startSec: 0,
+      endSec: 40,
+    });
+  });
+
+  it("returns null when segmentId is missing, empty, or unsafe", () => {
+    expect(resolvePersistenceTarget({ clipIndex: 1, startSec: 0, endSec: 40 })).toBeNull();
+    expect(resolvePersistenceTarget({ segmentId: "", clipIndex: 1, startSec: 0, endSec: 40 })).toBeNull();
+    expect(resolvePersistenceTarget({ segmentId: "../etc", clipIndex: 1, startSec: 0, endSec: 40 })).toBeNull();
+  });
+
+  it("returns null when clipIndex/startSec/endSec are missing, non-numeric, or negative", () => {
+    expect(resolvePersistenceTarget({ segmentId: "seg-1", startSec: 0, endSec: 40 })).toBeNull();
+    expect(resolvePersistenceTarget({ segmentId: "seg-1", clipIndex: "1", startSec: 0, endSec: 40 })).toBeNull();
+    expect(resolvePersistenceTarget({ segmentId: "seg-1", clipIndex: -1, startSec: 0, endSec: 40 })).toBeNull();
+    expect(resolvePersistenceTarget({ segmentId: "seg-1", clipIndex: 1, startSec: -5, endSec: 40 })).toBeNull();
   });
 });

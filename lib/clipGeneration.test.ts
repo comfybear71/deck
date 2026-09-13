@@ -4,6 +4,7 @@ import {
   estimateClipRenderCostUsd,
   generateSkidmarksClip,
   MAX_CLIP_REFERENCE_IMAGES,
+  MAX_MOTION_PROMPT_LENGTH,
 } from "./clipGeneration";
 
 describe("buildClipGenerationRequest", () => {
@@ -81,6 +82,86 @@ describe("buildClipGenerationRequest", () => {
     ]);
   });
 
+  it("uses the automatic push-in/zoom motion hint when no motionPrompt is given (unchanged default behavior)", () => {
+    const { prompt } = buildClipGenerationRequest({
+      shotPrompt: "a door creaks open",
+      bandName: "Jack Ash",
+      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+    });
+    expect(prompt).toContain("Slow cinematic push-in zoom");
+  });
+
+  it("lets an explicit motionPrompt override the automatic motion hint outright, not append alongside it", () => {
+    const { prompt } = buildClipGenerationRequest({
+      shotPrompt: "a door creaks open",
+      bandName: "Jack Ash",
+      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      motionPrompt: "slow pan left, then hold on the door",
+    });
+    expect(prompt).toContain("slow pan left, then hold on the door");
+    expect(prompt).not.toContain("Slow cinematic push-in zoom");
+  });
+
+  it("preserves a multi-line motionPrompt verbatim (aside from trimming) — this is a multi-line field, not single-line", () => {
+    const { prompt } = buildClipGenerationRequest({
+      shotPrompt: "a door creaks open",
+      bandName: "Jack Ash",
+      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      motionPrompt: "slow zoom into keyhole,\nmild pulse on door cracks",
+    });
+    expect(prompt).toContain("slow zoom into keyhole,\nmild pulse on door cracks");
+  });
+
+  it("trims a motionPrompt and falls back to the automatic hint when it's blank/whitespace-only", () => {
+    const { prompt } = buildClipGenerationRequest({
+      shotPrompt: "a door creaks open",
+      bandName: "Jack Ash",
+      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      motionPrompt: "   ",
+    });
+    expect(prompt).toContain("Slow cinematic push-in zoom");
+  });
+
+  it("caps an overlong motionPrompt at MAX_MOTION_PROMPT_LENGTH rather than sending it verbatim", () => {
+    const long = "pan ".repeat(60).trim();
+    expect(long.length).toBeGreaterThan(MAX_MOTION_PROMPT_LENGTH);
+    const { prompt } = buildClipGenerationRequest({
+      shotPrompt: "a door creaks open",
+      bandName: "Jack Ash",
+      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      motionPrompt: long,
+    });
+    expect(prompt).toContain(long.slice(0, MAX_MOTION_PROMPT_LENGTH));
+    expect(prompt).not.toContain(long);
+  });
+
+  it("passes the persistence fields (segmentId/clipIndex/startSec/endSec) straight through when given", () => {
+    const request = buildClipGenerationRequest({
+      shotPrompt: "a door creaks open",
+      bandName: "Jack Ash",
+      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+      segmentId: "seg-1",
+      clipIndex: 1,
+      startSec: 0,
+      endSec: 40,
+    });
+    expect(request.segmentId).toBe("seg-1");
+    expect(request.clipIndex).toBe(1);
+    expect(request.startSec).toBe(0);
+    expect(request.endSec).toBe(40);
+  });
+
+  it("leaves the persistence fields unset (not e.g. an explicit null) when the caller doesn't provide them", () => {
+    const request = buildClipGenerationRequest({
+      shotPrompt: "a door creaks open",
+      bandName: "Jack Ash",
+      plateStillDataUrls: ["data:image/jpeg;base64,door"],
+    });
+    expect(request.segmentId).toBeUndefined();
+    expect(request.clipIndex).toBeUndefined();
+    expect(JSON.stringify(request)).not.toContain("segmentId");
+  });
+
   it("always names the band and asks for no on-screen text/watermark", () => {
     const { prompt } = buildClipGenerationRequest({
       shotPrompt: "a keyhole, lit from behind",
@@ -127,7 +208,7 @@ describe("generateSkidmarksClip", () => {
       referenceImageDataUrls: ["data:image/jpeg;base64,door"],
     });
 
-    expect(outcome).toEqual({ ok: true, videoUrl: "https://vidgen.x.ai/clip.mp4", durationSec: 5 });
+    expect(outcome).toEqual({ ok: true, videoUrl: "https://vidgen.x.ai/clip.mp4", durationSec: 5, persisted: false });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/skidmarks/generate-clip");
@@ -168,6 +249,62 @@ describe("generateSkidmarksClip", () => {
     const outcome = await generateSkidmarksClip({ prompt: "x", shotPrompt: "x", referenceImageDataUrls: ["data:image/jpeg;base64,a"] });
 
     expect(outcome).toEqual({ ok: false, unconfigured: false, message: "Failed to fetch" });
+  });
+
+  it("reports persisted:true and the durable Blob URL when the route says the render was saved", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        videoUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/01_0000-0040_render.mp4",
+        durationSec: 5,
+        persisted: true,
+      })
+    );
+
+    const outcome = await generateSkidmarksClip({
+      prompt: "slow push-in zoom",
+      shotPrompt: "slow push-in zoom",
+      referenceImageDataUrls: ["data:image/jpeg;base64,door"],
+      segmentId: "seg-1",
+      clipIndex: 1,
+      startSec: 0,
+      endSec: 40,
+    });
+
+    expect(outcome).toEqual({
+      ok: true,
+      videoUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/01_0000-0040_render.mp4",
+      durationSec: 5,
+      persisted: true,
+    });
+  });
+
+  it("reports persisted:false plus a plain-language persistError when the route couldn't save the render", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        videoUrl: "https://vidgen.x.ai/clip.mp4",
+        durationSec: 5,
+        persisted: false,
+        persistError: "Vercel Blob: No token found.",
+      })
+    );
+
+    const outcome = await generateSkidmarksClip({
+      prompt: "x",
+      shotPrompt: "x",
+      referenceImageDataUrls: ["data:image/jpeg;base64,a"],
+      segmentId: "seg-1",
+      clipIndex: 1,
+      startSec: 0,
+      endSec: 40,
+    });
+
+    expect(outcome).toEqual({
+      ok: true,
+      videoUrl: "https://vidgen.x.ai/clip.mp4",
+      durationSec: 5,
+      persisted: false,
+      persistError: "Vercel Blob: No token found.",
+    });
   });
 
   it("reports a real failure if a 200 response is somehow missing videoUrl", async () => {

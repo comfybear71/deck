@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   formatSegmentRange,
   SKIDMARKS_SEGMENT_LABEL_META,
@@ -12,6 +12,15 @@ import {
   type SkidmarksTranscriptionStatus,
 } from "@/lib/skidmarks";
 import { type SkidmarksTranscriptionProvider } from "@/lib/transcription";
+import {
+  buildForceDownloadUrl,
+  buildRendersZip,
+  fetchPersistedClipRenders,
+  toBundleEntries,
+  triggerAnchorDownload,
+  triggerBlobDownload,
+  type PersistedClipRender,
+} from "@/lib/clipRenders";
 import { SkidmarksClipStub } from "./SkidmarksClipStub";
 
 interface SkidmarksClipTimelineProps {
@@ -67,6 +76,9 @@ function SegmentRow({
   renderLocked,
   onRenderStart,
   onRenderEnd,
+  clipIndex,
+  persistedRender,
+  onPersisted,
 }: {
   segment: SkidmarksClipSegment;
   band: SkidmarksBand;
@@ -93,6 +105,11 @@ function SegmentRow({
   renderLocked: boolean;
   onRenderStart: () => void;
   onRenderEnd: () => void;
+  /** This clip's 1-based position in the timeline — see
+   * `SkidmarksClipStub`'s doc comment for what it's used for. */
+  clipIndex: number;
+  persistedRender?: PersistedClipRender | null;
+  onPersisted: (render: PersistedClipRender) => void;
 }) {
   const meta = SKIDMARKS_SEGMENT_LABEL_META[segment.label];
 
@@ -141,6 +158,9 @@ function SegmentRow({
             renderLocked={renderLocked}
             onRenderStart={onRenderStart}
             onRenderEnd={onRenderEnd}
+            clipIndex={clipIndex}
+            persistedRender={persistedRender}
+            onPersisted={onPersisted}
           />
         </div>
       )}
@@ -237,6 +257,27 @@ function timelineNote(
  * from here. Seedance's multi-angle clip generation specifically also
  * stays entirely unwired either way — this render pass only ever calls
  * xAI, never Seedance.
+ *
+ * **Owns the "which clips already have a saved render" lookup for the
+ * whole timeline**, not just whichever row happens to be expanded —
+ * fetched once (`fetchPersistedClipRenders`, `lib/clipRenders.ts`) for
+ * every clip id on mount and whenever the *set* of clip ids changes
+ * (a fresh MP3 attach), not on every keystroke. This is what lets
+ * `SkidmarksClipStub`/`SkidmarksClipRender` show a saved render right
+ * away after a refresh even before that clip's row has ever been
+ * expanded in this session, and is also what backs the **"Download
+ * rendered clips"** control below the stub "Generate Clips" button —
+ * only shows up once at least one clip has a persisted render, and
+ * bundles every currently-known one into a single ZIP (built entirely
+ * client-side, `lib/zipDownload.ts` — no server round trip, no paid API
+ * call) named with this feature's own numeric convention, falling back
+ * to plain sequential per-clip downloads if the zip step itself fails
+ * for any reason (a real CORS regression, an expired/deleted blob) —
+ * the task's own explicit "otherwise sequential downloads... is OK for
+ * v1" escape hatch. This is deliberately a second, separate surface
+ * from each clip's own single-render Download link (never the same
+ * button): grabbing every rendered clip at once is a "get this whole
+ * batch off my phone" action, not a per-clip one.
  */
 export function SkidmarksClipTimeline({
   segments,
@@ -258,6 +299,45 @@ export function SkidmarksClipTimeline({
   // *whole* timeline, not just within one clip's own panel. See
   // `SkidmarksClipRender`'s doc comment.
   const [renderingSegmentId, setRenderingSegmentId] = useState<string | null>(null);
+  // What's currently known to be durably persisted, per clip id — see
+  // this component's doc comment. `undefined` while the initial lookup
+  // for a given clip is still in flight (or hasn't started yet);
+  // absent from the map once resolved with nothing saved for that clip.
+  const [persistedRenders, setPersistedRenders] = useState<Map<string, PersistedClipRender>>(new Map());
+  const [bundleState, setBundleState] = useState<{ busy: boolean; message: string | null }>({
+    busy: false,
+    message: null,
+  });
+
+  const segmentIdsKey = useMemo(() => segments.map((s) => s.id).join(","), [segments]);
+
+  useEffect(() => {
+    const segmentIds = segmentIdsKey ? segmentIdsKey.split(",") : [];
+    if (segmentIds.length === 0) return;
+    let cancelled = false;
+    fetchPersistedClipRenders(segmentIds).then((outcome) => {
+      if (cancelled || !outcome.ok) return;
+      setPersistedRenders((prev) => {
+        const next = new Map(prev);
+        for (const render of outcome.renders) next.set(render.segmentId, render);
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Re-fetches when the *set* of clip ids changes (a fresh MP3
+    // attach), not on every shot-prompt keystroke — `segmentIdsKey` is
+    // stable across an edit to an existing segment's own fields.
+  }, [segmentIdsKey]);
+
+  const handlePersisted = (render: PersistedClipRender) => {
+    setPersistedRenders((prev) => {
+      const next = new Map(prev);
+      next.set(render.segmentId, render);
+      return next;
+    });
+  };
 
   const toggleExpanded = (id: string) => {
     setExpandedIds((prev) => {
@@ -274,6 +354,42 @@ export function SkidmarksClipTimeline({
       "Stub only \u2014 no Comfy MCP / LTX render kicked off. Wire-up comes once that pipeline lands."
     );
     stubMessageTimer.current = setTimeout(() => setStubMessage(null), STUB_FEEDBACK_TIMEOUT_MS);
+  };
+
+  const renderedClips = Array.from(persistedRenders.values());
+
+  const handleDownloadRenderedClips = async () => {
+    if (renderedClips.length === 0 || bundleState.busy) return;
+    setBundleState({ busy: true, message: null });
+
+    if (renderedClips.length === 1) {
+      const [only] = toBundleEntries(renderedClips);
+      triggerAnchorDownload(buildForceDownloadUrl(only.url), only.filename);
+      setBundleState({ busy: false, message: null });
+      return;
+    }
+
+    const zipOutcome = await buildRendersZip(renderedClips);
+    if (zipOutcome.ok) {
+      const zipBlob = new Blob([zipOutcome.zipBytes.slice().buffer], { type: "application/zip" });
+      triggerBlobDownload(zipBlob, "skidmarks-renders.zip");
+      setBundleState({ busy: false, message: null });
+      return;
+    }
+
+    // Zip build failed (a real CORS regression, an expired/deleted
+    // blob) — fall back to plain sequential per-clip downloads, staggered
+    // so the browser doesn't treat a tight burst of clicks as a popup
+    // storm. Per the task's own explicit "sequential downloads with
+    // numeric names is OK for v1" fallback.
+    for (const entry of toBundleEntries(renderedClips)) {
+      triggerAnchorDownload(buildForceDownloadUrl(entry.url), entry.filename);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+    setBundleState({
+      busy: false,
+      message: `Couldn't bundle these into a zip (${zipOutcome.message}) \u2014 downloaded them one by one instead.`,
+    });
   };
 
   if (segments.length === 0) return null;
@@ -320,6 +436,9 @@ export function SkidmarksClipTimeline({
                   renderLocked={renderingSegmentId !== null && renderingSegmentId !== segment.id}
                   onRenderStart={() => setRenderingSegmentId(segment.id)}
                   onRenderEnd={() => setRenderingSegmentId((current) => (current === segment.id ? null : current))}
+                  clipIndex={i + 1}
+                  persistedRender={persistedRenders.get(segment.id) ?? null}
+                  onPersisted={handlePersisted}
                 />
               );
             })}
@@ -348,6 +467,38 @@ export function SkidmarksClipTimeline({
           >
             {stubMessage}
           </p>
+
+          {/* A second, deliberately separate surface from any one clip's
+              own Download link — grabbing every already-rendered clip at
+              once, per the task's "phone \u2192 PC" cross-device ask.
+              Renders nothing at all until at least one clip actually has
+              a saved render \u2014 same "don't show a control for state that
+              doesn't exist yet" pattern as `SkidmarksClipRender` itself. */}
+          {renderedClips.length > 0 && (
+            <div className="flex flex-col gap-1.5 border-t border-white/[0.06] pt-3">
+              <button
+                type="button"
+                onClick={handleDownloadRenderedClips}
+                disabled={bundleState.busy}
+                aria-disabled={bundleState.busy}
+                className={[
+                  "rounded-full px-4 py-2.5 text-center text-[13px] font-semibold transition-colors",
+                  bundleState.busy
+                    ? "cursor-not-allowed bg-white/[0.04] text-white/30"
+                    : "border border-white/10 bg-white/[0.04] text-white/80 hover:bg-white/[0.08]",
+                ].join(" ")}
+              >
+                {bundleState.busy
+                  ? "Bundling\u2026"
+                  : `Download rendered clip${renderedClips.length > 1 ? "s" : ""} (${renderedClips.length})`}
+              </button>
+              {bundleState.message && (
+                <p role="status" aria-live="polite" className="text-[10px] leading-snug text-white/40">
+                  {bundleState.message}
+                </p>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

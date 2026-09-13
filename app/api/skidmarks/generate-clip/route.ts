@@ -1,4 +1,6 @@
+import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { buildClipRenderPathname, isSafeSegmentId } from "@/lib/clipRenderBlob";
 
 /**
  * POST /api/skidmarks/generate-clip — the first real (non-stub) slice of
@@ -101,20 +103,52 @@ import { NextResponse } from "next/server";
  * says so plainly rather than pretending stills and video share a
  * "wired" bit.
  *
- * **Videos are returned as xAI's own temporary URL, not re-encoded to a
- * `data:` URL.** The still route downloads/re-encodes because a still is
- * small enough to persist straight into `localStorage`
- * (`SkidmarksClipSegment.plates[].still`) without blowing its quota. A
- * video is not \u2014 even a 5s/480p clip is roughly a megabyte, and
- * base64 adds \u2248 33% on top; persisting that into the same
- * few-MB-quota `localStorage` the rest of this app already shares would
- * risk breaking everything else Skidmarks persists after only a couple
- * of renders. So a render's result is intentionally **not** written to
- * `lib/skidmarks.ts`'s store at all \u2014 it's ephemeral React state in
- * `SkidmarksClipRender` (a `<video>` player + a download link), gone on
- * refresh, same spirit as "Resolve remains fine cut; in-app stitch is
- * optional/not required for v1." The UI says this plainly rather than
- * implying the render survives a reload.
+ * **Persisted to Vercel Blob, not `localStorage`, and no longer
+ * ephemeral React state.** This is a deliberate change from how this
+ * route originally shipped in #42: Stuart rejected a render that only
+ * lived in `SkidmarksClipRender`'s own React state (gone on refresh) —
+ * "never localStorage for clips/plates/studio state; Vercel Blob for
+ * media now" is the hard lock (see AGENTS.md). `localStorage` was never
+ * actually an option here anyway (a 5s/480p clip is roughly a
+ * megabyte — an order of magnitude past what that store's small shared
+ * quota can absorb even once, let alone per render), so a *real*
+ * durable store was always the only fix, not a corner that got cut.
+ * Once xAI's poll finishes successfully, this route re-downloads the
+ * finished video from xAI's temporary URL and re-uploads it to Vercel
+ * Blob (`@vercel/blob`'s `put()`) under a stable, parseable pathname
+ * (`lib/clipRenderBlob.ts`) — `access: "public"` (so the returned URL
+ * works directly in a `<video src>`/download link with no extra auth
+ * hop, the same access level xAI's own temporary URL already had) and
+ * `allowOverwrite: true` (each clip keeps exactly **one** persisted
+ * render, replaced by its latest — see that module's doc comment for
+ * why). The response's `videoUrl` becomes that durable Blob URL on
+ * success — a refresh, or even a different browser tab, can still
+ * reach it, unlike xAI's own temporary link. `app/api/skidmarks/clip-
+ * renders/route.ts` is the read side: it lists what's currently
+ * persisted so `components/SkidmarksClipTimeline.tsx` can show a saved
+ * render again after a reload without this route being called again.
+ *
+ * **Persistence is additive, and optional-by-request-shape, on
+ * purpose.** A caller that doesn't send `segmentId`/`clipIndex`/
+ * `startSec`/`endSec` (all four are needed to build a stable pathname)
+ * gets the exact same response shape this route always returned
+ * (`{ videoUrl, durationSec }`, xAI's own temporary URL) — this keeps
+ * the route usable by anything that doesn't care about persistence
+ * without a breaking change to its contract. The real UI
+ * (`components/SkidmarksClipRender.tsx`) always sends all four now,
+ * since every real clip render happens against a real clip with a real
+ * `segmentId` and time range.
+ *
+ * **Never claims a render is saved when it isn't.** If Vercel Blob
+ * isn't configured (no store connected / no `BLOB_READ_WRITE_TOKEN`),
+ * or the re-download/re-upload step itself fails for any reason, this
+ * route still returns the render Stuart just paid for — xAI's own
+ * temporary `videoUrl`, exactly as before this feature existed — but
+ * with `persisted: false` and a plain-language `persistError`, so the
+ * UI can say so honestly (see `SkidmarksClipRender`'s "not saved" note)
+ * instead of implying durability that didn't happen. A storage hiccup
+ * should never waste the real money a render just cost by discarding
+ * the one result Stuart already paid for.
  */
 
 export const runtime = "nodejs";
@@ -423,6 +457,110 @@ interface GenerateClipRequestBody {
    * checking that instead). */
   shotPrompt?: unknown;
   referenceImageDataUrls?: unknown;
+  /** The four fields needed to persist a successful render to Vercel
+   * Blob under a stable, parseable pathname (see `lib/clipRenderBlob
+   * .ts`) instead of only returning xAI's temporary URL. All optional —
+   * a caller that omits any of them (or sends one that fails
+   * `resolvePersistenceTarget`'s validation) still gets the exact same
+   * response shape this route always returned; persistence is purely
+   * additive on top of the existing contract, never a new requirement
+   * to call this route at all. */
+  segmentId?: unknown;
+  /** This clip's 1-based position in the timeline \u2014 only used to
+   * build a download-friendly numeric filename (e.g.
+   * `01_0000-0040_render.mp4`), never anything else. */
+  clipIndex?: unknown;
+  startSec?: unknown;
+  endSec?: unknown;
+}
+
+interface RenderPersistenceTarget {
+  segmentId: string;
+  clipIndex: number;
+  startSec: number;
+  endSec: number;
+}
+
+/**
+ * Validates the four optional persistence fields together \u2014 all four
+ * or none; a partial/malformed set is treated the same as none sent at
+ * all (`null`, "skip persistence") rather than failing the whole
+ * request. A render that already cost real xAI money should never be
+ * thrown away over a metadata problem on the *save* step; the worst
+ * case is the same "temporary URL, not saved" outcome this route always
+ * had before this feature existed.
+ */
+export function resolvePersistenceTarget(body: GenerateClipRequestBody): RenderPersistenceTarget | null {
+  const segmentId = typeof body.segmentId === "string" ? body.segmentId.trim() : "";
+  const clipIndex = typeof body.clipIndex === "number" ? body.clipIndex : NaN;
+  const startSec = typeof body.startSec === "number" ? body.startSec : NaN;
+  const endSec = typeof body.endSec === "number" ? body.endSec : NaN;
+
+  if (!isSafeSegmentId(segmentId)) return null;
+  if (!Number.isFinite(clipIndex) || clipIndex < 0) return null;
+  if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || startSec < 0 || endSec < 0) return null;
+
+  return {
+    segmentId,
+    clipIndex: Math.round(clipIndex),
+    startSec: Math.round(startSec),
+    endSec: Math.round(endSec),
+  };
+}
+
+type PersistRenderOutcome = { ok: true; url: string } | { ok: false; reason: string };
+
+/**
+ * Re-downloads the just-finished render from xAI's temporary URL and
+ * re-uploads it to Vercel Blob under this clip's stable pathname (see
+ * `lib/clipRenderBlob.ts`), overwriting any earlier render already
+ * saved for the same clip. Never throws \u2014 every real failure mode
+ * (the re-download failing, Blob not being configured, the upload
+ * itself failing) comes back as an honest `{ ok: false, reason }` so
+ * the route can still return the render Stuart already paid for.
+ */
+export async function persistClipRenderToBlob(
+  sourceVideoUrl: string,
+  target: RenderPersistenceTarget
+): Promise<PersistRenderOutcome> {
+  let videoRes: Response;
+  try {
+    videoRes = await fetch(sourceVideoUrl, { signal: AbortSignal.timeout(START_TIMEOUT_MS) });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `Could not download the finished render to save it: ${err instanceof Error ? err.message : "network error"}.`,
+    };
+  }
+  if (!videoRes.ok) {
+    return { ok: false, reason: `Downloading the finished render to save it returned HTTP ${videoRes.status}.` };
+  }
+
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await videoRes.arrayBuffer();
+  } catch {
+    return { ok: false, reason: "Could not read the finished render's bytes to save it." };
+  }
+
+  const pathname = buildClipRenderPathname(target.segmentId, target.clipIndex, target.startSec, target.endSec);
+  try {
+    const blob = await put(pathname, Buffer.from(bytes), {
+      access: "public",
+      contentType: "video/mp4",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+    });
+    return { ok: true, url: blob.url };
+  } catch (err) {
+    return {
+      ok: false,
+      reason:
+        err instanceof Error
+          ? `Vercel Blob upload failed: ${err.message}`
+          : "Vercel Blob upload failed for an unknown reason.",
+    };
+  }
 }
 
 function isReferenceDataUrl(value: unknown): value is string {
@@ -513,5 +651,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: pollResult.error, code: pollResult.code }, { status: pollResult.status });
   }
 
-  return NextResponse.json({ videoUrl: pollResult.videoUrl, durationSec: pollResult.durationSec });
+  const persistenceTarget = resolvePersistenceTarget(body);
+  if (!persistenceTarget) {
+    // No (or no valid) segmentId/clipIndex/startSec/endSec \u2014 same
+    // response shape this route always returned, before persistence
+    // existed. See `resolvePersistenceTarget`'s doc comment.
+    return NextResponse.json({ videoUrl: pollResult.videoUrl, durationSec: pollResult.durationSec });
+  }
+
+  const persistOutcome = await persistClipRenderToBlob(pollResult.videoUrl, persistenceTarget);
+  if (persistOutcome.ok) {
+    return NextResponse.json({
+      videoUrl: persistOutcome.url,
+      durationSec: pollResult.durationSec,
+      persisted: true,
+    });
+  }
+
+  // Persistence failed \u2014 still return the render Stuart already paid
+  // for (xAI's own temporary URL), honestly flagged as not saved. See
+  // this file's module doc comment's "never claims a render is saved
+  // when it isn't" note.
+  return NextResponse.json({
+    videoUrl: pollResult.videoUrl,
+    durationSec: pollResult.durationSec,
+    persisted: false,
+    persistError: persistOutcome.reason,
+  });
 }

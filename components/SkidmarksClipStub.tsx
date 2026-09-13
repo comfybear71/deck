@@ -20,6 +20,7 @@ import {
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
 import { SkidmarksClipRender } from "./SkidmarksClipRender";
+import type { PersistedClipRender } from "@/lib/clipRenders";
 
 interface SkidmarksClipStubProps {
   segment: SkidmarksClipSegment;
@@ -39,6 +40,16 @@ interface SkidmarksClipStubProps {
   renderLocked: boolean;
   onRenderStart: () => void;
   onRenderEnd: () => void;
+  /** This clip's 1-based position in the timeline — passed straight
+   * through to `SkidmarksClipRender` for its numeric download filename
+   * and Blob pathname; everything else it needs (`segment.id`,
+   * `segment.startSec`/`endSec`) is already on `segment`. */
+  clipIndex: number;
+  /** Threaded straight through to `SkidmarksClipRender` — see that
+   * component's and `SkidmarksClipTimeline`'s doc comments for how
+   * "show it after refresh" works at the timeline level. */
+  persistedRender?: PersistedClipRender | null;
+  onPersisted?: (render: PersistedClipRender) => void;
 }
 
 const SHOT_PROMPT_MAX_LENGTH = 500;
@@ -739,6 +750,9 @@ export function SkidmarksClipStub({
   renderLocked,
   onRenderStart,
   onRenderEnd,
+  clipIndex,
+  persistedRender,
+  onPersisted,
 }: SkidmarksClipStubProps) {
   const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label].vocal;
   // Resolved regardless of `vocal` now — an Instrumental/B-roll clip
@@ -800,6 +814,12 @@ export function SkidmarksClipStub({
         locked={renderLocked}
         onRenderStart={onRenderStart}
         onRenderEnd={onRenderEnd}
+        segmentId={segment.id}
+        clipIndex={clipIndex}
+        startSec={segment.startSec}
+        endSec={segment.endSec}
+        persistedRender={persistedRender}
+        onPersisted={onPersisted}
       />
     </div>
   );

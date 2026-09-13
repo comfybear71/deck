@@ -74,7 +74,8 @@ Skidmarks' own wizard flow, which stays phone-first everywhere else.
 | Energy heuristic (vocal/instrumental fallback) | **Real**, client-side, no key needed | `lib/audioAnalysis.ts` |
 | Plate *still* generation | **Real** — xAI Grok Imagine *image* API | `app/api/skidmarks/generate-still/route.ts`, `lib/plateGeneration.ts` |
 | Multi-plate strip per clip (door → keyhole → Jack) | **Real**, persisted to `localStorage` | `lib/skidmarks.ts` (`SkidmarksClipSegment.plates`), `components/SkidmarksClipStub.tsx` |
-| Per-clip opt-in *video* render | **Real** — xAI Grok Imagine *video* API, one clip at a time, explicit two-tap confirm, fixed 5s/480p cost cap | `app/api/skidmarks/generate-clip/route.ts`, `components/SkidmarksClipRender.tsx` |
+| Per-clip opt-in *video* render | **Real** — xAI Grok Imagine *video* API, one clip at a time, explicit two-tap confirm, fixed 5s/480p cost cap, optional multi-line camera-motion field as the primary motion instruction | `app/api/skidmarks/generate-clip/route.ts`, `components/SkidmarksClipRender.tsx` |
+| Render persistence | **Real** — a successful render is saved to durable Vercel Blob storage (not `localStorage`, not ephemeral React state), survives a refresh; download uses a numeric filename for Resolve, plus a "Download rendered clips" zip/sequential bundle across the whole timeline | `app/api/skidmarks/generate-clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`, `lib/clipRenderBlob.ts`, `lib/clipRenders.ts`, `lib/zipDownload.ts` |
 | Whole-song **"Generate Clips"** button | **Stub, deliberately** — never auto-renders every clip in the song | `components/SkidmarksClipTimeline.tsx` |
 | Voice, in-app stitch | Not built | — |
 | Comfy MCP / Seedance / LTX | Not built — no key, no endpoint, no request shape anywhere in this repo | — |
@@ -97,11 +98,21 @@ render control.
   that clip's strip — not one prompt field per plate. A per-plate prompt
   field has been considered and rejected as a second control repeating
   the same idea; don't re-add it without a fresh explicit ask.
-- **No model picker, no camera-angle picker, no pill/badge row** anywhere
-  in the current UI. `SkidmarksModelId` (LTX/Grok/H3/Seedance,
-  `lib/skidmarks.ts`) still exists in the data layer and still steers
-  prompt phrasing under the hood, but there is no tap surface for it
-  today — don't add one without an explicit ask.
+- **No model picker, no pill/badge row** anywhere in the current UI.
+  `SkidmarksModelId` (LTX/Grok/H3/Seedance, `lib/skidmarks.ts`) still
+  exists in the data layer and still steers prompt phrasing under the
+  hood, but there is no tap surface for it today — don't add one
+  without an explicit ask. **One narrow exception, added on an
+  explicit ask**: `components/SkidmarksClipRender.tsx` has one small,
+  optional, multi-line camera-motion field (a 2-row `<textarea>`,
+  capped at `MAX_MOTION_PROMPT_LENGTH`, `lib/clipGeneration.ts`) that
+  becomes the *primary* motion instruction sent to xAI's video call
+  when filled in (`shotPrompt`/the plate stills stay the visual
+  description and reference images) — still a single free-text field,
+  not a camera-angle picker/menu; leaving it blank keeps the original
+  automatic push-in/zoom behavior. Stuart's stated reason for this one:
+  #42's Render control had *no* motion instruction at all, which he
+  found irrational enough not to press the button.
 - Any **new** control (the render button included) has to survive the
   same test: is this the smallest possible surface, or is it turning
   into a button farm? Prefer reusing an existing field/gesture over
@@ -172,6 +183,14 @@ the request, and validate length against `shotPrompt` only.
   does — verify against the provider's real pricing before shipping,
   don't assume a "generate" button is free just because a sibling one
   (like the still-image one) happens to be cheap.
+- Persisting a render to Vercel Blob is a **storage** cost, not a
+  per-tap xAI spend risk — a handful of few-megabyte MP4s is well
+  within Vercel Blob's free-tier storage, and each clip only ever keeps
+  its *one* latest render (overwritten on re-render, see
+  `lib/clipRenderBlob.ts`), so this doesn't grow unbounded the way a
+  history of every past take would. Don't read this as a new cost lock
+  needing its own confirm step — the confirm step still gates the real
+  cost (the xAI render itself), not the save that follows it.
 
 ## Env vars this feature actually reads
 
@@ -187,6 +206,17 @@ the request, and validate length against `shotPrompt` only.
   required for real word-level transcription
   (`app/api/skidmarks/transcribe/route.ts`); missing it falls back to
   the client-side energy heuristic, honestly labeled, never silently.
+- `BLOB_READ_WRITE_TOKEN` — required to persist a successful clip
+  render to durable Vercel Blob storage (`app/api/skidmarks/generate-
+  clip/route.ts`, `app/api/skidmarks/clip-renders/route.ts`). Set
+  automatically once a Blob store is connected to this Vercel project
+  (Project Settings → Storage → connect/create a Blob store) — no
+  manual value to paste in most cases. Missing/unconfigured never
+  blocks or fails a render: the render Stuart already paid for is
+  still returned and playable, just honestly flagged as not saved
+  (`persisted: false`) instead of implying durability that didn't
+  happen. This is the one env var this feature reads that isn't an AI
+  provider key.
 - None of the above being unset should ever crash anything — every
   route returns an honest `missing_api_key`/`unconfigured` outcome
   instead. If you add a new real API call, match that shape.
