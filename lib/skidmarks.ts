@@ -1847,23 +1847,39 @@ function schedulePush(): void {
  *
  * **Exported (2026-09-14) for exactly one more caller**: a plate still
  * finishing generation/upload (`SkidmarksClipStub.tsx`'s `handleGenerate`/
- * `handleFileChange`, `SkidmarksAutoPlate.tsx`'s `handleConfirm`). A real
- * live bug — Stuart generated real plates, then did what he called a
- * "cold restart" shortly after, and they were gone on reload — is
- * consistent with those plates' `onSetClipPlateStill` write still
- * sitting in the 600ms debounce queue (or an even-longer real network
- * round trip to Neon) at the moment his phone/Safari actually died,
- * which `visibilitychange`/`pagehide` can't help with if the process is
- * killed outright rather than genuinely backgrounded first. Flushing
- * right after a still is durably worth saving shrinks that window from
- * "however long until he backgrounds the tab" to "immediately." */
-export function flushSkidmarksSessionNow(): void {
+ * `handleFileChange`, `SkidmarksAutoPlate.tsx`'s `handleConfirm`, and
+ * (later the same day) `SkidmarksMembersModule.tsx`/`SkidmarksBandPicker
+ * .tsx`'s avatar/cover pickers). A real live bug — Stuart generated real
+ * plates, then did what he called a "cold restart" shortly after, and
+ * they were gone on reload — is consistent with those plates'
+ * `onSetClipPlateStill` write still sitting in the 600ms debounce queue
+ * (or an even-longer real network round trip to Neon) at the moment his
+ * phone/Safari actually died, which `visibilitychange`/`pagehide` can't
+ * help with if the process is killed outright rather than genuinely
+ * backgrounded first. Flushing right after a still is durably worth
+ * saving shrinks that window from "however long until he backgrounds
+ * the tab" to "immediately."
+ *
+ * **`keepalive` defaults to `false` (2026-09-14, same-day fix to the fix
+ * above)** — a real bug this introduced and Stuart's own sharp
+ * observation caught: "the thumbnail saves, the MP3 saves, why not the
+ * plate?" Every one of the callers above wants the opposite of what
+ * `pushSkidmarksSessionNow`'s `keepalive: true` path means — a `true`
+ * caps a push at exactly one attempt (no retry), which made sense for
+ * the *original*, narrower use (a page that's about to disappear, where
+ * waiting for a retry is pointless), but every plate-still/avatar/cover
+ * flush call happens while Stuart is still actively in the app, so it
+ * deserved the same ~30s retry ladder an ordinary debounced save already
+ * gets — and, because `keepalive: true` was hard-coded here, never got
+ * it. Only `visibilitychange`/`pagehide` below still need the old
+ * one-attempt behavior; they pass `true` explicitly. */
+export function flushSkidmarksSessionNow(keepalive = false): void {
   if (!isBrowser()) return;
   if (pushTimer) {
     clearTimeout(pushTimer);
     pushTimer = null;
   }
-  void pushSkidmarksSessionNow(true);
+  void pushSkidmarksSessionNow(keepalive);
 }
 
 let sessionLifecycleWired = false;
@@ -1876,9 +1892,13 @@ function ensureSessionPersistenceWired(): void {
   if (sessionLifecycleWired || !isBrowser()) return;
   sessionLifecycleWired = true;
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flushSkidmarksSessionNow();
+    // `true`: the page may be about to disappear, so this is the one
+    // caller that still wants the old one-attempt-only behavior — see
+    // `flushSkidmarksSessionNow`'s own doc comment for why every *other*
+    // caller now defaults to the opposite.
+    if (document.visibilityState === "hidden") flushSkidmarksSessionNow(true);
   });
-  window.addEventListener("pagehide", flushSkidmarksSessionNow);
+  window.addEventListener("pagehide", () => flushSkidmarksSessionNow(true));
   // Real live bug (2026-09-14): Stuart tapped Safari's own reload button
   // — visible right in his own screenshots — while a save had genuinely
   // not landed yet (still "saving," or already showing the error
