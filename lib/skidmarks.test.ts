@@ -1614,11 +1614,14 @@ describe("resolveChainedPlateTarget", () => {
 });
 
 describe("buildScriptSequenceSegments / setSkidmarksScriptSequence", () => {
-  it("real reported ask: turns each parsed script part into one Instrumental/Grok clip with exactly one blank plate", () => {
-    const segments = buildScriptSequenceSegments([
-      { index: 1, title: "The Liquid Horizon", startSec: 0, endSec: 15, prompt: "Molten glass." },
-      { index: 2, title: "The Mercury Vortex", startSec: 15, endSec: 30, prompt: "Swirling vortex." },
-    ]);
+  it("real reported ask: turns each parsed script part into one clip with exactly one blank plate, Instrumental/Grok when nothing in the real song says otherwise", () => {
+    const segments = buildScriptSequenceSegments(
+      [
+        { index: 1, title: "The Liquid Horizon", startSec: 0, endSec: 15, prompt: "Molten glass." },
+        { index: 2, title: "The Mercury Vortex", startSec: 15, endSec: 30, prompt: "Swirling vortex." },
+      ],
+      []
+    );
     expect(segments).toHaveLength(2);
     expect(segments[0]).toMatchObject({
       startSec: 0,
@@ -1634,16 +1637,19 @@ describe("buildScriptSequenceSegments / setSkidmarksScriptSequence", () => {
 
   it("mints a fresh segment id for each part, so two script runs never collide", () => {
     const parts = [{ index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" }];
-    const first = buildScriptSequenceSegments(parts);
-    const second = buildScriptSequenceSegments(parts);
+    const first = buildScriptSequenceSegments(parts, []);
+    const second = buildScriptSequenceSegments(parts, []);
     expect(first[0].id).not.toBe(second[0].id);
   });
 
   it("every built segment spans exactly [startSec, endSec) with one plate — the real 15s enforcement, not just prompt text", () => {
-    const segments = buildScriptSequenceSegments([
-      { index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" },
-      { index: 2, title: "B", startSec: 15, endSec: 30, prompt: "y" },
-    ]);
+    const segments = buildScriptSequenceSegments(
+      [
+        { index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" },
+        { index: 2, title: "B", startSec: 15, endSec: 30, prompt: "y" },
+      ],
+      []
+    );
     for (const segment of segments) {
       expect(segment.endSec - segment.startSec).toBe(15);
       expect(segment.plates).toHaveLength(1);
@@ -1653,9 +1659,7 @@ describe("buildScriptSequenceSegments / setSkidmarksScriptSequence", () => {
   it("setSkidmarksScriptSequence replaces the attached song's segments wholesale", () => {
     selectSkidmarksBand("jack-ash");
     attachSkidmarksMp3(createMp3Attachment("liquid-horizon.mp3", 240));
-    const segments = buildScriptSequenceSegments([
-      { index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" },
-    ]);
+    const segments = buildScriptSequenceSegments([{ index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" }], []);
     setSkidmarksScriptSequence(segments);
     const snapshot = getSkidmarksSnapshot();
     expect(snapshot.session.mp3?.segments).toEqual(segments);
@@ -1664,10 +1668,45 @@ describe("buildScriptSequenceSegments / setSkidmarksScriptSequence", () => {
 
   it("is a safe no-op when no mp3 is attached yet, rather than inventing one", () => {
     selectSkidmarksBand("jack-ash"); // resets session.mp3 to null
-    const segments = buildScriptSequenceSegments([
-      { index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" },
-    ]);
+    const segments = buildScriptSequenceSegments([{ index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" }], []);
     expect(() => setSkidmarksScriptSequence(segments)).not.toThrow();
     expect(getSkidmarksSnapshot().session.mp3).toBeNull();
+  });
+
+  describe("real reported gap (2026-09-14): a part landing on real singing must route Vocal/LTX, not get forced to Grok", () => {
+    it("routes a part to Vocal/LTX when its midpoint falls inside a real Vocal segment", () => {
+      const realSegments = [
+        chainSegment({ id: "real-a", startSec: 0, endSec: 15, label: "instrumental", plates: [] }),
+        chainSegment({ id: "real-b", startSec: 15, endSec: 30, label: "vocal", plates: [] }),
+      ];
+      const segments = buildScriptSequenceSegments(
+        [
+          { index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" },
+          { index: 2, title: "B", startSec: 15, endSec: 30, prompt: "y" },
+        ],
+        realSegments
+      );
+      expect(segments[0]).toMatchObject({ label: "instrumental", model: "grok", instrumentalVideoModel: "grok" });
+      expect(segments[1]).toMatchObject({ label: "vocal", model: "ltx-lipsync" });
+      expect(segments[1].instrumentalVideoModel).toBeUndefined();
+    });
+
+    it("recognizes every real label the song's own analysis can produce, not just the literal 'vocal' one (verse/bridge are vocal too)", () => {
+      const realSegments = [chainSegment({ id: "real-a", startSec: 0, endSec: 15, label: "verse", plates: [] })];
+      const segments = buildScriptSequenceSegments([{ index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" }], realSegments);
+      expect(segments[0].label).toBe("vocal");
+    });
+
+    it("defaults to Instrumental when no real segment covers a part's midpoint, rather than guessing Vocal", () => {
+      const realSegments = [chainSegment({ id: "real-a", startSec: 0, endSec: 15, label: "vocal", plates: [] })];
+      // This part starts past the end of the one real segment above.
+      const segments = buildScriptSequenceSegments([{ index: 1, title: "A", startSec: 100, endSec: 115, prompt: "x" }], realSegments);
+      expect(segments[0].label).toBe("instrumental");
+    });
+
+    it("defaults to Instrumental for a brand-new project with no real song segments at all", () => {
+      const segments = buildScriptSequenceSegments([{ index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" }], []);
+      expect(segments[0].label).toBe("instrumental");
+    });
   });
 });

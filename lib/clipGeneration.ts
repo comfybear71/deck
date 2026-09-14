@@ -294,13 +294,15 @@ export function computePlateTimeRange(
   return { startSec: cursor, endSec: cursor + durationSec };
 }
 
-/** Longest a typed camera-motion override can be — still short by
- * design (a couple of lines like "slow zoom into keyhole, mild pulse on
- * door cracks", not a paragraph); enforced both as the `<textarea>`'s
- * own `maxLength` in `components/SkidmarksClipRender.tsx` and here, so
- * a request built without going through that field (a test, a future
- * caller) can't quietly bypass the same cap. */
-export const MAX_MOTION_PROMPT_LENGTH = 220;
+/** Longest a typed camera-motion override can be — raised from 220 to
+ * 600 (2026-09-14, Stuart's direct ask: some of his real motion
+ * prompts were getting cut off at 220, over 1.5x too short) so a real,
+ * detailed motion description isn't silently truncated. Enforced both
+ * as the `<textarea>`'s own `maxLength` in
+ * `components/SkidmarksClipRender.tsx` and here, so a request built
+ * without going through that field (a test, a future caller) can't
+ * quietly bypass the same cap. */
+export const MAX_MOTION_PROMPT_LENGTH = 600;
 
 /**
  * Motion language for a single-plate render when Stuart hasn't typed

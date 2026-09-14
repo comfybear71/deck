@@ -817,33 +817,86 @@ export function buildDemoSegments(totalSec: number): SkidmarksClipSegment[] {
 }
 
 /**
+ * Real reported gap (2026-09-14): the first version of this always
+ * built every part as Instrumental/Grok, full stop — but the song this
+ * runs against has **real singing**, already sectioned into real
+ * Vocal/Instrumental spans by this feature's own transcription/energy
+ * analysis (the exact thing `applySkidmarksTranscriptionResult`/
+ * `applySkidmarksAnalysisResult` produce). Stuart's own correction:
+ * "vocals always go to LTX and the instrumentals can go to either H3
+ * or Grok" — a script part landing where the song is actually singing
+ * has to route to LTX like every other Vocal clip in this feature does,
+ * not get forced to Grok just because it came from a pasted script.
+ *
+ * Resolves each part's real vocal/instrumental fact off `realSegments`
+ * (the song's segments *before* `setSkidmarksScriptSequence` replaces
+ * them) by checking which real segment covers that part's own
+ * midpoint, then reading that segment's own
+ * `SKIDMARKS_SEGMENT_LABEL_META[...].vocal` — the same canonical
+ * vocal/instrumental fact every other part of this feature already
+ * trusts, not a second, independent guess. A part with no real segment
+ * covering its midpoint (the script runs past the song's own known
+ * length, or no real segments exist at all) defaults to Instrumental —
+ * this only ever turns a part Vocal on a real, positive signal from the
+ * song's own analysis, never assumes it.
+ */
+export function resolveScriptPartVocal(
+  part: { startSec: number; endSec: number },
+  realSegments: SkidmarksClipSegment[]
+): boolean {
+  const midpoint = (part.startSec + part.endSec) / 2;
+  const covering = realSegments.find((s) => midpoint >= s.startSec && midpoint < s.endSec);
+  if (!covering) return false;
+  return SKIDMARKS_SEGMENT_LABEL_META[covering.label]?.vocal ?? false;
+}
+
+/**
  * Stuart's "paste a script, get a real clip timeline" automation
  * (2026-09-14, the "Liquid Horizon" 16-part black-and-white trippy
  * sequence) — turns `lib/scriptSequence.ts`'s parsed parts into real
- * clip segments, one per part, Instrumental/Grok, each spanning exactly
- * that part's own `[startSec, endSec)`. **This is the actual duration
- * enforcement Stuart asked for**: with exactly one plate per clip,
+ * clip segments, one per part, each spanning exactly that part's own
+ * `[startSec, endSec)`. **This is the actual duration enforcement
+ * Stuart asked for**: with exactly one plate per clip,
  * `lib/clipGeneration.ts`'s `computePlateDurationSec` (segment length
- * ÷ plate count, clamped to Grok's `[5, 15]`s range) resolves to
- * exactly that part's real span — a 15s-wide part always renders at a
- * real, backend-enforced 15s, never just a number typed into the
- * prompt text and hoped for. Pure — builds segment objects only, no
- * store write; `setSkidmarksScriptSequence` below is the one that
- * actually persists the result.
+ * ÷ plate count, clamped into whichever backend's real duration range
+ * applies) resolves to exactly that part's real span — a 15s-wide part
+ * always renders at a real, backend-enforced 15s, never just a number
+ * typed into the prompt text and hoped for.
+ *
+ * **Vocal vs. Instrumental, per part, off the real song** — see
+ * `resolveScriptPartVocal`'s doc comment for why `realSegments` (the
+ * song's own segments, captured *before* this run replaces them) is
+ * what decides this, not a blanket assumption either way. A Vocal part
+ * gets `label: "vocal"`/`model: "ltx-lipsync"`, matching every other
+ * Vocal clip in this feature (Comfy Cloud LTX, no H3/Grok switch — that
+ * field is only ever read on an Instrumental clip). An Instrumental
+ * part gets Stuart's explicit "Grok for every instrumental in this
+ * run" ask (`instrumentalVideoModel: "grok"`, never the app-wide H3
+ * default).
+ *
+ * Pure — builds segment objects only, no store write;
+ * `setSkidmarksScriptSequence` below is the one that actually persists
+ * the result.
  */
-export function buildScriptSequenceSegments(parts: ScriptSequencePart[]): SkidmarksClipSegment[] {
-  return parts.map((part) => ({
-    id: generateId("segment"),
-    startSec: part.startSec,
-    endSec: part.endSec,
-    label: "instrumental",
-    model: "grok",
-    shotPrompt: part.prompt,
-    uncensoredPlateStills: false,
-    plates: [buildBlankPlateSlot()],
-    selectedPlateId: null,
-    instrumentalVideoModel: "grok",
-  }));
+export function buildScriptSequenceSegments(
+  parts: ScriptSequencePart[],
+  realSegments: SkidmarksClipSegment[]
+): SkidmarksClipSegment[] {
+  return parts.map((part) => {
+    const vocal = resolveScriptPartVocal(part, realSegments);
+    return {
+      id: generateId("segment"),
+      startSec: part.startSec,
+      endSec: part.endSec,
+      label: vocal ? "vocal" : "instrumental",
+      model: vocal ? "ltx-lipsync" : "grok",
+      shotPrompt: part.prompt,
+      uncensoredPlateStills: false,
+      plates: [buildBlankPlateSlot()],
+      selectedPlateId: null,
+      ...(vocal ? {} : { instrumentalVideoModel: "grok" as const }),
+    };
+  });
 }
 
 /**
