@@ -478,14 +478,24 @@ export interface BuildClipGenerationRequestParams {
  * leaves frame entirely; (2) across the whole clip's motion, his face
  * must never become legible/well-lit or read as a normal, watchable
  * stare, even as he sings — the shadow-face lock holds for every frame
- * of the render, not just its first one.
+ * of the render, not just its first one; (3) a close-up push-in/zoom
+ * makes the shadow *darker*, not just held steady — the closer the
+ * camera gets to his face, the deeper the shadow gets, so the tightest
+ * close-up is the most hidden moment of the clip, not the most at-risk
+ * one (Stuart's own live-QA report, 2026-09-14: zooming in tight almost
+ * revealed a normal human face; his own follow-up ask, same day: the
+ * shadow should darken as the camera nears his face, not just hold).
  */
 function lockedCharacterVideoNote(): string {
   return (
     "Across this clip's motion, his glowing neon-blue lips are only ever visible while his mouth is actually " +
     "in frame \u2014 never invented on a shot where his face turns away or his mouth leaves frame. His face " +
     "never becomes legible, well-lit, or reads as a normal, watchable stare at any point in the motion, even " +
-    "while he's singing \u2014 the shadow-face lock holds for the whole clip, not just its first frame."
+    "while he's singing \u2014 the shadow-face lock holds for the whole clip, not just its first frame. This " +
+    "matters most exactly when the camera pushes in close or zooms tight on him: the shadow gets darker and " +
+    "deeper the closer the camera gets, never lighter or thinner \u2014 the tightest close-up on his face is " +
+    "the darkest, most completely hidden moment of the whole clip. He must never resolve into a normal, " +
+    "visible human face at any zoom level, and a zoom in is the one moment that most demands the shadow hold."
   );
 }
 
@@ -525,6 +535,8 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     params.vocal && lock ? lock.promptHallmarks : "",
     params.vocal && lock?.negativeCues ? `Do not show: ${lock.negativeCues}.` : "",
     params.vocal && lock ? lockedCharacterVideoNote() : "",
+    "Solo shot: no other people, extra characters, crowd, or background figures appear anywhere in frame at " +
+      "any point in the motion, including out-of-focus or partially-visible in the background.",
     `Music video for ${params.bandName}. Cinematic motion, no on-screen text, no watermark.`,
   ];
 
