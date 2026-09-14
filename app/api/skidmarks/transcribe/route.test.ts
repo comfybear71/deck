@@ -197,3 +197,94 @@ describe("POST (missing_api_key)", () => {
     expect(body.error.toLowerCase()).toContain("redeploy");
   });
 });
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+}
+
+function transcribeRequest(): Request {
+  const form = new FormData();
+  form.set("audio", new File([new Uint8Array([1, 2, 3])], "song.mp3", { type: "audio/mpeg" }));
+  return new Request("http://localhost/api/skidmarks/transcribe", { method: "POST", body: form });
+}
+
+const RATE_LIMIT_429_BODY = {
+  detail: {
+    status: "rate_limit_exceeded",
+    message: "We are sorry, the system is experiencing heavy traffic, please try again.",
+  },
+};
+
+/**
+ * Real reported bug (2026-09-14): a song's transcription permanently
+ * failed — "Lyrics timing failed" — off a single ElevenLabs 429 whose own
+ * body says "please try again." This route used to make exactly one
+ * attempt, so that one unlucky request sank the whole song until Stuart
+ * manually removed and re-attached the MP3. It now retries once after a
+ * short pause before giving up for real.
+ */
+describe("POST — ElevenLabs 429 retry", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.stubEnv("ELEVENLABS_API_KEY", "test-key");
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("retries once after a 429 and succeeds on the second attempt, the literal reported scenario", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(429, RATE_LIMIT_429_BODY))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          words: [{ type: "word", text: "hello", start: 0, end: 0.5 }],
+          audio_duration_secs: 1,
+        })
+      );
+
+    const resultPromise = POST(transcribeRequest());
+    await vi.advanceTimersByTimeAsync(4_000); // RATE_LIMIT_RETRY_DELAY_MS
+    const res = await resultPromise;
+    const body = await res.json();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(200);
+    expect(body.words).toHaveLength(1);
+  });
+
+  it("gives up as rate_limited after two 429s in a row, not an infinite retry", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(429, RATE_LIMIT_429_BODY))
+      .mockResolvedValueOnce(jsonResponse(429, RATE_LIMIT_429_BODY));
+
+    const resultPromise = POST(transcribeRequest());
+    await vi.advanceTimersByTimeAsync(4_000);
+    const res = await resultPromise;
+    const body = await res.json();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(429);
+    expect(body.code).toBe("rate_limited");
+  });
+
+  it("never retries a non-429 failure — a real auth error fails immediately", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(401, { detail: { status: "missing_permissions", message: "no access" } })
+    );
+
+    const res = await POST(transcribeRequest());
+    const body = await res.json();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(401);
+    expect(body.code).toBe("auth_error");
+  });
+});
