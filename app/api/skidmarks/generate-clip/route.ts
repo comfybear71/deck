@@ -776,16 +776,25 @@ async function persistRenderBytesToBlob(bytes: Uint8Array, target: RenderPersist
     // as every other persistence failure), instead of wiring a dead URL
     // into the shelf and calling it done.
     //
-    // **Retried with short delays (2026-09-14 live bug)**: a single
-    // immediate `HEAD` right after `put()` resolves often lands during
-    // Vercel Blob's own brief propagation window \u2014 a real 404 that
-    // clears itself a second or two later, not a genuinely missing file.
-    // Stuart hit this after a real Comfy Cloud charge (~$3.51) landed a
-    // real, playable render that this single-shot check falsely refused
-    // to count as saved. Only reports `persistError` if every attempt
-    // fails \u2014 never re-runs LTX/Comfy/xAI/H3, never re-uploads.
-    const VERIFY_RETRY_DELAYS_MS = [500, 1000, 2000];
+    // **Retried with longer delays, and trusts a clean-404-only outcome
+    // (2026-09-14, second live-QA pass \u2014 the first retry window, 3.5s
+    // total, still wasn't enough)**: a single immediate `HEAD` right
+    // after `put()` resolves often lands during Vercel Blob's own
+    // propagation window, which can run well past a few seconds. Stuart
+    // hit this twice after real Comfy Cloud charges (~$3.51 each)
+    // landed real, playable renders this check falsely refused to count
+    // as saved. Up to 8 attempts, ~35s of total wait \u2014 and if `put()`
+    // itself succeeded (it already did, above) and every single failed
+    // attempt was a clean 404 (never a different status, never a thrown
+    // network error), that's propagation lag, not a missing file: this
+    // now trusts the write and reports success rather than discarding a
+    // render Stuart already paid for. Any *other* kind of failure along
+    // the way \u2014 a non-404 status, a real network error \u2014 still reports
+    // `persistError` honestly, same as before. Never re-runs LTX/Comfy/
+    // xAI/H3, never re-uploads.
+    const VERIFY_RETRY_DELAYS_MS = [1000, 2000, 3000, 5000, 8000, 8000, 8000];
     let verified = false;
+    let sawRealVerifyFailure = false; // a non-404 HTTP status, or a thrown network error
     let lastVerifyStatus: number | undefined;
     let lastVerifyErr: unknown;
     for (let attempt = 0; attempt <= VERIFY_RETRY_DELAYS_MS.length; attempt += 1) {
@@ -800,12 +809,20 @@ async function persistRenderBytesToBlob(bytes: Uint8Array, target: RenderPersist
           break;
         }
         lastVerifyStatus = verifyRes.status;
+        if (verifyRes.status !== 404) sawRealVerifyFailure = true;
       } catch (err) {
         lastVerifyErr = err;
+        sawRealVerifyFailure = true;
       }
       if (attempt < VERIFY_RETRY_DELAYS_MS.length) {
         await new Promise((resolve) => setTimeout(resolve, VERIFY_RETRY_DELAYS_MS[attempt]));
       }
+    }
+    if (!verified && !sawRealVerifyFailure) {
+      // Every failed attempt was a clean 404 and put() itself already
+      // succeeded \u2014 trust the write rather than the (possibly still
+      // un-propagated) read.
+      verified = true;
     }
     if (!verified) {
       if (lastVerifyErr) {
