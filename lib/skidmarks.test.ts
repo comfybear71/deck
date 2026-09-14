@@ -11,6 +11,7 @@ import {
   renameSkidmarksBand,
   resolveChainedPlateTarget,
   setSkidmarksScriptSequence,
+  setSkidmarksScriptSequenceDraft,
   defaultSegmentModel,
   getSkidmarksSessionSyncSnapshot,
   getSkidmarksSnapshot,
@@ -483,7 +484,7 @@ describe("sessionHasSubstantiveContent", () => {
   function stateWith(overrides: Partial<SkidmarksState>): SkidmarksState {
     return {
       bands: [seedBand],
-      session: { projectKind: null, bandId: null, mp3: null },
+      session: { projectKind: null, bandId: null, mp3: null, scriptSequenceDraft: null },
       removedSeedBandIds: [],
       ...overrides,
     };
@@ -501,7 +502,9 @@ describe("sessionHasSubstantiveContent", () => {
   it("reads true once an mp3 is attached, even before any clip is tagged", () => {
     const mp3 = createMp3Attachment("song.mp3", 30);
     expect(
-      sessionHasSubstantiveContent(stateWith({ session: { projectKind: "music-video", bandId: "jack-ash", mp3 } }))
+      sessionHasSubstantiveContent(
+        stateWith({ session: { projectKind: "music-video", bandId: "jack-ash", mp3, scriptSequenceDraft: null } })
+      )
     ).toBe(true);
   });
 
@@ -509,7 +512,9 @@ describe("sessionHasSubstantiveContent", () => {
     const mp3 = createMp3Attachment("song.mp3", 30);
     mp3.segments = mp3.segments.map((seg, i) => (i === 0 ? { ...seg, shotPrompt: "slow push in, neon lips" } : seg));
     expect(
-      sessionHasSubstantiveContent(stateWith({ session: { projectKind: "music-video", bandId: "jack-ash", mp3 } }))
+      sessionHasSubstantiveContent(
+        stateWith({ session: { projectKind: "music-video", bandId: "jack-ash", mp3, scriptSequenceDraft: null } })
+      )
     ).toBe(true);
   });
 
@@ -1708,5 +1713,39 @@ describe("buildScriptSequenceSegments / setSkidmarksScriptSequence", () => {
       const segments = buildScriptSequenceSegments([{ index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" }], []);
       expect(segments[0].label).toBe("instrumental");
     });
+  });
+});
+
+describe("setSkidmarksScriptSequenceDraft", () => {
+  it("real reported ask (2026-09-14): survives what a component unmount/reload would otherwise lose", () => {
+    setSkidmarksScriptSequenceDraft({ script: "Part 1 (0:00 - 0:15) — A[Duration: 15s]. x", startingImageUrl: "https://blob.example/clip1.jpg" });
+    expect(getSkidmarksSnapshot().session.scriptSequenceDraft).toEqual({
+      script: "Part 1 (0:00 - 0:15) — A[Duration: 15s]. x",
+      startingImageUrl: "https://blob.example/clip1.jpg",
+    });
+  });
+
+  it("null clears it outright", () => {
+    setSkidmarksScriptSequenceDraft({ script: "something", startingImageUrl: "https://blob.example/x.jpg" });
+    setSkidmarksScriptSequenceDraft(null);
+    expect(getSkidmarksSnapshot().session.scriptSequenceDraft).toBeNull();
+  });
+
+  it("replaces wholesale, not merged — clearing just the image means passing the script back too", () => {
+    setSkidmarksScriptSequenceDraft({ script: "kept text", startingImageUrl: "https://blob.example/x.jpg" });
+    setSkidmarksScriptSequenceDraft({ script: "kept text", startingImageUrl: undefined });
+    expect(getSkidmarksSnapshot().session.scriptSequenceDraft).toEqual({ script: "kept text" });
+  });
+
+  it("a band switch clears a stale draft — a different song's leftover script/image must never leak into a newly-selected band", () => {
+    setSkidmarksScriptSequenceDraft({ script: "old band's script", startingImageUrl: "https://blob.example/old.jpg" });
+    selectSkidmarksBand("solar-rebel");
+    expect(getSkidmarksSnapshot().session.scriptSequenceDraft).toBeNull();
+  });
+
+  it("creating a brand-new band also clears a stale draft, same reasoning", () => {
+    setSkidmarksScriptSequenceDraft({ script: "old band's script" });
+    createSkidmarksBand();
+    expect(getSkidmarksSnapshot().session.scriptSequenceDraft).toBeNull();
   });
 });

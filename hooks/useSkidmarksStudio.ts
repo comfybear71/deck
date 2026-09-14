@@ -39,6 +39,7 @@ import {
   setSkidmarksMp3AudioUrl,
   setSkidmarksMp3Duration,
   setSkidmarksScriptSequence,
+  setSkidmarksScriptSequenceDraft,
   setSkidmarksSegmentInstrumentalVideoModel,
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
@@ -51,13 +52,14 @@ import {
   type SkidmarksMp3Attachment,
   type SkidmarksPlateStill,
   type SkidmarksProjectKind,
+  type SkidmarksScriptSequenceDraft,
   type SkidmarksSessionSyncState,
   type SkidmarksState,
 } from "@/lib/skidmarks";
 
 const EMPTY_STATE: SkidmarksState = {
   bands: [],
-  session: { projectKind: null, bandId: null, mp3: null },
+  session: { projectKind: null, bandId: null, mp3: null, scriptSequenceDraft: null },
   removedSeedBandIds: [],
 };
 
@@ -294,6 +296,14 @@ export function useSkidmarksStudio() {
     []
   );
 
+  /** The script-sequence panel's own persisted draft (pasted text + clip
+   * 1's starting image) — see `setSkidmarksScriptSequenceDraft`'s doc
+   * comment. */
+  const setScriptSequenceDraft = useCallback(
+    (draft: SkidmarksScriptSequenceDraft | null) => setSkidmarksScriptSequenceDraft(draft),
+    []
+  );
+
   /** The "+" control — appends one more empty plate slot to a clip's
    * strip (`addSkidmarksClipPlate`'s doc comment covers the cap). */
   const addClipPlate = useCallback((segmentId: string) => addSkidmarksClipPlate(segmentId), []);
@@ -374,6 +384,7 @@ export function useSkidmarksStudio() {
     nudgeSegmentEnd,
     setClipPlateStill,
     setScriptSequence,
+    setScriptSequenceDraft,
     addClipPlate,
     removeClipPlate,
     selectClipPlate,

@@ -62,6 +62,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     nudgeSegmentEnd,
     setClipPlateStill,
     setScriptSequence,
+    setScriptSequenceDraft,
     addClipPlate,
     removeClipPlate,
     selectClipPlate,
@@ -390,6 +391,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 realSegments={session.mp3?.segments ?? []}
                 mp3AudioUrl={session.mp3?.audioUrl}
                 renders={renders}
+                scriptSequenceDraft={session.scriptSequenceDraft}
+                onSetScriptSequenceDraft={setScriptSequenceDraft}
                 onSetScriptSequence={setScriptSequence}
                 onSetClipPlateStill={setClipPlateStill}
                 onRecordRender={addRender}
