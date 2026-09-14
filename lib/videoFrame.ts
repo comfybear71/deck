@@ -7,16 +7,23 @@
  * timeline can start visually where this one left off, instead of every
  * clip beginning from a plate Stuart has to generate/pick fresh.
  *
- * **Why this works cross-origin without a server-side proxy**: a
- * rendered clip's `videoUrl` is a real Vercel Blob URL, and Vercel Blob
- * serves successful reads with `Access-Control-Allow-Origin: *` (see
- * `lib/clipRenders.ts`'s `buildRendersZip` doc comment, which already
- * relies on the same fact for a plain cross-origin `fetch`) — set on the
- * `<video>` element via `crossOrigin = "anonymous"`, that's exactly what
- * keeps the canvas this draws onto un-tainted, so `toDataURL` doesn't
- * throw a `SecurityError`. A render from any other source (a same-origin
- * asset, a future non-Blob backend) still works the same way as long as
- * it answers a CORS-safe `Access-Control-Allow-Origin`.
+ * **Fetch the whole file first, then hand the `<video>` a same-origin
+ * `blob:` URL — never point it at the remote Blob URL directly.** The
+ * first version of this did set `video.crossOrigin = "anonymous"` and
+ * pointed `video.src` straight at the remote render URL, reasoning that
+ * Vercel Blob serves plain `fetch()` reads with `Access-Control-Allow-
+ * Origin: *` (true — `lib/clipRenders.ts`'s `buildRendersZip` already
+ * relies on exactly that fact). But a `<video>` element doesn't do one
+ * plain GET the way `fetch()` does — it seeks via HTTP Range requests,
+ * and Safari in particular is strict about a cross-origin video's Range/
+ * CORS handling being exactly right before it'll seek reliably at all.
+ * Real-world report (2026-09-14, Stuart's iPhone): the feature silently
+ * did nothing, more than once — consistent with exactly this class of
+ * failure. Fetching the full file with a plain `fetch()` (proven to
+ * work here already) and handing the video a `blob:` object URL sidesteps
+ * the whole Range/cross-origin question — a `blob:` URL is always
+ * same-origin, so there is nothing left for Safari's stricter cross-
+ * origin video handling to trip over.
  *
  * **iOS Safari note** (Stuart's actual device): a `<video>` element that
  * is *never* attached to the document can fail to decode/seek reliably
@@ -54,7 +61,7 @@ function waitForEvent(target: HTMLVideoElement, event: string, timeoutMs: number
     };
     const onError = () => {
       cleanup();
-      reject(new Error("The video could not be loaded for frame capture."));
+      reject(new Error("The video could not be decoded for frame capture."));
     };
     const cleanup = () => {
       clearTimeout(timer);
@@ -69,18 +76,27 @@ function waitForEvent(target: HTMLVideoElement, event: string, timeoutMs: number
 /**
  * Extracts the closing frame of `videoUrl` as a `data:image/jpeg` URL.
  * Never throws — rejects with a plain-language `Error` on any real
- * failure (network, decode, a non-CORS-safe source) so a caller that
- * treats this as a best-effort convenience (not a user-facing action
- * with its own error UI) can just swallow the rejection.
+ * failure (network, decode) so a caller that treats this as a
+ * best-effort convenience can report the real reason rather than guess.
  */
 export async function extractLastVideoFrame(videoUrl: string): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch(videoUrl);
+  } catch (err) {
+    throw new Error(`Could not download the rendered clip: ${err instanceof Error ? err.message : "network error"}.`);
+  }
+  if (!res.ok) {
+    throw new Error(`Could not download the rendered clip (HTTP ${res.status}).`);
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+
   const video = document.createElement("video");
-  video.crossOrigin = "anonymous";
-  video.preload = "auto";
   video.muted = true;
   video.playsInline = true;
   video.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;";
-  video.src = videoUrl;
+  video.src = objectUrl;
 
   document.body.appendChild(video);
   try {
@@ -103,15 +119,19 @@ export async function extractLastVideoFrame(videoUrl: string): Promise<string> {
     if (!ctx) throw new Error("Could not get a 2D canvas context.");
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
+    // Always same-origin now (a `blob:` URL), so this should never throw
+    // a cross-origin SecurityError the way the remote-URL version could
+    // — kept defensive anyway rather than assuming.
     try {
       return canvas.toDataURL("image/jpeg", 0.92);
     } catch {
-      throw new Error("Could not read the captured frame (a cross-origin canvas restriction).");
+      throw new Error("Could not read the captured frame.");
     }
   } finally {
     video.pause();
     video.removeAttribute("src");
     video.load();
     document.body.removeChild(video);
+    URL.revokeObjectURL(objectUrl);
   }
 }
