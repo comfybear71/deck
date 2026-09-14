@@ -525,6 +525,8 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     params.vocal && lock ? lock.promptHallmarks : "",
     params.vocal && lock?.negativeCues ? `Do not show: ${lock.negativeCues}.` : "",
     params.vocal && lock ? lockedCharacterVideoNote() : "",
+    "Solo shot: no other people, extra characters, crowd, or background figures appear anywhere in frame at " +
+      "any point in the motion, including out-of-focus or partially-visible in the background.",
     `Music video for ${params.bandName}. Cinematic motion, no on-screen text, no watermark.`,
   ];
 
