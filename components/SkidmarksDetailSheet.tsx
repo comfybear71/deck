@@ -129,19 +129,29 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
    * frame (`lib/videoFrame.ts`) and drop it straight into the *next*
    * segment's first plate — but only when that plate is still genuinely
    * empty, so this never clobbers a still Stuart already picked or
-   * generated there himself. Best-effort by design: any failure (a
-   * slow/blocked network read, a decode hiccup, this already being the
-   * last clip in the song) just leaves that next plate exactly as it
-   * was — nothing here shows an error, since this rides on top of a
-   * render that already genuinely succeeded; the chaining itself is a
-   * bonus, not the thing Stuart was actually waiting on.
+   * generated there himself.
+   *
+   * **Was silent by design; isn't anymore** — a first version here
+   * swallowed any failure with no visible sign at all, on the theory
+   * that the chaining was a bonus riding on top of a render that
+   * already genuinely succeeded. Stuart's own real report: it silently
+   * did nothing on his iPhone, more than once, and there was no way for
+   * either of us to tell why — "how do I know this is going to work?"
+   * was a fair question with no honest answer available. `chainNote`
+   * now reports the real outcome either way (success or the actual
+   * failure message) via `SkidmarksClipTimeline`'s banner, same
+   * "an honest error beats silence" rule this whole feature otherwise
+   * follows everywhere else (plate stills, clip renders, transcription).
    */
+  const [chainNote, setChainNote] = useState<{ ok: boolean; message: string } | null>(null);
+
   const handlePersisted = (render: PersistedClipRender) => {
     addRender(render);
 
     const target = resolveChainedPlateTarget(session.mp3?.segments ?? [], render.segmentId, render.plateId);
     if (!target) return;
 
+    setChainNote(null);
     extractLastVideoFrame(render.url)
       .then(async (dataUrl) => {
         const uploadOutcome = await uploadSkidmarksPlateStill(dataUrl);
@@ -152,9 +162,13 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
           ...(target.featuresLockedCharacter ? { featuresLockedCharacter: true } : {}),
         });
         flushSkidmarksSessionNow();
+        setChainNote({ ok: true, message: "Filled the next clip's first plate from this one's last frame." });
       })
-      .catch(() => {
-        // Best-effort — see this function's doc comment.
+      .catch((err) => {
+        setChainNote({
+          ok: false,
+          message: `Couldn't auto-fill the next clip's first plate: ${err instanceof Error ? err.message : "unknown error"}`,
+        });
       });
   };
 
@@ -388,6 +402,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 onSelectClipPlate={selectClipPlate}
                 onSetClipPlateMotionPrompt={setClipPlateMotionPrompt}
                 onSetClipInstrumentalModel={setClipInstrumentalModel}
+                chainNote={chainNote}
+                onDismissChainNote={() => setChainNote(null)}
               />
             )}
 

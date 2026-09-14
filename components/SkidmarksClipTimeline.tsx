@@ -66,6 +66,14 @@ interface SkidmarksClipTimelineProps {
   /** The H3/Grok switch inside `SkidmarksClipRender`'s Render confirm —
    * see `lib/skidmarks.ts`'s `SkidmarksInstrumentalVideoModel`. */
   onSetClipInstrumentalModel: (segmentId: string, model: SkidmarksInstrumentalVideoModel) => void;
+  /** Real, visible outcome of the last-frame-chaining attempt
+   * (`SkidmarksDetailSheet.tsx`'s `handlePersisted`) after a render
+   * persists — 2026-09-14, Stuart's own pushback: the feature used to
+   * fail (or succeed) completely silently, "how do I know this is
+   * going to work?" `null` before any render this session, or once
+   * dismissed. Never claims success/failure for anything else. */
+  chainNote?: { ok: boolean; message: string } | null;
+  onDismissChainNote?: () => void;
 }
 
 function ChevronIcon({ open }: { open: boolean }) {
@@ -344,6 +352,8 @@ export function SkidmarksClipTimeline({
   onSetClipInstrumentalModel,
   onNudgeSegmentStart,
   onNudgeSegmentEnd,
+  chainNote,
+  onDismissChainNote,
 }: SkidmarksClipTimelineProps) {
   const [sectionOpen, setSectionOpen] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -386,6 +396,30 @@ export function SkidmarksClipTimeline({
       {sectionOpen && (
         <>
           {note && <p className="text-[11px] leading-relaxed text-amber-200/70">{note}</p>}
+
+          {chainNote && (
+            <div
+              role={chainNote.ok ? "status" : "alert"}
+              className={[
+                "flex items-start justify-between gap-2 rounded-xl border px-3 py-2 text-[11px] leading-relaxed",
+                chainNote.ok
+                  ? "border-emerald-400/25 bg-emerald-400/[0.06] text-emerald-200/85"
+                  : "border-rose-400/25 bg-rose-400/[0.06] text-rose-200/85",
+              ].join(" ")}
+            >
+              <span>{chainNote.message}</span>
+              {onDismissChainNote && (
+                <button
+                  type="button"
+                  onClick={onDismissChainNote}
+                  aria-label="Dismiss"
+                  className="shrink-0 opacity-70 hover:opacity-100"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          )}
 
           <SkidmarksAutoPlate
             segments={segments}
