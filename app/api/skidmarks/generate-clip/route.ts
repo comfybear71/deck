@@ -775,23 +775,50 @@ async function persistRenderBytesToBlob(bytes: Uint8Array, target: RenderPersist
     // `persisted: false` / `persistError` path below (same honest shape
     // as every other persistence failure), instead of wiring a dead URL
     // into the shelf and calling it done.
-    try {
-      const verifyRes = await fetch(blob.url, {
-        method: "HEAD",
-        signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
-      });
-      if (!verifyRes.ok) {
+    //
+    // **Retried with short delays (2026-09-14 live bug)**: a single
+    // immediate `HEAD` right after `put()` resolves often lands during
+    // Vercel Blob's own brief propagation window \u2014 a real 404 that
+    // clears itself a second or two later, not a genuinely missing file.
+    // Stuart hit this after a real Comfy Cloud charge (~$3.51) landed a
+    // real, playable render that this single-shot check falsely refused
+    // to count as saved. Only reports `persistError` if every attempt
+    // fails \u2014 never re-runs LTX/Comfy/xAI/H3, never re-uploads.
+    const VERIFY_RETRY_DELAYS_MS = [500, 1000, 2000];
+    let verified = false;
+    let lastVerifyStatus: number | undefined;
+    let lastVerifyErr: unknown;
+    for (let attempt = 0; attempt <= VERIFY_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        const verifyRes = await fetch(blob.url, {
+          method: "HEAD",
+          signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+        });
+        if (verifyRes.ok) {
+          verified = true;
+          lastVerifyErr = undefined;
+          break;
+        }
+        lastVerifyStatus = verifyRes.status;
+      } catch (err) {
+        lastVerifyErr = err;
+      }
+      if (attempt < VERIFY_RETRY_DELAYS_MS.length) {
+        await new Promise((resolve) => setTimeout(resolve, VERIFY_RETRY_DELAYS_MS[attempt]));
+      }
+    }
+    if (!verified) {
+      if (lastVerifyErr) {
         return {
           ok: false,
-          reason:
-            `The render was saved to Vercel Blob, but the saved file isn't reachable yet (HTTP ${verifyRes.status}) ` +
-            "\u2014 not marking this as a successful save.",
+          reason: `The render was saved to Vercel Blob, but could not be verified as playable: ${lastVerifyErr instanceof Error ? lastVerifyErr.message : "network error"}.`,
         };
       }
-    } catch (err) {
       return {
         ok: false,
-        reason: `The render was saved to Vercel Blob, but could not be verified as playable: ${err instanceof Error ? err.message : "network error"}.`,
+        reason:
+          `The render was saved to Vercel Blob, but the saved file isn't reachable yet (HTTP ${lastVerifyStatus}) ` +
+          "\u2014 not marking this as a successful save.",
       };
     }
 

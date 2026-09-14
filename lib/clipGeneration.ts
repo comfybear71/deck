@@ -489,6 +489,20 @@ function lockedCharacterVideoNote(): string {
   );
 }
 
+/** Skidmarks' own original Vocal/LTX prompt lock (2026-09-14, "Vocal LTX
+ * prompt wrap only" ask) — kept byte-for-byte, typo included ("dication"),
+ * as given: this is the proven wrap this feature's own prompt used
+ * before it was lost, not new wording invented here. Prepended ahead of
+ * the shot/motion/character-lock text below, Vocal/LTX clips only —
+ * never on an Instrumental/Grok/H3 clip, which has no lip-sync and no
+ * "start image as first frame" contract to state. */
+const VOCAL_LTX_PROMPT_LOCK =
+  "perfect lip sync, clear lip movement, citing the dialogue clearly, facial expressions and hand gestures are " +
+  "lively, dication is perfect. Use the provided start image as the first frame. Same people as the start image " +
+  "for the entire clip. Highly detailed stylised 3D animated feature render, clean simplified forms, believable " +
+  "materials, soft overcast lighting, shallow depth of field, cinematic quality, sharp focus. Not photographic, " +
+  "not a cartoon, not a photoreal human. Camera holds.";
+
 /**
  * Builds the one real clip-render request this feature ever sends —
  * pure and synchronous, same "fully unit-testable independent of a real
@@ -505,6 +519,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
 
   const lock = params.vocalist ? getSkidmarksCharacterLock(params.vocalist.id) : undefined;
   const parts = [
+    params.vocal ? VOCAL_LTX_PROMPT_LOCK : "",
     params.shotPrompt.trim(),
     trimmedMotionPrompt || automaticMotionHint(),
     params.vocal && lock ? lock.promptHallmarks : "",
