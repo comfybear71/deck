@@ -346,7 +346,28 @@ export function classifyElevenLabsFailure(
   return { httpStatus: 502, code: "upstream_error" };
 }
 
+/** Real reported failure (2026-09-14): ElevenLabs' own 429 body reads
+ * "the system is experiencing heavy traffic, please try again" — a
+ * genuinely transient, provider-side condition, not anything wrong with
+ * Stuart's request. This route used to make exactly one attempt, so that
+ * single unlucky request permanently sank the whole song to "Lyrics
+ * timing failed" until Stuart manually removed and re-attached the MP3.
+ * One retry, after a short pause, before giving up — mirrors the same
+ * "a transient upstream hiccup deserves a retry, not an instant failure"
+ * fix already applied to Blob's post-put verify-HEAD in
+ * `app/api/skidmarks/generate-clip/route.ts`. Kept to a single retry
+ * (not a longer ladder) so the worst case (`UPSTREAM_TIMEOUT_MS` twice
+ * plus the pause) stays comfortably under `maxDuration`. */
+const RATE_LIMIT_RETRY_DELAY_MS = 4_000;
+
 async function transcribeWithElevenLabs(audio: File, apiKey: string): Promise<ProviderResult> {
+  const first = await attemptTranscribeWithElevenLabs(audio, apiKey);
+  if (first.ok || first.code !== "rate_limited") return first;
+  await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_RETRY_DELAY_MS));
+  return attemptTranscribeWithElevenLabs(audio, apiKey);
+}
+
+async function attemptTranscribeWithElevenLabs(audio: File, apiKey: string): Promise<ProviderResult> {
   const form = new FormData();
   form.set("file", audio, audio.name || "audio.mp3");
   form.set("model_id", ELEVENLABS_MODEL_ID);

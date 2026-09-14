@@ -645,7 +645,14 @@ export interface SkidmarksPlateStill {
    * literal `data:` URL sitting in an existing session) keeps working
    * unchanged, it just never gets re-inlined once regenerated/replaced. */
   dataUrl: string;
-  source: "upload" | "generated";
+  /** `"chained"` (2026-09-14): auto-filled from the last frame of the
+   * *previous* clip's finished render (`lib/videoFrame.ts`'s
+   * `extractLastVideoFrame`) rather than something Stuart uploaded or
+   * generated himself — Stuart's own ask, so cuts flow clip-to-clip
+   * through a whole song instead of every clip starting from an
+   * unrelated fresh still. Only ever auto-set onto a plate slot that was
+   * still empty; never overwrites a still Stuart already has there. */
+  source: "upload" | "generated" | "chained";
   createdAt: number;
   /** Whether *this* still is already known to feature a locked character
    * (Jack Ash today — `lib/plateGeneration.ts`'s `SKIDMARKS_CHARACTER_LOCKS`)
@@ -1193,7 +1200,7 @@ function normalizeSkidmarksStill(value: unknown): SkidmarksPlateStill | undefine
     v.dataUrl.startsWith("http://") ||
     v.dataUrl.startsWith("/");
   if (!hasKnownPrefix) return undefined;
-  if (v.source !== "upload" && v.source !== "generated") return undefined;
+  if (v.source !== "upload" && v.source !== "generated" && v.source !== "chained") return undefined;
   if (typeof v.createdAt !== "number") return undefined;
   const still: SkidmarksPlateStill = { dataUrl: v.dataUrl, source: v.source, createdAt: v.createdAt };
   if (v.featuresLockedCharacter === true) still.featuresLockedCharacter = true;
@@ -2786,6 +2793,58 @@ export function setSkidmarksSegmentInstrumentalVideoModel(
  * only ever updates the prompt text now. */
 export function setSkidmarksSegmentShotPrompt(segmentId: string, shotPrompt: string): void {
   updateSkidmarksSegment(segmentId, (s) => ({ ...s, shotPrompt }));
+}
+
+export interface ChainedPlateTarget {
+  segmentId: string;
+  plateId: string;
+  /** Whether the rendered plate this chains *from* already featured a
+   * locked character — copied forward onto the new chained still so a
+   * later plate that continues from *it* (`buildPlateGenerationRequest`'s
+   * `continuityFeaturesLockedCharacter`) still resolves correctly,
+   * same "only from the source still's own resolved fact" rule as
+   * every other continuity hop in this feature. */
+  featuresLockedCharacter: boolean;
+}
+
+/**
+ * Pure planner for Stuart's "last frame becomes the next clip's first
+ * frame" ask (2026-09-14, real-world example: a Grok Instrumental clip he
+ * wants chained through the whole song) — decides *whether and where* a
+ * just-finished render's closing frame should land, without doing any of
+ * the actual work (extracting the frame, uploading it, writing it back)
+ * itself. Same "pure planner, side-effecting runner" split
+ * `lib/autoPlate.ts`'s `planAutoPlateFill` already uses, for the same
+ * reason: the decision (which plate, if any) is fully unit-testable
+ * without a real video file or network call, while `extractLastVideoFrame`
+ * (`lib/videoFrame.ts`) and the Blob upload stay in
+ * `SkidmarksDetailSheet.tsx`'s `handlePersisted`, which actually calls
+ * this.
+ *
+ * Returns `undefined` — meaning "do nothing" — when: the rendered
+ * segment isn't found (a stale/mismatched render record), it's already
+ * the last segment in the song (nothing to chain into), the next
+ * segment has no first plate slot, or that first plate already has a
+ * still — **never** overwrites a still Stuart already picked or
+ * generated himself, automatic or not.
+ */
+export function resolveChainedPlateTarget(
+  segments: SkidmarksClipSegment[],
+  renderedSegmentId: string,
+  renderedPlateId: string
+): ChainedPlateTarget | undefined {
+  const index = segments.findIndex((s) => s.id === renderedSegmentId);
+  if (index === -1 || index === segments.length - 1) return undefined;
+  const nextSegment = segments[index + 1];
+  const nextPlate = nextSegment.plates[0];
+  if (!nextPlate || nextPlate.still) return undefined;
+
+  const renderedPlate = segments[index].plates.find((p) => p.id === renderedPlateId);
+  return {
+    segmentId: nextSegment.id,
+    plateId: nextPlate.id,
+    featuresLockedCharacter: renderedPlate?.still?.featuresLockedCharacter === true,
+  };
 }
 
 /** Sets, replaces, or clears one plate slot's still — the multi-plate
