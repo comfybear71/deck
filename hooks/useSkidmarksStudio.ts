@@ -26,6 +26,7 @@ import {
   removeSkidmarksBand,
   removeSkidmarksClipPlate,
   removeSkidmarksMember,
+  renameSkidmarksBand,
   renameSkidmarksMember,
   resetSkidmarksSessionAfterArchive,
   restoreSkidmarksArchivedSession,
@@ -134,6 +135,10 @@ export function useSkidmarksStudio() {
   const renameMember = useCallback(
     (bandId: string, memberId: string, name: string) =>
       renameSkidmarksMember(bandId, memberId, name),
+    []
+  );
+  const renameBand = useCallback(
+    (bandId: string, name: string) => renameSkidmarksBand(bandId, name),
     []
   );
   const setBandCoverImage = useCallback(
@@ -346,6 +351,7 @@ export function useSkidmarksStudio() {
     addMember,
     removeMember,
     renameMember,
+    renameBand,
     setBandCoverImage,
     setMemberAvatarImage,
     addLook,

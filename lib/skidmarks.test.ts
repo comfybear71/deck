@@ -6,6 +6,8 @@ import {
   attachSkidmarksMp3,
   canNudgeSkidmarksSegmentBoundary,
   createMp3Attachment,
+  createSkidmarksBand,
+  renameSkidmarksBand,
   defaultSegmentModel,
   getSkidmarksSessionSyncSnapshot,
   getSkidmarksSnapshot,
@@ -1481,5 +1483,36 @@ describe("Skidmarks session sync status store", () => {
     const unsubscribe = subscribeSkidmarksSessionSync(() => {});
     expect(typeof unsubscribe).toBe("function");
     unsubscribe();
+  });
+});
+
+describe("createSkidmarksBand / renameSkidmarksBand", () => {
+  it("real reported bug: tapping New used to always re-mint the same hand-filled demo band; it must now start genuinely blank", () => {
+    const band = createSkidmarksBand();
+    expect(band.name).toBe("");
+    expect(band.tagline).toBe("");
+    expect(band.members).toEqual([]);
+  });
+
+  it("mints a fresh id each time, so two taps of New never collide", () => {
+    const first = createSkidmarksBand();
+    const second = createSkidmarksBand();
+    expect(first.id).not.toBe(second.id);
+  });
+
+  it("selects the newly created band and clears any attached mp3", () => {
+    const band = createSkidmarksBand();
+    const snapshot = getSkidmarksSnapshot();
+    expect(snapshot.session.bandId).toBe(band.id);
+    expect(snapshot.session.mp3).toBeNull();
+  });
+
+  it("renameSkidmarksBand sets (and trims) the band's name, leaving other bands untouched", () => {
+    const band = createSkidmarksBand();
+    renameSkidmarksBand(band.id, "  Grok Bot & the Destroyers  ");
+    const renamed = getSkidmarksSnapshot().bands.find((b) => b.id === band.id);
+    expect(renamed?.name).toBe("Grok Bot & the Destroyers");
+    const jackAsh = getSkidmarksSnapshot().bands.find((b) => b.id === "jack-ash");
+    expect(jackAsh?.name).not.toBe("Grok Bot & the Destroyers");
   });
 });

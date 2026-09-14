@@ -48,6 +48,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     addMember,
     removeMember,
     renameMember,
+    renameBand,
     setBandCoverImage,
     setMemberAvatarImage,
     addLook,
@@ -283,6 +284,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   onSetMemberAvatarImage={(memberId, dataUrl) =>
                     setMemberAvatarImage(activeBand.id, memberId, dataUrl)
                   }
+                  onRenameBand={(name) => renameBand(activeBand.id, name)}
                 />
               </div>
             )}
