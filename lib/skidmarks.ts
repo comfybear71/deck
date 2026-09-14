@@ -1775,6 +1775,21 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   const snapshot = cachedState;
   setSessionSync({ status: "saving" });
   const maxAttempts = keepalive ? 1 : SESSION_PUSH_RETRY_DELAYS_MS.length + 1;
+  // Real live bug (2026-09-14): "Load failed" (a raw network-level fetch
+  // failure) kept recurring even on a confirmed-solid connection, after
+  // every size-related fix so far — meaning the actual cause is still
+  // unknown, not just "weak signal." One real possibility neither of the
+  // two error shapes so far rules out: Vercel's own edge can drop a
+  // request outright, as a raw connection failure rather than a clean
+  // `413` response body, once a body is large enough — which would
+  // *look* exactly like this "Load failed" wording from the browser's
+  // side, even though the root cause is the same payload-size class of
+  // bug already fixed twice. Surfacing the real payload size in the
+  // error message turns the next report into a measurement instead of
+  // another guess: a small number here rules that theory out entirely;
+  // a multi-MB number confirms it and says exactly where to look next.
+  const payloadJson = JSON.stringify({ state: snapshot });
+  const payloadSizeMb = (new TextEncoder().encode(payloadJson).length / (1024 * 1024)).toFixed(1);
   try {
     let lastNetworkError: unknown = null;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -1782,14 +1797,14 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
         const res = await fetch(SESSION_ENDPOINT, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ state: snapshot }),
+          body: payloadJson,
           keepalive,
         });
         const body = (await res.json().catch(() => ({}))) as SessionPutRouteBody;
         if (!res.ok || body.ok !== true) {
           setSessionSync({
             status: body.configured === false ? "unconfigured" : "error",
-            error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`,
+            error: `${typeof body.error === "string" ? body.error : `HTTP ${res.status}`} (payload ${payloadSizeMb}MB)`,
           });
         } else {
           setSessionSync({ status: "synced", lastSavedAt: Date.now() });
@@ -1804,7 +1819,7 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
     }
     setSessionSync({
       status: "error",
-      error: lastNetworkError instanceof Error ? lastNetworkError.message : "Could not save the session.",
+      error: `${lastNetworkError instanceof Error ? lastNetworkError.message : "Could not save the session."} (payload ${payloadSizeMb}MB)`,
     });
   } finally {
     pushInFlight = false;
@@ -1832,23 +1847,39 @@ function schedulePush(): void {
  *
  * **Exported (2026-09-14) for exactly one more caller**: a plate still
  * finishing generation/upload (`SkidmarksClipStub.tsx`'s `handleGenerate`/
- * `handleFileChange`, `SkidmarksAutoPlate.tsx`'s `handleConfirm`). A real
- * live bug — Stuart generated real plates, then did what he called a
- * "cold restart" shortly after, and they were gone on reload — is
- * consistent with those plates' `onSetClipPlateStill` write still
- * sitting in the 600ms debounce queue (or an even-longer real network
- * round trip to Neon) at the moment his phone/Safari actually died,
- * which `visibilitychange`/`pagehide` can't help with if the process is
- * killed outright rather than genuinely backgrounded first. Flushing
- * right after a still is durably worth saving shrinks that window from
- * "however long until he backgrounds the tab" to "immediately." */
-export function flushSkidmarksSessionNow(): void {
+ * `handleFileChange`, `SkidmarksAutoPlate.tsx`'s `handleConfirm`, and
+ * (later the same day) `SkidmarksMembersModule.tsx`/`SkidmarksBandPicker
+ * .tsx`'s avatar/cover pickers). A real live bug — Stuart generated real
+ * plates, then did what he called a "cold restart" shortly after, and
+ * they were gone on reload — is consistent with those plates'
+ * `onSetClipPlateStill` write still sitting in the 600ms debounce queue
+ * (or an even-longer real network round trip to Neon) at the moment his
+ * phone/Safari actually died, which `visibilitychange`/`pagehide` can't
+ * help with if the process is killed outright rather than genuinely
+ * backgrounded first. Flushing right after a still is durably worth
+ * saving shrinks that window from "however long until he backgrounds
+ * the tab" to "immediately."
+ *
+ * **`keepalive` defaults to `false` (2026-09-14, same-day fix to the fix
+ * above)** — a real bug this introduced and Stuart's own sharp
+ * observation caught: "the thumbnail saves, the MP3 saves, why not the
+ * plate?" Every one of the callers above wants the opposite of what
+ * `pushSkidmarksSessionNow`'s `keepalive: true` path means — a `true`
+ * caps a push at exactly one attempt (no retry), which made sense for
+ * the *original*, narrower use (a page that's about to disappear, where
+ * waiting for a retry is pointless), but every plate-still/avatar/cover
+ * flush call happens while Stuart is still actively in the app, so it
+ * deserved the same ~30s retry ladder an ordinary debounced save already
+ * gets — and, because `keepalive: true` was hard-coded here, never got
+ * it. Only `visibilitychange`/`pagehide` below still need the old
+ * one-attempt behavior; they pass `true` explicitly. */
+export function flushSkidmarksSessionNow(keepalive = false): void {
   if (!isBrowser()) return;
   if (pushTimer) {
     clearTimeout(pushTimer);
     pushTimer = null;
   }
-  void pushSkidmarksSessionNow(true);
+  void pushSkidmarksSessionNow(keepalive);
 }
 
 let sessionLifecycleWired = false;
@@ -1861,9 +1892,13 @@ function ensureSessionPersistenceWired(): void {
   if (sessionLifecycleWired || !isBrowser()) return;
   sessionLifecycleWired = true;
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flushSkidmarksSessionNow();
+    // `true`: the page may be about to disappear, so this is the one
+    // caller that still wants the old one-attempt-only behavior — see
+    // `flushSkidmarksSessionNow`'s own doc comment for why every *other*
+    // caller now defaults to the opposite.
+    if (document.visibilityState === "hidden") flushSkidmarksSessionNow(true);
   });
-  window.addEventListener("pagehide", flushSkidmarksSessionNow);
+  window.addEventListener("pagehide", () => flushSkidmarksSessionNow(true));
   // Real live bug (2026-09-14): Stuart tapped Safari's own reload button
   // — visible right in his own screenshots — while a save had genuinely
   // not landed yet (still "saving," or already showing the error
