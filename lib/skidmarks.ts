@@ -1158,13 +1158,36 @@ export function createMp3Attachment(
  * (`undefined`) rather than trusted as-is; a corrupt/partial value from a
  * future field rename or a hand-edited `localStorage` blob should never
  * render as a broken `<img>`. */
+/** Real live bug (2026-09-14): this used to only accept a literal
+ * `data:` URL — correct back when a still's `dataUrl` was always
+ * embedded base64, but `lib/plateStillBlob.ts` now stores a real Vercel
+ * Blob `https://` URL there instead (see `SkidmarksPlateStill.dataUrl`'s
+ * own doc comment). Every still that went through that fix got silently
+ * deleted right here, on the very next hydrate/normalize pass — this
+ * was never a save-reliability problem at all; it was this one
+ * validation gate rejecting the exact value the rest of the app had
+ * already started writing. Now accepts `data:`, `https://`, `http://`,
+ * or a root-relative `/...` asset path (the seeded Jack Ash reference
+ * photo's own shape) — anything else (a stray `blob:` object URL, an
+ * empty string, a missing field) is still dropped. Also now preserves
+ * `featuresLockedCharacter` when it's exactly `true` — silently dropped
+ * here before, which broke carrying a locked character's identity
+ * forward through "Use last plate" continuity across a reload. */
 function normalizeSkidmarksStill(value: unknown): SkidmarksPlateStill | undefined {
   if (!value || typeof value !== "object") return undefined;
   const v = value as Partial<SkidmarksPlateStill>;
-  if (typeof v.dataUrl !== "string" || !v.dataUrl.startsWith("data:")) return undefined;
+  if (typeof v.dataUrl !== "string" || v.dataUrl.length === 0) return undefined;
+  const hasKnownPrefix =
+    v.dataUrl.startsWith("data:") ||
+    v.dataUrl.startsWith("https://") ||
+    v.dataUrl.startsWith("http://") ||
+    v.dataUrl.startsWith("/");
+  if (!hasKnownPrefix) return undefined;
   if (v.source !== "upload" && v.source !== "generated") return undefined;
   if (typeof v.createdAt !== "number") return undefined;
-  return { dataUrl: v.dataUrl, source: v.source, createdAt: v.createdAt };
+  const still: SkidmarksPlateStill = { dataUrl: v.dataUrl, source: v.source, createdAt: v.createdAt };
+  if (v.featuresLockedCharacter === true) still.featuresLockedCharacter = true;
+  return still;
 }
 
 /** Validates one rehydrated plate slot — keeps its `id` if it's a real

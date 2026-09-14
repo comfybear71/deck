@@ -908,12 +908,20 @@ describe("normalizeSkidmarksSegment", () => {
       shotPrompt: "",
     };
 
-    // Not a data: URL (e.g. a stale/expired remote URL that should never
-    // have been persisted in the first place).
+    // A `blob:` object URL — only ever valid within the page that
+    // created it, never something that should survive a reload.
     expect(
       normalizeSkidmarksSegment({
         ...base,
-        still: { dataUrl: "https://example.com/temp.jpg", source: "upload", createdAt: 1 },
+        still: { dataUrl: "blob:https://deck.aiglitch.app/temp-id", source: "upload", createdAt: 1 },
+      } as unknown as SkidmarksClipSegment).plates[0].still
+    ).toBeUndefined();
+
+    // Empty dataUrl.
+    expect(
+      normalizeSkidmarksSegment({
+        ...base,
+        still: { dataUrl: "", source: "upload", createdAt: 1 },
       } as unknown as SkidmarksClipSegment).plates[0].still
     ).toBeUndefined();
 
@@ -971,12 +979,42 @@ describe("normalizeSkidmarksSegment", () => {
       label: "instrumental",
       model: "grok",
       shotPrompt: "",
-      plates: [{ id: "plate-1", still: { dataUrl: "https://example.com/stale.jpg", source: "upload", createdAt: 1 } }],
+      plates: [{ id: "plate-1", still: { dataUrl: "blob:https://deck.aiglitch.app/stale-id", source: "upload", createdAt: 1 } }],
     } as unknown as SkidmarksClipSegment;
 
     const normalized = normalizeSkidmarksSegment(withCorruptPlate);
     expect(normalized.plates).toHaveLength(1);
     expect(normalized.plates[0]).toEqual({ id: "plate-1" });
+  });
+
+  it("keeps a real Vercel Blob https:// still — the actual shape lib/plateStillBlob.ts now saves, previously deleted by this exact function on every reload", () => {
+    const withBlobStill = {
+      id: "seg-11",
+      startSec: 0,
+      endSec: 40,
+      label: "instrumental",
+      model: "grok",
+      shotPrompt: "",
+      plates: [
+        {
+          id: "plate-1",
+          still: {
+            dataUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/plate-stills/plate_1.jpg",
+            source: "generated",
+            createdAt: 1,
+            featuresLockedCharacter: true,
+          },
+        },
+      ],
+    } as unknown as SkidmarksClipSegment;
+
+    const normalized = normalizeSkidmarksSegment(withBlobStill);
+    expect(normalized.plates[0].still).toEqual({
+      dataUrl: "https://abc.public.blob.vercel-storage.com/skidmarks/plate-stills/plate_1.jpg",
+      source: "generated",
+      createdAt: 1,
+      featuresLockedCharacter: true,
+    });
   });
 
   it("backfills one blank slot if a real session's `plates` array is somehow empty", () => {
