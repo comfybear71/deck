@@ -18,21 +18,22 @@
  * video a `blob:` object URL sidesteps the whole Range/cross-origin
  * question — a `blob:` URL is always same-origin.
  *
- * **Real live failure (2026-09-14, Stuart's actual first automated
- * run): even off a local `blob:` URL, the seek-to-last-frame step
- * itself timed out on his iPhone** — the fetch/download and metadata
- * load both worked, but seeking to the tail of a video his device had
- * *just* finished decoding for the first time took longer than this
- * used to allow. Two changes in response: (1) waits for `loadeddata`
- * (the first frame is actually decoded) rather than only
- * `loadedmetadata` (duration/dimensions known, but nothing decoded
- * yet) before ever attempting the seek — seeking into an element with
- * zero decoded frames yet is a much heavier ask than seeking one
- * that's already rendered its first frame; (2) the seek step gets its
- * own longer timeout and **one retry** (a fresh `currentTime` seek,
+ * **Real live failures, 2026-09-14, Stuart's actual automated runs on
+ * his iPhone — two separate timeouts, at two separate readiness
+ * checkpoints, across two consecutive real attempts**: first "Seeking
+ * to the video's last frame timed out" (the seek step), then, after
+ * that step got a longer timeout + retry, "The video did not load in
+ * time" (the *earlier* load step, still on the original tight budget).
+ * Same underlying story both times — decoding a video his phone just
+ * finished downloading for the first time is genuinely variable in how
+ * long it takes on a real device, not something a single fixed
+ * timeout guessed right on the first try. `waitReady` below is now the
+ * one shared helper both checkpoints use: a generous timeout **and**
+ * one retry (a fresh attempt, not just re-waiting on the same one) —
  * same "a transient stall deserves a retry, not an instant failure"
- * rule already applied to Blob's post-put verify-HEAD and the
- * ElevenLabs 429 case) before giving up for real.
+ * rule already applied to Blob's verify-HEAD and the ElevenLabs 429
+ * case, now applied uniformly here instead of patched one checkpoint
+ * at a time as each one's own failure showed up live.
  *
  * **iOS Safari note** (Stuart's actual device): a `<video>` element that
  * is *never* attached to the document can fail to decode/seek reliably
@@ -52,52 +53,45 @@
  * (`MIN_CLIP_DURATION_SEC`/`MIN_LTX_CLIP_DURATION_SEC`, both 5s) clips. */
 const END_SEEK_BACKOFF_SEC = 0.15;
 
-/** The initial load (metadata + first decoded frame) shouldn't hang the
- * caller forever — generous enough for a large clip on a slow
- * connection, short enough that a genuinely stuck load doesn't block
- * the next clip's plate strip from being usable in the meantime. */
-const LOAD_TIMEOUT_MS = 20_000;
+/** Shared budget for both readiness checkpoints (initial load, then the
+ * seek) — generous enough that a real device genuinely decoding a
+ * freshly-downloaded video has room to finish, per the two live
+ * timeouts this module's doc comment describes. Each checkpoint also
+ * gets one retry on top of this (see `waitReady`), so the real
+ * worst-case budget per checkpoint is roughly double this before
+ * giving up for good. */
+const READY_TIMEOUT_MS = 30_000;
 
-/** Seeking to the tail of a video the device just finished decoding for
- * the first time is a heavier, slower operation than the initial load
- * — the real 2026-09-14 live failure timed out here specifically, at
- * the old shared 20s budget. Longer on its own, plus one retry below,
- * rather than just raising the shared number and hoping. */
-const SEEK_TIMEOUT_MS = 45_000;
-
-function waitForEvent(target: HTMLVideoElement, event: string, timeoutMs: number, timeoutMessage: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error(timeoutMessage));
-    }, timeoutMs);
-    const onEvent = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error("The video could not be decoded for frame capture."));
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      target.removeEventListener(event, onEvent);
-      target.removeEventListener("error", onError);
-    };
-    target.addEventListener(event, onEvent, { once: true });
-    target.addEventListener("error", onError, { once: true });
-  });
-}
-
-/** Seeks to `targetSec` and waits for `seeked`, retrying once (a fresh
- * seek, not just re-waiting on the same one) if the first attempt times
- * out — see this module's doc comment for why a stall here is worth
- * one real retry rather than an instant failure. */
-async function seekAndWait(video: HTMLVideoElement, targetSec: number): Promise<void> {
+/** Waits for `event` on `target`, retrying once (a fresh wait, not just
+ * re-listening on the same attempt) if the first one times out —
+ * shared by both the initial-load and the seek checkpoints below. See
+ * this module's doc comment for why a stall here is worth a real retry
+ * rather than an instant failure. */
+async function waitReady(target: HTMLVideoElement, event: string, timeoutMessage: string, onRetry?: () => void): Promise<void> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    video.currentTime = targetSec;
+    if (attempt > 0) onRetry?.();
     try {
-      await waitForEvent(video, "seeked", SEEK_TIMEOUT_MS, "Seeking to the video's last frame timed out.");
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error(timeoutMessage));
+        }, READY_TIMEOUT_MS);
+        const onEventFired = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error("The video could not be decoded for frame capture."));
+        };
+        const cleanup = () => {
+          clearTimeout(timer);
+          target.removeEventListener(event, onEventFired);
+          target.removeEventListener("error", onError);
+        };
+        target.addEventListener(event, onEventFired, { once: true });
+        target.addEventListener("error", onError, { once: true });
+      });
       return;
     } catch (err) {
       if (attempt === 1) throw err;
@@ -138,13 +132,17 @@ export async function extractLastVideoFrame(videoUrl: string): Promise<string> {
     // actually been decoded yet. Seeking before the first frame decodes
     // is a heavier ask than seeking an element that's already rendered
     // one — see this module's doc comment.
-    await waitForEvent(video, "loadeddata", LOAD_TIMEOUT_MS, "The video did not load in time.");
+    await waitReady(video, "loadeddata", "The video did not load in time.");
 
     const duration = video.duration;
     if (!Number.isFinite(duration) || duration <= 0) {
       throw new Error("The video reported no usable duration.");
     }
-    await seekAndWait(video, Math.max(0, duration - END_SEEK_BACKOFF_SEC));
+    const seekTargetSec = Math.max(0, duration - END_SEEK_BACKOFF_SEC);
+    video.currentTime = seekTargetSec;
+    await waitReady(video, "seeked", "Seeking to the video's last frame timed out.", () => {
+      video.currentTime = seekTargetSec; // re-issue the seek itself on retry, not just re-wait on the first one
+    });
 
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
