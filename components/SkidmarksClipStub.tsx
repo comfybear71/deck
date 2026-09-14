@@ -848,6 +848,26 @@ function SkidmarksPlateBox({
           <SkidmarksPlateSelectControl selected={selected} rendered={rendered} onSelect={onSelect} />
         )}
 
+        {/* Real visible proof the last-frame chaining (2026-09-14,
+            Stuart's ask) actually ran on this plate — it was silent
+            before, and Stuart's own reasonable pushback ("how do I know
+            this is going to work?") is exactly why this exists now. Only
+            ever shown on a still `resolveChainedPlateTarget`
+            (`lib/skidmarks.ts`) actually auto-filled, never claimed for
+            an upload or a manual Generate. */}
+        {hasStill && !generating && plate.still!.source === "chained" && (
+          // Left-aligned and capped short of the tile's own bottom-right
+          // select control (`SkidmarksPlateSelectControl`, a 40x40 tap
+          // target right there) so the two never overlap on this tile's
+          // tight 128x96 footprint.
+          <span
+            className="absolute bottom-1.5 left-1.5 z-10 max-w-[74px] truncate rounded-full bg-black/70 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-wide text-emerald-300 ring-1 ring-white/15"
+            title="Auto-filled from the previous clip's last rendered frame"
+          >
+            From last clip
+          </span>
+        )}
+
         {!hasStill && !generating && canRemove && (
           <button
             type="button"
