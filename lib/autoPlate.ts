@@ -79,6 +79,18 @@
  * camera framing only, so without this every Siray fill shared whatever
  * backdrop the master still itself happened to show. See
  * `AUTO_PLATE_LOCATIONS`'s own doc comment.
+ *
+ * **Locations from the brief (2026-09-14, same-day follow-up)**: when
+ * the typed brief itself lists two or more real places — split on a
+ * comma or " / ", e.g. "red hallway door, fence gate in the dirt, night
+ * pool shallow end, wet concrete in the rain" — those places cycle as
+ * this run's own locations instead of `AUTO_PLATE_LOCATIONS`, on both
+ * paths. A brief with fewer than two place phrases (empty, or a plain
+ * mood-board line with no commas/slashes) falls straight back to the
+ * hand-authored table, unchanged. See `parseBriefLocationPhrases`. The
+ * scripted door/concrete/keyhole opener is untouched either way — it
+ * keeps its own exact wording regardless of what the brief's other
+ * places are.
  */
 
 import {
@@ -223,16 +235,32 @@ const AUTO_PLATE_LOCATIONS = [
   "A dusty crossroads, a leaning stop sign, storm clouds building on the horizon.",
 ];
 
-function pickAutoPlateLocation(rotationIndex: number): string {
-  const i =
-    ((rotationIndex % AUTO_PLATE_LOCATIONS.length) + AUTO_PLATE_LOCATIONS.length) % AUTO_PLATE_LOCATIONS.length;
-  return AUTO_PLATE_LOCATIONS[i];
+/** Splits a typed brief into individual place phrases on a comma or
+ * " / " — e.g. "red hallway door, fence gate in the dirt, night pool
+ * shallow end, wet concrete in the rain" becomes four real places.
+ * Blank segments (a trailing comma, a doubled separator) are dropped.
+ * Pure string splitting, never sent to an LLM — same "heuristic
+ * planner, not an invented model call" spirit as the rest of this
+ * module. `planAutoPlateFill` only actually uses this run's own places
+ * once there are at least two of them — see this module's doc comment's
+ * "Locations from the brief" note for why one bare word isn't treated
+ * as a real location list. */
+function parseBriefLocationPhrases(brief: string): string[] {
+  return brief
+    .split(/,| \/ /)
+    .map((phrase) => phrase.trim())
+    .filter((phrase) => phrase.length > 0);
 }
 
-function genericShotPrompt(vocal: boolean, bandName: string, rotationIndex: number): string {
+function pickAutoPlateLocation(locations: string[], rotationIndex: number): string {
+  const i = ((rotationIndex % locations.length) + locations.length) % locations.length;
+  return locations[i];
+}
+
+function genericShotPrompt(vocal: boolean, bandName: string, rotationIndex: number, locations: string[]): string {
   const templates = vocal ? VOCAL_SHOT_TEMPLATES : INSTRUMENTAL_SHOT_TEMPLATES;
   const template = templates[((rotationIndex % templates.length) + templates.length) % templates.length];
-  return `${pickAutoPlateLocation(rotationIndex)} ${template.replace("{band}", bandName)}`;
+  return `${pickAutoPlateLocation(locations, rotationIndex)} ${template.replace("{band}", bandName)}`;
 }
 
 /**
@@ -257,6 +285,13 @@ export function planAutoPlateFill(
   const trimmedBrief = brief.trim().slice(0, MAX_AUTO_PLATE_BRIEF_LENGTH);
   const applyConcreteOpener =
     mentionsConcreteOpener(trimmedBrief) || mentionsConcreteOpener(songTitleHint);
+  // Two or more real places typed in the brief cycle as this run's own
+  // locations instead of the hand-authored table — see this module's
+  // doc comment's "Locations from the brief" note. Never applies to the
+  // scripted opener's own three shots below, which keep their exact
+  // wording regardless.
+  const briefLocationPhrases = parseBriefLocationPhrases(trimmedBrief);
+  const locations = briefLocationPhrases.length >= 2 ? briefLocationPhrases : AUTO_PLATE_LOCATIONS;
 
   const targets: AutoPlateTarget[] = [];
   let rotation = 0;
@@ -289,12 +324,13 @@ export function planAutoPlateFill(
           isFirstEmptySlotInClip,
           rotationIndex: sirayRotation,
         });
-        // Same `AUTO_PLATE_LOCATIONS` table the xAI path uses below —
+        // Same `locations` the xAI path uses below — either the brief's
+        // own places (2+ of them typed) or `AUTO_PLATE_LOCATIONS` —
         // `SIRAY_17_POSITIONS` is camera framing only (see that module's
         // own doc comment), so without this every Siray fill shared
         // whatever backdrop happened to be in the master still itself,
         // never a genuinely different place.
-        const location = pickAutoPlateLocation(sirayRotation);
+        const location = pickAutoPlateLocation(locations, sirayRotation);
         sirayRotation += 1;
         targets.push({
           segmentId: segment.id,
@@ -309,7 +345,7 @@ export function planAutoPlateFill(
       targets.push({
         segmentId: segment.id,
         plateId: plate.id,
-        shotPrompt: genericShotPrompt(vocal, bandName, rotation),
+        shotPrompt: genericShotPrompt(vocal, bandName, rotation, locations),
         continueFromPreviousPlate: false,
       });
       rotation += 1;

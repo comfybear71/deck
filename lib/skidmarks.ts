@@ -691,11 +691,16 @@ export const SEGMENT_NUDGE_STEP_SEC = 1;
 export const MIN_NUDGE_SEGMENT_SEC = 1;
 
 /** Caps a clip's plate strip (`SkidmarksClipSegment.plates`) so "+"
- * can't grow it unbounded — a handful of plates covers the motivating
- * door → keyhole → Jack case with room to spare, without letting the
- * horizontal scroll (or `localStorage`, which each plate's still adds
- * to) grow without limit. `addSkidmarksClipPlate` no-ops past this. */
-export const MAX_PLATES_PER_CLIP = 6;
+ * can't grow it unbounded — without letting the horizontal scroll grow
+ * without limit. Raised from 6 to 12 (2026-09-14, Stuart's own real
+ * reason): a clip's real render length is `segment length ÷ plate
+ * count` (see `lib/clipGeneration.ts`'s `computePlateDurationSec`/
+ * `computeLtxPlateDurationSec`), and a Vocal/LTX render's identity
+ * tends to drift after ~20s of continuous motion — more plates per clip
+ * is how he keeps each individual render down near ~15s instead of
+ * pushing toward LTX's 30s ceiling. `addSkidmarksClipPlate` no-ops past
+ * this. */
+export const MAX_PLATES_PER_CLIP = 12;
 
 /** Mints one empty plate slot — the dashed placeholder a fresh clip (or
  * a fresh "+" tap) always starts a slot as. */
