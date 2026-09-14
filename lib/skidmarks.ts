@@ -1775,6 +1775,21 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   const snapshot = cachedState;
   setSessionSync({ status: "saving" });
   const maxAttempts = keepalive ? 1 : SESSION_PUSH_RETRY_DELAYS_MS.length + 1;
+  // Real live bug (2026-09-14): "Load failed" (a raw network-level fetch
+  // failure) kept recurring even on a confirmed-solid connection, after
+  // every size-related fix so far — meaning the actual cause is still
+  // unknown, not just "weak signal." One real possibility neither of the
+  // two error shapes so far rules out: Vercel's own edge can drop a
+  // request outright, as a raw connection failure rather than a clean
+  // `413` response body, once a body is large enough — which would
+  // *look* exactly like this "Load failed" wording from the browser's
+  // side, even though the root cause is the same payload-size class of
+  // bug already fixed twice. Surfacing the real payload size in the
+  // error message turns the next report into a measurement instead of
+  // another guess: a small number here rules that theory out entirely;
+  // a multi-MB number confirms it and says exactly where to look next.
+  const payloadJson = JSON.stringify({ state: snapshot });
+  const payloadSizeMb = (new TextEncoder().encode(payloadJson).length / (1024 * 1024)).toFixed(1);
   try {
     let lastNetworkError: unknown = null;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -1782,14 +1797,14 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
         const res = await fetch(SESSION_ENDPOINT, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ state: snapshot }),
+          body: payloadJson,
           keepalive,
         });
         const body = (await res.json().catch(() => ({}))) as SessionPutRouteBody;
         if (!res.ok || body.ok !== true) {
           setSessionSync({
             status: body.configured === false ? "unconfigured" : "error",
-            error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`,
+            error: `${typeof body.error === "string" ? body.error : `HTTP ${res.status}`} (payload ${payloadSizeMb}MB)`,
           });
         } else {
           setSessionSync({ status: "synced", lastSavedAt: Date.now() });
@@ -1804,7 +1819,7 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
     }
     setSessionSync({
       status: "error",
-      error: lastNetworkError instanceof Error ? lastNetworkError.message : "Could not save the session.",
+      error: `${lastNetworkError instanceof Error ? lastNetworkError.message : "Could not save the session."} (payload ${payloadSizeMb}MB)`,
     });
   } finally {
     pushInFlight = false;
