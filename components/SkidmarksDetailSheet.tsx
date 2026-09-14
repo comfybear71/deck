@@ -221,6 +221,24 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
           </div>
         </div>
 
+        {sessionSync.status === "saving" && (
+          // Real live bug (2026-09-14): this row used to show *nothing*
+          // while a save was actually in flight \u2014 only once it had
+          // already failed. A save can take a few real seconds (a
+          // still's own Blob upload, then the session PUT, now with up
+          // to ~30s of retry on a bad connection), and a refresh landing
+          // anywhere in that silent window looked identical to a
+          // perfectly safe one. This is the one moment it's genuinely
+          // not safe to refresh \u2014 say so plainly instead of staying
+          // quiet about it.
+          <p
+            role="status"
+            className="mx-4 mb-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] leading-snug text-white/60"
+          >
+            Saving\u2026 hold on before refreshing.
+          </p>
+        )}
+
         {(sessionSync.status === "unconfigured" || sessionSync.status === "error") && (
           <p
             role="status"
@@ -228,7 +246,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
           >
             {sessionSync.status === "unconfigured"
               ? "Session storage isn\u2019t connected here \u2014 your edits won\u2019t survive a refresh this time."
-              : `Couldn\u2019t save your session just now \u2014 ${sessionSync.error ?? "unknown reason"}.`}
+              : `Couldn\u2019t save your session just now \u2014 ${sessionSync.error ?? "unknown reason"}. Don\u2019t refresh until this clears \u2014 your next edit will try again.`}
           </p>
         )}
 
