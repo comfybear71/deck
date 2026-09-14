@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildClipRenderFilename,
+  buildClipRenderLastFrameFilename,
+  buildClipRenderLastFramePathname,
   buildClipRenderPathname,
   buildClipRenderPlatePrefix,
   CLIP_RENDER_PATH_PREFIX,
@@ -59,6 +61,26 @@ describe("buildClipRenderFilename", () => {
   });
 });
 
+describe("buildClipRenderLastFrameFilename", () => {
+  it("mirrors buildClipRenderFilename's numbering, with a _lastframe.jpg extension instead of _render.mp4", () => {
+    expect(buildClipRenderLastFrameFilename(1, 0, 40)).toBe("01_0000-0040_lastframe.jpg");
+  });
+
+  it("letters the filename the same way as buildClipRenderFilename for a multi-plate clip", () => {
+    expect(buildClipRenderLastFrameFilename(1, 0, 40, 1)).toBe("01b_0000-0040_lastframe.jpg");
+  });
+});
+
+describe("buildClipRenderLastFramePathname", () => {
+  it("sits under the exact same plate prefix as the render's own pathname", () => {
+    const videoPathname = buildClipRenderPathname("segment_abc123", "plate_xyz", 2, 40, 90);
+    const framePathname = buildClipRenderLastFramePathname("segment_abc123", "plate_xyz", 2, 40, 90);
+    expect(framePathname).toBe(`${CLIP_RENDER_PATH_PREFIX}segment_abc123/plate_xyz/02_0040-0090_lastframe.jpg`);
+    expect(framePathname.startsWith(buildClipRenderPlatePrefix("segment_abc123", "plate_xyz"))).toBe(true);
+    expect(framePathname).not.toBe(videoPathname);
+  });
+});
+
 describe("buildClipRenderPathname / parseClipRenderPathname", () => {
   it("round-trips every field through build then parse, nested by plateId", () => {
     const pathname = buildClipRenderPathname("segment_abc123", "plate_xyz", 2, 40, 90);
@@ -96,6 +118,11 @@ describe("buildClipRenderPathname / parseClipRenderPathname", () => {
     // The pre-per-plate pathname scheme (no plate folder at all) no
     // longer matches — see this module's doc comment's migration note.
     expect(parseClipRenderPathname(`${CLIP_RENDER_PATH_PREFIX}segment_abc/01_0000-0040_render.mp4`)).toBeNull();
+  });
+
+  it("never mistakes a sibling last-frame image for a video render", () => {
+    const framePathname = buildClipRenderLastFramePathname("segment_abc123", "plate_xyz", 1, 0, 40);
+    expect(parseClipRenderPathname(framePathname)).toBeNull();
   });
 
   it("returns null when the parsed segment or plate id would itself be unsafe (defensive — build never emits this today)", () => {

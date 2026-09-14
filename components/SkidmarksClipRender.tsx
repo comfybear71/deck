@@ -274,7 +274,16 @@ export function SkidmarksClipRender({
             endSec,
             plateCount > 1 ? plateIndex : undefined
           );
-          onPersisted({ segmentId, plateId, url: outcome.videoUrl, filename, clipIndex, startSec, endSec });
+          onPersisted({
+            segmentId,
+            plateId,
+            url: outcome.videoUrl,
+            filename,
+            clipIndex,
+            startSec,
+            endSec,
+            ...(outcome.lastFrameUrl ? { lastFrameUrl: outcome.lastFrameUrl } : {}),
+          });
           setJustPersisted(true);
         } else {
           // Real money was already spent on this render (xAI itself

@@ -13,7 +13,6 @@ import {
 import { buildPlateGenerationRequest, generatePlateStill, resolvePlateReferenceDataUrl, resolveVocalistForPrompt } from "@/lib/plateGeneration";
 import { generateSkidmarksClip } from "@/lib/clipGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
-import { extractLastVideoFrame } from "@/lib/videoFrame";
 import { runScriptSequence, type ScriptSequenceRunEvent } from "@/lib/scriptSequenceRunner";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 
@@ -170,10 +169,15 @@ export function SkidmarksScriptSequencePanel({
         renderClip: async (request) => {
           const clipOutcome = await generateSkidmarksClip(request);
           if (!clipOutcome.ok) return { ok: false, message: clipOutcome.message };
-          return { ok: true, videoUrl: clipOutcome.videoUrl, persisted: clipOutcome.persisted, persistError: clipOutcome.persistError };
+          return {
+            ok: true,
+            videoUrl: clipOutcome.videoUrl,
+            persisted: clipOutcome.persisted,
+            persistError: clipOutcome.persistError,
+            lastFrameUrl: clipOutcome.lastFrameUrl,
+          };
         },
         recordRender: onRecordRender,
-        extractLastFrame: extractLastVideoFrame,
         setPlateStill: onSetClipPlateStill,
         onProgress: (event) => setProgressText(progressLabel(event)),
       },

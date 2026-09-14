@@ -5,8 +5,16 @@
  * network/DOM call so it's fully unit-testable with fakes before ever
  * spending real money. `components/SkidmarksScriptSequencePanel.tsx`
  * supplies the real implementations (`generateSkidmarksClip`,
- * `extractLastVideoFrame`, `uploadSkidmarksPlateStill`,
- * `generatePlateStill`, `setSkidmarksClipPlateStill`) as `deps`.
+ * `uploadSkidmarksPlateStill`, `generatePlateStill`,
+ * `setSkidmarksClipPlateStill`) as `deps`.
+ *
+ * **Frame carry is server-side now, not a `deps` function** (2026-09-14
+ * — three separate live failures on Stuart's iPhone with the old
+ * client-side `<video>`+`<canvas>` capture, `lib/videoFrame.ts`, now
+ * removed — see `lib/serverVideoFrame.ts`'s module doc comment for the
+ * full story). `renderClip`'s own outcome carries `lastFrameUrl`
+ * straight from the server when extraction succeeded; the chaining step
+ * below just reads it, rather than calling a separate extraction dep.
  *
  * **Stops on the first real failure — never keeps spending after
  * something's already broken.** Stuart explicitly asked for this to be
@@ -44,9 +52,15 @@ export interface ScriptSequenceRunnerDeps {
    * `lib/plateStillBlob.ts`'s `uploadSkidmarksPlateStill`. */
   uploadStill: (dataUrl: string) => Promise<{ ok: true; url: string } | { ok: false; message: string }>;
   /** Renders one clip — same contract as `lib/clipGeneration.ts`'s
-   * `generateSkidmarksClip`, called with an already-built request. */
+   * `generateSkidmarksClip`, called with an already-built request.
+   * `lastFrameUrl`, when present, is the render's own last frame
+   * already extracted and saved server-side
+   * (`app/api/skidmarks/generate-clip/route.ts`, `lib/
+   * serverVideoFrame.ts`) — the chaining step below reads it directly
+   * rather than calling out to a separate client-side extraction (see
+   * this module's doc comment for why that old approach was removed). */
   renderClip: (request: ReturnType<typeof buildClipGenerationRequest>) => Promise<
-    | { ok: true; videoUrl: string; persisted: boolean; persistError?: string }
+    | { ok: true; videoUrl: string; persisted: boolean; persistError?: string; lastFrameUrl?: string }
     | { ok: false; message: string }
   >;
   /** Turns a persisted render's own `PersistedClipRender` shape (what
@@ -54,10 +68,6 @@ export interface ScriptSequenceRunnerDeps {
    * this dep just records it wherever the caller keeps the render shelf
    * (`addRender` in `SkidmarksDetailSheet.tsx`). */
   recordRender: (render: PersistedClipRender) => void;
-  /** Extracts the closing frame of a just-finished render — same
-   * contract as `lib/videoFrame.ts`'s `extractLastVideoFrame` (throws
-   * on failure). */
-  extractLastFrame: (videoUrl: string) => Promise<string>;
   /** Writes a still onto a plate slot — same contract as
    * `lib/skidmarks.ts`'s `setSkidmarksClipPlateStill`. */
   setPlateStill: (segmentId: string, plateId: string, still: SkidmarksPlateStill) => void;
@@ -192,6 +202,7 @@ export async function runScriptSequence(
       clipIndex: i,
       startSec: segment.startSec,
       endSec: segment.endSec,
+      ...(outcome.lastFrameUrl ? { lastFrameUrl: outcome.lastFrameUrl } : {}),
     };
     deps.recordRender(render);
     report({ type: "clip-done", clipIndex: i, clipCount: segments.length });
@@ -203,20 +214,19 @@ export async function runScriptSequence(
     if (!nextPlate || nextPlate.still) continue; // already has a still (shouldn't happen on a fresh build, but never overwrite it
 
     report({ type: "chaining", clipIndex: i, clipCount: segments.length });
-    let frameDataUrl: string;
-    try {
-      frameDataUrl = await deps.extractLastFrame(render.url);
-    } catch (err) {
+    if (!outcome.lastFrameUrl) {
       return {
         ok: false,
         failedAtClipIndex: i,
-        message: `Couldn't carry clip ${i + 1}'s last frame into clip ${i + 2}: ${err instanceof Error ? err.message : "unknown error"}`,
+        message: `Couldn't carry clip ${i + 1}'s last frame into clip ${i + 2}: the server couldn't capture this render's last frame.`,
         renderedCount: i + 1,
       };
     }
-    const uploadOutcome = await deps.uploadStill(frameDataUrl);
+    // `outcome.lastFrameUrl` is already a durable Blob URL (server-side
+    // extraction — see this module's doc comment) — no upload left to
+    // do here, unlike a freshly-generated first still.
     const chainedStill: SkidmarksPlateStill = {
-      dataUrl: uploadOutcome.ok ? uploadOutcome.url : frameDataUrl,
+      dataUrl: outcome.lastFrameUrl,
       source: "chained",
       createdAt: Date.now(),
     };
