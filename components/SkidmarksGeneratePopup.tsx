@@ -1,23 +1,36 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { lookGradientClass, type SkidmarksLook, type SkidmarksMember } from "@/lib/skidmarks";
+import { downscaleDataUrlImage, flushSkidmarksSessionNow, lookGradientClass, type SkidmarksLook, type SkidmarksMember } from "@/lib/skidmarks";
+import { buildMemberLookRequest, generatePlateStill, resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
+import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 
 interface SkidmarksGeneratePopupProps {
   member: SkidmarksMember;
-  onGenerate: (prompt: string, photoreal: number) => void;
+  bandName: string;
+  onGenerate: (prompt: string, photoreal: number, imageUrl: string) => void;
   onRename: (name: string) => void;
   onClose: () => void;
 }
 
 const EMPTY_SLOT_COUNT = 3;
 const DEFAULT_PHOTOREAL = 80;
-/** Fake "rendering" pause so a tap doesn't just teleport a look into
- * existence — long enough to read as work happening, short enough not to
- * feel like a real render queue. No actual generation happens here. */
-const GENERATE_DELAY_MS = 700;
 
+/** A look's real photo when it has one (2026-09-14 — see
+ * `lib/skidmarks.ts`'s `buildGeneratedLook`); the old color-swatch
+ * stand-in only for a look saved before that fix (no `imageUrl`). */
 function LookThumb({ look }: { look: SkidmarksLook }) {
+  if (look.imageUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- Blob/data-URL photo, next/image can't optimize it
+      <img
+        src={look.imageUrl}
+        alt=""
+        title={look.prompt}
+        className="h-16 w-16 shrink-0 rounded-xl object-cover ring-1 ring-white/15"
+      />
+    );
+  }
   return (
     <div
       className={[
@@ -56,14 +69,21 @@ function EmptySlot() {
  * top (empty dashed slots before the first generate); below that, a name
  * field (this is how a blank "+ Add member" row gets a real name — see
  * `onRename`/`renameSkidmarksMember`), a prompt field, a Photoreal
- * 60–100% slider, and Generate/Cancel. Nothing here calls a real image
- * model — `buildMockLook` (via `onGenerate`) mints a deterministic
- * color-swatch stand-in. The name commits on blur, Cancel/X/Escape, and
- * right before Generate — so typing a name then generating (without ever
- * blurring the field) still saves it.
+ * 60–100% slider, and Generate/Cancel. Real bug (2026-09-14): Generate
+ * used to never call an actual image model — `buildMockLook` just minted
+ * a color-swatch stand-in. It now calls the same real xAI backend the
+ * plate-still generator uses (`lib/plateGeneration.ts`'s
+ * `buildMemberLookRequest`/`generatePlateStill`), uploads the result to
+ * Blob, and hands the real photo's URL to `onGenerate`. A member's
+ * already-set photo (`avatarImage`), if any, goes along as an identity
+ * reference so *re*-generating a look stays the same person. The name
+ * commits on blur, Cancel/X/Escape, and right before Generate — so typing
+ * a name then generating (without ever blurring the field) still saves
+ * it.
  */
 export function SkidmarksGeneratePopup({
   member,
+  bandName,
   onGenerate,
   onRename,
   onClose,
@@ -72,6 +92,7 @@ export function SkidmarksGeneratePopup({
   const [prompt, setPrompt] = useState("");
   const [photoreal, setPhotoreal] = useState(DEFAULT_PHOTOREAL);
   const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const commitName = useCallback(() => {
     if (name.trim() !== member.name) onRename(name);
@@ -90,15 +111,46 @@ export function SkidmarksGeneratePopup({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [handleClose]);
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (generating) return;
     commitName();
     setGenerating(true);
-    setTimeout(() => {
-      onGenerate(prompt, photoreal);
-      setGenerating(false);
+    setError(null);
+    try {
+      let identityReferenceDataUrl: string | undefined;
+      if (member.avatarImage) {
+        identityReferenceDataUrl = await resolvePlateReferenceDataUrl(member.avatarImage);
+      }
+      const request = buildMemberLookRequest({
+        memberName: name.trim() || member.name,
+        bandName,
+        prompt,
+        photoreal,
+        identityReferenceDataUrl,
+      });
+      const outcome = await generatePlateStill(request);
+      if (!outcome.ok) {
+        setError(outcome.message);
+        return;
+      }
+      let dataUrl = outcome.dataUrl;
+      try {
+        dataUrl = await downscaleDataUrlImage(outcome.dataUrl);
+      } catch {
+        // Keep the original, full-size dataUrl.
+      }
+      const uploadOutcome = await uploadSkidmarksMemberPhoto(dataUrl);
+      onGenerate(prompt, photoreal, uploadOutcome.ok ? uploadOutcome.url : dataUrl);
+      if (!uploadOutcome.ok) {
+        setError(`Generated, but couldn't save it for persistence yet — ${uploadOutcome.message}`);
+      }
+      flushSkidmarksSessionNow();
       setPrompt("");
-    }, GENERATE_DELAY_MS);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not generate a look.");
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const hasLooks = member.looks.length > 0;
@@ -192,6 +244,12 @@ export function SkidmarksGeneratePopup({
             className="w-full accent-rose-400"
           />
         </div>
+
+        {error && (
+          <p role="alert" className="mt-3 text-[11px] leading-snug text-rose-300/90">
+            {error}
+          </p>
+        )}
 
         <div className="mt-4 flex items-center gap-2.5">
           <button

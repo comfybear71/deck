@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildMemberLookRequest,
   buildPlateGenerationRequest,
   buildSirayCharacterPrompt,
   generatePlateStill,
@@ -512,6 +513,81 @@ describe("buildPlateGenerationRequest", () => {
       bandName: "Solar Rebel",
     });
     expect(prompt).toContain("Music video for Solar Rebel.");
+  });
+});
+
+describe("buildMemberLookRequest", () => {
+  it("real reported bug: the member-casting Generate button used to never call a real image model at all — this is the request it now sends", () => {
+    const request = buildMemberLookRequest({
+      memberName: "Stuie",
+      bandName: "Grok Bot & the Destroyers",
+      prompt: "chrome headphones, stage lights, leather jacket",
+      photoreal: 80,
+    });
+    expect(request.prompt).toContain("chrome headphones, stage lights, leather jacket");
+    expect(request.prompt).toContain("Character portrait of Stuie, a member of Grok Bot & the Destroyers.");
+    expect(request.shotPrompt).toBe("chrome headphones, stage lights, leather jacket");
+    expect(request.referenceImageDataUrls).toEqual([]);
+  });
+
+  it("still builds a real, non-empty prompt when Stuart leaves the look prompt blank", () => {
+    const request = buildMemberLookRequest({
+      memberName: "Rock Grok",
+      bandName: "Solar Rebel",
+      prompt: "",
+      photoreal: 80,
+    });
+    expect(request.shotPrompt).toBe("");
+    expect(request.prompt.length).toBeGreaterThan(0);
+    expect(request.prompt).toContain("Rock Grok");
+  });
+
+  it("falls back to a generic name for a not-yet-named member", () => {
+    const request = buildMemberLookRequest({
+      memberName: "",
+      bandName: "Solar Rebel",
+      prompt: "",
+      photoreal: 80,
+    });
+    expect(request.prompt).toContain("the character");
+  });
+
+  it("wires an identity reference through when the member already has a photo, so re-generating stays the same person", () => {
+    const request = buildMemberLookRequest({
+      memberName: "Jack Ash",
+      bandName: "Jack Ash",
+      prompt: "front porch at dusk",
+      photoreal: 80,
+      identityReferenceDataUrl: "data:image/jpeg;base64,AAAA",
+    });
+    expect(request.referenceImageDataUrls).toEqual(["data:image/jpeg;base64,AAAA"]);
+    expect(request.prompt).toContain("Use the reference image as the exact likeness");
+  });
+
+  it("steers stylization wording off the photoreal slider", () => {
+    const veryReal = buildMemberLookRequest({
+      memberName: "Nova",
+      bandName: "Solar Rebel",
+      prompt: "",
+      photoreal: 100,
+    });
+    expect(veryReal.prompt).toContain("Fully photoreal");
+
+    const stylized = buildMemberLookRequest({
+      memberName: "Nova",
+      bandName: "Solar Rebel",
+      prompt: "",
+      photoreal: 60,
+    });
+    expect(stylized.prompt).toContain("Stylized illustrated look");
+
+    const middle = buildMemberLookRequest({
+      memberName: "Nova",
+      bandName: "Solar Rebel",
+      prompt: "",
+      photoreal: 80,
+    });
+    expect(middle.prompt).toContain("Photoreal cinematic look");
   });
 });
 
