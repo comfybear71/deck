@@ -17,7 +17,12 @@ interface SkidmarksMembersModuleProps {
   onAddMember: () => void;
   onRemoveMember: (memberId: string) => void;
   onSetMemberAvatarImage: (memberId: string, dataUrl: string) => void;
+  onRenameBand: (name: string) => void;
 }
+
+/** Longest a typed band name can be — generous, just guards against a
+ * pasted wall of text breaking the header's layout. */
+const MAX_BAND_NAME_LENGTH = 60;
 
 /** Native file picker's accept list — jpg/png/webp only, matches what a
  * phone's own photo library exports. */
@@ -228,6 +233,7 @@ export function SkidmarksMembersModule({
   onAddMember,
   onRemoveMember,
   onSetMemberAvatarImage,
+  onRenameBand,
 }: SkidmarksMembersModuleProps) {
   const canAddMore = band.members.length < MAX_MEMBERS_PER_BAND;
 
@@ -256,7 +262,15 @@ export function SkidmarksMembersModule({
   return (
     <div>
       <div className="rounded-2xl border border-rose-400/30 bg-rose-400/[0.03] p-4">
-        <h3 className="mb-2 truncate text-base font-bold text-rose-200">{band.name}</h3>
+        <input
+          type="text"
+          value={band.name}
+          onChange={(e) => onRenameBand(e.target.value.slice(0, MAX_BAND_NAME_LENGTH))}
+          onBlur={() => flushSkidmarksSessionNow()}
+          placeholder="Name your band"
+          aria-label="Band name"
+          className="mb-2 w-full truncate bg-transparent text-base font-bold text-rose-200 placeholder:text-rose-200/40 focus:outline-none"
+        />
         <div className="flex flex-col divide-y divide-white/[0.06]">
           {band.members.map((member) => (
             <MemberRow

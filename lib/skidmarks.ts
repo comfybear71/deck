@@ -1038,44 +1038,25 @@ function emptyState(): SkidmarksState {
 }
 
 /**
- * Deterministic "New" band mock — matches the locked mockup's example
- * exactly (Grok Bot & the destroyers, Rock Grok already looked, Stew
- * Balls waiting on a first generate). Tapping "New" more than once in a
- * session just re-mints another copy of this same roster with a fresh
- * id, same spirit as `buildProjectFromBrief` always producing the same
- * stub output for the same input.
+ * A genuinely blank "New" band — no name, no tagline, no members.
+ * Real bug (2026-09-14): this used to always mint the exact same
+ * hand-filled demo band ("Grok Bot & the destroyers", a member called
+ * "Rock Grok" already looked, another waiting) — matched an early
+ * mockup, but in real use it meant tapping "New" never actually gave
+ * Stuart a blank slate: every new band looked like a pre-filled old
+ * project reappearing, because it always was the same one. Now "New"
+ * really means new — Stuart types the band's name (via `onRenameBand`
+ * in `SkidmarksMembersModule`) and adds members himself.
  */
-export function buildNewMockBand(): SkidmarksBand {
+export function buildBlankBand(): SkidmarksBand {
   const bandId = generateId("band");
   return {
     id: bandId,
-    name: "Grok Bot & the destroyers",
-    tagline: "New band",
+    name: "",
+    tagline: "",
     coverSeed: Date.now(),
     editIcon: "pencil",
-    members: [
-      {
-        id: generateId("member"),
-        name: "Rock Grok",
-        role: "Solo",
-        emoji: "\u{1F916}",
-        looks: [
-          {
-            id: generateId("look"),
-            seed: 7,
-            prompt: "chrome headphones, stage lights, leather jacket",
-            photoreal: 80,
-            createdAt: Date.now(),
-          },
-        ],
-      },
-      {
-        id: generateId("member"),
-        name: "Stew Balls",
-        emoji: "\u{1F3B3}",
-        looks: [],
-      },
-    ],
+    members: [],
   };
 }
 
@@ -2023,7 +2004,7 @@ export function selectSkidmarksBand(bandId: string): void {
  * selects it. Capped at `BAND_HISTORY_LIMIT` (oldest non-seed band drops
  * first) so tapping "New" repeatedly doesn't grow the picker forever. */
 export function createSkidmarksBand(): SkidmarksBand {
-  const band = buildNewMockBand();
+  const band = buildBlankBand();
   const current = getSkidmarksSnapshot();
   const seedIds = new Set(SEED_BANDS.map((b) => b.id));
   const nonSeed = current.bands.filter((b) => !seedIds.has(b.id));
@@ -2108,6 +2089,17 @@ export function renameSkidmarksMember(
       ),
     };
   });
+  persist({ ...current, bands });
+}
+
+/** Renames a band — same "trim, persist" shape as `renameSkidmarksMember`.
+ * The only way to name a band created via `buildBlankBand` (see its doc
+ * comment); the input this calls from lives on `SkidmarksMembersModule`'s
+ * band-name header. */
+export function renameSkidmarksBand(bandId: string, name: string): void {
+  const current = getSkidmarksSnapshot();
+  const trimmed = name.trim();
+  const bands = current.bands.map((b) => (b.id === bandId ? { ...b, name: trimmed } : b));
   persist({ ...current, bands });
 }
 

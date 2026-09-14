@@ -88,6 +88,11 @@ function BandTile({
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [picking, setPicking] = useState(false);
+  // A brand-new band (`buildBlankBand`, `lib/skidmarks.ts`) has no name
+  // yet — this display-only fallback keeps its tile from rendering
+  // blank text before Stuart types one in; the stored `band.name` stays
+  // the real empty string until he does.
+  const displayName = band.name.trim() || "New band";
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -116,7 +121,7 @@ function BandTile({
         type="button"
         onClick={onSelect}
         aria-pressed={active}
-        aria-label={`Choose band ${band.name}`}
+        aria-label={`Choose band ${displayName}`}
         className={[
           "relative flex h-28 w-28 shrink-0 overflow-hidden rounded-2xl transition-transform active:scale-[0.98]",
           band.coverImage ? "bg-zinc-900" : `bg-gradient-to-br ${coverGradientClass(band.coverSeed)}`,
@@ -146,7 +151,7 @@ function BandTile({
             />
             <span className="absolute inset-x-0 bottom-0 flex flex-col gap-0.5 px-2.5 py-2 text-center">
               <span className="line-clamp-1 text-sm font-bold uppercase tracking-wide text-white drop-shadow">
-                {band.name}
+                {displayName}
               </span>
               <span className="line-clamp-1 text-[10px] leading-tight text-white/80">
                 {band.tagline}
@@ -156,7 +161,7 @@ function BandTile({
         ) : (
           <span className="flex h-full w-full flex-col items-center justify-center gap-1 px-2.5 text-center">
             <span className="line-clamp-2 text-sm font-bold uppercase tracking-wide text-white drop-shadow">
-              {band.name}
+              {displayName}
             </span>
             <span className="line-clamp-2 text-[10px] leading-tight text-white/70">
               {band.tagline}
@@ -168,7 +173,7 @@ function BandTile({
         type="button"
         onClick={() => fileInputRef.current?.click()}
         disabled={picking}
-        aria-label={`Change cover art for ${band.name}`}
+        aria-label={`Change cover art for ${displayName}`}
         title="Change cover art"
         className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-white/80 backdrop-blur-sm transition-colors hover:bg-black/70 hover:text-white disabled:opacity-60"
       >
@@ -181,7 +186,7 @@ function BandTile({
       <button
         type="button"
         onClick={onRemove}
-        aria-label={`Remove band ${band.name}`}
+        aria-label={`Remove band ${displayName}`}
         title="Remove band"
         className="absolute left-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-white/70 backdrop-blur-sm transition-colors hover:bg-red-500/60 hover:text-white"
       >
