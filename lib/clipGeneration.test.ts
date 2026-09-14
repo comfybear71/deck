@@ -193,7 +193,7 @@ describe("buildClipGenerationRequest", () => {
   });
 
   it("caps an overlong motionPrompt at MAX_MOTION_PROMPT_LENGTH rather than sending it verbatim", () => {
-    const long = "pan ".repeat(60).trim();
+    const long = "pan ".repeat(160).trim();
     expect(long.length).toBeGreaterThan(MAX_MOTION_PROMPT_LENGTH);
     const { prompt } = buildClipGenerationRequest({
       vocal: false,
