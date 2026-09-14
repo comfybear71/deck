@@ -19,9 +19,13 @@ function fakeDeps(overrides: Partial<ScriptSequenceRunnerDeps> = {}): ScriptSequ
     resolveIdentityDataUrl: vi.fn(async (dataUrl: string) => dataUrl),
     generateFirstStill: vi.fn(async () => ({ ok: true as const, dataUrl: "data:image/jpeg;base64,first" })),
     uploadStill: vi.fn(async (dataUrl: string) => ({ ok: true as const, url: `https://blob.example/${dataUrl.length}` })),
-    renderClip: vi.fn(async () => ({ ok: true as const, videoUrl: "https://blob.example/clip.mp4", persisted: true })),
+    renderClip: vi.fn(async () => ({
+      ok: true as const,
+      videoUrl: "https://blob.example/clip.mp4",
+      persisted: true,
+      lastFrameUrl: "https://blob.example/clip-lastframe.jpg",
+    })),
     recordRender: vi.fn(),
-    extractLastFrame: vi.fn(async () => "data:image/jpeg;base64,lastframe"),
     setPlateStill: vi.fn(),
     onProgress: vi.fn(),
     ...overrides,
@@ -46,8 +50,8 @@ describe("runScriptSequence", () => {
     expect(outcome).toEqual({ ok: true, renderedCount: 3 });
     expect(deps.renderClip).toHaveBeenCalledTimes(3);
     expect(deps.recordRender).toHaveBeenCalledTimes(3);
-    // Chains after clip 1 and clip 2, never after the last clip (nothing to chain into).
-    expect(deps.extractLastFrame).toHaveBeenCalledTimes(2);
+    // Chains after clip 1 and clip 2, never after the last clip (nothing to chain into) —
+    // each chain-fill plus clip 1's own first still is one setPlateStill call.
     expect(deps.setPlateStill).toHaveBeenCalledTimes(3); // clip 1's first still + 2 chained fills
   });
 
@@ -83,7 +87,12 @@ describe("runScriptSequence", () => {
     const segments = buildScriptSequenceSegments(threeParts(), []);
     const renderClip = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, videoUrl: "https://blob.example/1.mp4", persisted: true })
+      .mockResolvedValueOnce({
+        ok: true,
+        videoUrl: "https://blob.example/1.mp4",
+        persisted: true,
+        lastFrameUrl: "https://blob.example/1-lastframe.jpg",
+      })
       .mockResolvedValueOnce({ ok: false, message: "Load failed" });
     const deps = fakeDeps({ renderClip });
 
@@ -114,23 +123,25 @@ describe("runScriptSequence", () => {
     expect(deps.recordRender).not.toHaveBeenCalled();
   });
 
-  it("real reported bug (2026-09-14): a chain-extraction failure stops the run rather than rendering the next clip from nothing", async () => {
+  it("real reported bug (2026-09-14): a render with no server-captured last frame stops the run rather than rendering the next clip from nothing", async () => {
     const segments = buildScriptSequenceSegments(threeParts(), []);
-    const extractLastFrame = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("Load failed"))
-      .mockResolvedValue("data:image/jpeg;base64,lastframe");
-    const deps = fakeDeps({ extractLastFrame });
+    const renderClip = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      videoUrl: "https://blob.example/1.mp4",
+      persisted: true,
+      // no lastFrameUrl — server-side extraction (lib/serverVideoFrame.ts) didn't succeed for this render.
+    });
+    const deps = fakeDeps({ renderClip });
 
     const outcome = await run(segments, deps);
 
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(outcome.failedAtClipIndex).toBe(0);
-      expect(outcome.message).toContain("Load failed");
+      expect(outcome.message).toContain("couldn't capture");
       expect(outcome.renderedCount).toBe(1); // clip 1 itself did render successfully
     }
-    expect(deps.renderClip).toHaveBeenCalledTimes(1); // never reaches clip 2 — no starting frame for it
+    expect(renderClip).toHaveBeenCalledTimes(1); // never reaches clip 2 — no starting frame for it
   });
 
   it("never overwrites a plate that somehow already has a still mid-run", async () => {
@@ -140,8 +151,9 @@ describe("runScriptSequence", () => {
 
     await run(segments, deps);
 
-    // Only one chain-fill (clip 2 -> clip 3); clip 1 -> clip 2 is skipped since clip 2 already has a still.
-    expect(deps.extractLastFrame).toHaveBeenCalledTimes(1);
+    // Clip 1's own first still, plus only one chain-fill (clip 2 -> clip 3);
+    // clip 1 -> clip 2 is skipped since clip 2 already has a still.
+    expect(deps.setPlateStill).toHaveBeenCalledTimes(2);
   });
 
   it("reports live progress events in the right order for a full successful run", async () => {
@@ -189,6 +201,7 @@ describe("runScriptSequence", () => {
         ok: true,
         videoUrl: "https://blob.example/clip.mp4",
         persisted: true,
+        lastFrameUrl: "https://blob.example/clip-lastframe.jpg",
       }));
       const deps = fakeDeps({ renderClip });
 
@@ -206,7 +219,12 @@ describe("runScriptSequence", () => {
 
     it("stops honestly at a Vocal clip when no song audio is available, rather than sending an unfulfillable request", async () => {
       const segments = buildScriptSequenceSegments(threeParts(), realSongSegments);
-      const renderClip = vi.fn(async () => ({ ok: true as const, videoUrl: "https://blob.example/clip.mp4", persisted: true }));
+      const renderClip = vi.fn(async () => ({
+        ok: true as const,
+        videoUrl: "https://blob.example/clip.mp4",
+        persisted: true,
+        lastFrameUrl: "https://blob.example/clip-lastframe.jpg",
+      }));
       const deps = fakeDeps({ renderClip });
 
       const outcome = await run(segments, deps, undefined, vocalist);

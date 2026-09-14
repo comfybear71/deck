@@ -81,17 +81,33 @@ function padNumber(value: number, minWidth: number): string {
  * keeps the exact filename shape this feature always used, so nothing
  * changes for the common case.
  */
+function plateLetterSuffix(plateLetterIndex?: number): string {
+  return typeof plateLetterIndex === "number" && Number.isFinite(plateLetterIndex) && plateLetterIndex >= 0
+    ? String.fromCharCode(97 + Math.floor(plateLetterIndex))
+    : "";
+}
+
 export function buildClipRenderFilename(
   clipIndex: number,
   startSec: number,
   endSec: number,
   plateLetterIndex?: number
 ): string {
-  const suffix =
-    typeof plateLetterIndex === "number" && Number.isFinite(plateLetterIndex) && plateLetterIndex >= 0
-      ? String.fromCharCode(97 + Math.floor(plateLetterIndex))
-      : "";
-  return `${padNumber(clipIndex, 2)}${suffix}_${padNumber(startSec, 4)}-${padNumber(endSec, 4)}_render.mp4`;
+  return `${padNumber(clipIndex, 2)}${plateLetterSuffix(plateLetterIndex)}_${padNumber(startSec, 4)}-${padNumber(endSec, 4)}_render.mp4`;
+}
+
+/** Sibling filename for the render's own extracted last frame (see
+ * `buildClipRenderLastFramePathname`'s doc comment) — same numbering
+ * scheme as `buildClipRenderFilename`, `_lastframe.jpg` instead of
+ * `_render.mp4` so the two are trivially told apart by eye in a Blob
+ * listing. */
+export function buildClipRenderLastFrameFilename(
+  clipIndex: number,
+  startSec: number,
+  endSec: number,
+  plateLetterIndex?: number
+): string {
+  return `${padNumber(clipIndex, 2)}${plateLetterSuffix(plateLetterIndex)}_${padNumber(startSec, 4)}-${padNumber(endSec, 4)}_lastframe.jpg`;
 }
 
 /** Builds this plate's one persisted-render pathname — stable across
@@ -111,6 +127,29 @@ export function buildClipRenderPathname(
   plateLetterIndex?: number
 ): string {
   return `${CLIP_RENDER_PATH_PREFIX}${segmentId}/${plateId}/${buildClipRenderFilename(clipIndex, startSec, endSec, plateLetterIndex)}`;
+}
+
+/**
+ * Sibling pathname, same `(segmentId, plateId)` directory, for the JPEG
+ * `app/api/skidmarks/generate-clip/route.ts` extracts server-side (via
+ * ffmpeg, `lib/serverVideoFrame.ts`) from this render's own last frame —
+ * the real replacement for the old client-side `<video>`+`<canvas>`
+ * capture (`lib/videoFrame.ts`, removed 2026-09-14 after three separate
+ * live failures on Stuart's iPhone: generation already runs in the
+ * cloud, so frame carry belongs in the cloud too, not in Safari). Lives
+ * under the exact same plate prefix as the video itself
+ * (`buildClipRenderPlatePrefix`), so one `pruneStaleRendersForPlate` call
+ * already covers both — see that route's `persistRenderBytesToBlob`.
+ */
+export function buildClipRenderLastFramePathname(
+  segmentId: string,
+  plateId: string,
+  clipIndex: number,
+  startSec: number,
+  endSec: number,
+  plateLetterIndex?: number
+): string {
+  return `${CLIP_RENDER_PATH_PREFIX}${segmentId}/${plateId}/${buildClipRenderLastFrameFilename(clipIndex, startSec, endSec, plateLetterIndex)}`;
 }
 
 /**

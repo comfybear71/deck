@@ -605,6 +605,16 @@ export type ClipGenerationOutcome =
        * caller never asked for persistence in the first place. Plain-
        * language, shown verbatim to Stuart rather than swallowed. */
       persistError?: string;
+      /** The durable Blob URL of this render's own last frame, extracted
+       * server-side (`app/api/skidmarks/generate-clip/route.ts`'s
+       * `persistRenderBytesToBlob`, `lib/serverVideoFrame.ts`) — the
+       * real "last frame becomes the next clip's first plate" mechanism,
+       * now fully server-side (see that module's doc comment for why
+       * the old client-side `<video>`+`<canvas>` capture was replaced).
+       * Absent when `persisted` is `false`, or when extraction itself
+       * failed (best-effort layered on top of a successful save — see
+       * that route's doc comment). */
+      lastFrameUrl?: string;
     }
   | { ok: false; unconfigured: boolean; message: string };
 
@@ -619,6 +629,7 @@ interface GenerateClipRouteSuccessBody {
   durationSec?: unknown;
   persisted?: unknown;
   persistError?: unknown;
+  lastFrameUrl?: unknown;
 }
 
 /**
@@ -674,7 +685,15 @@ export async function generateSkidmarksClip(
   const durationSec = typeof okBody.durationSec === "number" ? okBody.durationSec : 0;
   const persisted = okBody.persisted === true;
   const persistError = typeof okBody.persistError === "string" ? okBody.persistError : undefined;
-  return persistError ? { ok: true, videoUrl, durationSec, persisted, persistError } : { ok: true, videoUrl, durationSec, persisted };
+  const lastFrameUrl = typeof okBody.lastFrameUrl === "string" ? okBody.lastFrameUrl : undefined;
+  return {
+    ok: true,
+    videoUrl,
+    durationSec,
+    persisted,
+    ...(persistError ? { persistError } : {}),
+    ...(lastFrameUrl ? { lastFrameUrl } : {}),
+  };
 }
 
 /** Kept for backward compatibility with any caller that still imports

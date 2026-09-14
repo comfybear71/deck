@@ -32,6 +32,14 @@ export interface PersistedClipRender {
   clipIndex: number;
   startSec: number;
   endSec: number;
+  /** This render's own extracted last frame, as a durable Blob URL —
+   * server-side extraction (`lib/serverVideoFrame.ts`), set only when it
+   * succeeded. The real "carry this clip's last frame into the next
+   * clip's first plate" mechanism (`SkidmarksDetailSheet.tsx`'s
+   * `handlePersisted`, `lib/scriptSequenceRunner.ts`) reads this
+   * directly — see `lib/clipGeneration.ts`'s `ClipGenerationOutcome`
+   * for where it originates. */
+  lastFrameUrl?: string;
 }
 
 const CLIP_RENDERS_ENDPOINT = "/api/skidmarks/clip-renders";
@@ -52,7 +60,8 @@ function isPersistedClipRenderShape(value: unknown): value is PersistedClipRende
     typeof v.filename === "string" &&
     typeof v.clipIndex === "number" &&
     typeof v.startSec === "number" &&
-    typeof v.endSec === "number"
+    typeof v.endSec === "number" &&
+    (v.lastFrameUrl === undefined || typeof v.lastFrameUrl === "string")
   );
 }
 

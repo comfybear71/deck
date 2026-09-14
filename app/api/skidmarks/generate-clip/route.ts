@@ -1,6 +1,12 @@
 import { del, list, put } from "@vercel/blob";
 import { NextResponse } from "next/server";
-import { buildClipRenderPathname, buildClipRenderPlatePrefix, isSafeSegmentId } from "@/lib/clipRenderBlob";
+import {
+  buildClipRenderLastFramePathname,
+  buildClipRenderPathname,
+  buildClipRenderPlatePrefix,
+  isSafeSegmentId,
+} from "@/lib/clipRenderBlob";
+import { extractLastVideoFrameServer } from "@/lib/serverVideoFrame";
 import {
   buildLtx23Ia2vWorkflow,
   downloadComfyCloudOutput,
@@ -700,7 +706,20 @@ export function resolvePersistenceTarget(body: GenerateClipRequestBody): RenderP
   };
 }
 
-type PersistRenderOutcome = { ok: true; url: string } | { ok: false; reason: string };
+type PersistRenderOutcome =
+  | {
+      ok: true;
+      url: string;
+      /** The durable Blob URL of this render's own last frame, extracted
+       * server-side via ffmpeg (`lib/serverVideoFrame.ts`) — present
+       * whenever that extraction and its own upload both succeeded.
+       * Absent (not a failure of the render/save itself) when either
+       * step didn't — frame-carry is best-effort layered on top of a
+       * save that already succeeded, never something that can turn a
+       * successful save into a failure. See `persistRenderBytesToBlob`. */
+      lastFrameUrl?: string;
+    }
+  | { ok: false; reason: string };
 
 /**
  * Deletes every blob already sitting under this plate's own directory
@@ -723,11 +742,17 @@ type PersistRenderOutcome = { ok: true; url: string } | { ok: false; reason: str
  * orphan blob (a storage-hygiene issue, not a cost or correctness one
  * \u2014 see AGENTS.md's "Persisting a render to Vercel Blob is a storage
  * cost, not a per-tap xAI spend risk").
+ *
+ * `keepPathnames` takes more than one now that a plate can carry two
+ * live blobs at once (the render itself, plus its own extracted last
+ * frame \u2014 `buildClipRenderLastFramePathname`, same plate prefix): both
+ * are "the current take" and neither should be pruned as if it were a
+ * leftover from an earlier one.
  */
-async function pruneStaleRendersForPlate(segmentId: string, plateId: string, keepPathname: string): Promise<void> {
+async function pruneStaleRendersForPlate(segmentId: string, plateId: string, keepPathnames: string[]): Promise<void> {
   try {
     const { blobs } = await list({ prefix: buildClipRenderPlatePrefix(segmentId, plateId) });
-    const stale = blobs.filter((b) => b.pathname !== keepPathname).map((b) => b.pathname);
+    const stale = blobs.filter((b) => !keepPathnames.includes(b.pathname)).map((b) => b.pathname);
     if (stale.length > 0) await del(stale);
   } catch {
     // Best-effort \u2014 see this function's doc comment.
@@ -839,8 +864,42 @@ async function persistRenderBytesToBlob(bytes: Uint8Array, target: RenderPersist
       };
     }
 
-    await pruneStaleRendersForPlate(target.segmentId, target.plateId, pathname);
-    return { ok: true, url: blob.url };
+    // Server-side last-frame extraction (`lib/serverVideoFrame.ts`) —
+    // the real replacement for the old client-side `<video>`+`<canvas>`
+    // capture, which failed live three separate times on Stuart's
+    // iPhone (see that module's doc comment). Best-effort, layered on
+    // top of a save that already succeeded above: a failure here never
+    // fails the render/save itself, it just means this plate's
+    // `lastFrameUrl` comes back unset and whatever's chaining off this
+    // render (the manual single-clip flow, the script-sequence
+    // automation) reports that honestly rather than guessing.
+    let lastFramePathname: string | undefined;
+    let lastFrameUrl: string | undefined;
+    const frameOutcome = await extractLastVideoFrameServer(bytes);
+    if (frameOutcome.ok) {
+      lastFramePathname = buildClipRenderLastFramePathname(
+        target.segmentId,
+        target.plateId,
+        target.clipIndex,
+        target.startSec,
+        target.endSec,
+        target.plateLetterIndex
+      );
+      try {
+        const frameBlob = await put(lastFramePathname, Buffer.from(frameOutcome.bytes), {
+          access: "public",
+          contentType: "image/jpeg",
+          addRandomSuffix: false,
+          allowOverwrite: true,
+        });
+        lastFrameUrl = frameBlob.url;
+      } catch {
+        lastFramePathname = undefined; // nothing actually saved there — don't protect it from pruning below
+      }
+    }
+
+    await pruneStaleRendersForPlate(target.segmentId, target.plateId, [pathname, lastFramePathname].filter((p): p is string => Boolean(p)));
+    return lastFrameUrl ? { ok: true, url: blob.url, lastFrameUrl } : { ok: true, url: blob.url };
   } catch (err) {
     return {
       ok: false,
@@ -1125,7 +1184,12 @@ async function handleVocalComfyLtxRender(
 
   const persistOutcome = await persistRenderBytesToBlob(downloadResult.bytes, persistenceTarget);
   if (persistOutcome.ok) {
-    return NextResponse.json({ videoUrl: persistOutcome.url, durationSec: actualDurationSec, persisted: true });
+    return NextResponse.json({
+      videoUrl: persistOutcome.url,
+      durationSec: actualDurationSec,
+      persisted: true,
+      ...(persistOutcome.lastFrameUrl ? { lastFrameUrl: persistOutcome.lastFrameUrl } : {}),
+    });
   }
 
   // Persistence failed \u2014 still return the render Stuart already paid
@@ -1265,7 +1329,12 @@ async function handleInstrumentalH3Render(
 
   const persistOutcome = await persistRenderBytesToBlob(downloadResult.bytes, persistenceTarget);
   if (persistOutcome.ok) {
-    return NextResponse.json({ videoUrl: persistOutcome.url, durationSec: requestedDurationSec, persisted: true });
+    return NextResponse.json({
+      videoUrl: persistOutcome.url,
+      durationSec: requestedDurationSec,
+      persisted: true,
+      ...(persistOutcome.lastFrameUrl ? { lastFrameUrl: persistOutcome.lastFrameUrl } : {}),
+    });
   }
 
   // Persistence failed — still return the render Stuart already paid
@@ -1432,6 +1501,7 @@ export async function POST(request: Request) {
       videoUrl: persistOutcome.url,
       durationSec: pollResult.durationSec,
       persisted: true,
+      ...(persistOutcome.lastFrameUrl ? { lastFrameUrl: persistOutcome.lastFrameUrl } : {}),
     });
   }
 

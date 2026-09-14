@@ -647,8 +647,8 @@ export interface SkidmarksPlateStill {
    * unchanged, it just never gets re-inlined once regenerated/replaced. */
   dataUrl: string;
   /** `"chained"` (2026-09-14): auto-filled from the last frame of the
-   * *previous* clip's finished render (`lib/videoFrame.ts`'s
-   * `extractLastVideoFrame`) rather than something Stuart uploaded or
+   * *previous* clip's finished render, extracted server-side
+   * (`lib/serverVideoFrame.ts`) rather than something Stuart uploaded or
    * generated himself — Stuart's own ask, so cuts flow clip-to-clip
    * through a whole song instead of every clip starting from an
    * unrelated fresh still. Only ever auto-set onto a plate slot that was
@@ -2925,8 +2925,9 @@ export interface ChainedPlateTarget {
  * itself. Same "pure planner, side-effecting runner" split
  * `lib/autoPlate.ts`'s `planAutoPlateFill` already uses, for the same
  * reason: the decision (which plate, if any) is fully unit-testable
- * without a real video file or network call, while `extractLastVideoFrame`
- * (`lib/videoFrame.ts`) and the Blob upload stay in
+ * without a real video file or network call, while the actual frame
+ * carry — server-side extraction (`lib/serverVideoFrame.ts`) that
+ * already happened by the time a render is persisted — stays in
  * `SkidmarksDetailSheet.tsx`'s `handlePersisted`, which actually calls
  * this.
  *

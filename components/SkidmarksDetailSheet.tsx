@@ -5,8 +5,6 @@ import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
 import { useSkidmarksClipRenders } from "@/hooks/useSkidmarksClipRenders";
 import { buildGeneratedLook, flushSkidmarksSessionNow, resolveChainedPlateTarget } from "@/lib/skidmarks";
 import type { PersistedClipRender } from "@/lib/clipRenders";
-import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
-import { extractLastVideoFrame } from "@/lib/videoFrame";
 import {
   archiveSkidmarksSession,
   fetchArchiveSnapshot,
@@ -153,25 +151,29 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     const target = resolveChainedPlateTarget(session.mp3?.segments ?? [], render.segmentId, render.plateId);
     if (!target) return;
 
-    setChainNote(null);
-    extractLastVideoFrame(render.url)
-      .then(async (dataUrl) => {
-        const uploadOutcome = await uploadSkidmarksPlateStill(dataUrl);
-        setClipPlateStill(target.segmentId, target.plateId, {
-          dataUrl: uploadOutcome.ok ? uploadOutcome.url : dataUrl,
-          source: "chained",
-          createdAt: Date.now(),
-          ...(target.featuresLockedCharacter ? { featuresLockedCharacter: true } : {}),
-        });
-        flushSkidmarksSessionNow();
-        setChainNote({ ok: true, message: "Filled the next clip's first plate from this one's last frame." });
-      })
-      .catch((err) => {
-        setChainNote({
-          ok: false,
-          message: `Couldn't auto-fill the next clip's first plate: ${err instanceof Error ? err.message : "unknown error"}`,
-        });
+    // `render.lastFrameUrl` is already a durable Blob URL, extracted
+    // server-side by ffmpeg (`app/api/skidmarks/generate-clip/route.ts`,
+    // `lib/serverVideoFrame.ts`) right when the render itself was
+    // persisted — no client-side capture (and no second upload) left to
+    // do here anymore. See that module's doc comment for why this
+    // replaced the old `<video>`+`<canvas>` capture, which failed live
+    // three separate times on Stuart's iPhone.
+    if (!render.lastFrameUrl) {
+      setChainNote({
+        ok: false,
+        message: "Couldn't auto-fill the next clip's first plate: the server couldn't capture this render's last frame.",
       });
+      return;
+    }
+
+    setClipPlateStill(target.segmentId, target.plateId, {
+      dataUrl: render.lastFrameUrl,
+      source: "chained",
+      createdAt: Date.now(),
+      ...(target.featuresLockedCharacter ? { featuresLockedCharacter: true } : {}),
+    });
+    flushSkidmarksSessionNow();
+    setChainNote({ ok: true, message: "Filled the next clip's first plate from this one's last frame." });
   };
 
   const handleRemoveBand = (bandId: string) => {
