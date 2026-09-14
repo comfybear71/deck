@@ -479,9 +479,12 @@ export interface BuildClipGenerationRequestParams {
  * must never become legible/well-lit or read as a normal, watchable
  * stare, even as he sings — the shadow-face lock holds for every frame
  * of the render, not just its first one; (3) a close-up push-in/zoom
- * never earns an exception — the closer the camera gets, the more
- * important the shadow stays, not less (Stuart's own live-QA report,
- * 2026-09-14: zooming in tight almost revealed a normal human face).
+ * makes the shadow *darker*, not just held steady — the closer the
+ * camera gets to his face, the deeper the shadow gets, so the tightest
+ * close-up is the most hidden moment of the clip, not the most at-risk
+ * one (Stuart's own live-QA report, 2026-09-14: zooming in tight almost
+ * revealed a normal human face; his own follow-up ask, same day: the
+ * shadow should darken as the camera nears his face, not just hold).
  */
 function lockedCharacterVideoNote(): string {
   return (
@@ -489,9 +492,10 @@ function lockedCharacterVideoNote(): string {
     "in frame \u2014 never invented on a shot where his face turns away or his mouth leaves frame. His face " +
     "never becomes legible, well-lit, or reads as a normal, watchable stare at any point in the motion, even " +
     "while he's singing \u2014 the shadow-face lock holds for the whole clip, not just its first frame. This " +
-    "matters most exactly when the camera pushes in close or zooms tight on him: a close-up never lightens or " +
-    "thins the shadow \u2014 his face must stay just as fully hidden, unlit, and unrecognizable at the tightest " +
-    "zoom as it is in a wide shot. He must never resolve into a normal, visible human face at any zoom level."
+    "matters most exactly when the camera pushes in close or zooms tight on him: the shadow gets darker and " +
+    "deeper the closer the camera gets, never lighter or thinner \u2014 the tightest close-up on his face is " +
+    "the darkest, most completely hidden moment of the whole clip. He must never resolve into a normal, " +
+    "visible human face at any zoom level, and a zoom in is the one moment that most demands the shadow hold."
   );
 }
 
