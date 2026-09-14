@@ -116,16 +116,13 @@ export async function runScriptSequence(
       return { ok: false, failedAtClipIndex: 0, message: stillOutcome.message, renderedCount: 0 };
     }
     const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
-    deps.setPlateStill(first.id, first.plates[0].id, {
-      dataUrl: uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl,
-      source: "generated",
-      createdAt: Date.now(),
-    });
-    first.plates[0].still = {
+    const firstStill: SkidmarksPlateStill = {
       dataUrl: uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl,
       source: "generated",
       createdAt: Date.now(),
     };
+    deps.setPlateStill(first.id, first.plates[0].id, firstStill);
+    first.plates[0].still = firstStill; // so the loop below sees it immediately, without a store re-read
   }
 
   for (let i = 0; i < segments.length; i++) {

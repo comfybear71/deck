@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { parseScriptSequence } from "@/lib/scriptSequence";
 import {
   buildScriptSequenceSegments,
   flushSkidmarksSessionNow,
+  readImageFileAsDataUrl,
   type SkidmarksBand,
   type SkidmarksClipSegment,
   type SkidmarksPlateStill,
@@ -15,6 +16,10 @@ import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import { extractLastVideoFrame } from "@/lib/videoFrame";
 import { runScriptSequence, type ScriptSequenceRunEvent } from "@/lib/scriptSequenceRunner";
 import type { PersistedClipRender } from "@/lib/clipRenders";
+
+/** Native file picker's accept list — jpg/png/webp only, matches every
+ * other photo picker in this feature. */
+const STARTING_IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp";
 
 interface SkidmarksScriptSequencePanelProps {
   band: SkidmarksBand;
@@ -79,8 +84,32 @@ export function SkidmarksScriptSequencePanel({
   const [running, setRunning] = useState(false);
   const [progressText, setProgressText] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  /** Real reported gap (2026-09-14): this automation always built brand-
+   * new blank clips, so there was no way to hand it a real starting
+   * image for clip 1 — it would just auto-generate one every time,
+   * silently ignoring anything Stuart already had ready. Picked here,
+   * uploaded and set onto clip 1's plate in `handleRun` before the
+   * runner ever looks at it — `runScriptSequence` already skips
+   * generating a first still whenever one is already there (same path
+   * a manual clip that's already got a still uses), so this needs no
+   * runner change at all, just handing it a real still up front. */
+  const [startingImageDataUrl, setStartingImageDataUrl] = useState<string | null>(null);
+  const [startingImagePicking, setStartingImagePicking] = useState(false);
+  const startingImageInputRef = useRef<HTMLInputElement | null>(null);
 
   const parts = useMemo(() => parseScriptSequence(script), [script]);
+
+  const handlePickStartingImage = async (file: File) => {
+    setStartingImagePicking(true);
+    try {
+      const dataUrl = await readImageFileAsDataUrl(file);
+      setStartingImageDataUrl(dataUrl);
+    } catch {
+      setResult({ ok: false, message: "Couldn't read that image — try a different file." });
+    } finally {
+      setStartingImagePicking(false);
+    }
+  };
 
   const handleRun = async () => {
     if (running) return;
@@ -99,8 +128,27 @@ export function SkidmarksScriptSequencePanel({
 
     const vocalist = resolveVocalistForPrompt(band.members);
     const segments = buildScriptSequenceSegments(parts, realSegments);
+
+    // Set up the new timeline in the store *first* — setting a still on
+    // clip 1's plate below only works once that plate actually exists
+    // there (`setSkidmarksClipPlateStill` looks it up by id in the
+    // current store state, which doesn't have these brand-new segments
+    // until this call lands).
     onSetScriptSequence(segments);
     flushSkidmarksSessionNow();
+
+    if (startingImageDataUrl) {
+      setProgressText("Saving your starting image for clip 1…");
+      const uploadOutcome = await uploadSkidmarksPlateStill(startingImageDataUrl);
+      const startingStill: SkidmarksPlateStill = {
+        dataUrl: uploadOutcome.ok ? uploadOutcome.url : startingImageDataUrl,
+        source: "upload",
+        createdAt: Date.now(),
+      };
+      segments[0].plates[0].still = startingStill; // so the runner below sees it immediately
+      onSetClipPlateStill(segments[0].id, segments[0].plates[0].id, startingStill);
+      flushSkidmarksSessionNow();
+    }
 
     const outcome = await runScriptSequence(
       segments,
@@ -136,6 +184,7 @@ export function SkidmarksScriptSequencePanel({
     flushSkidmarksSessionNow();
     setRunning(false);
     setProgressText(null);
+    setStartingImageDataUrl(null); // one-time input for this run — never silently reused on a later, different script
     setResult(
       outcome.ok
         ? { ok: true, message: `All ${outcome.renderedCount} clips rendered and chained.` }
@@ -157,6 +206,60 @@ export function SkidmarksScriptSequencePanel({
         rows={4}
         className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none disabled:opacity-60"
       />
+
+      <div className="flex items-center gap-2.5">
+        {startingImageDataUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- data-URL preview, next/image can't optimize it
+          <img
+            src={startingImageDataUrl}
+            alt=""
+            className="h-12 w-12 shrink-0 rounded-lg object-cover ring-1 ring-white/15"
+          />
+        ) : (
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-dashed border-white/15 text-[9px] text-white/25">
+            None
+          </span>
+        )}
+        <div className="flex flex-1 flex-col gap-1">
+          <span className="text-[11px] text-white/40">
+            {startingImageDataUrl
+              ? "Clip 1 will start from your picture, not a fresh generated one."
+              : "Optional: clip 1's starting image — skips generating one."}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => startingImageInputRef.current?.click()}
+              disabled={running || startingImagePicking}
+              className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {startingImagePicking ? "Reading…" : startingImageDataUrl ? "Change" : "Upload"}
+            </button>
+            {startingImageDataUrl && (
+              <button
+                type="button"
+                onClick={() => setStartingImageDataUrl(null)}
+                disabled={running}
+                className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] font-medium text-white/50 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+        <input
+          ref={startingImageInputRef}
+          type="file"
+          accept={STARTING_IMAGE_ACCEPT}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) handlePickStartingImage(file);
+          }}
+          className="hidden"
+        />
+      </div>
+
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] text-white/40">
           {parts.length > 0 ? `Found ${parts.length} part${parts.length === 1 ? "" : "s"}.` : "No parts found yet."}
