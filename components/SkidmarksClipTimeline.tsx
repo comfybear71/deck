@@ -395,7 +395,11 @@ export function SkidmarksClipTimeline({
 
       {sectionOpen && (
         <>
-          {note && <p className="text-[11px] leading-relaxed text-amber-200/70">{note}</p>}
+          {note && (
+            <p className="rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-[12px] leading-relaxed text-amber-100">
+              {note}
+            </p>
+          )}
 
           {chainNote && (
             <div
