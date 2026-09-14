@@ -169,6 +169,7 @@ import {
 } from "./transcription";
 import { uploadSkidmarksMemberPhoto } from "./memberPhotoBlob";
 import { uploadSkidmarksPlateStill } from "./plateStillBlob";
+import type { ScriptSequencePart } from "./scriptSequence";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -812,6 +813,61 @@ export function buildDemoSegments(totalSec: number): SkidmarksClipSegment[] {
     const endSec = i === pattern.length - 1 ? totalSec : cursor + step.frac * totalSec;
     cursor = endSec;
     return buildDefaultSegment(startSec, endSec, step.label);
+  });
+}
+
+/**
+ * Stuart's "paste a script, get a real clip timeline" automation
+ * (2026-09-14, the "Liquid Horizon" 16-part black-and-white trippy
+ * sequence) — turns `lib/scriptSequence.ts`'s parsed parts into real
+ * clip segments, one per part, Instrumental/Grok, each spanning exactly
+ * that part's own `[startSec, endSec)`. **This is the actual duration
+ * enforcement Stuart asked for**: with exactly one plate per clip,
+ * `lib/clipGeneration.ts`'s `computePlateDurationSec` (segment length
+ * ÷ plate count, clamped to Grok's `[5, 15]`s range) resolves to
+ * exactly that part's real span — a 15s-wide part always renders at a
+ * real, backend-enforced 15s, never just a number typed into the
+ * prompt text and hoped for. Pure — builds segment objects only, no
+ * store write; `setSkidmarksScriptSequence` below is the one that
+ * actually persists the result.
+ */
+export function buildScriptSequenceSegments(parts: ScriptSequencePart[]): SkidmarksClipSegment[] {
+  return parts.map((part) => ({
+    id: generateId("segment"),
+    startSec: part.startSec,
+    endSec: part.endSec,
+    label: "instrumental",
+    model: "grok",
+    shotPrompt: part.prompt,
+    uncensoredPlateStills: false,
+    plates: [buildBlankPlateSlot()],
+    selectedPlateId: null,
+    instrumentalVideoModel: "grok",
+  }));
+}
+
+/**
+ * Replaces the active session's whole clip timeline with a script
+ * sequence's segments — a deliberate wholesale swap, not a merge, since
+ * a pasted script describes a complete, from-scratch timeline (Stuart's
+ * "Stu Balls" test band, not tied to any song's real vocal timing). A
+ * no-op if no MP3 is attached yet — this only replaces an existing
+ * `segments` array, it never invents an `mp3` to hold one; the caller
+ * (`components/SkidmarksScriptSequencePanel.tsx`) tells Stuart plainly
+ * to attach something first if this returns having done nothing.
+ * `segmentsSource: "seed-fallback"` is the closest honest fit among the
+ * existing values — a script sequence is neither a real transcription
+ * nor the energy heuristic, so it must never claim to be either.
+ */
+export function setSkidmarksScriptSequence(segments: SkidmarksClipSegment[]): void {
+  const current = getSkidmarksSnapshot();
+  if (!current.session.mp3) return;
+  persist({
+    ...current,
+    session: {
+      ...current.session,
+      mp3: { ...current.session.mp3, segments, segmentsSource: "seed-fallback" },
+    },
   });
 }
 

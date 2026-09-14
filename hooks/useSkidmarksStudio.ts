@@ -38,12 +38,14 @@ import {
   setSkidmarksMemberAvatarImage,
   setSkidmarksMp3AudioUrl,
   setSkidmarksMp3Duration,
+  setSkidmarksScriptSequence,
   setSkidmarksSegmentInstrumentalVideoModel,
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
   subscribeSkidmarks,
   subscribeSkidmarksSessionSync,
   type SkidmarksBand,
+  type SkidmarksClipSegment,
   type SkidmarksInstrumentalVideoModel,
   type SkidmarksLook,
   type SkidmarksMp3Attachment,
@@ -283,6 +285,15 @@ export function useSkidmarksStudio() {
     []
   );
 
+  /** Stuart's "paste a script, get a real timeline" automation
+   * (2026-09-14) — wholesale-replaces the active song's clip list with
+   * a parsed script sequence's segments. See
+   * `setSkidmarksScriptSequence`'s doc comment. */
+  const setScriptSequence = useCallback(
+    (segments: SkidmarksClipSegment[]) => setSkidmarksScriptSequence(segments),
+    []
+  );
+
   /** The "+" control — appends one more empty plate slot to a clip's
    * strip (`addSkidmarksClipPlate`'s doc comment covers the cap). */
   const addClipPlate = useCallback((segmentId: string) => addSkidmarksClipPlate(segmentId), []);
@@ -362,6 +373,7 @@ export function useSkidmarksStudio() {
     nudgeSegmentStart,
     nudgeSegmentEnd,
     setClipPlateStill,
+    setScriptSequence,
     addClipPlate,
     removeClipPlate,
     selectClipPlate,

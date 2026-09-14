@@ -19,6 +19,7 @@ import { SkidmarksMembersModule } from "./SkidmarksMembersModule";
 import { SkidmarksGeneratePopup } from "./SkidmarksGeneratePopup";
 import { SkidmarksMp3Card } from "./SkidmarksMp3Card";
 import { SkidmarksClipTimeline } from "./SkidmarksClipTimeline";
+import { SkidmarksScriptSequencePanel } from "./SkidmarksScriptSequencePanel";
 import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksArchiveShelf } from "./SkidmarksArchiveShelf";
 
@@ -62,6 +63,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     nudgeSegmentStart,
     nudgeSegmentEnd,
     setClipPlateStill,
+    setScriptSequence,
     addClipPlate,
     removeClipPlate,
     selectClipPlate,
@@ -377,6 +379,16 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   </p>
                 )}
               </div>
+            )}
+
+            {activeBand && (
+              <SkidmarksScriptSequencePanel
+                band={activeBand}
+                hasMp3={!!session.mp3}
+                onSetScriptSequence={setScriptSequence}
+                onSetClipPlateStill={setClipPlateStill}
+                onRecordRender={addRender}
+              />
             )}
 
             {session.mp3 && activeBand && (

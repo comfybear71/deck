@@ -4,11 +4,13 @@ import {
   applySkidmarksAnalysisResult,
   applySkidmarksTranscriptionResult,
   attachSkidmarksMp3,
+  buildScriptSequenceSegments,
   canNudgeSkidmarksSegmentBoundary,
   createMp3Attachment,
   createSkidmarksBand,
   renameSkidmarksBand,
   resolveChainedPlateTarget,
+  setSkidmarksScriptSequence,
   defaultSegmentModel,
   getSkidmarksSessionSyncSnapshot,
   getSkidmarksSnapshot,
@@ -1608,5 +1610,64 @@ describe("resolveChainedPlateTarget", () => {
     ];
     const target = resolveChainedPlateTarget(segments, "seg-a", "plate-a2");
     expect(target?.plateId).toBe("plate-b1");
+  });
+});
+
+describe("buildScriptSequenceSegments / setSkidmarksScriptSequence", () => {
+  it("real reported ask: turns each parsed script part into one Instrumental/Grok clip with exactly one blank plate", () => {
+    const segments = buildScriptSequenceSegments([
+      { index: 1, title: "The Liquid Horizon", startSec: 0, endSec: 15, prompt: "Molten glass." },
+      { index: 2, title: "The Mercury Vortex", startSec: 15, endSec: 30, prompt: "Swirling vortex." },
+    ]);
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toMatchObject({
+      startSec: 0,
+      endSec: 15,
+      label: "instrumental",
+      model: "grok",
+      instrumentalVideoModel: "grok",
+      shotPrompt: "Molten glass.",
+    });
+    expect(segments[0].plates).toHaveLength(1);
+    expect(segments[0].plates[0].still).toBeUndefined();
+  });
+
+  it("mints a fresh segment id for each part, so two script runs never collide", () => {
+    const parts = [{ index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" }];
+    const first = buildScriptSequenceSegments(parts);
+    const second = buildScriptSequenceSegments(parts);
+    expect(first[0].id).not.toBe(second[0].id);
+  });
+
+  it("every built segment spans exactly [startSec, endSec) with one plate — the real 15s enforcement, not just prompt text", () => {
+    const segments = buildScriptSequenceSegments([
+      { index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" },
+      { index: 2, title: "B", startSec: 15, endSec: 30, prompt: "y" },
+    ]);
+    for (const segment of segments) {
+      expect(segment.endSec - segment.startSec).toBe(15);
+      expect(segment.plates).toHaveLength(1);
+    }
+  });
+
+  it("setSkidmarksScriptSequence replaces the attached song's segments wholesale", () => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("liquid-horizon.mp3", 240));
+    const segments = buildScriptSequenceSegments([
+      { index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" },
+    ]);
+    setSkidmarksScriptSequence(segments);
+    const snapshot = getSkidmarksSnapshot();
+    expect(snapshot.session.mp3?.segments).toEqual(segments);
+    expect(snapshot.session.mp3?.segmentsSource).toBe("seed-fallback");
+  });
+
+  it("is a safe no-op when no mp3 is attached yet, rather than inventing one", () => {
+    selectSkidmarksBand("jack-ash"); // resets session.mp3 to null
+    const segments = buildScriptSequenceSegments([
+      { index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" },
+    ]);
+    expect(() => setSkidmarksScriptSequence(segments)).not.toThrow();
+    expect(getSkidmarksSnapshot().session.mp3).toBeNull();
   });
 });
