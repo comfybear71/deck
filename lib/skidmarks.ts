@@ -924,6 +924,18 @@ export function setSkidmarksScriptSequence(segments: SkidmarksClipSegment[]): vo
   });
 }
 
+/** Writes the script-sequence panel's own draft input (pasted text +
+ * clip 1's starting image URL) — see `SkidmarksScriptSequenceDraft`'s
+ * doc comment for why this exists at all (a real reported gap,
+ * 2026-09-14: backgrounding the phone before tapping Generate used to
+ * lose both). `null` clears it (used once a run actually starts, so a
+ * later different script never silently inherits a stale starting
+ * image — see `SkidmarksScriptSequencePanel.tsx`'s `handleRun`). */
+export function setSkidmarksScriptSequenceDraft(draft: SkidmarksScriptSequenceDraft | null): void {
+  const current = getSkidmarksSnapshot();
+  persist({ ...current, session: { ...current.session, scriptSequenceDraft: draft } });
+}
+
 /**
  * Where the current `segments` list actually came from, in priority
  * order (a lower-ranked source can never overwrite a higher one once
@@ -1084,6 +1096,31 @@ export interface SkidmarksMp3Attachment {
   audioPersistError?: string;
 }
 
+/**
+ * The script-sequence panel's own in-progress input — Stuart's real ask
+ * (2026-09-14): pasting a long script and picking clip 1's starting
+ * image, then backgrounding the phone or closing the tab before tapping
+ * Generate, used to lose both outright (plain React `useState` inside
+ * `SkidmarksScriptSequencePanel`, gone the moment the component
+ * unmounted). Persisted through the same Neon-backed `session` this
+ * whole store already uses for everything else durable — never
+ * `localStorage` (see AGENTS.md's lock) — so a reload/reopen shows
+ * exactly what he left there.
+ */
+export interface SkidmarksScriptSequenceDraft {
+  /** Raw pasted text, exactly as typed — kept as-is even if it doesn't
+   * parse cleanly yet, so a half-finished paste/edit survives too. */
+  script: string;
+  /** Clip 1's optional starting image, already uploaded to durable Blob
+   * storage the moment it's picked (`uploadSkidmarksPlateStill`) —
+   * never a raw `data:` URL sitting in this state: the same "big base64
+   * blobs blow past Vercel's ~4.5MB session PUT body cap" reasoning as
+   * every other big-media field in this store (see
+   * `SkidmarksPlateStill.dataUrl`'s doc comment). `undefined` means no
+   * starting image picked (or it was removed). */
+  startingImageUrl?: string;
+}
+
 /** The Music-video wizard's progress — which project type, which band,
  * and (once chosen) the attached MP3. `null` fields mean "not reached
  * that step yet", so the UI knows exactly how much to append. */
@@ -1091,6 +1128,12 @@ export interface SkidmarksSession {
   projectKind: SkidmarksProjectKind | null;
   bandId: string | null;
   mp3: SkidmarksMp3Attachment | null;
+  /** See `SkidmarksScriptSequenceDraft`'s doc comment. Reset to `null`
+   * whenever the active band/song context changes out from under it
+   * (a band switch, a fresh "New" band, restoring/resetting after an
+   * Archive) — a stale draft from a *different* song leaking into a
+   * newly-selected one would be actively misleading, not just unused. */
+  scriptSequenceDraft: SkidmarksScriptSequenceDraft | null;
 }
 
 export interface SkidmarksState {
@@ -1162,7 +1205,7 @@ const SEED_BANDS: SkidmarksBand[] = [
 function emptyState(): SkidmarksState {
   return {
     bands: SEED_BANDS,
-    session: { projectKind: null, bandId: null, mp3: null },
+    session: { projectKind: null, bandId: null, mp3: null, scriptSequenceDraft: null },
     removedSeedBandIds: [],
   };
 }
@@ -1398,6 +1441,18 @@ function normalizeState(parsed: unknown): SkidmarksState {
   const bandId = typeof session.bandId === "string" ? session.bandId : null;
   const stillHasBand = bandId !== null && bands.some((b) => b.id === bandId);
 
+  // Sessions saved before this field existed (or a value that doesn't
+  // even look like the real shape) just get `null` — no dishonest
+  // "recovering" a draft that was never really there.
+  const storedDraft = session.scriptSequenceDraft as Partial<SkidmarksScriptSequenceDraft> | null | undefined;
+  const scriptSequenceDraft: SkidmarksScriptSequenceDraft | null =
+    storedDraft && typeof storedDraft.script === "string"
+      ? {
+          script: storedDraft.script,
+          ...(typeof storedDraft.startingImageUrl === "string" ? { startingImageUrl: storedDraft.startingImageUrl } : {}),
+        }
+      : null;
+
   const storedMp3 = (session.mp3 as SkidmarksMp3Attachment | null | undefined) ?? null;
   // Sessions saved before the clip-timeline feature shipped won't have
   // `segments` yet — backfill once, off whatever duration is already known.
@@ -1512,6 +1567,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
           : null,
       bandId: stillHasBand ? bandId : null,
       mp3: stillHasBand ? mp3 : null,
+      scriptSequenceDraft: stillHasBand ? scriptSequenceDraft : null,
     },
   };
 }
@@ -2136,7 +2192,7 @@ export function selectSkidmarksBand(bandId: string): void {
   if (!current.bands.some((b) => b.id === bandId)) return;
   persist({
     ...current,
-    session: { ...current.session, bandId, mp3: null },
+    session: { ...current.session, bandId, mp3: null, scriptSequenceDraft: null },
   });
 }
 
@@ -2156,7 +2212,7 @@ export function createSkidmarksBand(): SkidmarksBand {
   persist({
     ...current,
     bands,
-    session: { ...current.session, bandId: band.id, mp3: null },
+    session: { ...current.session, bandId: band.id, mp3: null, scriptSequenceDraft: null },
   });
   return band;
 }
@@ -3069,7 +3125,7 @@ export function restoreSkidmarksArchivedSession(band: SkidmarksBand, mp3: Skidma
   persist({
     ...current,
     bands,
-    session: { projectKind: "music-video", bandId: band.id, mp3 },
+    session: { projectKind: "music-video", bandId: band.id, mp3, scriptSequenceDraft: null },
   });
 }
 
@@ -3080,7 +3136,7 @@ export function restoreSkidmarksArchivedSession(band: SkidmarksBand, mp3: Skidma
  * it doesn't delete the band itself. */
 export function resetSkidmarksSessionAfterArchive(): void {
   const current = getSkidmarksSnapshot();
-  persist({ ...current, session: { projectKind: "music-video", bandId: null, mp3: null } });
+  persist({ ...current, session: { projectKind: "music-video", bandId: null, mp3: null, scriptSequenceDraft: null } });
 }
 
 export function getActiveSkidmarksBand(

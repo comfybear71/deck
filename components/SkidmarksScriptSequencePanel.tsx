@@ -5,10 +5,10 @@ import { parseScriptSequence } from "@/lib/scriptSequence";
 import {
   buildScriptSequenceSegments,
   flushSkidmarksSessionNow,
-  readImageFileAsDataUrl,
   type SkidmarksBand,
   type SkidmarksClipSegment,
   type SkidmarksPlateStill,
+  type SkidmarksScriptSequenceDraft,
 } from "@/lib/skidmarks";
 import { buildPlateGenerationRequest, generatePlateStill, resolvePlateReferenceDataUrl, resolveVocalistForPrompt } from "@/lib/plateGeneration";
 import { generateSkidmarksClip } from "@/lib/clipGeneration";
@@ -42,6 +42,14 @@ interface SkidmarksScriptSequencePanelProps {
    * than relying on this run's own in-memory `result` state, which is
    * gone the moment the page reloads. */
   renders: Map<string, PersistedClipRender>;
+  /** This panel's own persisted draft — pasted script text + clip 1's
+   * already-uploaded starting image URL. Real reported gap (2026-09-14):
+   * this used to be plain `useState`, so backgrounding the phone or
+   * closing the tab before tapping Generate lost both outright. `null`
+   * means nothing drafted yet (or it was cleared after a run started —
+   * see `handleRun`). */
+  scriptSequenceDraft: SkidmarksScriptSequenceDraft | null;
+  onSetScriptSequenceDraft: (draft: SkidmarksScriptSequenceDraft | null) => void;
   onSetScriptSequence: (segments: SkidmarksClipSegment[]) => void;
   onSetClipPlateStill: (segmentId: string, plateId: string, still: SkidmarksPlateStill | null) => void;
   onRecordRender: (render: PersistedClipRender) => void;
@@ -84,27 +92,25 @@ export function SkidmarksScriptSequencePanel({
   realSegments,
   mp3AudioUrl,
   renders,
+  scriptSequenceDraft,
+  onSetScriptSequenceDraft,
   onSetScriptSequence,
   onSetClipPlateStill,
   onRecordRender,
 }: SkidmarksScriptSequencePanelProps) {
-  const [script, setScript] = useState("");
   const [running, setRunning] = useState(false);
   const [progressText, setProgressText] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
-  /** Real reported gap (2026-09-14): this automation always built brand-
-   * new blank clips, so there was no way to hand it a real starting
-   * image for clip 1 — it would just auto-generate one every time,
-   * silently ignoring anything Stuart already had ready. Picked here,
-   * uploaded and set onto clip 1's plate in `handleRun` before the
-   * runner ever looks at it — `runScriptSequence` already skips
-   * generating a first still whenever one is already there (same path
-   * a manual clip that's already got a still uses), so this needs no
-   * runner change at all, just handing it a real still up front. */
-  const [startingImageDataUrl, setStartingImageDataUrl] = useState<string | null>(null);
+  /** Whether a starting-image pick is mid-upload right now — purely a
+   * local spinner label, never needs to survive a reload the way the
+   * uploaded URL itself does (`scriptSequenceDraft.startingImageUrl`),
+   * so this stays plain `useState` unlike the draft fields above it. */
   const [startingImagePicking, setStartingImagePicking] = useState(false);
+  const [startingImageError, setStartingImageError] = useState<string | null>(null);
   const startingImageInputRef = useRef<HTMLInputElement | null>(null);
 
+  const script = scriptSequenceDraft?.script ?? "";
+  const startingImageUrl = scriptSequenceDraft?.startingImageUrl;
   const parts = useMemo(() => parseScriptSequence(script), [script]);
 
   /**
@@ -135,16 +141,33 @@ export function SkidmarksScriptSequencePanel({
     return { resumeIndex, total: realSegments.length };
   }, [realSegments, renders]);
 
+  /** Uploads to durable Blob storage immediately on pick, not deferred
+   * until Generate — the whole point of persisting this draft at all is
+   * surviving a backgrounded phone/closed tab, which a `data:` URL only
+   * ever sitting in local component state can't do. `onSetScriptSequenceDraft`
+   * + `flushSkidmarksSessionNow` land it in Neon right away, same as
+   * every other real upload in this feature. */
   const handlePickStartingImage = async (file: File) => {
     setStartingImagePicking(true);
+    setStartingImageError(null);
     try {
-      const dataUrl = await readImageFileAsDataUrl(file);
-      setStartingImageDataUrl(dataUrl);
+      const uploadOutcome = await uploadSkidmarksPlateStill(file);
+      if (!uploadOutcome.ok) {
+        setStartingImageError("Couldn't save that image — try again.");
+        return;
+      }
+      onSetScriptSequenceDraft({ script, startingImageUrl: uploadOutcome.url });
+      flushSkidmarksSessionNow();
     } catch {
-      setResult({ ok: false, message: "Couldn't read that image — try a different file." });
+      setStartingImageError("Couldn't read that image — try a different file.");
     } finally {
       setStartingImagePicking(false);
     }
+  };
+
+  const handleRemoveStartingImage = () => {
+    onSetScriptSequenceDraft({ script, startingImageUrl: undefined });
+    flushSkidmarksSessionNow();
   };
 
   /** Shared by a fresh run and a resume — same real backends, same
@@ -239,11 +262,11 @@ export function SkidmarksScriptSequencePanel({
     onSetScriptSequence(segments);
     flushSkidmarksSessionNow();
 
-    if (startingImageDataUrl) {
-      setProgressText("Saving your starting image for clip 1…");
-      const uploadOutcome = await uploadSkidmarksPlateStill(startingImageDataUrl);
+    // Already a durable Blob URL, uploaded the moment it was picked
+    // (`handlePickStartingImage`) — nothing left to upload here.
+    if (startingImageUrl) {
       const startingStill: SkidmarksPlateStill = {
-        dataUrl: uploadOutcome.ok ? uploadOutcome.url : startingImageDataUrl,
+        dataUrl: startingImageUrl,
         source: "upload",
         createdAt: Date.now(),
       };
@@ -254,10 +277,14 @@ export function SkidmarksScriptSequencePanel({
 
     const outcome = await runScriptSequence(segments, band.name, buildRunnerDeps(), mp3AudioUrl, vocalist);
 
+    // The starting image was a one-time input for *this* run — clear it
+    // so it's never silently reused on a later, different script. The
+    // script text itself stays (matches the pre-persistence behavior —
+    // useful to see/tweak/rerun), just the image.
+    onSetScriptSequenceDraft({ script, startingImageUrl: undefined });
     flushSkidmarksSessionNow();
     setRunning(false);
     setProgressText(null);
-    setStartingImageDataUrl(null); // one-time input for this run — never silently reused on a later, different script
     reportRunOutcome(outcome);
   };
 
@@ -283,7 +310,7 @@ export function SkidmarksScriptSequencePanel({
 
       <textarea
         value={script}
-        onChange={(e) => setScript(e.target.value)}
+        onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl })}
         disabled={running}
         placeholder={"Paste your “Part 1 (0:00 - 0:15) — Title[Duration: ...]. ...” script here."}
         rows={4}
@@ -291,10 +318,10 @@ export function SkidmarksScriptSequencePanel({
       />
 
       <div className="flex items-center gap-2.5">
-        {startingImageDataUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element -- data-URL preview, next/image can't optimize it
+        {startingImageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- already-uploaded Blob URL, next/image can't optimize a runtime-picked one
           <img
-            src={startingImageDataUrl}
+            src={startingImageUrl}
             alt=""
             className="h-12 w-12 shrink-0 rounded-lg object-cover ring-1 ring-white/15"
           />
@@ -305,7 +332,7 @@ export function SkidmarksScriptSequencePanel({
         )}
         <div className="flex flex-1 flex-col gap-1">
           <span className="text-[11px] text-white/40">
-            {startingImageDataUrl
+            {startingImageUrl
               ? "Clip 1 will start from your picture, not a fresh generated one."
               : "Optional: clip 1's starting image — skips generating one."}
           </span>
@@ -316,12 +343,12 @@ export function SkidmarksScriptSequencePanel({
               disabled={running || startingImagePicking}
               className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {startingImagePicking ? "Reading…" : startingImageDataUrl ? "Change" : "Upload"}
+              {startingImagePicking ? "Uploading…" : startingImageUrl ? "Change" : "Upload"}
             </button>
-            {startingImageDataUrl && (
+            {startingImageUrl && (
               <button
                 type="button"
-                onClick={() => setStartingImageDataUrl(null)}
+                onClick={handleRemoveStartingImage}
                 disabled={running}
                 className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] font-medium text-white/50 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -329,6 +356,7 @@ export function SkidmarksScriptSequencePanel({
               </button>
             )}
           </div>
+          {startingImageError && <span className="text-[11px] text-rose-300/90">{startingImageError}</span>}
         </div>
         <input
           ref={startingImageInputRef}
