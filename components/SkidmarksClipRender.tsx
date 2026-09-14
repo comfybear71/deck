@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
   buildClipGenerationRequest,
   estimateClipRenderCostUsd,
@@ -92,12 +92,6 @@ interface SkidmarksClipRenderProps {
   onPersisted: (render: PersistedClipRender) => void;
 }
 
-/** How long the inline "Confirm — real xAI video call, ~$0.4x" step
- * stays up before reverting to the plain button — long enough to read
- * and tap deliberately, short enough that walking away doesn't leave a
- * stale confirm sitting there. */
-const CONFIRM_TIMEOUT_MS = 6000;
-
 function Spinner() {
   return (
     <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4 animate-spin text-white/80">
@@ -134,8 +128,12 @@ function Spinner() {
  * Instrumental switch's shape. Deliberately **not** the old whole-song
  * "Generate Clips" button (removed entirely, see
  * `SkidmarksClipTimeline`'s doc comment) — this animates exactly one
- * already-selected plate at a time, explicit two-tap confirm still
- * required for the real spend.
+ * already-selected plate at a time. **One-tap Render (2026-09-14,
+ * Stuart's direct ask)** — the old two-tap confirm step (a "Confirm —
+ * real xAI video call, ~$0.4x" second button) is gone; tapping "Render
+ * plate" starts the real, paid call immediately. Still disabled (never
+ * a silent no-op) while `locked` or `missingAudio`, and still just one
+ * render at a time across the whole timeline.
  *
  * **Vocal plates need real audio, not just a text prompt.** When
  * `vocal` is true, Render stays disabled (with an honest inline
@@ -169,11 +167,9 @@ function Spinner() {
  * Stuart type a duration in — it's derived, not a picker, per
  * AGENTS.md's "no duration/resolution knob in the UI" lock.
  *
- * **Cost-aware, explicit two-tap confirm**: the first tap never fires a
- * real request — it only reveals a "Confirm — real xAI video call,
- * Ns, ~$0.4x" step that has to be tapped again within
- * `CONFIRM_TIMEOUT_MS`, or it reverts. **One render at a time across the
- * whole timeline**: `locked` disables this control while any other
+ * **One-tap Render**: tapping "Render plate" fires the real request
+ * immediately — no second confirm step. **One render at a time across
+ * the whole timeline**: `locked` disables this control while any other
  * plate's render is in flight.
  *
  * **The result no longer renders inline here** — a successful render's
@@ -207,7 +203,6 @@ export function SkidmarksClipRender({
   alreadyRendered,
   onPersisted,
 }: SkidmarksClipRenderProps) {
-  const [confirming, setConfirming] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** True only for the "xAI succeeded (Stuart was charged) but the save
@@ -219,13 +214,6 @@ export function SkidmarksClipRender({
    * error. */
   const [paidButNotSaved, setPaidButNotSaved] = useState(false);
   const [justPersisted, setJustPersisted] = useState(false);
-  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (confirmTimer.current) clearTimeout(confirmTimer.current);
-    };
-  }, []);
 
   if (!plateStillDataUrl) return null;
 
@@ -240,28 +228,8 @@ export function SkidmarksClipRender({
   // server would have to reject anyway.
   const missingAudio = vocal && !mp3AudioUrl;
 
-  const clearConfirmTimer = () => {
-    if (confirmTimer.current) {
-      clearTimeout(confirmTimer.current);
-      confirmTimer.current = null;
-    }
-  };
-
-  const startConfirm = () => {
+  const handleRender = async () => {
     if (locked || generating || missingAudio) return;
-    setError(null);
-    setConfirming(true);
-    clearConfirmTimer();
-    confirmTimer.current = setTimeout(() => setConfirming(false), CONFIRM_TIMEOUT_MS);
-  };
-
-  const cancelConfirm = () => {
-    setConfirming(false);
-    clearConfirmTimer();
-  };
-
-  const handleConfirm = async () => {
-    cancelConfirm();
     const trimmedPrompt = shotPrompt.trim();
     if (!trimmedPrompt) {
       setError("Add a shot prompt first — Render needs something to go on.");
@@ -407,55 +375,27 @@ export function SkidmarksClipRender({
             </div>
           )}
 
-          {!confirming ? (
-            // "About half width" per Stuart's explicit ask — the switch/
-            // pill to its left takes the rest of the row instead of this
-            // button spanning edge-to-edge the way it used to. Slimmed
-            // down alongside the switch above (2026-09-14).
-            <button
-              type="button"
-              onClick={startConfirm}
-              disabled={locked || missingAudio}
-              aria-disabled={locked || missingAudio}
-              className={[
-                "w-1/2 rounded-full px-3.5 py-2 text-center text-[12px] font-semibold transition-colors",
-                locked || missingAudio
-                  ? "cursor-not-allowed bg-white/[0.04] text-white/30"
-                  : "bg-rose-400 text-zinc-950 hover:bg-rose-300 active:bg-rose-400/85",
-              ].join(" ")}
-            >
-              {showsAsRendered ? "Render plate again" : "Render plate"}
-            </button>
-          ) : (
-            <>
-              {/* Streamlined 2026-09-14, Stuart's direct "looks horrible
-                  like a big balloon" report — the old wording ("Confirm
-                  — real Comfy Cloud LTX call, 27s, ~$3.51") wrapped to
-                  three lines at the previous padding/text size, which is
-                  what actually ballooned this button's height. Shorter
-                  wording plus the same slimmer sizing the H3/Grok switch
-                  and Render button already got keeps this to one or two
-                  lines instead. */}
-              <button
-                type="button"
-                onClick={handleConfirm}
-                className="flex-1 rounded-full bg-rose-400 px-3 py-2 text-center text-[11px] font-semibold leading-snug text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/85"
-              >
-                {vocal
-                  ? `Confirm — Comfy Cloud LTX, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
-                  : instrumentalVideoModel === "h3"
-                    ? `Confirm — MiniMax H3, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`
-                    : `Confirm — xAI Grok video, ${durationSec}s, ~$${estimatedCost.toFixed(2)}`}
-              </button>
-              <button
-                type="button"
-                onClick={cancelConfirm}
-                className="shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] font-medium text-white/60 transition-colors hover:bg-white/[0.07] hover:text-white"
-              >
-                Cancel
-              </button>
-            </>
-          )}
+          {/* One-tap Render (2026-09-14, Stuart's direct ask) — this
+              used to be the first of a two-tap confirm ("Render plate"
+              then "Confirm — real ... call, ~$X.XX"), now fires the real
+              request immediately. "About half width" per Stuart's
+              earlier explicit ask — the switch/pill to its left takes
+              the rest of the row instead of this button spanning
+              edge-to-edge. */}
+          <button
+            type="button"
+            onClick={handleRender}
+            disabled={locked || missingAudio}
+            aria-disabled={locked || missingAudio}
+            className={[
+              "w-1/2 rounded-full px-3.5 py-2 text-center text-[12px] font-semibold transition-colors",
+              locked || missingAudio
+                ? "cursor-not-allowed bg-white/[0.04] text-white/30"
+                : "bg-rose-400 text-zinc-950 hover:bg-rose-300 active:bg-rose-400/85",
+            ].join(" ")}
+          >
+            {showsAsRendered ? "Render plate again" : "Render plate"}
+          </button>
         </div>
       )}
 

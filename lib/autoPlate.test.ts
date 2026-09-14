@@ -101,7 +101,12 @@ describe("planAutoPlateFill", () => {
 
   it("never applies the scripted opener to a later clip, even if it too has empty plates", () => {
     const segments = withPlateCount(buildDemoSegments(210), [1, 3]);
-    const targets = planAutoPlateFill(segments, "door, keyhole, Jack", "Jack Ash");
+    // A single trigger word (not 2+ comma-separated phrases) so this
+    // brief only ever exercises the opener, never the separate
+    // "2+ places in the brief become this run's own locations" feature
+    // (see `parseBriefLocationPhrases`) — a brief with real comma-
+    // separated places is covered by its own tests below.
+    const targets = planAutoPlateFill(segments, "door", "Jack Ash");
     const secondClipTargets = targets.filter((t) => t.segmentId === segments[1].id);
     expect(secondClipTargets.every((t) => !t.shotPrompt.toLowerCase().includes("keyhole"))).toBe(true);
   });
@@ -148,6 +153,65 @@ describe("planAutoPlateFill", () => {
     const targets = planAutoPlateFill(segments, "a normal brief with no opener keywords", "Jack Ash");
     const locations = targets.map((t) => t.shotPrompt.match(LOCATION_WORDS)?.[0]);
     expect(new Set(locations).size).toBeGreaterThan(1);
+  });
+
+  // 2026-09-14, Stuart's ask: the brief itself can list real places
+  // instead of just triggering the hand-authored table.
+  it("uses the brief's own comma-separated places as this run's locations, not the hand-authored table", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [4]).slice(0, 1);
+    const briefPlaces = ["neon rooftop at dusk", "empty subway platform", "rain-slick alley", "quiet diner booth"];
+    const targets = planAutoPlateFill(segments, briefPlaces.join(", "), "Jack Ash");
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(briefPlaces.some((place) => target.shotPrompt.includes(place))).toBe(true);
+      expect(target.shotPrompt).not.toMatch(LOCATION_WORDS);
+    }
+  });
+
+  it("cycles the brief's own places deterministically, not the same one every time", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [4]).slice(0, 1);
+    const briefPlaces = ["neon rooftop at dusk", "empty subway platform", "rain-slick alley"];
+    const targets = planAutoPlateFill(segments, briefPlaces.join(", "), "Jack Ash");
+    const used = targets.map((t) => briefPlaces.find((place) => t.shotPrompt.includes(place)));
+    expect(new Set(used).size).toBeGreaterThan(1);
+  });
+
+  it("splits brief places on \" / \" as well as commas", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [4]).slice(0, 1);
+    const briefPlaces = ["neon rooftop at dusk", "empty subway platform"];
+    const targets = planAutoPlateFill(segments, briefPlaces.join(" / "), "Jack Ash");
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(briefPlaces.some((place) => target.shotPrompt.includes(place))).toBe(true);
+    }
+  });
+
+  it("falls back to the hand-authored table when the brief has fewer than two place phrases", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [4]).slice(0, 1);
+    const targets = planAutoPlateFill(segments, "a mood board with no commas at all", "Jack Ash");
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(target.shotPrompt).toMatch(LOCATION_WORDS);
+    }
+  });
+
+  it("Stuart's real example brief: the scripted opener still wins on clip 1's first three plates, the brief's own places drive the rest", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [4]).slice(0, 1);
+    const brief = "red hallway door, fence gate in the dirt, night pool shallow end, wet concrete in the rain";
+    const targets = planAutoPlateFill(segments, brief, "Jack Ash");
+    expect(targets).toHaveLength(4);
+    expect(targets[0].shotPrompt).toContain("door");
+    expect(targets[1].shotPrompt).toContain("keyhole");
+    expect(targets[2].shotPrompt).toContain("Jack");
+    // The 4th plate falls past the 3-shot scripted opener — a real
+    // generic fill, using the brief's own places.
+    const briefPlaces = [
+      "red hallway door",
+      "fence gate in the dirt",
+      "night pool shallow end",
+      "wet concrete in the rain",
+    ];
+    expect(briefPlaces.some((place) => targets[3].shotPrompt.includes(place))).toBe(true);
   });
 });
 
@@ -234,6 +298,17 @@ describe("planAutoPlateFill — master-still routing (Siray)", () => {
     }
     const locations = targets.map((t) => t.shotPrompt.match(LOCATION_WORDS)?.[0]);
     expect(new Set(locations).size).toBeGreaterThan(1);
+  });
+
+  it("also uses the brief's own 2+ places for a Siray-routed fill's backdrop, not the hand-authored table", () => {
+    const segments = withPlateCount(buildDemoSegments(210), [4]).slice(0, 1);
+    const briefPlaces = ["neon rooftop at dusk", "empty subway platform"];
+    const targets = planAutoPlateFill(segments, briefPlaces.join(", "), "Jack Ash", "", MASTER_STILL);
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(briefPlaces.some((place) => target.shotPrompt.includes(place))).toBe(true);
+      expect(target.shotPrompt).not.toMatch(LOCATION_WORDS);
+    }
   });
 });
 
