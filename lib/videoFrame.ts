@@ -8,22 +8,31 @@
  * clip beginning from a plate Stuart has to generate/pick fresh.
  *
  * **Fetch the whole file first, then hand the `<video>` a same-origin
- * `blob:` URL — never point it at the remote Blob URL directly.** The
- * first version of this did set `video.crossOrigin = "anonymous"` and
- * pointed `video.src` straight at the remote render URL, reasoning that
- * Vercel Blob serves plain `fetch()` reads with `Access-Control-Allow-
- * Origin: *` (true — `lib/clipRenders.ts`'s `buildRendersZip` already
- * relies on exactly that fact). But a `<video>` element doesn't do one
- * plain GET the way `fetch()` does — it seeks via HTTP Range requests,
- * and Safari in particular is strict about a cross-origin video's Range/
- * CORS handling being exactly right before it'll seek reliably at all.
- * Real-world report (2026-09-14, Stuart's iPhone): the feature silently
- * did nothing, more than once — consistent with exactly this class of
- * failure. Fetching the full file with a plain `fetch()` (proven to
- * work here already) and handing the video a `blob:` object URL sidesteps
- * the whole Range/cross-origin question — a `blob:` URL is always
- * same-origin, so there is nothing left for Safari's stricter cross-
- * origin video handling to trip over.
+ * `blob:` URL — never point it at the remote Blob URL directly.** A
+ * `<video>` element doesn't do one plain GET the way `fetch()` does —
+ * it seeks via HTTP Range requests, and Safari in particular is strict
+ * about a cross-origin video's Range/CORS handling being exactly right
+ * before it'll seek reliably at all. Fetching the full file with a
+ * plain `fetch()` (proven to work here already — same fact
+ * `lib/clipRenders.ts`'s `buildRendersZip` relies on) and handing the
+ * video a `blob:` object URL sidesteps the whole Range/cross-origin
+ * question — a `blob:` URL is always same-origin.
+ *
+ * **Real live failure (2026-09-14, Stuart's actual first automated
+ * run): even off a local `blob:` URL, the seek-to-last-frame step
+ * itself timed out on his iPhone** — the fetch/download and metadata
+ * load both worked, but seeking to the tail of a video his device had
+ * *just* finished decoding for the first time took longer than this
+ * used to allow. Two changes in response: (1) waits for `loadeddata`
+ * (the first frame is actually decoded) rather than only
+ * `loadedmetadata` (duration/dimensions known, but nothing decoded
+ * yet) before ever attempting the seek — seeking into an element with
+ * zero decoded frames yet is a much heavier ask than seeking one
+ * that's already rendered its first frame; (2) the seek step gets its
+ * own longer timeout and **one retry** (a fresh `currentTime` seek,
+ * same "a transient stall deserves a retry, not an instant failure"
+ * rule already applied to Blob's post-put verify-HEAD and the
+ * ElevenLabs 429 case) before giving up for real.
  *
  * **iOS Safari note** (Stuart's actual device): a `<video>` element that
  * is *never* attached to the document can fail to decode/seek reliably
@@ -43,11 +52,18 @@
  * (`MIN_CLIP_DURATION_SEC`/`MIN_LTX_CLIP_DURATION_SEC`, both 5s) clips. */
 const END_SEEK_BACKOFF_SEC = 0.15;
 
-/** Real network/decode failures shouldn't hang the caller forever —
- * generous enough for a large clip on a slow connection, short enough
- * that a genuinely stuck load doesn't block the next clip's plate strip
- * from being usable in the meantime. */
+/** The initial load (metadata + first decoded frame) shouldn't hang the
+ * caller forever — generous enough for a large clip on a slow
+ * connection, short enough that a genuinely stuck load doesn't block
+ * the next clip's plate strip from being usable in the meantime. */
 const LOAD_TIMEOUT_MS = 20_000;
+
+/** Seeking to the tail of a video the device just finished decoding for
+ * the first time is a heavier, slower operation than the initial load
+ * — the real 2026-09-14 live failure timed out here specifically, at
+ * the old shared 20s budget. Longer on its own, plus one retry below,
+ * rather than just raising the shared number and hoping. */
+const SEEK_TIMEOUT_MS = 45_000;
 
 function waitForEvent(target: HTMLVideoElement, event: string, timeoutMs: number, timeoutMessage: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -73,6 +89,22 @@ function waitForEvent(target: HTMLVideoElement, event: string, timeoutMs: number
   });
 }
 
+/** Seeks to `targetSec` and waits for `seeked`, retrying once (a fresh
+ * seek, not just re-waiting on the same one) if the first attempt times
+ * out — see this module's doc comment for why a stall here is worth
+ * one real retry rather than an instant failure. */
+async function seekAndWait(video: HTMLVideoElement, targetSec: number): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    video.currentTime = targetSec;
+    try {
+      await waitForEvent(video, "seeked", SEEK_TIMEOUT_MS, "Seeking to the video's last frame timed out.");
+      return;
+    } catch (err) {
+      if (attempt === 1) throw err;
+    }
+  }
+}
+
 /**
  * Extracts the closing frame of `videoUrl` as a `data:image/jpeg` URL.
  * Never throws — rejects with a plain-language `Error` on any real
@@ -95,19 +127,24 @@ export async function extractLastVideoFrame(videoUrl: string): Promise<string> {
   const video = document.createElement("video");
   video.muted = true;
   video.playsInline = true;
+  video.preload = "auto";
   video.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;";
   video.src = objectUrl;
 
   document.body.appendChild(video);
   try {
-    await waitForEvent(video, "loadedmetadata", LOAD_TIMEOUT_MS, "The video's metadata did not load in time.");
+    // `loadeddata`, not just `loadedmetadata` — the latter only
+    // guarantees duration/dimensions are known, not that any frame has
+    // actually been decoded yet. Seeking before the first frame decodes
+    // is a heavier ask than seeking an element that's already rendered
+    // one — see this module's doc comment.
+    await waitForEvent(video, "loadeddata", LOAD_TIMEOUT_MS, "The video did not load in time.");
 
     const duration = video.duration;
     if (!Number.isFinite(duration) || duration <= 0) {
       throw new Error("The video reported no usable duration.");
     }
-    video.currentTime = Math.max(0, duration - END_SEEK_BACKOFF_SEC);
-    await waitForEvent(video, "seeked", LOAD_TIMEOUT_MS, "Seeking to the video's last frame timed out.");
+    await seekAndWait(video, Math.max(0, duration - END_SEEK_BACKOFF_SEC));
 
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
