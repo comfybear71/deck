@@ -132,6 +132,21 @@ async function advanceOnePoll() {
   await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
 }
 
+/** The post-put Blob verify HEAD's own retry delays (route.ts's
+ * `VERIFY_RETRY_DELAYS_MS`, not exported \u2014 kept in sync by hand here,
+ * same "restate the constant" convention this suite already uses for
+ * `POLL_INTERVAL_MS`-adjacent values). 8 attempts total, ~35s of real
+ * delay between them if every one fails \u2014 drives fake timers through
+ * every gap so a test exercising a persistent verify failure/success
+ * doesn't actually wait that out. */
+const VERIFY_RETRY_DELAYS_MS = [1000, 2000, 3000, 5000, 8000, 8000, 8000];
+
+async function advanceAllVerifyRetries() {
+  for (const delay of VERIFY_RETRY_DELAYS_MS) {
+    await vi.advanceTimersByTimeAsync(delay);
+  }
+}
+
 describe("POST /api/skidmarks/generate-clip", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -721,19 +736,22 @@ describe("POST /api/skidmarks/generate-clip", () => {
       );
     });
 
-    it("reports an honest persistError \u2014 never a silently-broken URL \u2014 when the just-written Blob URL fails its post-put HEAD verify", async () => {
+    it("reports an honest persistError \u2014 never a silently-broken URL \u2014 when every post-put HEAD verify attempt is a real failure (not propagation lag)", async () => {
       // The live-QA'd bug: `put()` resolved, but the returned URL wasn't
-      // actually reachable (a stale 404, a since-pruned path) \u2014 this
-      // must never come back as `persisted: true` with a dead URL wired
-      // into the shelf.
+      // actually reachable \u2014 this must never come back as
+      // `persisted: true` with a dead URL wired into the shelf. A real
+      // failure (a non-404 status) on every attempt is the case that
+      // must still report persistError \u2014 see the sibling "clean 404"
+      // test below for the one now-trusted case this is *not*.
       mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
       fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
-      fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 })); // HEAD verify fails
+      fetchMock.mockResolvedValue(new Response(null, { status: 500 })); // every HEAD verify attempt fails, and not with a 404
       putMock.mockResolvedValueOnce({
         url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-2/01b_0000-0040_render.mp4",
       });
 
-      const res = await POST(
+      vi.useFakeTimers();
+      const resultPromise = POST(
         postRequest({
           prompt: "slow zoom",
           referenceImageDataUrls: [TINY_DATA_URL],
@@ -746,6 +764,9 @@ describe("POST /api/skidmarks/generate-clip", () => {
           endSec: 40,
         })
       );
+      await advanceAllVerifyRetries();
+      const res = await resultPromise;
+      vi.useRealTimers();
       const body = await res.json();
 
       expect(res.status).toBe(200);
@@ -753,7 +774,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
       // URL) \u2014 never discarded over a save-verification problem.
       expect(body.videoUrl).toBe("https://vidgen.x.ai/clip.mp4");
       expect(body.persisted).toBe(false);
-      expect(body.persistError).toContain("404");
+      expect(body.persistError).toContain("500");
       // Never prunes/deletes anything on a failed verify \u2014 the write
       // itself already happened; only the "was it a success" call is
       // what failed.
@@ -761,15 +782,57 @@ describe("POST /api/skidmarks/generate-clip", () => {
       expect(delMock).not.toHaveBeenCalled();
     });
 
-    it("reports an honest persistError when the post-put HEAD verify itself errors (network failure)", async () => {
+    it("trusts a successful put() and reports persisted: true when every HEAD verify attempt is a clean 404 (propagation lag, not a missing file)", async () => {
+      // 2026-09-14 live bug, second pass: Stuart paid for a real render
+      // twice that this route then discarded, because Vercel Blob's own
+      // propagation window sometimes outlasts even a long retry
+      // schedule. put() succeeding is trusted as the real signal once
+      // every failed verify attempt is specifically a 404 \u2014 never on a
+      // different status or a thrown error (see the sibling "real
+      // failure" test above).
       mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
       fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
-      fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch")); // HEAD verify network error
+      fetchMock.mockResolvedValue(new Response(null, { status: 404 })); // every HEAD verify attempt \u2014 clean propagation-lag 404s only
+      putMock.mockResolvedValueOnce({
+        url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-3/01c_0000-0040_render.mp4",
+      });
+
+      vi.useFakeTimers();
+      const resultPromise = POST(
+        postRequest({
+          prompt: "slow zoom",
+          referenceImageDataUrls: [TINY_DATA_URL],
+          segmentId: "seg-1",
+          plateId: "plate-3",
+          plateIndex: 2,
+          plateCount: 3,
+          clipIndex: 1,
+          startSec: 0,
+          endSec: 40,
+        })
+      );
+      await advanceAllVerifyRetries();
+      const res = await resultPromise;
+      vi.useRealTimers();
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.persisted).toBe(true);
+      expect(body.videoUrl).toBe(
+        "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-3/01c_0000-0040_render.mp4"
+      );
+    });
+
+    it("reports an honest persistError when the post-put HEAD verify itself errors on every attempt (network failure)", async () => {
+      mockSuccessfulRender("https://vidgen.x.ai/clip.mp4");
+      fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      fetchMock.mockRejectedValue(new TypeError("Failed to fetch")); // every HEAD verify attempt \u2014 a real network error
       putMock.mockResolvedValueOnce({
         url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0040_render.mp4",
       });
 
-      const res = await POST(
+      vi.useFakeTimers();
+      const resultPromise = POST(
         postRequest({
           prompt: "slow zoom",
           referenceImageDataUrls: [TINY_DATA_URL],
@@ -780,6 +843,9 @@ describe("POST /api/skidmarks/generate-clip", () => {
           endSec: 40,
         })
       );
+      await advanceAllVerifyRetries();
+      const res = await resultPromise;
+      vi.useRealTimers();
       const body = await res.json();
 
       expect(res.status).toBe(200);
@@ -1146,6 +1212,12 @@ describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) rend
     mockSubmit("job-boundary");
     mockJobPoll();
     mockDownload(new Uint8Array([1, 2, 3]));
+    // This test is about duration clamping, not persistence — a real
+    // HEAD-verify success on the first attempt keeps it from tripping
+    // the (unrelated) verify-retry path, which an unconfigured putMock
+    // would otherwise send into its full ~35s retry schedule.
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
+    putMock.mockResolvedValueOnce({ url: "https://abc.public.blob.vercel-storage.com/boundary.mp4" });
 
     const res = await POST(
       vocalRequest({
@@ -1179,6 +1251,9 @@ describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) rend
     mockSubmit("job-overshoot");
     mockJobPoll();
     mockDownload(new Uint8Array([4, 5, 6]));
+    // See the matching comment in the sibling boundary test above.
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
+    putMock.mockResolvedValueOnce({ url: "https://abc.public.blob.vercel-storage.com/overshoot.mp4" });
 
     const res = await POST(
       vocalRequest({
