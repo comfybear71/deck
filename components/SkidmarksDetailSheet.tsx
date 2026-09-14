@@ -3,7 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
 import { useSkidmarksClipRenders } from "@/hooks/useSkidmarksClipRenders";
-import { buildGeneratedLook } from "@/lib/skidmarks";
+import { buildGeneratedLook, flushSkidmarksSessionNow, resolveChainedPlateTarget } from "@/lib/skidmarks";
+import type { PersistedClipRender } from "@/lib/clipRenders";
+import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
+import { extractLastVideoFrame } from "@/lib/videoFrame";
 import {
   archiveSkidmarksSession,
   fetchArchiveSnapshot,
@@ -118,6 +121,41 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const handleRenameMember = (name: string) => {
     if (!activeBand || !openMember) return;
     renameMember(activeBand.id, openMember.id, name);
+  };
+
+  /**
+   * Stuart's "last frame becomes the next clip's first frame" ask
+   * (2026-09-14): once a render persists, grab that video's closing
+   * frame (`lib/videoFrame.ts`) and drop it straight into the *next*
+   * segment's first plate — but only when that plate is still genuinely
+   * empty, so this never clobbers a still Stuart already picked or
+   * generated there himself. Best-effort by design: any failure (a
+   * slow/blocked network read, a decode hiccup, this already being the
+   * last clip in the song) just leaves that next plate exactly as it
+   * was — nothing here shows an error, since this rides on top of a
+   * render that already genuinely succeeded; the chaining itself is a
+   * bonus, not the thing Stuart was actually waiting on.
+   */
+  const handlePersisted = (render: PersistedClipRender) => {
+    addRender(render);
+
+    const target = resolveChainedPlateTarget(session.mp3?.segments ?? [], render.segmentId, render.plateId);
+    if (!target) return;
+
+    extractLastVideoFrame(render.url)
+      .then(async (dataUrl) => {
+        const uploadOutcome = await uploadSkidmarksPlateStill(dataUrl);
+        setClipPlateStill(target.segmentId, target.plateId, {
+          dataUrl: uploadOutcome.ok ? uploadOutcome.url : dataUrl,
+          source: "chained",
+          createdAt: Date.now(),
+          ...(target.featuresLockedCharacter ? { featuresLockedCharacter: true } : {}),
+        });
+        flushSkidmarksSessionNow();
+      })
+      .catch(() => {
+        // Best-effort — see this function's doc comment.
+      });
   };
 
   const handleRemoveBand = (bandId: string) => {
@@ -340,7 +378,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 mp3FileName={session.mp3.fileName}
                 mp3AudioUrl={session.mp3.audioUrl}
                 renders={renders}
-                onPersisted={addRender}
+                onPersisted={handlePersisted}
                 onSetSegmentShotPrompt={setSegmentShotPrompt}
                 onNudgeSegmentStart={nudgeSegmentStart}
                 onNudgeSegmentEnd={nudgeSegmentEnd}

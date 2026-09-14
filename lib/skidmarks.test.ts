@@ -8,6 +8,7 @@ import {
   createMp3Attachment,
   createSkidmarksBand,
   renameSkidmarksBand,
+  resolveChainedPlateTarget,
   defaultSegmentModel,
   getSkidmarksSessionSyncSnapshot,
   getSkidmarksSnapshot,
@@ -44,6 +45,7 @@ import {
   type SkidmarksBand,
   type SkidmarksClipPlateSlot,
   type SkidmarksClipSegment,
+  type SkidmarksPlateStill,
   type SkidmarksState,
 } from "./skidmarks";
 import type { SkidmarksTranscribedWord } from "./transcription";
@@ -1514,5 +1516,97 @@ describe("createSkidmarksBand / renameSkidmarksBand", () => {
     expect(renamed?.name).toBe("Grok Bot & the Destroyers");
     const jackAsh = getSkidmarksSnapshot().bands.find((b) => b.id === "jack-ash");
     expect(jackAsh?.name).not.toBe("Grok Bot & the Destroyers");
+  });
+});
+
+/**
+ * The pure "which plate, if any, should chain from a just-finished
+ * render" decision behind Stuart's real ask (2026-09-14): the last frame
+ * of one Grok clip becomes the first frame of the next, all the way
+ * through the whole song. `SkidmarksDetailSheet.tsx`'s `handlePersisted`
+ * is the only real caller — it does the actual frame extraction/upload
+ * once this says where (if anywhere) the result belongs.
+ */
+function plateStill(overrides: Partial<SkidmarksPlateStill> = {}): SkidmarksPlateStill {
+  return { dataUrl: "https://blob.example/still.jpg", source: "generated", createdAt: 1, ...overrides };
+}
+
+function chainSegment(overrides: Partial<SkidmarksClipSegment> & { id: string; plates: SkidmarksClipPlateSlot[] }): SkidmarksClipSegment {
+  return {
+    startSec: 0,
+    endSec: 10,
+    label: "verse",
+    model: "grok",
+    shotPrompt: "",
+    uncensoredPlateStills: false,
+    selectedPlateId: null,
+    ...overrides,
+  };
+}
+
+describe("resolveChainedPlateTarget", () => {
+  it("real reported ask: chains a rendered clip's next segment onto its still-empty first plate", () => {
+    const segments = [
+      chainSegment({ id: "seg-a", plates: [{ id: "plate-a1", still: plateStill() }] }),
+      chainSegment({ id: "seg-b", plates: [{ id: "plate-b1" }] }),
+    ];
+    const target = resolveChainedPlateTarget(segments, "seg-a", "plate-a1");
+    expect(target).toEqual({ segmentId: "seg-b", plateId: "plate-b1", featuresLockedCharacter: false });
+  });
+
+  it("never overwrites a plate that already has a still — automatic or not", () => {
+    const segments = [
+      chainSegment({ id: "seg-a", plates: [{ id: "plate-a1", still: plateStill() }] }),
+      chainSegment({ id: "seg-b", plates: [{ id: "plate-b1", still: plateStill({ source: "upload" }) }] }),
+    ];
+    expect(resolveChainedPlateTarget(segments, "seg-a", "plate-a1")).toBeUndefined();
+  });
+
+  it("does nothing off the last segment in the song — there's nothing to chain into", () => {
+    const segments = [chainSegment({ id: "seg-a", plates: [{ id: "plate-a1", still: plateStill() }] })];
+    expect(resolveChainedPlateTarget(segments, "seg-a", "plate-a1")).toBeUndefined();
+  });
+
+  it("does nothing for a render whose segment isn't found (a stale/mismatched record)", () => {
+    const segments = [
+      chainSegment({ id: "seg-a", plates: [{ id: "plate-a1", still: plateStill() }] }),
+      chainSegment({ id: "seg-b", plates: [{ id: "plate-b1" }] }),
+    ];
+    expect(resolveChainedPlateTarget(segments, "seg-does-not-exist", "plate-a1")).toBeUndefined();
+  });
+
+  it("does nothing when the next segment has no plate slots at all", () => {
+    const segments = [
+      chainSegment({ id: "seg-a", plates: [{ id: "plate-a1", still: plateStill() }] }),
+      chainSegment({ id: "seg-b", plates: [] }),
+    ];
+    expect(resolveChainedPlateTarget(segments, "seg-a", "plate-a1")).toBeUndefined();
+  });
+
+  it("carries a locked character's identity forward when the rendered plate itself already featured them", () => {
+    const segments = [
+      chainSegment({
+        id: "seg-a",
+        plates: [{ id: "plate-a1", still: plateStill({ featuresLockedCharacter: true }) }],
+      }),
+      chainSegment({ id: "seg-b", plates: [{ id: "plate-b1" }] }),
+    ];
+    const target = resolveChainedPlateTarget(segments, "seg-a", "plate-a1");
+    expect(target?.featuresLockedCharacter).toBe(true);
+  });
+
+  it("targets only the next segment's *first* plate, even when the rendered clip had several", () => {
+    const segments = [
+      chainSegment({
+        id: "seg-a",
+        plates: [
+          { id: "plate-a1", still: plateStill() },
+          { id: "plate-a2", still: plateStill() },
+        ],
+      }),
+      chainSegment({ id: "seg-b", plates: [{ id: "plate-b1" }, { id: "plate-b2" }] }),
+    ];
+    const target = resolveChainedPlateTarget(segments, "seg-a", "plate-a2");
+    expect(target?.plateId).toBe("plate-b1");
   });
 });
