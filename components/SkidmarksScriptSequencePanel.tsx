@@ -9,7 +9,7 @@ import {
   type SkidmarksClipSegment,
   type SkidmarksPlateStill,
 } from "@/lib/skidmarks";
-import { buildPlateGenerationRequest, generatePlateStill, resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
+import { buildPlateGenerationRequest, generatePlateStill, resolvePlateReferenceDataUrl, resolveVocalistForPrompt } from "@/lib/plateGeneration";
 import { generateSkidmarksClip } from "@/lib/clipGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import { extractLastVideoFrame } from "@/lib/videoFrame";
@@ -19,6 +19,17 @@ import type { PersistedClipRender } from "@/lib/clipRenders";
 interface SkidmarksScriptSequencePanelProps {
   band: SkidmarksBand;
   hasMp3: boolean;
+  /** The song's own real segments *before* this run replaces them —
+   * `buildScriptSequenceSegments` reads these to route each script part
+   * Vocal/LTX when it lands on real singing, Instrumental/Grok
+   * otherwise (Stuart's own correction, 2026-09-14: "vocals always go
+   * to LTX... instrumentals... go to Grok"). `[]` for a band with no
+   * MP3/no real segments yet — every part then defaults Instrumental. */
+  realSegments: SkidmarksClipSegment[];
+  /** The song's own durable audio URL — required for any part that
+   * routes Vocal (LTX needs a real slice of it); `undefined` if the
+   * attached MP3's audio hasn't finished uploading yet. */
+  mp3AudioUrl?: string;
   onSetScriptSequence: (segments: SkidmarksClipSegment[]) => void;
   onSetClipPlateStill: (segmentId: string, plateId: string, still: SkidmarksPlateStill | null) => void;
   onRecordRender: (render: PersistedClipRender) => void;
@@ -58,6 +69,8 @@ function progressLabel(event: ScriptSequenceRunEvent): string {
 export function SkidmarksScriptSequencePanel({
   band,
   hasMp3,
+  realSegments,
+  mp3AudioUrl,
   onSetScriptSequence,
   onSetClipPlateStill,
   onRecordRender,
@@ -84,28 +97,41 @@ export function SkidmarksScriptSequencePanel({
     setResult(null);
     setProgressText("Building the clip timeline…");
 
-    const segments = buildScriptSequenceSegments(parts);
+    const vocalist = resolveVocalistForPrompt(band.members);
+    const segments = buildScriptSequenceSegments(parts, realSegments);
     onSetScriptSequence(segments);
     flushSkidmarksSessionNow();
 
-    const outcome = await runScriptSequence(segments, band.name, {
-      resolveIdentityDataUrl: resolvePlateReferenceDataUrl,
-      generateFirstStill: async (shotPrompt, bandName) => {
-        const request = buildPlateGenerationRequest({ shotPrompt, vocal: false, model: "grok", bandName });
-        const stillOutcome = await generatePlateStill(request);
-        return stillOutcome.ok ? { ok: true, dataUrl: stillOutcome.dataUrl } : { ok: false, message: stillOutcome.message };
+    const outcome = await runScriptSequence(
+      segments,
+      band.name,
+      {
+        resolveIdentityDataUrl: resolvePlateReferenceDataUrl,
+        generateFirstStill: async (shotPrompt, bandName, vocal, firstClipVocalist) => {
+          const request = buildPlateGenerationRequest({
+            shotPrompt,
+            vocal,
+            model: vocal ? "ltx-lipsync" : "grok",
+            bandName,
+            vocalist: firstClipVocalist,
+          });
+          const stillOutcome = await generatePlateStill(request);
+          return stillOutcome.ok ? { ok: true, dataUrl: stillOutcome.dataUrl } : { ok: false, message: stillOutcome.message };
+        },
+        uploadStill: uploadSkidmarksPlateStill,
+        renderClip: async (request) => {
+          const clipOutcome = await generateSkidmarksClip(request);
+          if (!clipOutcome.ok) return { ok: false, message: clipOutcome.message };
+          return { ok: true, videoUrl: clipOutcome.videoUrl, persisted: clipOutcome.persisted, persistError: clipOutcome.persistError };
+        },
+        recordRender: onRecordRender,
+        extractLastFrame: extractLastVideoFrame,
+        setPlateStill: onSetClipPlateStill,
+        onProgress: (event) => setProgressText(progressLabel(event)),
       },
-      uploadStill: uploadSkidmarksPlateStill,
-      renderClip: async (request) => {
-        const clipOutcome = await generateSkidmarksClip(request);
-        if (!clipOutcome.ok) return { ok: false, message: clipOutcome.message };
-        return { ok: true, videoUrl: clipOutcome.videoUrl, persisted: clipOutcome.persisted, persistError: clipOutcome.persistError };
-      },
-      recordRender: onRecordRender,
-      extractLastFrame: extractLastVideoFrame,
-      setPlateStill: onSetClipPlateStill,
-      onProgress: (event) => setProgressText(progressLabel(event)),
-    });
+      mp3AudioUrl,
+      vocalist
+    );
 
     flushSkidmarksSessionNow();
     setRunning(false);
