@@ -389,6 +389,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 hasMp3={!!session.mp3}
                 realSegments={session.mp3?.segments ?? []}
                 mp3AudioUrl={session.mp3?.audioUrl}
+                renders={renders}
                 onSetScriptSequence={setScriptSequence}
                 onSetClipPlateStill={setClipPlateStill}
                 onRecordRender={addRender}

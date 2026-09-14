@@ -103,13 +103,30 @@ const SCRIPT_SEQUENCE_DURATION_SEC = 15;
  * actually Vocal; a Vocal segment with no `mp3AudioUrl` available fails
  * that clip honestly rather than sending a request the server can't
  * fulfill.
+ *
+ * **`startAtClipIndex`** (default `0`) lets a caller resume an earlier,
+ * partially-completed run at a real failure (a real live example,
+ * 2026-09-14: xAI's own content-moderation rejecting one generated
+ * clip, 12 of 16 already rendered fine) without re-spending on the
+ * clips that already rendered — `i` stays each clip's real, absolute
+ * position throughout (so progress events, filenames, and Blob
+ * pathnames all still read correctly), the loop just starts partway
+ * through, and the "generate clip 1's starting still" step is skipped
+ * entirely whenever `startAtClipIndex > 0` (clip 1 already has one from
+ * the original run). The caller is responsible for passing the *same*
+ * `segments` array clips 1..`startAtClipIndex - 1` already rendered
+ * into (`components/SkidmarksScriptSequencePanel.tsx`'s `handleResume`
+ * reads it straight back off the stored session, not a fresh
+ * `buildScriptSequenceSegments` call — a fresh build would mint new
+ * segment/plate ids and have no starting stills at all).
  */
 export async function runScriptSequence(
   segments: SkidmarksClipSegment[],
   bandName: string,
   deps: ScriptSequenceRunnerDeps,
   mp3AudioUrl: string | undefined,
-  vocalist: SkidmarksMember | undefined
+  vocalist: SkidmarksMember | undefined,
+  startAtClipIndex: number = 0
 ): Promise<ScriptSequenceRunOutcome> {
   const report = (event: ScriptSequenceRunEvent) => deps.onProgress?.(event);
 
@@ -117,25 +134,27 @@ export async function runScriptSequence(
     return { ok: false, failedAtClipIndex: 0, message: "No clips to render.", renderedCount: 0 };
   }
 
-  const first = segments[0];
-  const firstIsVocal = SKIDMARKS_SEGMENT_LABEL_META[first.label]?.vocal ?? false;
-  if (!first.plates[0]?.still) {
-    report({ type: "generating-first-still" });
-    const stillOutcome = await deps.generateFirstStill(first.shotPrompt, bandName, firstIsVocal, vocalist);
-    if (!stillOutcome.ok) {
-      return { ok: false, failedAtClipIndex: 0, message: stillOutcome.message, renderedCount: 0 };
+  if (startAtClipIndex === 0) {
+    const first = segments[0];
+    const firstIsVocal = SKIDMARKS_SEGMENT_LABEL_META[first.label]?.vocal ?? false;
+    if (!first.plates[0]?.still) {
+      report({ type: "generating-first-still" });
+      const stillOutcome = await deps.generateFirstStill(first.shotPrompt, bandName, firstIsVocal, vocalist);
+      if (!stillOutcome.ok) {
+        return { ok: false, failedAtClipIndex: 0, message: stillOutcome.message, renderedCount: 0 };
+      }
+      const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
+      const firstStill: SkidmarksPlateStill = {
+        dataUrl: uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl,
+        source: "generated",
+        createdAt: Date.now(),
+      };
+      deps.setPlateStill(first.id, first.plates[0].id, firstStill);
+      first.plates[0].still = firstStill; // so the loop below sees it immediately, without a store re-read
     }
-    const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
-    const firstStill: SkidmarksPlateStill = {
-      dataUrl: uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl,
-      source: "generated",
-      createdAt: Date.now(),
-    };
-    deps.setPlateStill(first.id, first.plates[0].id, firstStill);
-    first.plates[0].still = firstStill; // so the loop below sees it immediately, without a store re-read
   }
 
-  for (let i = 0; i < segments.length; i++) {
+  for (let i = Math.max(0, Math.min(startAtClipIndex, segments.length)); i < segments.length; i++) {
     const segment = segments[i];
     const plate = segment.plates[0];
     const still = plate?.still;

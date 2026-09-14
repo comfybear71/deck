@@ -36,8 +36,14 @@ function fakeDeps(overrides: Partial<ScriptSequenceRunnerDeps> = {}): ScriptSequ
  * comes out Instrumental (an empty `realSegments` list means
  * `resolveScriptPartVocal` never finds anything to route Vocal), so
  * these two are never actually read by most tests below. */
-function run(segments: SkidmarksClipSegment[], deps: ScriptSequenceRunnerDeps, mp3AudioUrl?: string, vocalist?: SkidmarksMember) {
-  return runScriptSequence(segments, "Stu Balls", deps, mp3AudioUrl, vocalist);
+function run(
+  segments: SkidmarksClipSegment[],
+  deps: ScriptSequenceRunnerDeps,
+  mp3AudioUrl?: string,
+  vocalist?: SkidmarksMember,
+  startAtClipIndex?: number
+) {
+  return runScriptSequence(segments, "Stu Balls", deps, mp3AudioUrl, vocalist, startAtClipIndex);
 }
 
 describe("runScriptSequence", () => {
@@ -179,6 +185,75 @@ describe("runScriptSequence", () => {
   it("returns an honest failure for an empty segment list rather than silently succeeding", async () => {
     const outcome = await run([] as SkidmarksClipSegment[], fakeDeps());
     expect(outcome.ok).toBe(false);
+  });
+
+  describe("real reported ask (2026-09-14): resuming a partially-completed run without re-spending on already-rendered clips", () => {
+    it("starts the loop at startAtClipIndex, skips the clip-1 first-still step entirely, and reports real (absolute) positions throughout", async () => {
+      const segments = buildScriptSequenceSegments(threeParts(), []);
+      // Clips 1 and 2 already have stills from an earlier, partial run —
+      // clip 1's own first-frame generation should never be re-attempted.
+      segments[0].plates[0].still = { dataUrl: "data:image/jpeg;base64,one", source: "generated", createdAt: 1 };
+      segments[1].plates[0].still = { dataUrl: "data:image/jpeg;base64,two", source: "chained", createdAt: 2 };
+      const events: string[] = [];
+      const deps = fakeDeps({ onProgress: (e) => events.push(e.type) });
+
+      const outcome = await run(segments, deps, undefined, undefined, 1);
+
+      expect(deps.generateFirstStill).not.toHaveBeenCalled();
+      expect(deps.renderClip).toHaveBeenCalledTimes(2); // clips 2 and 3 only — never re-renders clip 1
+      expect(events).toEqual(["rendering", "clip-done", "chaining", "rendering", "clip-done"]);
+      expect(outcome).toEqual({ ok: true, renderedCount: 3 }); // real total across both the original run and this resume
+    });
+
+    it("a real live example: content moderation rejects clip 13 of 16 — resuming at clip 13 never re-renders clips 1-12", async () => {
+      const parts = Array.from({ length: 16 }, (_, i) => ({
+        index: i + 1,
+        title: `Part ${i + 1}`,
+        startSec: i * 15,
+        endSec: (i + 1) * 15,
+        prompt: `part ${i + 1}`,
+      }));
+      const segments = buildScriptSequenceSegments(parts, []);
+      // Clips 1-12 already rendered in the earlier run; clip 13 (index
+      // 12) already has its chained-in starting still (chaining fills
+      // the *next* clip's plate right after a successful render, before
+      // that next clip is ever attempted) — same real shape as Stuart's
+      // actual stuck run.
+      for (let i = 0; i < 13; i++) {
+        segments[i].plates[0].still = { dataUrl: `data:image/jpeg;base64,${i}`, source: i === 0 ? "generated" : "chained", createdAt: i };
+      }
+
+      const renderClip = vi.fn(async () => ({ ok: false as const, message: "Generated video rejected by content moderation." }));
+      const deps = fakeDeps({ renderClip });
+
+      const outcome = await run(segments, deps, undefined, undefined, 12);
+
+      expect(renderClip).toHaveBeenCalledTimes(1); // only clip 13 attempted — clips 1-12 never re-rendered
+      expect(outcome).toEqual({
+        ok: false,
+        failedAtClipIndex: 12,
+        message: "Generated video rejected by content moderation.",
+        renderedCount: 12, // the 12 real clips already rendered before this resume attempt
+      });
+    });
+
+    it("resuming from a clip with no starting image fails honestly rather than guessing", async () => {
+      const segments = buildScriptSequenceSegments(threeParts(), []);
+      // Clip 2's plate has no still — never happens in the real chained
+      // flow, but this function shouldn't assume its caller got that
+      // right either.
+      const deps = fakeDeps();
+
+      const outcome = await run(segments, deps, undefined, undefined, 1);
+
+      expect(outcome).toEqual({
+        ok: false,
+        failedAtClipIndex: 1,
+        message: "Clip 2 has no starting image to render from.",
+        renderedCount: 1,
+      });
+      expect(deps.renderClip).not.toHaveBeenCalled();
+    });
   });
 
   describe("real reported gap (2026-09-14): Vocal clips must route to LTX with the song's real audio, not Grok", () => {

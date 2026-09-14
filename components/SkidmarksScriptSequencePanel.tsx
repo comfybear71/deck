@@ -13,8 +13,8 @@ import {
 import { buildPlateGenerationRequest, generatePlateStill, resolvePlateReferenceDataUrl, resolveVocalistForPrompt } from "@/lib/plateGeneration";
 import { generateSkidmarksClip } from "@/lib/clipGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
-import { runScriptSequence, type ScriptSequenceRunEvent } from "@/lib/scriptSequenceRunner";
-import type { PersistedClipRender } from "@/lib/clipRenders";
+import { runScriptSequence, type ScriptSequenceRunEvent, type ScriptSequenceRunnerDeps } from "@/lib/scriptSequenceRunner";
+import { persistedRenderKey, type PersistedClipRender } from "@/lib/clipRenders";
 
 /** Native file picker's accept list — jpg/png/webp only, matches every
  * other photo picker in this feature. */
@@ -34,6 +34,14 @@ interface SkidmarksScriptSequencePanelProps {
    * routes Vocal (LTX needs a real slice of it); `undefined` if the
    * attached MP3's audio hasn't finished uploading yet. */
   mp3AudioUrl?: string;
+  /** Every persisted render across the whole song, keyed by
+   * `persistedRenderKey(segmentId, plateId)` — the same map
+   * `SkidmarksClipTimeline` already reads (`useSkidmarksClipRenders`).
+   * This is the durable, reload-proof way of finding "where a partial
+   * script-sequence run stopped" (see `incompleteRun` below), rather
+   * than relying on this run's own in-memory `result` state, which is
+   * gone the moment the page reloads. */
+  renders: Map<string, PersistedClipRender>;
   onSetScriptSequence: (segments: SkidmarksClipSegment[]) => void;
   onSetClipPlateStill: (segmentId: string, plateId: string, still: SkidmarksPlateStill | null) => void;
   onRecordRender: (render: PersistedClipRender) => void;
@@ -75,6 +83,7 @@ export function SkidmarksScriptSequencePanel({
   hasMp3,
   realSegments,
   mp3AudioUrl,
+  renders,
   onSetScriptSequence,
   onSetClipPlateStill,
   onRecordRender,
@@ -98,6 +107,34 @@ export function SkidmarksScriptSequencePanel({
 
   const parts = useMemo(() => parseScriptSequence(script), [script]);
 
+  /**
+   * Where an earlier, partial run of *this same stored timeline* stopped
+   * — derived straight from durable state (`realSegments` +
+   * `renders`, both sourced from the saved session), never from this
+   * run's own in-memory `result`, so it survives a page reload the way
+   * a real fix-and-refresh cycle actually needs to (a real live
+   * example, 2026-09-14: xAI content moderation rejected clip 13 of 16;
+   * fixing that meant a code change and a refresh, which would have
+   * thrown away any in-memory-only "resume point"). The first segment,
+   * in order, with no persisted render yet is exactly the clip to
+   * retry — whether it never got its starting still, has one but never
+   * rendered, or rendered but failed to persist, `runScriptSequence`'s
+   * own per-clip checks report the real reason honestly either way.
+   * `undefined` when there's nothing to resume: no script-sequence
+   * timeline yet, clip 1 itself was never rendered (this isn't really
+   * "partial," it just hasn't started), or every clip already has a
+   * render (fully done).
+   */
+  const incompleteRun = useMemo(() => {
+    if (realSegments.length === 0) return undefined;
+    const resumeIndex = realSegments.findIndex((segment) => {
+      const plate = segment.plates[0];
+      return !plate || !renders.has(persistedRenderKey(segment.id, plate.id));
+    });
+    if (resumeIndex <= 0) return undefined;
+    return { resumeIndex, total: realSegments.length };
+  }, [realSegments, renders]);
+
   const handlePickStartingImage = async (file: File) => {
     setStartingImagePicking(true);
     try {
@@ -108,6 +145,72 @@ export function SkidmarksScriptSequencePanel({
     } finally {
       setStartingImagePicking(false);
     }
+  };
+
+  /** Shared by a fresh run and a resume — same real backends, same
+   * progress reporting, the only difference is which segments/start
+   * index `runScriptSequence` itself is called with. */
+  const buildRunnerDeps = (): ScriptSequenceRunnerDeps => ({
+    resolveIdentityDataUrl: resolvePlateReferenceDataUrl,
+    generateFirstStill: async (shotPrompt, bandName, vocal, firstClipVocalist) => {
+      const request = buildPlateGenerationRequest({
+        shotPrompt,
+        vocal,
+        model: vocal ? "ltx-lipsync" : "grok",
+        bandName,
+        vocalist: firstClipVocalist,
+      });
+      const stillOutcome = await generatePlateStill(request);
+      return stillOutcome.ok ? { ok: true, dataUrl: stillOutcome.dataUrl } : { ok: false, message: stillOutcome.message };
+    },
+    uploadStill: uploadSkidmarksPlateStill,
+    renderClip: async (request) => {
+      const clipOutcome = await generateSkidmarksClip(request);
+      if (!clipOutcome.ok) return { ok: false, message: clipOutcome.message };
+      return {
+        ok: true,
+        videoUrl: clipOutcome.videoUrl,
+        persisted: clipOutcome.persisted,
+        persistError: clipOutcome.persistError,
+        lastFrameUrl: clipOutcome.lastFrameUrl,
+      };
+    },
+    recordRender: onRecordRender,
+    setPlateStill: onSetClipPlateStill,
+    onProgress: (event) => setProgressText(progressLabel(event)),
+  });
+
+  const reportRunOutcome = (outcome: Awaited<ReturnType<typeof runScriptSequence>>) => {
+    setResult(
+      outcome.ok
+        ? { ok: true, message: `All ${outcome.renderedCount} clips rendered and chained.` }
+        : {
+            ok: false,
+            message: `Stopped at clip ${outcome.failedAtClipIndex + 1} (${outcome.renderedCount} clip${outcome.renderedCount === 1 ? "" : "s"} rendered so far): ${outcome.message}`,
+          }
+    );
+  };
+
+  const handleResume = async () => {
+    if (running || !incompleteRun) return;
+    setRunning(true);
+    setResult(null);
+    setProgressText(`Resuming at clip ${incompleteRun.resumeIndex + 1} of ${incompleteRun.total}…`);
+
+    const vocalist = resolveVocalistForPrompt(band.members);
+    const outcome = await runScriptSequence(
+      realSegments,
+      band.name,
+      buildRunnerDeps(),
+      mp3AudioUrl,
+      vocalist,
+      incompleteRun.resumeIndex
+    );
+
+    flushSkidmarksSessionNow();
+    setRunning(false);
+    setProgressText(null);
+    reportRunOutcome(outcome);
   };
 
   const handleRun = async () => {
@@ -149,59 +252,35 @@ export function SkidmarksScriptSequencePanel({
       flushSkidmarksSessionNow();
     }
 
-    const outcome = await runScriptSequence(
-      segments,
-      band.name,
-      {
-        resolveIdentityDataUrl: resolvePlateReferenceDataUrl,
-        generateFirstStill: async (shotPrompt, bandName, vocal, firstClipVocalist) => {
-          const request = buildPlateGenerationRequest({
-            shotPrompt,
-            vocal,
-            model: vocal ? "ltx-lipsync" : "grok",
-            bandName,
-            vocalist: firstClipVocalist,
-          });
-          const stillOutcome = await generatePlateStill(request);
-          return stillOutcome.ok ? { ok: true, dataUrl: stillOutcome.dataUrl } : { ok: false, message: stillOutcome.message };
-        },
-        uploadStill: uploadSkidmarksPlateStill,
-        renderClip: async (request) => {
-          const clipOutcome = await generateSkidmarksClip(request);
-          if (!clipOutcome.ok) return { ok: false, message: clipOutcome.message };
-          return {
-            ok: true,
-            videoUrl: clipOutcome.videoUrl,
-            persisted: clipOutcome.persisted,
-            persistError: clipOutcome.persistError,
-            lastFrameUrl: clipOutcome.lastFrameUrl,
-          };
-        },
-        recordRender: onRecordRender,
-        setPlateStill: onSetClipPlateStill,
-        onProgress: (event) => setProgressText(progressLabel(event)),
-      },
-      mp3AudioUrl,
-      vocalist
-    );
+    const outcome = await runScriptSequence(segments, band.name, buildRunnerDeps(), mp3AudioUrl, vocalist);
 
     flushSkidmarksSessionNow();
     setRunning(false);
     setProgressText(null);
     setStartingImageDataUrl(null); // one-time input for this run — never silently reused on a later, different script
-    setResult(
-      outcome.ok
-        ? { ok: true, message: `All ${outcome.renderedCount} clips rendered and chained.` }
-        : {
-            ok: false,
-            message: `Stopped at clip ${outcome.failedAtClipIndex + 1} (${outcome.renderedCount} clip${outcome.renderedCount === 1 ? "" : "s"} rendered before this): ${outcome.message}`,
-          }
-    );
+    reportRunOutcome(outcome);
   };
 
   return (
     <div className="flex flex-col gap-2.5 rounded-2xl border border-rose-400/25 bg-rose-400/[0.03] p-4">
       <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">Script sequence</p>
+
+      {incompleteRun && (
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2">
+          <span className="text-[12px] leading-relaxed text-amber-100">
+            Clip {incompleteRun.resumeIndex + 1} of {incompleteRun.total} didn&apos;t finish — {incompleteRun.resumeIndex} rendered so far.
+          </span>
+          <button
+            type="button"
+            onClick={handleResume}
+            disabled={running}
+            className="shrink-0 rounded-full bg-amber-300 px-3 py-1.5 text-[13px] font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {running ? "Rendering…" : `Resume — ${incompleteRun.total - incompleteRun.resumeIndex} left`}
+          </button>
+        </div>
+      )}
+
       <textarea
         value={script}
         onChange={(e) => setScript(e.target.value)}
@@ -266,12 +345,16 @@ export function SkidmarksScriptSequencePanel({
 
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] text-white/40">
-          {parts.length > 0 ? `Found ${parts.length} part${parts.length === 1 ? "" : "s"}.` : "No parts found yet."}
+          {incompleteRun
+            ? "Use Resume above — starting fresh here would re-render (and re-charge for) the clips already done."
+            : parts.length > 0
+              ? `Found ${parts.length} part${parts.length === 1 ? "" : "s"}.`
+              : "No parts found yet."}
         </span>
         <button
           type="button"
           onClick={handleRun}
-          disabled={running || parts.length === 0}
+          disabled={running || parts.length === 0 || !!incompleteRun}
           className="rounded-full bg-rose-400 px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {running ? "Rendering…" : `Generate & render all${parts.length > 0 ? ` ${parts.length}` : ""}`}
