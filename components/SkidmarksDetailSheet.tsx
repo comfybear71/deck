@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
 import { useSkidmarksClipRenders } from "@/hooks/useSkidmarksClipRenders";
-import { buildMockLook } from "@/lib/skidmarks";
+import { buildGeneratedLook } from "@/lib/skidmarks";
 import {
   archiveSkidmarksSession,
   fetchArchiveSnapshot,
@@ -104,9 +104,15 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     }
   }, [session.bandId]);
 
-  const handleGenerate = (prompt: string, photoreal: number) => {
+  const handleGenerate = (prompt: string, photoreal: number, imageUrl: string) => {
     if (!activeBand || !openMember) return;
-    addLook(activeBand.id, openMember.id, buildMockLook(prompt, photoreal));
+    addLook(activeBand.id, openMember.id, buildGeneratedLook(prompt, photoreal, imageUrl));
+    // Also sets it as the member's real avatarImage — every other place
+    // that reads a member's photo (the avatar ring, plate-generation
+    // identity references, the archive export) only ever looks at
+    // `avatarImage`, never `looks[]`. A freshly generated look should
+    // act exactly like a freshly picked photo.
+    setMemberAvatarImage(activeBand.id, openMember.id, imageUrl);
   };
 
   const handleRenameMember = (name: string) => {
@@ -359,6 +365,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {activeBand && openMember && (
         <SkidmarksGeneratePopup
           member={openMember}
+          bandName={activeBand.name}
           onGenerate={handleGenerate}
           onRename={handleRenameMember}
           onClose={() => setOpenMemberId(null)}

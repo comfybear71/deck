@@ -77,11 +77,17 @@
  * `markSkidmarksAnalysisFailed`/`markSkidmarksTranscriptionFailed` keep
  * the seed cadence (`buildDemoSegments`) as an **honestly-labeled
  * fallback** — see `segmentsSource` — rather than silently pretending
- * either is real. What's still mock: generated "looks" (`buildMockLook`
- * — a color swatch, not an image model call), and the seed fallback
- * cadence itself when it's showing (a deterministic
- * verse/bridge/lead/instrumental scaffold). **Plate stills are real
- * now, though** (a later pass than the one this module doc comment
+ * either is real. **Generated "looks" are real too, now** (2026-09-14
+ * — `buildGeneratedLook`, was `buildMockLook`): the member-casting
+ * "Generate" popup used to always mint a plain color swatch, no image
+ * model call at all — genuinely never wired up, not a regression. It
+ * now calls the same real xAI Grok Imagine backend the plate-still
+ * generator already uses (`lib/plateGeneration.ts`'s
+ * `buildMemberLookRequest`/`generatePlateStill`), and the result is
+ * uploaded to Blob the same way every other real photo in this feature
+ * is. What's still mock: the seed fallback cadence itself when it's
+ * showing (a deterministic verse/bridge/lead/instrumental scaffold).
+ * **Plate stills are real too** (a later pass than the one this module doc comment
  * otherwise describes): each slot in a clip's plate strip
  * (`SkidmarksClipSegment.plates`, a `SkidmarksClipPlateSlot[]`) holds
  * either a photo Stuart uploaded or a real image
@@ -202,6 +208,14 @@ export interface SkidmarksLook {
   prompt: string;
   photoreal: number;
   createdAt: number;
+  /** The real generated photo — a Vercel Blob URL (or, on a Blob upload
+   * hiccup, a fallback inline `data:` URL) from `lib/plateGeneration.ts`'s
+   * `generatePlateStill`. Missing on a look created before this field
+   * existed (`buildMockLook`'s old color-swatch-only shape) — such a
+   * look still renders fine, just without a real photo (see
+   * `MemberAvatar`'s `latestLook` fallback in
+   * `SkidmarksMembersModule.tsx`). */
+  imageUrl?: string;
 }
 
 export interface SkidmarksMember {
@@ -1073,14 +1087,24 @@ export function buildBlankMember(): SkidmarksMember {
   };
 }
 
-/** Pure builder: a prompt + photoreal % → a new mock "look". No image
- * generation happens here — see the module doc comment. */
-export function buildMockLook(prompt: string, photoreal: number): SkidmarksLook {
+/** Pure builder: a prompt + photoreal % + the real generated image's URL
+ * → a new "look". Real bug (2026-09-14): this used to be `buildMockLook`
+ * and never took an image at all — the whole member-casting "Generate"
+ * button just minted a color swatch, no actual xAI call, ever (see the
+ * module doc comment). `imageUrl` is the real photo
+ * `SkidmarksGeneratePopup`'s own async `handleGenerate` gets back from
+ * `lib/plateGeneration.ts`'s `generatePlateStill` (via
+ * `buildMemberLookRequest`), same real backend the plate-still generator
+ * already uses — uploaded to Blob (`uploadSkidmarksMemberPhoto`) before
+ * landing here, same as every other real generated/picked photo in this
+ * feature. */
+export function buildGeneratedLook(prompt: string, photoreal: number, imageUrl: string): SkidmarksLook {
   return {
     id: generateId("look"),
     seed: Math.floor(Math.random() * 1_000_000),
     prompt: prompt.trim(),
     photoreal,
+    imageUrl,
     createdAt: Date.now(),
   };
 }

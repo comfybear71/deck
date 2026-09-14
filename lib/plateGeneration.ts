@@ -432,6 +432,67 @@ export function buildPlateGenerationRequest(
   };
 }
 
+export interface BuildMemberLookRequestParams {
+  /** The member's own name, if set — casting a brand-new blank member
+   * still generates fine with a generic "the character" fallback below. */
+  memberName: string;
+  bandName: string;
+  /** Stuart's own typed look prompt (e.g. "chrome headphones, stage
+   * lights, leather jacket") — optional; the character-portrait framing
+   * below carries the request on its own if left blank. */
+  prompt: string;
+  /** The popup's 60–100 Photoreal slider — steers stylization wording,
+   * same spirit as this feature's other photoreal-driven framing. */
+  photoreal: number;
+  /** This member's already-picked/generated photo (already resolved to a
+   * real `data:` URL — see `resolvePlateReferenceDataUrl`), if any —
+   * sent as an identity reference so *re*-generating a look keeps the
+   * same person rather than drifting to someone new each time. Omitted
+   * for a member with no photo yet, same as a fresh plate with no
+   * continuity/identity reference. */
+  identityReferenceDataUrl?: string;
+}
+
+/**
+ * Builds a still-generation request for the member-casting "Generate"
+ * popup (`SkidmarksGeneratePopup`) — a simple character-portrait framing,
+ * not the clip-timeline's model-routing/continuity/character-lock
+ * machinery `buildPlateGenerationRequest` handles (this runs *before* a
+ * clip even exists, often before the character has a locked identity at
+ * all). Shares the same wire shape (`PlateGenerationRequest`) and the
+ * same real backend (`generatePlateStill` below,
+ * `app/api/skidmarks/generate-still/route.ts`) — see this module's doc
+ * comment.
+ */
+export function buildMemberLookRequest(params: BuildMemberLookRequestParams): PlateGenerationRequest {
+  const { memberName, bandName, prompt, photoreal, identityReferenceDataUrl } = params;
+  const trimmedPrompt = prompt.trim();
+  const name = memberName.trim() || "the character";
+  const parts = [
+    trimmedPrompt,
+    `Character portrait of ${name}, a member of ${bandName}. Waist-up band promo photo, plain neutral ` +
+      "backdrop, studio lighting.",
+    photoreal >= 90
+      ? "Fully photoreal, sharp focus, like a real photograph."
+      : photoreal <= 65
+        ? "Stylized illustrated look, not photoreal."
+        : "Photoreal cinematic look.",
+    identityReferenceDataUrl
+      ? "Use the reference image as the exact likeness — match their face, build, and wardrobe " +
+        "precisely; this is the same specific person, not a generic stand-in."
+      : "",
+    "No on-screen text, no watermark.",
+  ];
+  return {
+    prompt: parts
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+      .join(" "),
+    shotPrompt: trimmedPrompt,
+    referenceImageDataUrls: identityReferenceDataUrl ? [identityReferenceDataUrl] : [],
+  };
+}
+
 export type PlateGenerationOutcome =
   | { ok: true; dataUrl: string }
   | { ok: false; unconfigured: boolean; message: string };
