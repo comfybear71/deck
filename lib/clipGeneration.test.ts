@@ -45,17 +45,17 @@ describe("computePlateDurationSec", () => {
 });
 
 describe("computeLtxPlateDurationSec", () => {
-  it("clamps into LTX's real [5, 30] range \u2014 not Grok's [5, 15]", () => {
+  it("clamps into LTX's real [5, 15] range", () => {
     expect(computeLtxPlateDurationSec(60, 1, 0)).toBe(MAX_LTX_CLIP_DURATION_SEC);
     expect(computeLtxPlateDurationSec(2, 1, 0)).toBe(MIN_LTX_CLIP_DURATION_SEC);
   });
 
-  it("gives an 18s share a real, unclamped pass-through (would have been clamped under Grok's 15s ceiling)", () => {
-    expect(computeLtxPlateDurationSec(18, 1, 0)).toBe(18);
+  it("gives a 12s share a real, unclamped pass-through", () => {
+    expect(computeLtxPlateDurationSec(12, 1, 0)).toBe(12);
   });
 
   it("clamps a raw segment/plateCount well past the ceiling (Stuart's real 163s / 5 plates live-QA case) down to MAX_LTX_CLIP_DURATION_SEC, never throwing", () => {
-    // 163s / 5 plates \u2248 32-33s/plate raw \u2014 must clamp to 30, not error.
+    // 163s / 5 plates \u2248 32-33s/plate raw \u2014 must clamp to 15, not error.
     for (let plateIndex = 0; plateIndex < 5; plateIndex++) {
       expect(computeLtxPlateDurationSec(163, 5, plateIndex)).toBe(MAX_LTX_CLIP_DURATION_SEC);
     }
@@ -84,10 +84,10 @@ describe("computePlateTimeRange", () => {
     expect(computePlateTimeRange(100, 140, 2, 1)).toEqual({ startSec: 115, endSec: 130 });
   });
 
-  it("respects the LTX bounds when explicitly given, instead of clamping down to Grok's tighter ceiling", () => {
+  it("clamps the same way whether LTX bounds are passed explicitly or left at Grok's default — the two ranges are equal now (both [5, 15])", () => {
     const ltxBounds = { min: MIN_LTX_CLIP_DURATION_SEC, max: MAX_LTX_CLIP_DURATION_SEC };
-    expect(computePlateTimeRange(100, 140, 2, 0, ltxBounds)).toEqual({ startSec: 100, endSec: 120 });
-    expect(computePlateTimeRange(100, 140, 2, 1, ltxBounds)).toEqual({ startSec: 120, endSec: 140 });
+    expect(computePlateTimeRange(100, 140, 2, 0, ltxBounds)).toEqual({ startSec: 100, endSec: 115 });
+    expect(computePlateTimeRange(100, 140, 2, 1, ltxBounds)).toEqual({ startSec: 115, endSec: 130 });
   });
 
   it("every plate's own endSec - startSec matches computePlateDurationSec for the same inputs, under either bounds", () => {
@@ -337,16 +337,16 @@ describe("buildClipGenerationRequest", () => {
       expect(request.vocal).toBe(true);
     });
 
-    it("clamps durationSec into LTX's [5, 30] range, not Grok's [5, 15]", () => {
+    it("clamps durationSec into LTX's [5, 15] range", () => {
       expect(
         buildClipGenerationRequest({
           vocal: true,
           shotPrompt: "x",
           bandName: "Jack Ash",
           plateStillDataUrl: "data:image/jpeg;base64,x",
-          durationSec: 18,
+          durationSec: 12,
         }).durationSec
-      ).toBe(18);
+      ).toBe(12);
       expect(
         buildClipGenerationRequest({
           vocal: true,

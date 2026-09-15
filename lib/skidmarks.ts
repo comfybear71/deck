@@ -719,8 +719,10 @@ export const MIN_NUDGE_SEGMENT_SEC = 1;
  * count` (see `lib/clipGeneration.ts`'s `computePlateDurationSec`/
  * `computeLtxPlateDurationSec`), and a Vocal/LTX render's identity
  * tends to drift after ~20s of continuous motion — more plates per clip
- * is how he keeps each individual render down near ~15s instead of
- * pushing toward LTX's 30s ceiling. `addSkidmarksClipPlate` no-ops past
+ * is how he keeps each individual render down near ~15s. LTX's own
+ * product ceiling (`MAX_LTX_CLIP_DURATION_SEC`) was lowered to 15s on
+ * 2026-09-15 for the same reason, so this now enforces itself rather
+ * than relying only on plate count. `addSkidmarksClipPlate` no-ops past
  * this. */
 export const MAX_PLATES_PER_CLIP = 12;
 

@@ -1238,7 +1238,7 @@ describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) rend
   it("real-world regression: a plate requested at exactly MAX_LTX_CLIP_DURATION_SEC never fails with an \"audio slice is Ns\" error", async () => {
     // Stuart's exact live-QA repro shape: a plate's audio window is
     // clamped by the caller to exactly the product ceiling (previously
-    // 20s — the bug — now MAX_LTX_CLIP_DURATION_SEC/30s). Frame-aligned
+    // 20s — the bug — now MAX_LTX_CLIP_DURATION_SEC, 15s). Frame-aligned
     // outward rounding (`lib/mp3Slice.ts`) must never push the *actual*
     // slice back over that same ceiling and trip a spurious rejection.
     const mp3Bytes = encodeTestMp3(45, 44100, 128);
@@ -1267,10 +1267,10 @@ describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) rend
     expect(res.status).toBe(200);
     expect(body.code).toBeUndefined();
     expect(body.durationSec).toBeLessThanOrEqual(MAX_LTX_CLIP_DURATION_SEC);
-    // 30s is an ordinary graph input on LTX 2.3 — it reaches the graph
-    // untouched, with no hosted-node 20s cap in the way.
+    // Duration is an ordinary graph input on LTX 2.3 — it reaches the
+    // graph untouched, with no hosted-node 20s cap in the way.
     expect(submittedGraph()["340:331"].inputs.value).toBe(body.durationSec);
-    expect(body.durationSec).toBeGreaterThan(29);
+    expect(body.durationSec).toBeGreaterThan(MAX_LTX_CLIP_DURATION_SEC - 1);
   });
 
   it("clamps a raw segment/plateCount duration well past the ceiling instead of ever sending/erroring past it", async () => {

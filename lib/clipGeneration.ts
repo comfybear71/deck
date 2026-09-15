@@ -96,10 +96,9 @@
  * Cloud account, because that workflow never used that node. The Vocal
  * path now submits the full LTX 2.3 IA2V graph
  * (`lib/comfyCloud.ts`, `workflow/LTX_2.3_IA2V_Cloud.json`), where
- * duration is an ordinary graph input with no such ceiling, so
- * `MAX_LTX_CLIP_DURATION_SEC` is `30` — matching his demonstrated
- * usage, not a doc page. A second, separate real bug also came out of
- * that first pass: a plate
+ * duration is an ordinary graph input with no such ceiling, so this
+ * was raised to `30` — matching his demonstrated usage, not a doc
+ * page. A second, separate real bug also came out of that first pass:
  * a plate requested at *exactly* the ceiling could still get rejected
  * — the audio must be frame-aligned, and `lib/mp3Slice.ts`'s
  * `sliceMp3ToTimeRange` rounds **outward** to the nearest real MP3
@@ -108,11 +107,20 @@
  * `"20.0s"` (one-decimal rounding) in the error text but still failed
  * a strict `> 20` check — a real "the number you see isn't the number
  * that got checked" gap, not a one-off fluke tied to `20` specifically.
- * Both fixes land in `app/api/skidmarks/generate-clip/route.ts`'s
- * Vocal branch now: the real ceiling is `30`, and `sliceMp3ToTimeRange`
- * itself trims whole frames off the *end* of an over-long slice down to
- * that ceiling instead of erroring — so this class of "exact-boundary"
- * rounding overshoot can't resurface at the new number either. **This
+ * Fixed in `app/api/skidmarks/generate-clip/route.ts`'s Vocal branch:
+ * `sliceMp3ToTimeRange` itself trims whole frames off the *end* of an
+ * over-long slice down to the ceiling instead of erroring, so this
+ * class of "exact-boundary" rounding overshoot can't resurface at any
+ * ceiling. **Lowered back to `15` on 2026-09-15** (Stuart's own real
+ * report: real quality/reliability problems on renders past ~20s on
+ * this app specifically, not matching what he saw building his earlier
+ * apps) — `30` was a real number he'd once produced, but not a safe
+ * one to keep defaulting to here. `15` also now matches Instrumental's
+ * own ceiling and lines up with the locked-character batch-chain
+ * math: 3 clips × 15s = the 45s real limit on how long one chained
+ * run is allowed to run before it must reset (see
+ * `scriptSequenceRunner.ts`'s `LOCKED_CHARACTER_CHAIN_BATCH_SIZE`).
+ * **This
  * app's own product duration floor/ceiling should never throw a hard
  * error just because `segmentLengthSec / plateCount` computes something
  * outside `[MIN_LTX_CLIP_DURATION_SEC, MAX_LTX_CLIP_DURATION_SEC]`** —
@@ -146,15 +154,14 @@ export const MIN_CLIP_DURATION_SEC = 5;
 export const MAX_CLIP_DURATION_SEC = 15;
 
 /** Vocal/Comfy-LTX duration range — see this module's doc comment's
- * "History of this ceiling" note: `30`, not the `20` this shipped with
- * originally — a partner-node doc page's `2-20s` figure turned out to
- * be more conservative than Stuart's own real, live Comfy Cloud usage
- * (many real ~30s LTX renders already produced there), so this app's
- * own product ceiling now matches his actual demonstrated workflow
- * instead of that doc page's number. `5` stays the floor, matching this
- * feature's existing floor everywhere else. */
+ * "History of this ceiling" note: raised to `30` once, then lowered
+ * back to `15` on 2026-09-15 after real reliability problems on
+ * renders past ~20s on this app. `15` now matches Instrumental's own
+ * ceiling and the locked-character batch-chain math (3 clips × 15s =
+ * the 45s real limit before a chained run must reset). `5` stays the
+ * floor, matching this feature's existing floor everywhere else. */
 export const MIN_LTX_CLIP_DURATION_SEC = 5;
-export const MAX_LTX_CLIP_DURATION_SEC = 30;
+export const MAX_LTX_CLIP_DURATION_SEC = 15;
 
 /** Mirrors `app/api/skidmarks/generate-clip/route.ts`'s hardcoded
  * `CLIP_RESOLUTION` ("480p", $0.08/sec per xAI's published Grok Imagine

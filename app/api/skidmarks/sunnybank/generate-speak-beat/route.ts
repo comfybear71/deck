@@ -69,8 +69,9 @@ const MIN_LTX_AUDIO_INPUT_SEC = 2;
  * sitcom dialogue line should never approach this, but the clamp stays
  * as a defensive floor/ceiling on the *reported* duration fed to the
  * workflow's graph input, never on the real audio bytes themselves
- * (which are always sent in full, whatever their real length). */
-const MAX_LTX_CLIP_DURATION_SEC = 30;
+ * (which are always sent in full, whatever their real length). Lowered
+ * to `15` alongside that constant on 2026-09-15 — keep both in sync. */
+const MAX_LTX_CLIP_DURATION_SEC = 15;
 
 const SPEAK_BEAT_POLL_DEADLINE_MS = 240_000;
 
