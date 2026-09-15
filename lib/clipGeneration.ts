@@ -312,8 +312,32 @@ export const MAX_MOTION_PROMPT_LENGTH = 600;
  * now (image-to-video mode) — the multi-plate continuity phrasing this
  * used to emit for 2–3 references no longer applies, since a render is
  * always exactly one plate's still now (see this module's doc comment).
+ *
+ * 2026-09-15: for a Vocal render of a locked character, this used to
+ * return the same push-in-zoom text as everything else — directly
+ * contradicting `VOCAL_LTX_PROMPT_LOCK`'s own "Camera holds" line a
+ * few sentences earlier in the same prompt, and directly contradicting
+ * the sibling `skidmarks` project's own LTX research log
+ * (`docs/LTX_23_PROMPT_RESEARCH.md`: "Do not add push-in / orbit on a
+ * talking plate unless Stuie asks — that is how faces drift") and its
+ * proven "worked 100%" gold shape (`docs/SUNNY_BANKS_IMAGE_MOTION_STANDARD.md`),
+ * which uses a static `Camera holds` frame with only small natural
+ * body movement, never zoom or push-in, on every speaking plate. A
+ * `vocalLockedCharacter` render now gets that same static-camera shape
+ * instead, matching Stuart's own live-QA finding the same day (steady
+ * camera + head nod + foot tap "worked perfectly"; his same-day
+ * follow-up confirmed hand gestures and tilting his head up and to
+ * the side are also safe and never altered his character).
  */
-function automaticMotionHint(): string {
+function automaticMotionHint(vocalLockedCharacter: boolean): string {
+  if (vocalLockedCharacter) {
+    return (
+      "Camera holds — a static, locked-off frame for the whole clip, no push-in, no zoom, no orbit, no " +
+      "pan. All the energy comes from him instead: small, natural movement in time with the vocal — a slight " +
+      "head nod, tilting his head up and to the side, relaxed hand gestures, a light foot tap. Same scene, " +
+      "subject, and lighting as the reference image throughout."
+    );
+  }
   return (
     "Slow cinematic push-in zoom, subtle camera movement, keep the scene, subject, and lighting consistent " +
     "with the reference image."
@@ -419,13 +443,15 @@ export interface BuildClipGenerationRequestParams {
    * into keyhole, mild pulse on door cracks") — the *primary* motion
    * instruction sent to xAI when given (non-blank); `shotPrompt`/the
    * plate still remain the visual description and reference image,
-   * unchanged. Replaces `automaticMotionHint`'s push-in/zoom phrasing
+   * unchanged. Replaces `automaticMotionHint`'s default phrasing
    * outright rather than being appended alongside it, so Stuart's own
    * explicit direction is never diluted or contradicted by the default.
    * Trimmed and capped at `MAX_MOTION_PROMPT_LENGTH`; blank/omitted
-   * keeps the automatic push-in/zoom behavior. Still read on the
-   * Vocal/Comfy-LTX path too — a typed camera-motion note is just as
-   * meaningful for that partner node's own `prompt` field. */
+   * keeps the automatic default (a static "Camera holds" shot for a
+   * locked character's Vocal clip, push-in/zoom otherwise — see
+   * `automaticMotionHint`). Still read on the Vocal/Comfy-LTX path
+   * too — a typed camera-motion note is just as meaningful for that
+   * partner node's own `prompt` field. */
   motionPrompt?: string;
   /** This plate's real, auto-computed render length — see
    * `computePlateDurationSec`/`computeLtxPlateDurationSec`. Callers
@@ -495,6 +521,26 @@ export interface BuildClipGenerationRequestParams {
  * one (Stuart's own live-QA report, 2026-09-14: zooming in tight almost
  * revealed a normal human face; his own follow-up ask, same day: the
  * shadow should darken as the camera nears his face, not just hold).
+ *
+ * Revised 2026-09-15 after a real repro: telling the model the
+ * close-up should be its "most completely hidden," darkest moment
+ * read as an instruction to go fully, totally black on his face \u2014
+ * and LTX does not hold a true black frame cleanly, it resolves the
+ * emptiness into an invented normal human face once the shot has
+ * nothing left to anchor to. The fix is not "hold less dark," it's
+ * "never truly empty": the close-up stays as deep and dark as before,
+ * but always keeps one small visible anchor in frame (the hat-brim
+ * edge, a whisper of rim light on the shadow's outline, or the glowing
+ * neon lips) so the model always has *some* real shape to lock onto,
+ * never a flat black frame with nothing in it.
+ *
+ * Also added 2026-09-15, same round: Stuart's own direct comparison \u2014
+ * fast camera movement around his head while singing "always screws
+ * it up," while a clip where the camera held steady and he just
+ * nodded his head and tapped his foot "worked perfectly." Camera
+ * speed around the face, not just darkness, is a second real trigger,
+ * so this now steers the energy of the shot onto his own small body
+ * movement instead of onto camera motion.
  */
 function lockedCharacterVideoNote(): string {
   return (
@@ -503,9 +549,15 @@ function lockedCharacterVideoNote(): string {
     "never becomes legible, well-lit, or reads as a normal, watchable stare at any point in the motion, even " +
     "while he's singing \u2014 the shadow-face lock holds for the whole clip, not just its first frame. This " +
     "matters most exactly when the camera pushes in close or zooms tight on him: the shadow gets darker and " +
-    "deeper the closer the camera gets, never lighter or thinner \u2014 the tightest close-up on his face is " +
-    "the darkest, most completely hidden moment of the whole clip. He must never resolve into a normal, " +
-    "visible human face at any zoom level, and a zoom in is the one moment that most demands the shadow hold."
+    "deeper the closer the camera gets, never lighter or thinner. But the frame must never go fully, totally " +
+    "black or empty \u2014 even at the tightest close-up, keep one small real anchor visible at all times: the " +
+    "hat-brim edge, a faint rim of light along the shadow's outline, or the glowing neon lips. A pure black, " +
+    "featureless frame is wrong here, not the goal \u2014 deep near-black shadow with one visible anchor point " +
+    "is. He must never resolve into a normal, visible human face at any zoom level. While he's singing, the " +
+    "camera itself stays calm and slow \u2014 no fast pans, whips, or rapid circling around his head; quick " +
+    "camera movement around his face is what breaks the shadow lock. The energy of the shot comes from his " +
+    "own small, natural body movement instead: a slight head nod in time with the vocal, tilting his head up " +
+    "and to the side, relaxed hand gestures, a light foot tap \u2014 not from big or sudden motion of any kind."
   );
 }
 
@@ -549,7 +601,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   const parts = [
     params.vocal ? VOCAL_LTX_PROMPT_LOCK : "",
     params.shotPrompt.trim(),
-    trimmedMotionPrompt || automaticMotionHint(),
+    trimmedMotionPrompt || automaticMotionHint(Boolean(params.vocal && lock)),
     params.vocal && lock ? (lock.videoPromptHallmarks ?? lock.promptHallmarks) : "",
     params.vocal && lock ? lockedCharacterVideoNote() : "",
     "Solo shot: no other people, extra characters, crowd, or background figures appear anywhere in frame at " +
