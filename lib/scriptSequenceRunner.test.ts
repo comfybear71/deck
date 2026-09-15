@@ -191,12 +191,14 @@ describe("runScriptSequence", () => {
   });
 
   it("real follow-up ask (2026-09-15): a locked vocalist chains within a batch of clips, then resets to his reference photo at the batch boundary", async () => {
-    // 5 parts crosses one LOCKED_CHARACTER_CHAIN_BATCH_SIZE (4) boundary:
-    // clip1->2, clip2->3, clip3->4 stay chained (real continuity within
-    // the batch); clip4->5 resets to the reference photo instead — a
-    // full reset-every-clip would never chain at all, a full
-    // never-reset would never reset; this is the middle ground Stuart
-    // asked for after "nobody wants to watch a boring video."
+    // 5 parts crosses one LOCKED_CHARACTER_CHAIN_BATCH_SIZE (3) boundary
+    // and into the start of the next batch: clip1->2, clip2->3 stay
+    // chained (real continuity for up to 3 clips in a row); clip3->4
+    // resets to the reference photo (a fresh batch, max 3 strung
+    // together); clip4->5 chains again, starting the next batch's own
+    // continuity — a full reset-every-clip would never chain at all, a
+    // full never-reset would never reset; this is the middle ground
+    // Stuart asked for after "nobody wants to watch a boring video."
     const segments = buildScriptSequenceSegments(fiveParts(), []);
     const jackAsh = member({
       id: "jack-ash-frontman",
@@ -211,14 +213,16 @@ describe("runScriptSequence", () => {
     expect(chainFills).toHaveLength(4); // clip1->2, 2->3, 3->4, 4->5
 
     const [toClip2, toClip3, toClip4, toClip5] = chainFills;
-    for (const still of [toClip2, toClip3, toClip4]) {
+    for (const still of [toClip2, toClip3]) {
       expect(still.dataUrl).toBe("https://blob.example/clip-lastframe.jpg");
       expect(still.source).toBe("chained");
       expect(still.featuresLockedCharacter).toBeUndefined();
     }
-    expect(toClip5.dataUrl).toBe("https://blob.example/jack-ash-reference.jpg");
-    expect(toClip5.source).toBe("generated");
-    expect(toClip5.featuresLockedCharacter).toBe(true);
+    expect(toClip4.dataUrl).toBe("https://blob.example/jack-ash-reference.jpg");
+    expect(toClip4.source).toBe("generated");
+    expect(toClip4.featuresLockedCharacter).toBe(true);
+    expect(toClip5.dataUrl).toBe("https://blob.example/clip-lastframe.jpg");
+    expect(toClip5.source).toBe("chained");
   });
 
   it("falls back to the locked reference photo mid-batch when the server couldn't capture a last frame, instead of failing the run", async () => {

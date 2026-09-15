@@ -41,9 +41,12 @@ import { getSkidmarksCharacterLock } from "./plateGeneration";
  * 30-clip song. Chaining in small batches — a few clips sharing one
  * continuous scene, then a fresh reset before the next — keeps real
  * movement and scene continuity while capping how far any one bad
- * frame can compound before it's wiped out by the next reset.
+ * frame can compound before it's wiped out by the next reset. Set to
+ * 3 (Stuart's own follow-up number, same day): a script should plan
+ * for a fresh plate/new scenery at least every 3 clips to line up
+ * with this reset — see the script-writing rules doc.
  */
-const LOCKED_CHARACTER_CHAIN_BATCH_SIZE = 4;
+const LOCKED_CHARACTER_CHAIN_BATCH_SIZE = 3;
 
 export interface ScriptSequenceRunnerDeps {
   /** Resolves any still's `dataUrl` (already-`data:`, or a real Blob
