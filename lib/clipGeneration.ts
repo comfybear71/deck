@@ -507,6 +507,14 @@ export interface BuildClipGenerationRequestParams {
  * edge, a whisper of rim light on the shadow's outline, or the glowing
  * neon lips) so the model always has *some* real shape to lock onto,
  * never a flat black frame with nothing in it.
+ *
+ * Also added 2026-09-15, same round: Stuart's own direct comparison \u2014
+ * fast camera movement around his head while singing "always screws
+ * it up," while a clip where the camera held steady and he just
+ * nodded his head and tapped his foot "worked perfectly." Camera
+ * speed around the face, not just darkness, is a second real trigger,
+ * so this now steers the energy of the shot onto his own small body
+ * movement instead of onto camera motion.
  */
 function lockedCharacterVideoNote(): string {
   return (
@@ -519,7 +527,11 @@ function lockedCharacterVideoNote(): string {
     "black or empty \u2014 even at the tightest close-up, keep one small real anchor visible at all times: the " +
     "hat-brim edge, a faint rim of light along the shadow's outline, or the glowing neon lips. A pure black, " +
     "featureless frame is wrong here, not the goal \u2014 deep near-black shadow with one visible anchor point " +
-    "is. He must never resolve into a normal, visible human face at any zoom level."
+    "is. He must never resolve into a normal, visible human face at any zoom level. While he's singing, the " +
+    "camera itself stays calm and slow \u2014 no fast pans, whips, or rapid circling around his head; quick " +
+    "camera movement around his face is what breaks the shadow lock. The energy of the shot comes from his " +
+    "own small, natural body movement instead: a slight head nod in time with the vocal, relaxed hand " +
+    "gestures, a light foot tap \u2014 not from big or sudden motion of any kind."
   );
 }
 
