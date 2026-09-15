@@ -197,7 +197,7 @@ export interface SkidmarksProjectKindMeta {
 export const SKIDMARKS_PROJECT_KINDS: SkidmarksProjectKindMeta[] = [
   { kind: "music-video", label: "Music video", icon: "note", enabled: true },
   { kind: "skidmarks", label: "Skidmarks", icon: "tire", enabled: false },
-  { kind: "sunnybank", label: "Sunnybank", icon: "sun", enabled: false },
+  { kind: "sunnybank", label: "Sunnybank", icon: "sun", enabled: true },
 ];
 
 /** One generated "look" for a member — a stand-in for a real render.
