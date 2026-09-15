@@ -72,6 +72,18 @@ export interface SunnyBanksCharacterLock {
    * have one; a caller must treat that as a real, named gap rather than
    * silently picking a stand-in voice for him. */
   voiceId?: string;
+  /** This character's real reference plate — a static asset shipped
+   * with the app (`public/skidmarks/sunnybanks/...`), same convention
+   * as Skidmarks' own `jack-ash-reference.jpg`: a real photo/plate
+   * Stuart provided, not picked at runtime, so a fresh session already
+   * has an identity reference without him having to upload one first.
+   * Still resolves through the normal reference-resolution path
+   * (`lib/plateGeneration.ts`'s `resolvePlateReferenceDataUrl`) before
+   * ever reaching xAI/Comfy — same as any other reference image in this
+   * app. `undefined` means no plate yet; a caller (the eventual cast-
+   * strip UI) must offer Stuart an upload for that character rather
+   * than rendering with no identity reference at all. */
+  referenceImage?: string;
 }
 
 /**
@@ -102,11 +114,13 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
       "as on that plate — early: tall messy blonde, blue shirt, beers, coins, or pink hair dryer depending " +
       "on the plate — later: wild mullet, stained blue singlet, stubbies, beer can",
     voiceId: "Kn29eGLhsovCLwKvKi2q",
+    referenceImage: "/skidmarks/sunnybanks/dazza-reference.jpg",
   },
   Nan: {
     name: "Nan",
     look: "tiny elderly woman, hair bun, round glasses, purple housecoat, teacup, cricket bat",
     voiceId: "u57uR2xbwGdASNetz0GB",
+    referenceImage: "/skidmarks/sunnybanks/nan-reference.jpg",
   },
   Hans: {
     name: "Hans",
@@ -118,6 +132,7 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
     name: "Nuggets",
     look: "skinny teen, buzz cut, blue and yellow jersey, meat pie",
     voiceId: "URQwIuGxmxWfCgwXuDxA",
+    referenceImage: "/skidmarks/sunnybanks/nuggets-reference.jpg",
   },
   "Ranger Bazza": {
     name: "Ranger Bazza",
@@ -182,17 +197,6 @@ export function buildSunnyBanksSpeakingPrompt(character: SunnyBanksCharacterLock
 }
 
 /**
- * Builds the hold-plate motion prompt (no dialogue) — a reaction, a
- * pause, or the "hard cut" fallback `app/api/skidmarks/sunnybank/
- * generate-speak-beat/route.ts` reaches for when server-side last-frame
- * extraction fails for a beat (continue from that beat's own locked
- * plate rather than aborting the whole episode — see this module's
- * module-level doc comment and `lib/serverVideoFrame.ts`, the same
- * server-side extraction Skidmarks' music-video chaining already uses;
- * Sunny Banks reuses it as-is, never the old client-side `<video>`
- * capture that failed live three times there).
- */
-/**
  * Blob pathname for one rendered speak-beat clip — deliberately the
  * simplest thing that works for the pilot (Grok's own "smallest slice
  * that proves..." scope): one timestamped file per render, no per-beat
@@ -209,6 +213,17 @@ export function buildSunnyBanksSpeakBeatPathname(characterName: string, timestam
   return `sunnybanks/speak-beats/${timestampMs}-${slug}.mp4`;
 }
 
+/**
+ * Builds the hold-plate motion prompt (no dialogue) — a reaction, a
+ * pause, or the "hard cut" fallback `app/api/skidmarks/sunnybank/
+ * generate-speak-beat/route.ts` reaches for when server-side last-frame
+ * extraction fails for a beat (continue from that beat's own locked
+ * plate rather than aborting the whole episode — see this module's
+ * module-level doc comment and `lib/serverVideoFrame.ts`, the same
+ * server-side extraction Skidmarks' music-video chaining already uses;
+ * Sunny Banks reuses it as-is, never the old client-side `<video>`
+ * capture that failed live three times there).
+ */
 export function buildSunnyBanksHoldPrompt(character: SunnyBanksCharacterLock): string {
   return (
     `Use the provided start image as the first frame. ${character.name}, ${character.look} holds their pose, ` +
