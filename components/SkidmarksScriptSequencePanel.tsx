@@ -10,7 +10,13 @@ import {
   type SkidmarksPlateStill,
   type SkidmarksScriptSequenceDraft,
 } from "@/lib/skidmarks";
-import { buildPlateGenerationRequest, generatePlateStill, resolvePlateReferenceDataUrl, resolveVocalistForPrompt } from "@/lib/plateGeneration";
+import {
+  buildPlateGenerationRequest,
+  generatePlateStill,
+  getSkidmarksCharacterLock,
+  resolvePlateReferenceDataUrl,
+  resolveVocalistForPrompt,
+} from "@/lib/plateGeneration";
 import { generateSkidmarksClip } from "@/lib/clipGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import { runScriptSequence, type ScriptSequenceRunEvent, type ScriptSequenceRunnerDeps } from "@/lib/scriptSequenceRunner";
@@ -85,6 +91,17 @@ function progressLabel(event: ScriptSequenceRunEvent): string {
  * clip" alternative). The one safety net kept regardless: the runner
  * stops dead at the first real failure rather than continuing to spend
  * on a broken chain — see `runScriptSequenceRunner.ts`'s doc comment.
+ *
+ * **"Build timeline" (2026-09-15)** is the one deliberate pause in that
+ * otherwise-automatic flow — real reported ask after a full-script
+ * batch render came back with the locked character drifted out of
+ * existence by the last few clips: build the whole timeline and
+ * pre-fill every plate from the locked character's own reference photo
+ * *before* any rendering or any money is spent, so Stuart can actually
+ * scroll through and check every starting image first. Free (no AI
+ * call, just copying a URL onto every plate) — `handleRun` below then
+ * reuses that already-built, already-checked timeline instead of
+ * silently rebuilding a fresh one and throwing the review away.
  */
 export function SkidmarksScriptSequencePanel({
   band,
@@ -236,6 +253,48 @@ export function SkidmarksScriptSequencePanel({
     reportRunOutcome(outcome);
   };
 
+  /**
+   * Real reported ask (2026-09-15, after a full-script batch render came
+   * back with the locked character having "drifted out of existence" by
+   * the last few clips): build the whole clip timeline and pre-fill
+   * *every* plate with the locked character's own fixed reference photo
+   * — before any rendering, any AI call, or any money spent — so Stuart
+   * can scroll through and actually see every starting image is correct
+   * first. Free and instant (no network call, just the same reference
+   * URL copied onto every plate), unlike a render. A band with no locked
+   * vocalist still gets its timeline built here, just without the
+   * pre-fill — there's nothing safe to auto-fill a plate with otherwise.
+   */
+  const handleBuildTimeline = () => {
+    if (running || parts.length === 0) return;
+
+    const segments = buildScriptSequenceSegments(parts, realSegments);
+    onSetScriptSequence(segments);
+
+    const vocalist = resolveVocalistForPrompt(band.members);
+    const lock = vocalist ? getSkidmarksCharacterLock(vocalist.id) : undefined;
+    if (lock && vocalist?.avatarImage) {
+      for (const segment of segments) {
+        const plate = segment.plates[0];
+        if (!plate) continue;
+        onSetClipPlateStill(segment.id, plate.id, {
+          dataUrl: vocalist.avatarImage,
+          source: "generated",
+          createdAt: Date.now(),
+          featuresLockedCharacter: true,
+        });
+      }
+    }
+
+    flushSkidmarksSessionNow();
+    setResult({
+      ok: true,
+      message: lock
+        ? `Timeline built — all ${segments.length} plates start from the locked reference photo. Scroll up to check them, then tap Generate & render all when you're happy.`
+        : `Timeline built — ${segments.length} clips ready. No locked character on this band, so plates are still blank until you render or fill them in yourself.`,
+    });
+  };
+
   const handleRun = async () => {
     if (running) return;
     if (parts.length === 0) {
@@ -252,25 +311,45 @@ export function SkidmarksScriptSequencePanel({
     setProgressText("Building the clip timeline…");
 
     const vocalist = resolveVocalistForPrompt(band.members);
-    const segments = buildScriptSequenceSegments(parts, realSegments);
+    // Reuse the timeline "Build timeline" already committed for this
+    // exact script, instead of rebuilding from scratch and silently
+    // discarding whatever Stuart already reviewed there (a fresh build
+    // mints new segment/plate ids with blank plates every time — see
+    // `buildScriptSequenceSegments`'s own doc comment). Matching part
+    // counts is an imperfect but low-stakes signal: worst case a changed
+    // script with the same number of parts reuses stale plates, which
+    // Stuart would see immediately in the review step, not something
+    // that silently costs money.
+    const alreadyBuilt = realSegments.length === parts.length;
+    let segments = alreadyBuilt ? realSegments : buildScriptSequenceSegments(parts, realSegments);
 
     // Set up the new timeline in the store *first* — setting a still on
     // clip 1's plate below only works once that plate actually exists
     // there (`setSkidmarksClipPlateStill` looks it up by id in the
     // current store state, which doesn't have these brand-new segments
     // until this call lands).
-    onSetScriptSequence(segments);
-    flushSkidmarksSessionNow();
+    if (!alreadyBuilt) {
+      onSetScriptSequence(segments);
+      flushSkidmarksSessionNow();
+    }
 
     // Already a durable Blob URL, uploaded the moment it was picked
-    // (`handlePickStartingImage`) — nothing left to upload here.
+    // (`handlePickStartingImage`) — nothing left to upload here. An
+    // explicit pick here always wins over whatever "Build timeline"
+    // pre-filled clip 1 with — Stuart's own deliberate choice beats any
+    // automatic default. Rebuilds clip 1's own segment/plate objects
+    // rather than mutating them in place — `segments` can alias the
+    // `realSegments` prop now (the `alreadyBuilt` reuse above), and
+    // props/hook state must never be mutated directly.
     if (startingImageUrl) {
       const startingStill: SkidmarksPlateStill = {
         dataUrl: startingImageUrl,
         source: "upload",
         createdAt: Date.now(),
       };
-      segments[0].plates[0].still = startingStill; // so the runner below sees it immediately
+      segments = segments.map((segment, i) =>
+        i === 0 ? { ...segment, plates: [{ ...segment.plates[0], still: startingStill }, ...segment.plates.slice(1)] } : segment
+      );
       onSetClipPlateStill(segments[0].id, segments[0].plates[0].id, startingStill);
       flushSkidmarksSessionNow();
     }
@@ -379,14 +458,25 @@ export function SkidmarksScriptSequencePanel({
               ? `Found ${parts.length} part${parts.length === 1 ? "" : "s"}.`
               : "No parts found yet."}
         </span>
-        <button
-          type="button"
-          onClick={handleRun}
-          disabled={running || parts.length === 0 || !!incompleteRun}
-          className="rounded-full bg-rose-400 px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {running ? "Rendering…" : `Generate & render all${parts.length > 0 ? ` ${parts.length}` : ""}`}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={handleBuildTimeline}
+            disabled={running || parts.length === 0 || !!incompleteRun}
+            title="Builds the timeline and pre-fills every plate with the locked reference photo — free, no rendering yet, so you can check every plate first."
+            className="rounded-full border border-white/15 bg-white/[0.03] px-3.5 py-2 text-sm font-semibold text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Build timeline
+          </button>
+          <button
+            type="button"
+            onClick={handleRun}
+            disabled={running || parts.length === 0 || !!incompleteRun}
+            className="rounded-full bg-rose-400 px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {running ? "Rendering…" : `Generate & render all${parts.length > 0 ? ` ${parts.length}` : ""}`}
+          </button>
+        </div>
       </div>
 
       {progressText && (
