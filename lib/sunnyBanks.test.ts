@@ -24,15 +24,15 @@ describe("SUNNY_BANKS_CAST", () => {
     expect(getSunnyBanksCharacterLock("Some Guest")).toBeUndefined();
   });
 
-  it("real reported ask (2026-09-15): Dazza, Nan, and Nuggets have Stuart's real reference plates", () => {
+  it("real reported ask (2026-09-15): five cast members have Stuart's real reference plates", () => {
+    expect(SUNNY_BANKS_CAST.Shazza.referenceImage).toBe("/skidmarks/sunnybanks/shazza-reference.jpg");
     expect(SUNNY_BANKS_CAST.Dazza.referenceImage).toBe("/skidmarks/sunnybanks/dazza-reference.jpg");
     expect(SUNNY_BANKS_CAST.Nan.referenceImage).toBe("/skidmarks/sunnybanks/nan-reference.jpg");
     expect(SUNNY_BANKS_CAST.Nuggets.referenceImage).toBe("/skidmarks/sunnybanks/nuggets-reference.jpg");
+    expect(SUNNY_BANKS_CAST["Ranger Bazza"].referenceImage).toBe("/skidmarks/sunnybanks/ranger-bazza-reference.jpg");
     // Not sent yet — an undefined reference must stay undefined, never a
     // guessed/invented path a caller could 404 on.
-    expect(SUNNY_BANKS_CAST.Shazza.referenceImage).toBeUndefined();
     expect(SUNNY_BANKS_CAST.Hans.referenceImage).toBeUndefined();
-    expect(SUNNY_BANKS_CAST["Ranger Bazza"].referenceImage).toBeUndefined();
     expect(SUNNY_BANKS_CAST["Unit 4S"].referenceImage).toBeUndefined();
   });
 });

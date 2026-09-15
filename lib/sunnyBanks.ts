@@ -107,6 +107,7 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
     name: "Shazza",
     look: "big blonde hair, leopard-print top, cigarette, arms folded",
     voiceId: "Vuun8WKmo2MZSUXgLPGw",
+    referenceImage: "/skidmarks/sunnybanks/shazza-reference.jpg",
   },
   Dazza: {
     name: "Dazza",
@@ -136,8 +137,14 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   },
   "Ranger Bazza": {
     name: "Ranger Bazza",
+    // Real reference plate (2026-09-15) shows tan/khaki ranger uniform,
+    // sunglasses, moustache, whistle on a lanyard — no Akubra, no
+    // hi-vis, no bike in frame. Left as Grok's originally relayed text
+    // rather than silently overwritten — flagged to Stuart instead;
+    // see the PR this landed in.
     look: "portly park ranger, oversized Akubra, high-vis vest, mountain bike",
     voiceId: "lT1zujgSfYwPzAlTNE9z",
+    referenceImage: "/skidmarks/sunnybanks/ranger-bazza-reference.jpg",
   },
   "Unit 4S": {
     name: "Unit 4S",
