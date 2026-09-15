@@ -325,15 +325,17 @@ export const MAX_MOTION_PROMPT_LENGTH = 600;
  * body movement, never zoom or push-in, on every speaking plate. A
  * `vocalLockedCharacter` render now gets that same static-camera shape
  * instead, matching Stuart's own live-QA finding the same day (steady
- * camera + head nod + foot tap "worked perfectly").
+ * camera + head nod + foot tap "worked perfectly"; his same-day
+ * follow-up confirmed hand gestures and tilting his head up and to
+ * the side are also safe and never altered his character).
  */
 function automaticMotionHint(vocalLockedCharacter: boolean): string {
   if (vocalLockedCharacter) {
     return (
       "Camera holds — a static, locked-off frame for the whole clip, no push-in, no zoom, no orbit, no " +
-      "pan. All the energy comes from him instead: small, natural movement in time with the vocal, a slight " +
-      "head nod, relaxed hand gestures, a light foot tap. Same scene, subject, and lighting as the reference " +
-      "image throughout."
+      "pan. All the energy comes from him instead: small, natural movement in time with the vocal — a slight " +
+      "head nod, tilting his head up and to the side, relaxed hand gestures, a light foot tap. Same scene, " +
+      "subject, and lighting as the reference image throughout."
     );
   }
   return (
@@ -554,8 +556,8 @@ function lockedCharacterVideoNote(): string {
     "is. He must never resolve into a normal, visible human face at any zoom level. While he's singing, the " +
     "camera itself stays calm and slow \u2014 no fast pans, whips, or rapid circling around his head; quick " +
     "camera movement around his face is what breaks the shadow lock. The energy of the shot comes from his " +
-    "own small, natural body movement instead: a slight head nod in time with the vocal, relaxed hand " +
-    "gestures, a light foot tap \u2014 not from big or sudden motion of any kind."
+    "own small, natural body movement instead: a slight head nod in time with the vocal, tilting his head up " +
+    "and to the side, relaxed hand gestures, a light foot tap \u2014 not from big or sudden motion of any kind."
   );
 }
 
