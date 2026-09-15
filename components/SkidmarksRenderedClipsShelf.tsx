@@ -145,6 +145,11 @@ export function SkidmarksRenderedClipsShelf({ renders, onRemoved }: SkidmarksRen
   const handleRemove = async (render: PersistedClipRender) => {
     const key = persistedRenderKey(render.segmentId, render.plateId);
     if (removingKey) return;
+    // Real reported accident (2026-09-15): Remove sits right next to
+    // Download in a horizontally-scrolling row — an ordinary scroll
+    // gesture on a phone can land on it and delete a render with no
+    // way back. One confirm before the real delete call.
+    if (!window.confirm(`Remove this rendered clip (${render.filename})? This can't be undone.`)) return;
     setRemovingKey(key);
     setRemoveErrors((prev) => {
       if (!(key in prev)) return prev;
