@@ -284,16 +284,53 @@ export async function runScriptSequence(
         renderedCount: i + 1,
       };
     }
+
+    let resetStill: SkidmarksPlateStill | undefined;
+    if (resetToReference) {
+      // Real follow-up ask (2026-09-15): reusing the exact same static
+      // reference photo at every batch reset is repetitive — "that's
+      // not satisfactory." At a genuine batch boundary (not the missing-
+      // last-frame safety net below), generate a fresh still for the
+      // *next* clip's own scene instead, through the same locked-
+      // character still pipeline clip 1's own first still already uses
+      // (`deps.generateFirstStill` — full shadow-face lock hallmarks,
+      // not a bare unlocked prompt). A single still generation is far
+      // lower-risk than a multi-second video render: no motion, no
+      // camera, nothing to drift over time. Falls back to the plain
+      // static reference photo on any generation failure — strictly no
+      // worse than before this change, never blocks the run over it.
+      const nextVocal = SKIDMARKS_SEGMENT_LABEL_META[nextSegment.label]?.vocal ?? false;
+      if (startsNewBatch && vocalist) {
+        const freshOutcome = await deps.generateFirstStill(nextSegment.shotPrompt, bandName, nextVocal, vocalist);
+        if (freshOutcome.ok) {
+          const uploadOutcome = await deps.uploadStill(freshOutcome.dataUrl);
+          resetStill = {
+            dataUrl: uploadOutcome.ok ? uploadOutcome.url : freshOutcome.dataUrl,
+            source: "generated",
+            createdAt: Date.now(),
+            featuresLockedCharacter: true,
+          };
+        }
+      }
+      if (!resetStill) {
+        // `lockedVocalistReference` is the member's own already-durable
+        // `avatarImage`, not a fresh `data:` URL needing an upload.
+        resetStill = {
+          dataUrl: lockedVocalistReference!,
+          source: "generated",
+          createdAt: Date.now(),
+          featuresLockedCharacter: true,
+        };
+      }
+    }
+
     // `outcome.lastFrameUrl` is already a durable Blob URL (server-side
     // extraction — see this module's doc comment) — no upload left to
-    // do here, unlike a freshly-generated first still. Same for
-    // `lockedVocalistReference`: it's the member's own already-durable
-    // `avatarImage`, not a fresh `data:` URL needing one.
-    const chainedStill: SkidmarksPlateStill = {
-      dataUrl: resetToReference ? lockedVocalistReference! : outcome.lastFrameUrl!,
-      source: resetToReference ? "generated" : "chained",
+    // do here.
+    const chainedStill: SkidmarksPlateStill = resetStill ?? {
+      dataUrl: outcome.lastFrameUrl!,
+      source: "chained",
       createdAt: Date.now(),
-      ...(resetToReference ? { featuresLockedCharacter: true } : {}),
     };
     deps.setPlateStill(nextSegment.id, nextPlate.id, chainedStill);
     nextPlate.still = chainedStill; // so the next loop iteration sees it immediately, without a store re-read
