@@ -194,18 +194,69 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
    * completely untouched — nothing here ever clears the workspace
    * before the snapshot is durably saved.
    */
-  const handleArchive = async () => {
-    if (!activeBand || !session.mp3 || archiving) return;
+  /**
+   * Shared by "New" and picking a different band from the picker row —
+   * archives whatever's currently live (if anything) before the switch
+   * actually happens. Without this, `selectSkidmarksBand`/
+   * `createSkidmarksBand` (`lib/skidmarks.ts`) reset `session.mp3`
+   * straight to `null` and whatever song was in progress — segments,
+   * plates, renders — was just gone, nowhere. Real reported ask
+   * (2026-09-15): "when I create a new video that workspace should be
+   * blank — they should only be the stuff that's in the archives," which
+   * only holds if a switch actually puts the old stuff in the archives
+   * first. Returns `false` (and leaves the live session untouched) on a
+   * real archive failure, so the caller can bail out of the switch
+   * instead of silently destroying work a failed save never actually
+   * captured.
+   */
+  const archiveBeforeSwitch = async (): Promise<boolean> => {
+    if (!activeBand || !session.mp3) return true;
     setArchiving(true);
     setArchiveError(null);
-    const outcome = await archiveSkidmarksSession(activeBand, session.mp3, renders.size);
+    // `archiveSkidmarksSession` itself has no timeout (same as the
+    // existing manual Archive button) — fine when Archive is a
+    // deliberate, occasional tap, but "New" is something Stuart taps
+    // constantly, so a slow/dead connection can't be allowed to leave
+    // "New" hung forever. A stalled attempt still finishes in the
+    // background (worst case: a late, harmless archived entry appears
+    // on its own) — this race just stops it from blocking the switch.
+    const timedOut = new Promise<{ ok: false; message: string }>((resolve) =>
+      setTimeout(
+        () => resolve({ ok: false, message: "Archiving is taking too long — check your connection and try again." }),
+        15000
+      )
+    );
+    const outcome = await Promise.race([archiveSkidmarksSession(activeBand, session.mp3, renders.size), timedOut]);
     setArchiving(false);
     if (!outcome.ok) {
       setArchiveError(outcome.message);
-      return;
+      return false;
     }
     clearSessionAfterArchive();
     setArchiveRefreshToken((t) => t + 1);
+    return true;
+  };
+
+  const handleArchive = async () => {
+    if (archiving) return;
+    await archiveBeforeSwitch();
+  };
+
+  const handleSelectBand = async (bandId: string) => {
+    // Re-tapping the tile that's already active used to still fire
+    // `selectSkidmarksBand`, which unconditionally reset `session.mp3` to
+    // `null` — a stray second tap on your own band silently wiped the
+    // MP3 you'd just attached. Selecting a band you're already on is a
+    // no-op, not a reset.
+    if (bandId === activeBand?.id || archiving) return;
+    if (!(await archiveBeforeSwitch())) return;
+    selectBand(bandId);
+  };
+
+  const handleCreateBand = async () => {
+    if (archiving) return;
+    if (!(await archiveBeforeSwitch())) return;
+    createBand();
   };
 
   /**
@@ -344,8 +395,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                   <SkidmarksBandPicker
                     bands={bands}
                     activeBandId={session.bandId}
-                    onSelectBand={selectBand}
-                    onCreateBand={createBand}
+                    onSelectBand={handleSelectBand}
+                    onCreateBand={handleCreateBand}
                     onSetCoverImage={setBandCoverImage}
                     onRemoveBand={handleRemoveBand}
                   />
