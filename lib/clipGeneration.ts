@@ -495,6 +495,18 @@ export interface BuildClipGenerationRequestParams {
  * one (Stuart's own live-QA report, 2026-09-14: zooming in tight almost
  * revealed a normal human face; his own follow-up ask, same day: the
  * shadow should darken as the camera nears his face, not just hold).
+ *
+ * Revised 2026-09-15 after a real repro: telling the model the
+ * close-up should be its "most completely hidden," darkest moment
+ * read as an instruction to go fully, totally black on his face \u2014
+ * and LTX does not hold a true black frame cleanly, it resolves the
+ * emptiness into an invented normal human face once the shot has
+ * nothing left to anchor to. The fix is not "hold less dark," it's
+ * "never truly empty": the close-up stays as deep and dark as before,
+ * but always keeps one small visible anchor in frame (the hat-brim
+ * edge, a whisper of rim light on the shadow's outline, or the glowing
+ * neon lips) so the model always has *some* real shape to lock onto,
+ * never a flat black frame with nothing in it.
  */
 function lockedCharacterVideoNote(): string {
   return (
@@ -503,9 +515,11 @@ function lockedCharacterVideoNote(): string {
     "never becomes legible, well-lit, or reads as a normal, watchable stare at any point in the motion, even " +
     "while he's singing \u2014 the shadow-face lock holds for the whole clip, not just its first frame. This " +
     "matters most exactly when the camera pushes in close or zooms tight on him: the shadow gets darker and " +
-    "deeper the closer the camera gets, never lighter or thinner \u2014 the tightest close-up on his face is " +
-    "the darkest, most completely hidden moment of the whole clip. He must never resolve into a normal, " +
-    "visible human face at any zoom level, and a zoom in is the one moment that most demands the shadow hold."
+    "deeper the closer the camera gets, never lighter or thinner. But the frame must never go fully, totally " +
+    "black or empty \u2014 even at the tightest close-up, keep one small real anchor visible at all times: the " +
+    "hat-brim edge, a faint rim of light along the shadow's outline, or the glowing neon lips. A pure black, " +
+    "featureless frame is wrong here, not the goal \u2014 deep near-black shadow with one visible anchor point " +
+    "is. He must never resolve into a normal, visible human face at any zoom level."
   );
 }
 
