@@ -275,15 +275,15 @@ export const MAX_CLIP_DURATION_SEC = 15;
  * `MAX_LTX_CLIP_DURATION_SEC` (duplicated here on purpose, same "each
  * Skidmarks API route stays self-contained" convention as the Grok
  * constants above \u2014 nothing enforces the two staying in sync
- * automatically). `30`, not the `20` this shipped with originally.
- * That `20` came from the hosted `LtxApi25AudioToVideo` partner node,
- * which really does hard-reject driving audio outside 2\u201320s in its
- * own `execute()` \u2014 but this route doesn't use that node any more.
- * On the LTX 2.3 graph duration is an ordinary graph input (node
- * `340:331`) with no such cap, and 30s matches Stuart's own real, live
- * Comfy Cloud usage. */
+ * automatically, so both need updating together). Raised to `30` once
+ * (from the `20` this shipped with originally, a ceiling that came
+ * from a hosted partner node this route no longer uses \u2014 the LTX
+ * 2.3 graph's own duration input has no such cap), then lowered back
+ * to `15` on 2026-09-15 after real reliability problems on renders
+ * past ~20s on this app \u2014 see `lib/clipGeneration.ts`'s matching
+ * constant for the full history. */
 export const MIN_LTX_CLIP_DURATION_SEC = 5;
-export const MAX_LTX_CLIP_DURATION_SEC = 30;
+export const MAX_LTX_CLIP_DURATION_SEC = 15;
 /** A floor on the *actual* driving audio (2s) \u2014 looser than
  * `MIN_LTX_CLIP_DURATION_SEC` (this
  * app's own product floor, which nothing normally sends below); this

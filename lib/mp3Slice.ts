@@ -218,7 +218,7 @@ export type Mp3SliceOutcome =
  * clamped request. Never trims below a single frame, so this can't
  * produce an empty slice even if `maxDurationSec` itself is smaller
  * than one frame's own duration (a pathological caller error, not a
- * real scenario for this feature's own `[5, 30]`s range).
+ * real scenario for this feature's own `[5, 15]`s range).
  */
 export function sliceMp3ToTimeRange(
   bytes: Uint8Array,

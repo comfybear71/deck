@@ -26,6 +26,19 @@ function threeParts() {
   ];
 }
 
+/** Five parts — long enough to cross one
+ * `LOCKED_CHARACTER_CHAIN_BATCH_SIZE` (4) boundary, so a batching test
+ * can see both a within-batch chain-fill and a batch-boundary reset. */
+function fiveParts() {
+  return [
+    { index: 1, title: "A", startSec: 0, endSec: 15, prompt: "part one" },
+    { index: 2, title: "B", startSec: 15, endSec: 30, prompt: "part two" },
+    { index: 3, title: "C", startSec: 30, endSec: 45, prompt: "part three" },
+    { index: 4, title: "D", startSec: 45, endSec: 60, prompt: "part four" },
+    { index: 5, title: "E", startSec: 60, endSec: 75, prompt: "part five" },
+  ];
+}
+
 /** A fully successful fake pipeline — every dep resolves as if the real
  * network/DOM calls behind it worked. Individual tests override just
  * the one dep they want to fail. */
@@ -177,8 +190,15 @@ describe("runScriptSequence", () => {
     expect(deps.setPlateStill).toHaveBeenCalledTimes(2);
   });
 
-  it("real reported disaster (2026-09-15): a locked vocalist's next plate resets to his own reference photo, never the previous clip's last frame", async () => {
-    const segments = buildScriptSequenceSegments(threeParts(), []);
+  it("real follow-up ask (2026-09-15): a locked vocalist chains within a batch of clips, then generates a fresh scene still at the batch boundary", async () => {
+    // 5 parts crosses one LOCKED_CHARACTER_CHAIN_BATCH_SIZE (3) boundary
+    // and into the start of the next batch: clip1->2, clip2->3 stay
+    // chained (real continuity for up to 3 clips in a row); clip3->4
+    // generates a fresh still for clip 4's own scene instead of reusing
+    // the same static reference photo every time ("that's not
+    // satisfactory" — Stuart's own follow-up); clip4->5 chains again,
+    // starting the next batch's own continuity.
+    const segments = buildScriptSequenceSegments(fiveParts(), []);
     const jackAsh = member({
       id: "jack-ash-frontman",
       name: "Jack Ash",
@@ -188,16 +208,83 @@ describe("runScriptSequence", () => {
 
     await run(segments, deps, undefined, jackAsh);
 
-    // Two chain-fills (clip1->clip2, clip2->clip3) plus clip 1's own
-    // first still — none of them ever read from outcome.lastFrameUrl.
     const chainFills = chainFillCalls(deps, segments[0].id);
-    expect(chainFills).toHaveLength(2);
-    for (const still of chainFills) {
-      expect(still.dataUrl).toBe("https://blob.example/jack-ash-reference.jpg");
-      expect(still.dataUrl).not.toBe("https://blob.example/clip-lastframe.jpg");
-      expect(still.source).toBe("generated");
-      expect(still.featuresLockedCharacter).toBe(true);
+    expect(chainFills).toHaveLength(4); // clip1->2, 2->3, 3->4, 4->5
+
+    const [toClip2, toClip3, toClip4, toClip5] = chainFills;
+    for (const still of [toClip2, toClip3]) {
+      expect(still.dataUrl).toBe("https://blob.example/clip-lastframe.jpg");
+      expect(still.source).toBe("chained");
+      expect(still.featuresLockedCharacter).toBeUndefined();
     }
+    // A freshly generated still for clip 4's own scene, not the static
+    // avatarImage, uploaded the same way clip 1's own first still is.
+    expect(toClip4.dataUrl).not.toBe("https://blob.example/jack-ash-reference.jpg");
+    expect(toClip4.source).toBe("generated");
+    expect(toClip4.featuresLockedCharacter).toBe(true);
+    expect(toClip5.dataUrl).toBe("https://blob.example/clip-lastframe.jpg");
+    expect(toClip5.source).toBe("chained");
+
+    // Went through the same locked-character still pipeline as clip 1's
+    // own first still — clip 4's own shot prompt, not a generic one.
+    expect(deps.generateFirstStill).toHaveBeenCalledWith("part four", "Stu Balls", false, jackAsh);
+  });
+
+  it("falls back to the static reference photo at a batch boundary when generating a fresh scene still fails", async () => {
+    const segments = buildScriptSequenceSegments(fiveParts(), []);
+    const jackAsh = member({
+      id: "jack-ash-frontman",
+      name: "Jack Ash",
+      avatarImage: "https://blob.example/jack-ash-reference.jpg",
+    });
+    const generateFirstStill = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true as const, dataUrl: "data:image/jpeg;base64,first" }) // clip 1's own first still
+      .mockResolvedValue({ ok: false as const, message: "Siray unavailable" }); // every batch-boundary attempt after
+    const deps = fakeDeps({ generateFirstStill });
+
+    const outcome = await run(segments, deps, undefined, jackAsh);
+
+    expect(outcome.ok).toBe(true);
+    const chainFills = chainFillCalls(deps, segments[0].id);
+    const toClip4 = chainFills[2];
+    expect(toClip4.dataUrl).toBe("https://blob.example/jack-ash-reference.jpg");
+    expect(toClip4.source).toBe("generated");
+    expect(toClip4.featuresLockedCharacter).toBe(true);
+  });
+
+  it("falls back to the locked reference photo mid-batch when the server couldn't capture a last frame, instead of failing the run", async () => {
+    // threeParts, not fiveParts: stays clear of the real batch boundary
+    // at clip 4 so this test isolates just the missing-last-frame
+    // safety net at clip1->clip2, which is not a real batch boundary
+    // (1 % LOCKED_CHARACTER_CHAIN_BATCH_SIZE !== 0) and so never
+    // attempts a fresh generation — it uses the static photo directly.
+    const segments = buildScriptSequenceSegments(threeParts(), []);
+    const jackAsh = member({
+      id: "jack-ash-frontman",
+      name: "Jack Ash",
+      avatarImage: "https://blob.example/jack-ash-reference.jpg",
+    });
+    const renderClip = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, videoUrl: "https://blob.example/1.mp4", persisted: true }) // no lastFrameUrl
+      .mockResolvedValue({
+        ok: true,
+        videoUrl: "https://blob.example/clip.mp4",
+        persisted: true,
+        lastFrameUrl: "https://blob.example/clip-lastframe.jpg",
+      });
+    const deps = fakeDeps({ renderClip });
+
+    const outcome = await run(segments, deps, undefined, jackAsh);
+
+    expect(outcome.ok).toBe(true);
+    const chainFills = chainFillCalls(deps, segments[0].id);
+    // clip1->2 hits the missing-last-frame safety net, not a real batch
+    // boundary — stays the plain static photo, no extra generation call.
+    expect(chainFills[0].dataUrl).toBe("https://blob.example/jack-ash-reference.jpg");
+    expect(chainFills[0].source).toBe("generated");
+    expect(deps.generateFirstStill).toHaveBeenCalledTimes(1); // clip 1's own first still only
   });
 
   it("keeps chaining the real last frame for a vocalist with no registered character lock", async () => {
