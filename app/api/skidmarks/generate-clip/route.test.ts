@@ -1213,7 +1213,7 @@ describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) rend
     expect(rawBody).not.toContain("model.resolution");
   });
 
-  it("submits the verified template unchanged apart from the patched nodes, ID LoRA included", async () => {
+  it("submits the verified template unchanged apart from the patched nodes", async () => {
     mockAudioFetch(encodeTestMp3(6));
     mockUploads("only-plate.png", "only-clip.mp3");
     mockSubmit("job-template");
@@ -1230,10 +1230,9 @@ describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) rend
     const differing = Object.keys(template).filter(
       (id) => JSON.stringify(graph[id]) !== JSON.stringify(template[id])
     );
-    expect(differing.sort()).toEqual(["269", "276", "340:296", "340:319", "340:331", "341"]);
-    // The `talkvid-3k` ID LoRA is what holds a face through motion —
-    // it must survive every patch.
-    expect(JSON.stringify(graph)).toContain("talkvid-3k");
+    expect(differing.sort()).toEqual(["269", "276", "340:296", "340:319", "340:331", "340:349", "341"]);
+    // Prompt enhancer forced off, every render.
+    expect((graph["340:349"] as { inputs: { value: boolean } }).inputs.value).toBe(false);
   });
 
   it("real-world regression: a plate requested at exactly MAX_LTX_CLIP_DURATION_SEC never fails with an \"audio slice is Ns\" error", async () => {

@@ -1,7 +1,7 @@
 {
   "269": {
     "inputs": {
-      "image": "4e2ae55fe7ac119c7a2d1cd00516aa5dde2997cfaa3776b72787d4e164487999.jpg"
+      "image": "c8d46dd8a92591474032281a6de91ed339fdbd88ecdae2d14fec61a3ad47f9ef.jpg"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -10,7 +10,7 @@
   },
   "276": {
     "inputs": {
-      "audio": "8c183d53fad1b57b9661bedad95784906f6b968131e29fa58c790df945275ac6.mp3"
+      "audio": "b401a5285efb8a50bab1e6613b38a2c9ec28916a87415e165fde2befba119a01.mp3"
     },
     "class_type": "LoadAudio",
     "_meta": {
@@ -21,6 +21,7 @@
     "inputs": {
       "filename_prefix": "video/LTX_2.3_ia2v",
       "format": "auto",
+      "format.codec": "auto",
       "codec": "auto",
       "video": [
         "340:312",
@@ -43,7 +44,7 @@
   },
   "340:286": {
     "inputs": {
-      "noise_seed": 180333457574494
+      "noise_seed": 75505595210544
     },
     "class_type": "RandomNoise",
     "_meta": {
@@ -337,7 +338,7 @@
     "inputs": {
       "cfg": 1,
       "model": [
-        "340:353",
+        "340:293",
         0
       ],
       "positive": [
@@ -515,6 +516,7 @@
         0
       ],
       "bit_depth": 8,
+      "color_space": "sRGB",
       "images": [
         "340:316",
         0
@@ -531,7 +533,7 @@
   },
   "340:331": {
     "inputs": {
-      "value": 4
+      "value": 5
     },
     "class_type": "PrimitiveFloat",
     "_meta": {
@@ -704,7 +706,7 @@
   },
   "340:319": {
     "inputs": {
-      "value": "Ranger Bazza is the prominent character in frame (largest / nearest / centre). Ranger Bazza's mouth and head move while speaking, other people stay secondary and mostly still, props stay where they are in the plate. highly detailed stylised 3D animated feature render, clean simplified forms, believable materials, soft overcast lighting, shallow depth of field with blurred background, cinematic quality, sharp focus. Not photographic, not a cartoon, not photorealistic"
+      "value": "[VISUAL]: 16 Dazza stubbies look. Dazza alone, one person only in frame, empty space around them, no extra people appear. Soft idle motion, heat haze, flies, weight shift, breathing, props stay locked to the plate, no new dialogue. rubbery adult cartoon, thick black outlines, flat cel colour, big heads, noodly arms, sun-bleached Aussie palette, dusty ochre, faded teal, heat haze. Not photographic, not soft Pixar, not photorealistic\n[SPEECH]:"
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -814,56 +816,11 @@
   },
   "340:349": {
     "inputs": {
-      "value": false
+      "value": true
     },
     "class_type": "PrimitiveBoolean",
     "_meta": {
       "title": "Boolean (Enable Prompt Enhance)"
-    }
-  },
-  "340:352": {
-    "inputs": {
-      "lora_name": "ltx-2.3-id-lora-talkvid-3k.safetensors",
-      "strength_model": 1,
-      "model": [
-        "340:293",
-        0
-      ]
-    },
-    "class_type": "LoraLoaderModelOnly",
-    "_meta": {
-      "title": "Load ID LoRA"
-    }
-  },
-  "340:353": {
-    "inputs": {
-      "identity_guidance_scale": 3,
-      "start_percent": 0,
-      "end_percent": 1,
-      "model": [
-        "340:352",
-        0
-      ],
-      "positive": [
-        "340:307",
-        0
-      ],
-      "negative": [
-        "340:307",
-        1
-      ],
-      "reference_audio": [
-        "276",
-        0
-      ],
-      "audio_vae": [
-        "340:335",
-        0
-      ]
-    },
-    "class_type": "LTXVReferenceAudio",
-    "_meta": {
-      "title": "LTXV Reference Audio"
     }
   }
 }

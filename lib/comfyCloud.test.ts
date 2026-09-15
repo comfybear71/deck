@@ -354,12 +354,12 @@ describe("downloadComfyCloudOutput", () => {
 
 describe("buildLtx23Ia2vWorkflow", () => {
   // Always patched, regardless of the optional `negativePrompt` input —
-  // `340:296` (refine strength) has a real default
-  // (`LTX_IA2V_DEFAULT_REFINE_STRENGTH`) applied unconditionally.
+  // `340:296` (refine strength) and `340:349` (prompt enhancer) both
+  // have real unconditional defaults applied on every call.
   // `340:314` (negative prompt) is deliberately NOT in this list — it's
   // only patched when `negativePrompt` is actually given, see the
   // dedicated tests below.
-  const PATCHED_NODE_IDS = ["269", "276", "340:296", "340:319", "340:331", "341"];
+  const PATCHED_NODE_IDS = ["269", "276", "340:296", "340:319", "340:331", "340:349", "341"];
 
   function build(overrides: Partial<Parameters<typeof buildLtx23Ia2vWorkflow>[0]> = {}) {
     return buildLtx23Ia2vWorkflow({
@@ -426,9 +426,14 @@ describe("buildLtx23Ia2vWorkflow", () => {
     expect(differing.sort()).toEqual([...PATCHED_NODE_IDS].sort());
   });
 
-  it("keeps the talkvid-3k ID LoRA that holds a face through motion", () => {
+  it("always forces the prompt enhancer off, regardless of the template's own shipped default", () => {
     const graph = build();
-    expect(JSON.stringify(graph)).toContain("talkvid-3k");
+    expect((graph["340:349"] as { inputs: { value: boolean } }).inputs.value).toBe(false);
+  });
+
+  it("real finding (2026-09-15): the template has no identity/face-lock LoRA at all — a live export from Stuart's own account confirmed it, correcting an earlier wrong assumption", () => {
+    const graph = build();
+    expect(JSON.stringify(graph)).not.toContain("talkvid");
   });
 
   it("never mutates the imported template between calls", () => {
