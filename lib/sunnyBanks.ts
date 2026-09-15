@@ -137,19 +137,25 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   },
   "Ranger Bazza": {
     name: "Ranger Bazza",
-    // Real reference plate (2026-09-15) shows tan/khaki ranger uniform,
-    // sunglasses, moustache, whistle on a lanyard — no Akubra, no
-    // hi-vis, no bike in frame. Left as Grok's originally relayed text
-    // rather than silently overwritten — flagged to Stuart instead;
-    // see the PR this landed in.
-    look: "portly park ranger, oversized Akubra, high-vis vest, mountain bike",
+    // Stuart's own confirmation (2026-09-15): both looks are real, not a
+    // stale/wrong description — same "as on that plate" ambiguity-
+    // preserving shape as Dazza's own entry above, since this module
+    // never guesses which one a given scene means.
+    look:
+      "as on that plate — portly build either way: tan/khaki ranger uniform, sunglasses, moustache, whistle " +
+      "on a lanyard, or oversized Akubra, high-vis vest, mountain bike",
     voiceId: "lT1zujgSfYwPzAlTNE9z",
     referenceImage: "/skidmarks/sunnybanks/ranger-bazza-reference.jpg",
   },
   "Unit 4S": {
     name: "Unit 4S",
-    look: "short purple alien, antennae, bulging eyes, bucket hat, high-vis vest",
+    // Real reference plate (2026-09-15): bucket hat + antennae + bulging
+    // eyes confirmed, but no high-vis vest in frame — holding a pair of
+    // thongs instead. Updated to match the real art, not the originally
+    // relayed text.
+    look: "short purple alien, antennae, bulging eyes, teal bucket hat, holding a pair of thongs, bare feet",
     voiceId: "9AMMyX2GM74yY0KQwYkF",
+    referenceImage: "/skidmarks/sunnybanks/unit-4s-reference.jpg",
   },
 };
 
