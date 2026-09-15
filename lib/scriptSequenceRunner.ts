@@ -29,6 +29,7 @@
 import { SKIDMARKS_SEGMENT_LABEL_META, type SkidmarksClipSegment, type SkidmarksMember, type SkidmarksPlateStill } from "./skidmarks";
 import type { PersistedClipRender } from "./clipRenders";
 import { buildClipGenerationRequest } from "./clipGeneration";
+import { getSkidmarksCharacterLock } from "./plateGeneration";
 
 export interface ScriptSequenceRunnerDeps {
   /** Resolves any still's `dataUrl` (already-`data:`, or a real Blob
@@ -233,7 +234,24 @@ export async function runScriptSequence(
     if (!nextPlate || nextPlate.still) continue; // already has a still (shouldn't happen on a fresh build, but never overwrite it
 
     report({ type: "chaining", clipIndex: i, clipCount: segments.length });
-    if (!outcome.lastFrameUrl) {
+
+    // Real reported disaster (2026-09-15): chaining every clip's last
+    // frame into the next blindly compounds drift — one clip losing the
+    // shadow-face lock even slightly means the *next* clip starts from
+    // an already-part-human frame and drifts further, and by clip 20 of
+    // 21 the locked character "doesn't even exist" anymore, all chained
+    // from one early slip. For a genuinely locked character (Jack Ash),
+    // every clip now resets back to his own fixed, verified reference
+    // photo instead of the previous clip's own output — a single bad
+    // render then stays a single bad render, it can never drag the rest
+    // of the song down with it. Real cost: this gives up the
+    // door→keyhole→seated background/pose continuity chaining
+    // otherwise buys — an accepted tradeoff for a character whose look
+    // must never drift, not something to weigh per-clip.
+    const lockedVocalistReference =
+      vocalist && getSkidmarksCharacterLock(vocalist.id) && vocalist.avatarImage ? vocalist.avatarImage : undefined;
+
+    if (!lockedVocalistReference && !outcome.lastFrameUrl) {
       return {
         ok: false,
         failedAtClipIndex: i,
@@ -243,11 +261,14 @@ export async function runScriptSequence(
     }
     // `outcome.lastFrameUrl` is already a durable Blob URL (server-side
     // extraction — see this module's doc comment) — no upload left to
-    // do here, unlike a freshly-generated first still.
+    // do here, unlike a freshly-generated first still. Same for
+    // `lockedVocalistReference`: it's the member's own already-durable
+    // `avatarImage`, not a fresh `data:` URL needing one.
     const chainedStill: SkidmarksPlateStill = {
-      dataUrl: outcome.lastFrameUrl,
-      source: "chained",
+      dataUrl: lockedVocalistReference ?? outcome.lastFrameUrl!,
+      source: lockedVocalistReference ? "generated" : "chained",
       createdAt: Date.now(),
+      ...(lockedVocalistReference ? { featuresLockedCharacter: true } : {}),
     };
     deps.setPlateStill(nextSegment.id, nextPlate.id, chainedStill);
     nextPlate.still = chainedStill; // so the next loop iteration sees it immediately, without a store re-read
