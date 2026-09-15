@@ -57,7 +57,7 @@ function formatArchivedAt(ms: number): string {
  * workspace, after "Open in editor" restores that exact song into it.
  */
 export function SkidmarksArchiveShelf({ onOpenInEditor, refreshToken }: SkidmarksArchiveShelfProps) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [songs, setSongs] = useState<SkidmarksArchivedSong[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
