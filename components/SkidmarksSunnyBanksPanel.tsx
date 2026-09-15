@@ -26,6 +26,12 @@ import { SUNNY_BANKS_CAST } from "@/lib/sunnyBanks";
  */
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
+/** The always-on cast strip only ever shows the locked series regulars
+ * — a one-episode guest (Hans today) has no business sitting in a
+ * permanent "the cast" row with no episode to scope him to (Stuart's
+ * own correction, 2026-09-15). Still selectable in the line-test form
+ * below once he has a voice + plate — this only hides the strip. */
+const SERIES_REGULARS = CAST_LIST.filter((c) => !c.guest);
 
 type GenerateSpeakBeatResult =
   | { ok: true; videoUrl: string; durationSec: number }
@@ -83,7 +89,7 @@ export function SkidmarksSunnyBanksPanel() {
       <div>
         <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-white/40">Cast</p>
         <div className="flex flex-wrap gap-2">
-          {CAST_LIST.map((c) => {
+          {SERIES_REGULARS.map((c) => {
             const ready = !!(c.voiceId && c.referenceImage);
             return (
               <div

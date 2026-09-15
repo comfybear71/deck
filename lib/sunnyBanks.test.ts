@@ -35,6 +35,16 @@ describe("SUNNY_BANKS_CAST", () => {
     // guessed/invented path a caller could 404 on.
     expect(SUNNY_BANKS_CAST.Hans.referenceImage).toBeUndefined();
   });
+
+  it("real reported ask (2026-09-15): only Hans is a guest — the six series regulars aren't", () => {
+    expect(SUNNY_BANKS_CAST.Hans.guest).toBe(true);
+    expect(SUNNY_BANKS_CAST.Shazza.guest).toBeFalsy();
+    expect(SUNNY_BANKS_CAST.Dazza.guest).toBeFalsy();
+    expect(SUNNY_BANKS_CAST.Nan.guest).toBeFalsy();
+    expect(SUNNY_BANKS_CAST.Nuggets.guest).toBeFalsy();
+    expect(SUNNY_BANKS_CAST["Ranger Bazza"].guest).toBeFalsy();
+    expect(SUNNY_BANKS_CAST["Unit 4S"].guest).toBeFalsy();
+  });
 });
 
 describe("buildSunnyBanksSpeakingPrompt", () => {
