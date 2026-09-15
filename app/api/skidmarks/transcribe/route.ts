@@ -193,34 +193,13 @@ import { NextResponse } from "next/server";
  * only ElevenLabs' own (key-free) error text does.
  */
 
+import { ELEVENLABS_API_KEY_ENV_CANDIDATES, resolveElevenLabsApiKey } from "@/lib/elevenLabsKey";
+
 export const runtime = "nodejs";
 // Transcription of a full song can run past the platform's default
 // function timeout on some plans — this only raises the ceiling this
 // route asks for; the platform's own plan limit still applies.
 export const maxDuration = 120;
-
-/** Candidate env var names for Stuart's existing ElevenLabs API key, in
- * priority order — see the module doc comment's "Key wiring" note.
- * `ELEVENLABS_API_KEY` is the standard name ElevenLabs' own SDKs/docs
- * use, and the one Stuart confirmed he set on this project;
- * `ELEVEN_LABS_API_KEY` is the one plausible manual-naming variant worth
- * checking for free. Not an open-ended guess list — if neither is set,
- * `resolveElevenLabsApiKey` says so honestly (naming both) rather than
- * silently trying more names. */
-const ELEVENLABS_API_KEY_ENV_CANDIDATES = ["ELEVENLABS_API_KEY", "ELEVEN_LABS_API_KEY"] as const;
-
-/** Looks up Stuart's already-configured ElevenLabs key under whichever
- * of `ELEVENLABS_API_KEY_ENV_CANDIDATES` is actually set, and reports
- * which name matched — so a caller that finds nothing can name exactly
- * what it checked (see the `missing_api_key` response below) instead of
- * a bare "not configured". Returns `null`, never throws, if none match. */
-function resolveElevenLabsApiKey(): { key: string; envVarName: string } | null {
-  for (const envVarName of ELEVENLABS_API_KEY_ENV_CANDIDATES) {
-    const key = process.env[envVarName];
-    if (key) return { key, envVarName };
-  }
-  return null;
-}
 
 const ELEVENLABS_TRANSCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text";
 /** State-of-the-art ElevenLabs STT model as of this build — see
