@@ -1,5 +1,6 @@
 import { del, list, put } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { decodeDataUrl } from "@/lib/dataUrl";
 import {
   buildClipRenderLastFramePathname,
   buildClipRenderPathname,
@@ -953,20 +954,6 @@ export async function persistClipRenderToBlob(
 
 function isReferenceDataUrl(value: unknown): value is string {
   return typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,.+/.test(value);
-}
-
-/** A plate still is always `data:image/...`, but the audio slice this
- * route sends to Comfy Cloud is raw bytes it produced itself
- * (`lib/mp3Slice.ts`), never a data URL on the wire \u2014 no matching
- * validator needed for it. */
-function decodeDataUrl(dataUrl: string): { bytes: Uint8Array; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
-  if (!match) return null;
-  try {
-    return { bytes: new Uint8Array(Buffer.from(match[2], "base64")), mimeType: match[1] };
-  } catch {
-    return null;
-  }
 }
 
 /** Fetches the attached song's own durable Blob audio (never the

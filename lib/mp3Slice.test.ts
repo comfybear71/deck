@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Mp3Encoder } from "@breezystack/lamejs";
-import { parseMp3Frames, skipLeadingId3v2Tag, sliceMp3ToTimeRange } from "./mp3Slice";
+import { estimateMp3DurationSec, parseMp3Frames, skipLeadingId3v2Tag, sliceMp3ToTimeRange } from "./mp3Slice";
 
 /**
  * Encodes a real MP3 via the same `@breezystack/lamejs` encoder
@@ -187,5 +187,29 @@ describe("sliceMp3ToTimeRange", () => {
       if (!outcome.ok) return;
       expect(outcome.actualEndSec - outcome.actualStartSec).toBeLessThanOrEqual(30);
     });
+  });
+});
+
+describe("estimateMp3DurationSec", () => {
+  it("real reported need (2026-09-15): reports a real encoder's actual duration, closely, not just the requested one", () => {
+    const mp3 = encodeTestMp3(4, 22050, 64);
+    const duration = estimateMp3DurationSec(mp3);
+    // Real encoders don't land on the exact requested length (frame
+    // quantization, encoder flush padding) — close, not exact, is the
+    // honest bar here, same tolerance the rest of this file's real-MP3
+    // fixtures already work within.
+    expect(duration).toBeGreaterThan(3.5);
+    expect(duration).toBeLessThan(4.5);
+  });
+
+  it("scales with real content — a longer file reports a longer duration", () => {
+    const short = estimateMp3DurationSec(encodeTestMp3(2, 22050, 64));
+    const long = estimateMp3DurationSec(encodeTestMp3(8, 22050, 64));
+    expect(long).toBeGreaterThan(short);
+  });
+
+  it("returns 0 for bytes with no valid MP3 frames, rather than throwing", () => {
+    expect(estimateMp3DurationSec(new TextEncoder().encode("not an mp3"))).toBe(0);
+    expect(estimateMp3DurationSec(new Uint8Array(0))).toBe(0);
   });
 });

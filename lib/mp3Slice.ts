@@ -268,3 +268,24 @@ export function sliceMp3ToTimeRange(
   const last = trimmed[trimmed.length - 1];
   return { ok: true, bytes: out, actualStartSec: first.startSec, actualEndSec: last.startSec + last.durationSec };
 }
+
+/**
+ * Real, exact duration of an MP3 file — same frame-accurate timing
+ * `parseMp3Frames` already computes per-frame (sample-rate + samples-
+ * per-frame, not an average-bitrate estimate), just summed to the whole
+ * file. First real use (2026-09-15): Sunny Banks' `generate-speak-beat`
+ * route needs to know how long an ElevenLabs-synthesized dialogue line
+ * actually runs, to drive the LTX render for exactly that long — same
+ * "the audio's own real length decides the clip's length" idea
+ * `sliceMp3ToTimeRange`'s `actualStartSec`/`actualEndSec` already gives
+ * the Vocal/song path, just for audio this app generated itself rather
+ * than sliced out of an attached file. Returns `0` for bytes that don't
+ * parse as any valid frames — an honest "no real audio here" rather
+ * than throwing, matching `parseMp3Frames`' own never-throws contract.
+ */
+export function estimateMp3DurationSec(bytes: Uint8Array): number {
+  const frames = parseMp3Frames(bytes);
+  if (frames.length === 0) return 0;
+  const last = frames[frames.length - 1];
+  return last.startSec + last.durationSec;
+}
