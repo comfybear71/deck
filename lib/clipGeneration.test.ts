@@ -416,9 +416,9 @@ describe("buildClipGenerationRequest", () => {
       expect(request.audioEndSec).toBeUndefined();
     });
 
-    it("injects Jack Ash's locked hallmarks/negative cues plus the video-specific 'mouth in frame' note when he's the vocalist", () => {
+    it("injects Jack Ash's video-specific hallmarks plus the 'mouth in frame' note when he's the vocalist, and sends his negative cues on a real, separate channel instead of inline", () => {
       const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
-      const { prompt } = buildClipGenerationRequest({
+      const request = buildClipGenerationRequest({
         vocal: true,
         shotPrompt: "singing directly to camera",
         bandName: "Jack Ash",
@@ -426,16 +426,23 @@ describe("buildClipGenerationRequest", () => {
         durationSec: 10,
         vocalist: jackAsh,
       });
-      expect(prompt.toLowerCase()).toContain("neon blue");
-      expect(prompt.toLowerCase()).toContain("shadow");
-      expect(prompt).toContain("Do not show:");
-      expect(prompt.toLowerCase()).toContain("watchable stare");
-      expect(prompt.toLowerCase()).toContain("mouth is actually");
+      expect(request.prompt.toLowerCase()).toContain("neon blue");
+      expect(request.prompt.toLowerCase()).toContain("shadow");
+      expect(request.prompt.toLowerCase()).toContain("watchable stare");
+      expect(request.prompt.toLowerCase()).toContain("mouth is actually");
+      // Real reported failure (2026-09-15): naming a concept even to
+      // negate it, inside the same positive-conditioning text, doesn't
+      // suppress it as reliably as true negative conditioning — the
+      // negative cues no longer ride along in `prompt` as a "Do not
+      // show: X" sentence at all.
+      expect(request.prompt).not.toContain("Do not show:");
+      expect(request.negativePrompt?.toLowerCase()).toContain("face lit or visible");
+      expect(request.negativePrompt?.toLowerCase()).toContain("normal skin tone");
     });
 
     it("never injects a character lock for a vocalist with no registered lock", () => {
       const nova = member({ id: "solar-rebel-vocals", name: "Nova", role: "Vocals" });
-      const { prompt } = buildClipGenerationRequest({
+      const request = buildClipGenerationRequest({
         vocal: true,
         shotPrompt: "singing directly to camera",
         bandName: "Solar Rebel",
@@ -443,8 +450,9 @@ describe("buildClipGenerationRequest", () => {
         durationSec: 10,
         vocalist: nova,
       });
-      expect(prompt.toLowerCase()).not.toContain("neon blue");
-      expect(prompt).not.toContain("Do not show:");
+      expect(request.prompt.toLowerCase()).not.toContain("neon blue");
+      expect(request.prompt).not.toContain("Do not show:");
+      expect(request.negativePrompt).toBeUndefined();
     });
 
     it("never injects the locked-character note on a Grok/Instrumental request even for a locked vocalist", () => {

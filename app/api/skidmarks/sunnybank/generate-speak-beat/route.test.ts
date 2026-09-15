@@ -37,7 +37,12 @@ function encodeTestMp3(durationSec: number, sampleRate: number = 22050, bitrateK
   return out;
 }
 
-const TINY_DATA_URL = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+// A real, tiny, fast-to-decode 1x1 PNG, not just JPEG-header-shaped
+// bytes — see `app/api/skidmarks/generate-clip/route.test.ts`'s own
+// copy of this comment for why: `letterboxImageForLtxIa2v` runs a real
+// `sharp` decode here too, and malformed bytes can make that hang.
+const TINY_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 function postRequest(body: unknown): Request {
   return new Request("http://localhost/api/skidmarks/sunnybank/generate-speak-beat", {

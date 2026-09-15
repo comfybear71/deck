@@ -12,6 +12,35 @@ vi.mock("@vercel/blob", () => ({
   del: (...args: unknown[]) => delMock(...args),
 }));
 
+// `letterboxImageForLtxIa2v` (`lib/comfyCloud.ts`) calls real `sharp` on
+// the Vocal path. Real finding, not just a test nicety: `sharp`'s
+// native async completion never fires under `vi.useFakeTimers()` (this
+// file uses it heavily to skip real poll-interval waits) — it hangs
+// indefinitely, and even `letterboxImageForLtxIa2v`'s own timeout can't
+// rescue it, since that timeout is *also* a `setTimeout` frozen by the
+// same fake clock. `lib/comfyCloud.test.ts` already covers
+// `letterboxImageForLtxIa2v` itself against real `sharp`, with no fake
+// timers involved — this file only cares about the route's own
+// behavior (polling, uploads, persistence), so a fast fake stands in
+// here instead. Reports the frame already at the target size, so every
+// existing test's plate takes the early-return "no change needed" path
+// with no resize.
+vi.mock("sharp", () => ({
+  default: () => ({
+    metadata: () => Promise.resolve({ width: 1280, height: 720 }),
+    rotate: function (this: unknown) {
+      return this;
+    },
+    resize: function (this: unknown) {
+      return this;
+    },
+    jpeg: function (this: unknown) {
+      return this;
+    },
+    toBuffer: () => Promise.resolve(Buffer.from([1, 2, 3])),
+  }),
+}));
+
 import {
   classifyXaiVideoHttpFailure,
   classifyXaiVideoJobError,
@@ -119,7 +148,15 @@ function postRequest(body: unknown): Request {
   });
 }
 
-const TINY_DATA_URL = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+// A real, tiny, fast-to-decode 1x1 PNG — not just JPEG-header-shaped
+// bytes. `letterboxImageForLtxIa2v` (`lib/comfyCloud.ts`) now runs a
+// real `sharp` decode on the Vocal path's reference image, and a
+// genuinely malformed/truncated image can make that decode hang rather
+// than reject quickly (a real finding, not just a test nicety — see
+// that function's own timeout). Real, valid bytes keep every test in
+// this file fast and deterministic regardless.
+const TINY_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const SECOND_DATA_URL = "data:image/png;base64,iVBORw0KGgo=";
 const THIRD_DATA_URL = "data:image/jpeg;base64,thirdplatebytes";
 
@@ -1176,7 +1213,7 @@ describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) rend
     expect(rawBody).not.toContain("model.resolution");
   });
 
-  it("submits the verified template unchanged apart from the five patched nodes, ID LoRA included", async () => {
+  it("submits the verified template unchanged apart from the patched nodes, ID LoRA included", async () => {
     mockAudioFetch(encodeTestMp3(6));
     mockUploads("only-plate.png", "only-clip.mp3");
     mockSubmit("job-template");
@@ -1193,7 +1230,7 @@ describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) rend
     const differing = Object.keys(template).filter(
       (id) => JSON.stringify(graph[id]) !== JSON.stringify(template[id])
     );
-    expect(differing.sort()).toEqual(["269", "276", "340:319", "340:331", "341"]);
+    expect(differing.sort()).toEqual(["269", "276", "340:296", "340:319", "340:331", "341"]);
     // The `talkvid-3k` ID LoRA is what holds a face through motion —
     // it must survive every patch.
     expect(JSON.stringify(graph)).toContain("talkvid-3k");

@@ -4,12 +4,26 @@ import {
   buildLtx23Ia2vWorkflow,
   DEFAULT_LTX_FILENAME_PREFIX,
   downloadComfyCloudOutput,
+  letterboxImageForLtxIa2v,
+  LTX_IA2V_DEFAULT_REFINE_STRENGTH,
+  LTX_IA2V_FRAME_HEIGHT,
+  LTX_IA2V_FRAME_WIDTH,
   pickComfyCloudVideo,
   pollComfyCloudJob,
   resolveComfyCloudCredentials,
   submitComfyCloudWorkflow,
   uploadComfyCloudInput,
 } from "./comfyCloud";
+
+async function pngOfSize(width: number, height: number): Promise<Uint8Array> {
+  const sharp = (await import("sharp")).default;
+  const buf = await sharp({
+    create: { width, height, channels: 3, background: { r: 200, g: 60, b: 60 } },
+  })
+    .png()
+    .toBuffer();
+  return new Uint8Array(buf);
+}
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -247,6 +261,47 @@ describe("pickComfyCloudVideo", () => {
   });
 });
 
+describe("letterboxImageForLtxIa2v", () => {
+  it("pads a square plate into the full 1280x720 frame instead of leaving it for Comfy to center-crop", async () => {
+    const square = await pngOfSize(1024, 1024);
+    const outcome = await letterboxImageForLtxIa2v(square, "image/png");
+    expect(outcome.letterboxed).toBe(true);
+    expect(outcome.mimeType).toBe("image/jpeg");
+    const sharp = (await import("sharp")).default;
+    const meta = await sharp(Buffer.from(outcome.bytes)).metadata();
+    expect(meta.width).toBe(LTX_IA2V_FRAME_WIDTH);
+    expect(meta.height).toBe(LTX_IA2V_FRAME_HEIGHT);
+  });
+
+  it("leaves an already-1280x720 plate untouched", async () => {
+    const exact = await pngOfSize(LTX_IA2V_FRAME_WIDTH, LTX_IA2V_FRAME_HEIGHT);
+    const outcome = await letterboxImageForLtxIa2v(exact, "image/png");
+    expect(outcome).toEqual({ bytes: exact, mimeType: "image/png", letterboxed: false });
+  });
+
+  it("trusts Comfy's own crop for a plate already close enough to 16:9 (matches the original's 3:2 threshold)", async () => {
+    const threeByTwo = await pngOfSize(768, 512); // aspect 1.5, over the 1.45 threshold
+    const outcome = await letterboxImageForLtxIa2v(threeByTwo, "image/png");
+    expect(outcome).toEqual({ bytes: threeByTwo, mimeType: "image/png", letterboxed: false });
+  });
+
+  it("pads a portrait plate too, not just square", async () => {
+    const portrait = await pngOfSize(600, 900); // aspect 0.67
+    const outcome = await letterboxImageForLtxIa2v(portrait, "image/png");
+    expect(outcome.letterboxed).toBe(true);
+    const sharp = (await import("sharp")).default;
+    const meta = await sharp(Buffer.from(outcome.bytes)).metadata();
+    expect(meta.width).toBe(LTX_IA2V_FRAME_WIDTH);
+    expect(meta.height).toBe(LTX_IA2V_FRAME_HEIGHT);
+  });
+
+  it("never blocks a render on bad image bytes — falls back to the original, unmodified", async () => {
+    const garbage = new Uint8Array([1, 2, 3, 4, 5]);
+    const outcome = await letterboxImageForLtxIa2v(garbage, "image/png");
+    expect(outcome).toEqual({ bytes: garbage, mimeType: "image/png", letterboxed: false });
+  });
+});
+
 describe("downloadComfyCloudOutput", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   beforeEach(() => {
@@ -298,7 +353,13 @@ describe("downloadComfyCloudOutput", () => {
 });
 
 describe("buildLtx23Ia2vWorkflow", () => {
-  const PATCHED_NODE_IDS = ["269", "276", "340:319", "340:331", "341"];
+  // Always patched, regardless of the optional `negativePrompt` input —
+  // `340:296` (refine strength) has a real default
+  // (`LTX_IA2V_DEFAULT_REFINE_STRENGTH`) applied unconditionally.
+  // `340:314` (negative prompt) is deliberately NOT in this list — it's
+  // only patched when `negativePrompt` is actually given, see the
+  // dedicated tests below.
+  const PATCHED_NODE_IDS = ["269", "276", "340:296", "340:319", "340:331", "341"];
 
   function build(overrides: Partial<Parameters<typeof buildLtx23Ia2vWorkflow>[0]> = {}) {
     return buildLtx23Ia2vWorkflow({
@@ -310,7 +371,7 @@ describe("buildLtx23Ia2vWorkflow", () => {
     });
   }
 
-  it("patches exactly the five documented node inputs", () => {
+  it("patches the documented node inputs", () => {
     const graph = build();
 
     expect((graph["269"] as { inputs: { image: string } }).inputs.image).toBe("plate.png");
@@ -323,6 +384,33 @@ describe("buildLtx23Ia2vWorkflow", () => {
       DEFAULT_LTX_FILENAME_PREFIX
     );
     expect(DEFAULT_LTX_FILENAME_PREFIX).toBe("video/skidmarks_ltx");
+  });
+
+  it("applies the default refine strength when not overridden, per the real live-QA finding this closes", () => {
+    const graph = build();
+    expect((graph["340:296"] as { inputs: { strength: number } }).inputs.strength).toBe(0.6);
+    expect(LTX_IA2V_DEFAULT_REFINE_STRENGTH).toBe(0.6);
+    // The base pass, left deliberately alone, stays at the template's own value.
+    expect((graph["340:325"] as { inputs: { strength: number } }).inputs.strength).toBe(0.7);
+  });
+
+  it("honors an explicit refineStrength override", () => {
+    const graph = build({ refineStrength: 0.9 });
+    expect((graph["340:296"] as { inputs: { strength: number } }).inputs.strength).toBe(0.9);
+  });
+
+  it("leaves the negative-prompt node at its template default when no negativePrompt is given", () => {
+    const graph = build();
+    expect((graph["340:314"] as { inputs: { text: string } }).inputs.text).toBe(
+      "pc game, console game, video game, cartoon, childish, ugly"
+    );
+  });
+
+  it("appends a given negativePrompt onto the default negative text, never replacing it", () => {
+    const graph = build({ negativePrompt: "a visible human face, eyes, skin" });
+    expect((graph["340:314"] as { inputs: { text: string } }).inputs.text).toBe(
+      "pc game, console game, video game, cartoon, childish, ugly, a visible human face, eyes, skin"
+    );
   });
 
   it("leaves every other node byte-identical to the verified template", () => {
