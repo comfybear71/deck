@@ -87,13 +87,17 @@ export interface SunnyBanksCharacterLock {
 }
 
 /**
- * The six locked series regulars, keyed by name (matches how a script
- * actually names a speaker — `NAME:`/`NAME says:` — not a synthetic id;
- * unlike Skidmarks' `SKIDMARKS_CHARACTER_LOCKS`, which keys by band-
- * member id because band members get renamed and re-cast, a Sunny Banks
- * cast is fixed and Stuart names beats by these exact names). Ranger
- * Bazza, not "Ranger Dan" — Grok's own relayed spec had the wrong name;
- * Stuart's own correction wins (2026-09-15).
+ * The six locked series regulars, plus Hans (a one-episode special
+ * guest, not a regular — Stuart's own correction, 2026-09-15; kept in
+ * this same table since the lock mechanism itself — name, look, voice,
+ * reference plate — works identically for a guest as a regular, just
+ * without the expectation he ever reappears), keyed by name (matches
+ * how a script actually names a speaker — `NAME:`/`NAME says:` — not a
+ * synthetic id; unlike Skidmarks' `SKIDMARKS_CHARACTER_LOCKS`, which
+ * keys by band-member id because band members get renamed and re-cast,
+ * a Sunny Banks cast is fixed and Stuart names beats by these exact
+ * names). Ranger Bazza, not "Ranger Dan" — Grok's own relayed spec had
+ * the wrong name; Stuart's own correction wins (2026-09-15).
  *
  * The two aliens (Unit 4S) share one voice/look entry — per Stuart's
  * own description they don't speak English at all ("yup yup... nah",
