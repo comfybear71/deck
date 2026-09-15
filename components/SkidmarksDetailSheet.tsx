@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
 import { useSkidmarksClipRenders } from "@/hooks/useSkidmarksClipRenders";
 import { buildGeneratedLook, flushSkidmarksSessionNow, resolveChainedPlateTarget } from "@/lib/skidmarks";
+import { getSkidmarksCharacterLock, resolveVocalistForPrompt } from "@/lib/plateGeneration";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 import {
   archiveSkidmarksSession,
@@ -152,6 +153,39 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
     const target = resolveChainedPlateTarget(session.mp3?.segments ?? [], render.segmentId, render.plateId);
     if (!target) return;
+
+    // Real reported disaster (2026-09-15): chaining every render's last
+    // frame into the next blindly compounds drift for a locked
+    // character — a single clip losing the shadow-face lock even
+    // slightly means the next clip starts from an already-part-human
+    // frame and drifts further, and 20 clips later he "doesn't even
+    // exist" anymore. See `lib/scriptSequenceRunner.ts`'s matching fix
+    // for the batch "Generate & render all" path — same rule here for a
+    // single manual Render: once this band's vocalist is a genuinely
+    // locked character, the next plate resets to his own fixed,
+    // verified reference photo instead of chaining the last frame
+    // forward, so one bad render can never drag every plate after it
+    // down with it too. Real cost, accepted on purpose: this gives up
+    // the door→keyhole→seated background/pose continuity
+    // chaining otherwise buys for him.
+    const vocalist = activeBand ? resolveVocalistForPrompt(activeBand.members) : undefined;
+    const lockedVocalistReference =
+      vocalist && getSkidmarksCharacterLock(vocalist.id) && vocalist.avatarImage ? vocalist.avatarImage : undefined;
+
+    if (lockedVocalistReference) {
+      setClipPlateStill(target.segmentId, target.plateId, {
+        dataUrl: lockedVocalistReference,
+        source: "generated",
+        createdAt: Date.now(),
+        featuresLockedCharacter: true,
+      });
+      flushSkidmarksSessionNow();
+      setChainNote({
+        ok: true,
+        message: "Reset the next clip's first plate to the locked reference photo, not this render's last frame — keeps him from drifting.",
+      });
+      return;
+    }
 
     // `render.lastFrameUrl` is already a durable Blob URL, extracted
     // server-side by ffmpeg (`app/api/skidmarks/generate-clip/route.ts`,

@@ -3,6 +3,21 @@ import { runScriptSequence, type ScriptSequenceRunnerDeps } from "./scriptSequen
 import { buildScriptSequenceSegments } from "./skidmarks";
 import type { SkidmarksClipSegment, SkidmarksMember } from "./skidmarks";
 
+function member(overrides: Partial<SkidmarksMember>): SkidmarksMember {
+  return { id: "member-id", name: "", emoji: "", looks: [], ...overrides };
+}
+
+/** Every `setPlateStill` call that isn't clip 1's own first still — i.e.
+ * the chain-fills onto every clip after it. */
+function chainFillCalls(deps: ScriptSequenceRunnerDeps, firstSegmentId: string) {
+  const calls = (deps.setPlateStill as ReturnType<typeof vi.fn>).mock.calls as [
+    string,
+    string,
+    { dataUrl: string; source: string; featuresLockedCharacter?: boolean },
+  ][];
+  return calls.filter(([segmentId]) => segmentId !== firstSegmentId).map(([, , still]) => still);
+}
+
 function threeParts() {
   return [
     { index: 1, title: "A", startSec: 0, endSec: 15, prompt: "part one" },
@@ -160,6 +175,44 @@ describe("runScriptSequence", () => {
     // Clip 1's own first still, plus only one chain-fill (clip 2 -> clip 3);
     // clip 1 -> clip 2 is skipped since clip 2 already has a still.
     expect(deps.setPlateStill).toHaveBeenCalledTimes(2);
+  });
+
+  it("real reported disaster (2026-09-15): a locked vocalist's next plate resets to his own reference photo, never the previous clip's last frame", async () => {
+    const segments = buildScriptSequenceSegments(threeParts(), []);
+    const jackAsh = member({
+      id: "jack-ash-frontman",
+      name: "Jack Ash",
+      avatarImage: "https://blob.example/jack-ash-reference.jpg",
+    });
+    const deps = fakeDeps();
+
+    await run(segments, deps, undefined, jackAsh);
+
+    // Two chain-fills (clip1->clip2, clip2->clip3) plus clip 1's own
+    // first still — none of them ever read from outcome.lastFrameUrl.
+    const chainFills = chainFillCalls(deps, segments[0].id);
+    expect(chainFills).toHaveLength(2);
+    for (const still of chainFills) {
+      expect(still.dataUrl).toBe("https://blob.example/jack-ash-reference.jpg");
+      expect(still.dataUrl).not.toBe("https://blob.example/clip-lastframe.jpg");
+      expect(still.source).toBe("generated");
+      expect(still.featuresLockedCharacter).toBe(true);
+    }
+  });
+
+  it("keeps chaining the real last frame for a vocalist with no registered character lock", async () => {
+    const segments = buildScriptSequenceSegments(threeParts(), []);
+    const nova = member({ id: "solar-rebel-vocals", name: "Nova", avatarImage: "https://blob.example/nova.jpg" });
+    const deps = fakeDeps();
+
+    await run(segments, deps, undefined, nova);
+
+    const chainFills = chainFillCalls(deps, segments[0].id);
+    expect(chainFills).toHaveLength(2);
+    for (const still of chainFills) {
+      expect(still.dataUrl).toBe("https://blob.example/clip-lastframe.jpg");
+      expect(still.source).toBe("chained");
+    }
   });
 
   it("reports live progress events in the right order for a full successful run", async () => {
