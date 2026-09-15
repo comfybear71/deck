@@ -11,6 +11,7 @@ import { extractLastVideoFrameServer } from "@/lib/serverVideoFrame";
 import {
   buildLtx23Ia2vWorkflow,
   downloadComfyCloudOutput,
+  letterboxImageForLtxIa2v,
   pollComfyCloudJob,
   resolveComfyCloudCredentials,
   submitComfyCloudWorkflow,
@@ -596,6 +597,12 @@ interface GenerateClipRequestBody {
    * so a caller that only sends `prompt` still works (falls back to
    * checking that instead). */
   shotPrompt?: unknown;
+  /** A locked vocalist's negative cues (Vocal/Comfy-LTX only) — see
+   * `lib/clipGeneration.ts`'s `ClipGenerationRequest.negativePrompt` doc
+   * comment. Sent to the workflow's real negative-conditioning node
+   * instead of riding along inside `prompt`. Optional; omitted entirely
+   * for an Instrumental request or a Vocal one with no locked vocalist. */
+  negativePrompt?: unknown;
   referenceImageDataUrls?: unknown;
   /** Real, per-plate render length in seconds — see this file's module
    * doc comment and `lib/clipGeneration.ts`'s `computePlateDurationSec`.
@@ -1106,10 +1113,15 @@ async function handleVocalComfyLtxRender(
     );
   }
 
+  // See `letterboxImageForLtxIa2v`'s doc comment — a non-16:9 plate gets
+  // center-cropped by Comfy's own IA2V resize otherwise, which can chop
+  // straight through a locked character's hat/shadow framing before the
+  // video model ever sees a frame to animate from.
+  const framedImage = await letterboxImageForLtxIa2v(decodedImage.bytes, decodedImage.mimeType);
   const imageUpload = await uploadComfyCloudInput(
-    decodedImage.bytes,
-    `skidmarks-plate-${Date.now()}.png`,
-    decodedImage.mimeType,
+    framedImage.bytes,
+    framedImage.letterboxed ? `skidmarks-plate-${Date.now()}.jpg` : `skidmarks-plate-${Date.now()}.png`,
+    framedImage.mimeType,
     creds
   );
   if (!imageUpload.ok) {
@@ -1132,11 +1144,13 @@ async function handleVocalComfyLtxRender(
   // parameter. Everything else in the graph (checkpoint, the
   // `talkvid-3k` ID LoRA, samplers, VAE chain) is left exactly as the
   // verified template has it.
+  const negativePrompt = typeof body.negativePrompt === "string" ? body.negativePrompt.trim() : "";
   const workflow = buildLtx23Ia2vWorkflow({
     imageFilename: imageUpload.name,
     audioFilename: audioUpload.name,
     prompt,
     durationSec: actualDurationSec,
+    ...(negativePrompt ? { negativePrompt } : {}),
   });
 
   const submitResult = await submitComfyCloudWorkflow(workflow, creds);

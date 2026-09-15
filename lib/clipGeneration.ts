@@ -327,6 +327,14 @@ export interface ClipGenerationRequest {
    * given, stored per-plate) or this module's automatic motion routing
    * hint, plus a band/no-text/no-watermark footer. */
   prompt: string;
+  /** A locked vocalist's `negativeCues` (Jack Ash today), when present —
+   * only ever set on the Vocal/Comfy-LTX path. Sent to the workflow's
+   * own real negative-conditioning node (`lib/comfyCloud.ts`'s
+   * `IA2V_NODE_NEGATIVE_PROMPT`), appended onto its default negative
+   * text rather than replacing it. Omitted entirely for an Instrumental
+   * request or a Vocal one with no locked vocalist — nothing here
+   * invents negative text for a character with no lock. */
+  negativePrompt?: string;
   /** The selected plate's still, and nothing else — always exactly one
    * entry; kept as an array on the wire (unchanged shape from before
    * this rework) since `app/api/skidmarks/generate-clip/route.ts` still
@@ -530,12 +538,19 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   const durationSec = Math.min(bounds.max, Math.max(bounds.min, Math.round(params.durationSec)));
 
   const lock = params.vocalist ? getSkidmarksCharacterLock(params.vocalist.id) : undefined;
+  // `lock.negativeCues` no longer rides along in this *positive* prompt
+  // as a "Do not show: X" sentence — it goes out on the workflow's own
+  // real negative-conditioning channel instead (`request.negativePrompt`
+  // below, `lib/comfyCloud.ts`'s `IA2V_NODE_NEGATIVE_PROMPT`). Naming a
+  // concept even to negate it, inside the same positive-conditioning
+  // text, doesn't suppress it as reliably as true negative conditioning
+  // does — real reported failure, 2026-09-15: Jack Ash's face resolving
+  // into a normal, lit human face on every single Vocal clip.
   const parts = [
     params.vocal ? VOCAL_LTX_PROMPT_LOCK : "",
     params.shotPrompt.trim(),
     trimmedMotionPrompt || automaticMotionHint(),
-    params.vocal && lock ? lock.promptHallmarks : "",
-    params.vocal && lock?.negativeCues ? `Do not show: ${lock.negativeCues}.` : "",
+    params.vocal && lock ? (lock.videoPromptHallmarks ?? lock.promptHallmarks) : "",
     params.vocal && lock ? lockedCharacterVideoNote() : "",
     "Solo shot: no other people, extra characters, crowd, or background figures appear anywhere in frame at " +
       "any point in the motion, including out-of-focus or partially-visible in the background.",
@@ -558,6 +573,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     startSec: params.startSec,
     endSec: params.endSec,
     vocal: params.vocal,
+    ...(params.vocal && lock?.negativeCues ? { negativePrompt: lock.negativeCues } : {}),
   };
 
   if (!params.vocal) {

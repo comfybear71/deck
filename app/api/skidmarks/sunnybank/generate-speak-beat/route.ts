@@ -11,6 +11,7 @@ import {
 import {
   buildLtx23Ia2vWorkflow,
   downloadComfyCloudOutput,
+  letterboxImageForLtxIa2v,
   pollComfyCloudJob,
   resolveComfyCloudCredentials,
   submitComfyCloudWorkflow,
@@ -155,10 +156,14 @@ export async function POST(request: Request) {
     );
   }
 
+  // See `letterboxImageForLtxIa2v`'s doc comment — a cast reference
+  // photo isn't reliably 16:9, and Comfy's own IA2V resize center-crops
+  // anything else instead of scaling to fit.
+  const framedImage = await letterboxImageForLtxIa2v(decodedImage.bytes, decodedImage.mimeType);
   const imageUpload = await uploadComfyCloudInput(
-    decodedImage.bytes,
-    `sunnybanks-start-${Date.now()}.png`,
-    decodedImage.mimeType,
+    framedImage.bytes,
+    framedImage.letterboxed ? `sunnybanks-start-${Date.now()}.jpg` : `sunnybanks-start-${Date.now()}.png`,
+    framedImage.mimeType,
     creds
   );
   if (!imageUpload.ok) {

@@ -50,14 +50,23 @@
  * `340:331`), so there is no hosted-node duration ceiling to work
  * around.
  *
- * **The template is a verified artifact, not source code.** It is
- * copied byte-for-byte from the original repo and must not be
- * reformatted, pruned or "tidied" — in particular the `talkvid-3k` ID
- * LoRA is what holds a face through motion. `buildLtx23Ia2vWorkflow`
- * patches exactly five node inputs and touches nothing else; it is
- * imported as a TypeScript JSON module (`resolveJsonModule`) rather
- * than read off disk with `fs`, because an `fs` read of a non-traced
- * file is fragile on Vercel.
+ * **The template is a verified artifact, not source code** — a graph
+ * export, not something to hand-edit or "tidy." It is imported as a
+ * TypeScript JSON module (`resolveJsonModule`) rather than read off
+ * disk with `fs`, because an `fs` read of a non-traced file is fragile
+ * on Vercel.
+ *
+ * **Re-synced 2026-09-15 against Stuart's real, live Comfy Cloud
+ * workflow** — a direct export from his account, not the earlier
+ * byte-for-byte copy from the *original* Skidmarks repo. That earlier
+ * copy had drifted from what's actually live: it referenced a
+ * `talkvid-3k` ID LoRA node (and an `LTXVReferenceAudio` identity node)
+ * that turned out not to exist in Stuart's real workflow at all — this
+ * app had been claiming a face-lock LoRA was in play that never really
+ * was. The live export confirmed no such thing is
+ * there, so it was never a real lever to test. `buildLtx23Ia2vWorkflow`
+ * patches specific node inputs, documented in the table below, and
+ * touches nothing else.
  *
  * **Honesty note — this plumbing is ported, but not live-verified in
  * this sandbox.** There is no `COMFY_CLOUD_API_KEY` available in this
@@ -65,17 +74,22 @@
  * run end to end from this repo. Passing tests are not proof the
  * render works; the only proof is Stuart tapping Vocal Render on his
  * iPhone after a deploy and a shelf clip playing. Two things the
- * original repo does that were deliberately *not* ported, either of
- * which is cheap to add if the first live render shows it's needed:
- * it letterboxes the plate to 16:9 before upload
- * (`letterboxPlateForCloudIa2v`), and it builds a specific Cloud IA2V
- * prompt paragraph (`buildCloudIa2vPrompt`) with a lip-sync lead line
- * and a style lock. This app sends the shot prompt as-is.
+ * original repo does that were deliberately *not* ported at first, each
+ * flagged as cheap to add if the first live render showed it was
+ * needed: it letterboxes the plate to 16:9 before upload — **now
+ * ported**, see `letterboxImageForLtxIa2v` below, added 2026-09-15 once
+ * a real 20+-clip run showed exactly this gap (the model drifting into
+ * a visible face on every Vocal clip) — and it builds a specific Cloud
+ * IA2V prompt paragraph (`buildCloudIa2vPrompt`) with a lip-sync lead
+ * line and a style lock, which stays un-ported: this app's own prompt
+ * assembly (`lib/clipGeneration.ts`'s `buildClipGenerationRequest`) is a
+ * more developed, iterated-on replacement for that, not a gap.
  *
  * Only two env vars are real here, confirmed against the original
  * Skidmarks repo's own `.env.example`: `COMFY_CLOUD_API_KEY` and
  * `COMFY_URL` (blank = Comfy Cloud) — nothing else is invented.
  */
+import sharp from "sharp";
 import LTX_23_IA2V_TEMPLATE from "@/workflow/LTX_2.3_IA2V_Cloud.json";
 
 /** Confirmed against the original Skidmarks repo's own `.env.example`
@@ -146,6 +160,87 @@ function classifyComfyHttpFailure(status: number): { code: string } {
   if (status === 429) return { code: "rate_limited" };
   if (status === 400) return { code: "invalid_request" };
   return { code: "upstream_error" };
+}
+
+/** The LTX 2.3 IA2V template's own frame size (nodes `340:330`/`340:324`
+ * in `workflow/LTX_2.3_IA2V_Cloud.json`) — must match. */
+export const LTX_IA2V_FRAME_WIDTH = 1280;
+export const LTX_IA2V_FRAME_HEIGHT = 720;
+
+export interface LetterboxedImage {
+  bytes: Uint8Array;
+  mimeType: string;
+  letterboxed: boolean;
+}
+
+/**
+ * The LTX 2.3 IA2V template expects a 1280x720 start frame — Comfy's own
+ * internal resize step **center-crops** anything else into that box
+ * rather than scaling to fit, which silently chops off whatever sits at
+ * the top or bottom of a non-16:9 still. A squarer plate (this app's
+ * `generate-still`/Sunny Banks reference photos aren't reliably 16:9)
+ * can lose real headroom this way, sometimes cropping straight through
+ * a locked character's hat/shadow framing before the video model ever
+ * sees a frame to animate from — a start-frame problem no amount of
+ * prompt wording downstream can fix.
+ *
+ * Ported from the original Skidmarks repo's `letterboxPlateForCloudIa2v`
+ * (`src/lib/ltxCloudPlate.ts`) — this app's own Comfy Cloud LTX pipeline
+ * deliberately shipped without it at first (this module's earlier doc
+ * comment: "cheap to add if the first live render shows it's needed").
+ * Real reported ask (2026-09-15): 20+ Vocal clips in a row drifted into
+ * a visible human face — the missing letterbox, not just prompt
+ * wording, was the gap this closes.
+ *
+ * Only ever **pads** (never crops or distorts) to fit inside 1280x720
+ * with black bars, and only when the source isn't already close enough
+ * to 16:9 to trust Comfy's own crop (same `sourceAspect >= 1.45`
+ * threshold the original used — a 3:2 plate was already fine in
+ * practice there). Returns the original bytes unchanged,
+ * `letterboxed: false`, for anything that doesn't need it, and on any
+ * decode/resize failure — a framing nicety must never block a render
+ * Stuart's already paying for — including, per a real live-QA finding,
+ * on a malformed/truncated image: some invalid byte sequences can make
+ * `sharp`'s decoder hang rather than reject quickly, so the whole
+ * operation races against `LETTERBOX_TIMEOUT_MS` and falls back to the
+ * original bytes the same as any other failure — a framing nicety must
+ * never be able to stall a real render indefinitely.
+ */
+const LETTERBOX_TIMEOUT_MS = 15_000;
+
+async function letterboxImageForLtxIa2vInner(bytes: Uint8Array, mimeType: string): Promise<LetterboxedImage> {
+  const meta = await sharp(Buffer.from(bytes)).metadata();
+  const w = meta.width ?? 0;
+  const h = meta.height ?? 0;
+  if (!w || !h) return { bytes, mimeType, letterboxed: false };
+  if (w === LTX_IA2V_FRAME_WIDTH && h === LTX_IA2V_FRAME_HEIGHT) {
+    return { bytes, mimeType, letterboxed: false };
+  }
+  if (w / h >= 1.45) {
+    return { bytes, mimeType, letterboxed: false };
+  }
+  const padded = await sharp(Buffer.from(bytes))
+    .rotate()
+    .resize({
+      width: LTX_IA2V_FRAME_WIDTH,
+      height: LTX_IA2V_FRAME_HEIGHT,
+      fit: "contain",
+      background: { r: 0, g: 0, b: 0 },
+    })
+    .jpeg({ quality: 92 })
+    .toBuffer();
+  return { bytes: new Uint8Array(padded), mimeType: "image/jpeg", letterboxed: true };
+}
+
+export async function letterboxImageForLtxIa2v(bytes: Uint8Array, mimeType: string): Promise<LetterboxedImage> {
+  try {
+    const timedOut = new Promise<LetterboxedImage>((resolve) =>
+      setTimeout(() => resolve({ bytes, mimeType, letterboxed: false }), LETTERBOX_TIMEOUT_MS)
+    );
+    return await Promise.race([letterboxImageForLtxIa2vInner(bytes, mimeType), timedOut]);
+  } catch {
+    return { bytes, mimeType, letterboxed: false };
+  }
 }
 
 export type UploadInputOutcome =
@@ -534,15 +629,93 @@ export interface Ltx23Ia2vWorkflowInputs {
    * hosted-node ceiling to work around. */
   durationSec: number;
   filenamePrefix?: string;
+  /** Extra negative-conditioning text — appended onto the template's
+   * own default negative prompt (`IA2V_DEFAULT_NEGATIVE_PROMPT`), never
+   * replacing it, so every render keeps the anti-game/anti-cartoon
+   * signal the template shipped with even when it also has a locked
+   * character's own negative cues to add. Omitted entirely (node left
+   * untouched) when there's nothing extra to add. See node `340:314`'s
+   * doc note below — this is a real, separate negative-prompt channel
+   * in the graph, distinct from `prompt` above. */
+  negativePrompt?: string;
+  /** How much freedom the 4-step high-res refinement pass (node
+   * `340:296`) gets to redraw detail after the base pass + upscale —
+   * `1.0` (the template's shipped default) is fully free. Defaults to
+   * `LTX_IA2V_DEFAULT_REFINE_STRENGTH` when omitted; only override for
+   * a deliberate experiment. See that constant's doc comment for why
+   * this exists. */
+  refineStrength?: number;
 }
 
-/** The five template node ids this app ever patches — the same five
- * the original repo's `runLtxCloudIa2v` patches, and the only five. */
+/** The template node ids this app patches. `IA2V_NODE_IMAGE` through
+ * `IA2V_NODE_SAVE` are the original five (matching the original repo's
+ * `runLtxCloudIa2v`); `IA2V_NODE_NEGATIVE_PROMPT` and
+ * `IA2V_NODE_REFINE_STRENGTH` were added 2026-09-15 (see
+ * `Ltx23Ia2vWorkflowInputs`'s field docs and `LTX_IA2V_DEFAULT_REFINE_STRENGTH`'s
+ * doc comment) once a real, repeated live failure (a locked character's
+ * face resolving out of the shadow on every single Vocal clip) pointed
+ * at both as real, fixable graph-level gaps — not just a prompt-wording
+ * problem. */
 const IA2V_NODE_IMAGE = "269";
 const IA2V_NODE_AUDIO = "276";
 const IA2V_NODE_PROMPT = "340:319";
 const IA2V_NODE_DURATION = "340:331";
 const IA2V_NODE_SAVE = "341";
+/** A real, separate `CLIPTextEncode` negative-conditioning node —
+ * wired up 2026-09-15, then found to be **inert at this graph's actual
+ * settings**: both `CFGGuider` nodes run `cfg: 1`, and standard
+ * classifier-free-guidance math collapses to `output = positive` at
+ * cfg=1 — the negative conditioning has no effect on the result
+ * regardless of what text lives here, confirmed by reading the live
+ * graph (no `NAG`/attention-guidance node exists here either, which is
+ * the one thing that *would* make a real difference at cfg=1). Left
+ * wired anyway — harmless, and it becomes real the moment cfg is ever
+ * raised above 1 — but **this was never the actual fix** for a locked
+ * character's face slipping; don't spend more effort tuning this
+ * node's text. The real levers turned out to be the prompt enhancer
+ * and the refine pass's strength, both below. */
+const IA2V_NODE_NEGATIVE_PROMPT = "340:314";
+const IA2V_DEFAULT_NEGATIVE_PROMPT = "pc game, console game, video game, cartoon, childish, ugly";
+/** Node `340:296`, `LTXVImgToVideoInplace` — the short (4-step),
+ * high-resolution refinement pass that runs *after* the low-res base
+ * pass and upscale (node `340:325`, a separate `LTXVImgToVideoInplace`
+ * left untouched at the template's own `0.7`). The template shipped
+ * this refinement pass at `strength: 1` — fully free to redraw detail.
+ * Real reported failure (2026-09-15): a locked character's face
+ * resolving into a normal, lit human face on every single Vocal clip,
+ * 20+ renders in a row. The base pass already settles the frame's real
+ * structure (including the shadow); a fully-free refinement pass has
+ * enough room to invent new high-frequency detail — like a face — into
+ * a region the base pass had correctly left dark. Lowering this keeps
+ * the refinement pass closer to what the base pass already established,
+ * while still leaving it room to sharpen legitimate detail (hat weave,
+ * fabric, lighting). Applied to every Vocal render, not just Jack
+ * Ash's — this is a graph-level tuning fix for the shared pipeline, not
+ * a character-specific one.
+ *
+ * **Not proven by a real render in this sandbox** — there's no
+ * `COMFY_CLOUD_API_KEY` here to test against (same honesty note as the
+ * rest of this module). Stuart's own next live Vocal render is the
+ * actual test; if it still drifts, the next lever to try is the base
+ * pass's own `0.7` (node `340:325`), left alone here deliberately so a
+ * single live test result says which pass actually needed the change. */
+export const LTX_IA2V_DEFAULT_REFINE_STRENGTH = 0.6;
+const IA2V_NODE_REFINE_STRENGTH = "340:296";
+/** Node `340:349`, "Boolean (Enable Prompt Enhance)" — gates whether
+ * the positive prompt actually sent to the model is `prompt` verbatim,
+ * or a rewrite of it produced by an LLM step (`340:346`,
+ * `TextGenerateLTX2Prompt`, running on Gemma at `temperature: 0.7` with
+ * its own sampling). Confirmed **on** in Stuart's live graph. That
+ * means every Vocal render to date has had its prompt silently
+ * rewritten before the video model ever saw it — a locked character's
+ * carefully-worded "stays a shadow, never a lit face" instruction could
+ * plausibly get reinterpreted into something more generic (e.g. "a man
+ * singing") by that rewrite step, with real, uncontrolled randomness on
+ * every render (same prompt in, different rewrite out). Always forced
+ * off here, unconditionally, for every Vocal render this app makes —
+ * the whole point of hand-writing a locked character's prompt is that
+ * exact wording reaches the model, not an LLM's paraphrase of it. */
+const IA2V_NODE_PROMPT_ENHANCE = "340:349";
 
 type TemplateNode = { class_type?: string; inputs?: Record<string, unknown> };
 
@@ -573,11 +746,16 @@ function patchNodeInputs(graph: Record<string, unknown>, nodeId: string, patch: 
  * | `340:319` `PrimitiveString` | `value` | the prompt |
  * | `340:331` `PrimitiveFloat` | `value` | duration in seconds |
  * | `341` `SaveVideo` | `filename_prefix` | default `video/skidmarks_ltx` |
+ * | `340:314` `CLIPTextEncode` | `text` | default negative + `negativePrompt`, only when given (see that node's doc comment — inert at this graph's `cfg: 1`, kept anyway) |
+ * | `340:296` `LTXVImgToVideoInplace` | `strength` | `refineStrength` ?? `LTX_IA2V_DEFAULT_REFINE_STRENGTH` |
+ * | `340:349` `PrimitiveBoolean` | `value` | always `false` — prompt enhancer forced off |
  *
  * **Everything else in the graph stays exactly as the template has it**
- * — the checkpoint, the `talkvid-3k` ID LoRA that holds a face through
- * motion, the samplers, the VAE chain. Don't "improve" any of it: this
- * is the graph with 100+ real renders behind it.
+ * — the checkpoint, the samplers, the VAE chain. Don't "improve" any of
+ * it: this is Stuart's own real, live workflow, re-synced 2026-09-15
+ * (see this module's doc comment). The last three rows above are the
+ * deliberate exceptions — real graph-level gaps a live failure pointed
+ * at, not "tidying."
  */
 export function buildLtx23Ia2vWorkflow(inputs: Ltx23Ia2vWorkflowInputs): Record<string, unknown> {
   const graph = structuredClone(LTX_23_IA2V_TEMPLATE) as unknown as Record<string, unknown>;
@@ -589,6 +767,15 @@ export function buildLtx23Ia2vWorkflow(inputs: Ltx23Ia2vWorkflowInputs): Record<
   patchNodeInputs(graph, IA2V_NODE_SAVE, {
     filename_prefix: inputs.filenamePrefix ?? DEFAULT_LTX_FILENAME_PREFIX,
   });
+  if (inputs.negativePrompt) {
+    patchNodeInputs(graph, IA2V_NODE_NEGATIVE_PROMPT, {
+      text: `${IA2V_DEFAULT_NEGATIVE_PROMPT}, ${inputs.negativePrompt}`,
+    });
+  }
+  patchNodeInputs(graph, IA2V_NODE_REFINE_STRENGTH, {
+    strength: inputs.refineStrength ?? LTX_IA2V_DEFAULT_REFINE_STRENGTH,
+  });
+  patchNodeInputs(graph, IA2V_NODE_PROMPT_ENHANCE, { value: false });
 
   return graph;
 }

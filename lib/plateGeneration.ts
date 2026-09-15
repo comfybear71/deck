@@ -108,14 +108,40 @@ import {
 export interface SkidmarksCharacterLock {
   /** Appended to the generation prompt whenever this member is the
    * resolved vocalist in frame — the character's own hallmarks, stated
-   * as directly as the model needs, not just a name/mood. */
+   * as directly as the model needs, not just a name/mood. Used for
+   * **stills** (xAI Grok Imagine) always, and for **video** (Comfy LTX)
+   * whenever `videoPromptHallmarks` isn't set. */
   promptHallmarks: string;
+  /** A video-specific override of `promptHallmarks`, used only by
+   * `lib/clipGeneration.ts`'s Vocal/Comfy-LTX path — optional, falls
+   * back to `promptHallmarks` when unset, so a character with no video
+   * override behaves exactly as before this field existed (the still
+   * path is never affected by it either way). Real reported ask
+   * (2026-09-15, straight from a live-QA session on Jack Ash's video
+   * drifting into a visible human face across 20+ Vocal clips): a
+   * diffusion model can still associate a concept with its *positive*
+   * conditioning even while a sentence is naming it to say "hidden" —
+   * this trims Jack Ash's positive video prompt down to describing the
+   * silhouette/shadow shape itself, leaving the explicit anatomy
+   * enumeration (eyes, brow, nose, cheeks, jawline) to `negativeCues`'
+   * real negative-conditioning channel instead (see
+   * `lib/comfyCloud.ts`'s `Ltx23Ia2vWorkflowInputs.negativePrompt`).
+   * The still path keeps the original, unchanged `promptHallmarks` —
+   * xAI's image API has no equivalent negative channel to move that
+   * text into, so there's nothing to gain from trimming it there, and a
+   * real risk of quietly weakening a still-image prompt that isn't the
+   * one Stuart reported a problem with. */
+  videoPromptHallmarks?: string;
   /** A plain-language list of the specific mistakes this character can't
-   * afford (e.g. showing a face that's supposed to always be hidden) —
-   * xAI's Grok Imagine API has no dedicated negative-prompt parameter
-   * (unlike some other image APIs), so this is woven into the same
-   * prompt string as an explicit "do not show" clause rather than a
-   * separate request field. */
+   * afford (e.g. showing a face that's supposed to always be hidden).
+   * Serves **two** real channels, not one: on stills (xAI Grok Imagine,
+   * no dedicated negative-prompt parameter) it's woven into the same
+   * prompt string as an explicit "do not show" clause
+   * (`lib/plateGeneration.ts`'s own call sites); on video (Comfy LTX)
+   * it's sent to a real, separate negative-conditioning node
+   * (`lib/comfyCloud.ts`'s `IA2V_NODE_NEGATIVE_PROMPT`) — a comma-style
+   * concept list reads naturally either way, so one string serves both
+   * without a second copy to keep in sync. */
   negativeCues?: string;
   /** A short, human-facing one-liner for this character's look — the
    * director's-shorthand version of `promptHallmarks`, not phrased for
@@ -143,13 +169,25 @@ export const SKIDMARKS_CHARACTER_LOCKS: Record<string, SkidmarksCharacterLock> =
       "Camera angle is locked too, every plate: he is shot from an angled \u00be view, profile, over-the-" +
       "shoulder, or looking-away framing \u2014 never square-on to the lens \u2014 with his eyes never turned " +
       "toward the camera, even in a shot where his mouth and neon lips are readable.",
+    videoPromptHallmarks:
+      "Jack Ash's signature look, locked, non-negotiable: a mysterious noir silhouette wearing a wide-brim " +
+      "black fedora and a suit, desert-noir atmosphere. His whole head reads as one solid black shadow shape at " +
+      "all times, with no lit detail inside it, even in close-up, even in a brightly lit or backlit scene — " +
+      "a true silhouette, never a normally-lit person. The one feature that breaks through that darkness is his " +
+      "mouth: his lips glow a vivid neon blue, clearly visible even though the rest of his head stays a " +
+      "completely unlit, featureless dark shape. This lock is not optional and applies to every plate he appears " +
+      "in, Vocal or Instrumental: he must match this exact reference photo's build, wardrobe, and silhouette " +
+      "— never a different or generic-looking man, and never bare-headed. Camera angle is locked too, " +
+      "every plate: he is shot from an angled ¾ view, profile, over-the-shoulder, or looking-away framing " +
+      "— never square-on to the lens, which keeps him from ever facing the lens directly.",
     negativeCues:
       "Jack Ash's face lit or visible, his eyes, brow, nose, cheeks, or jawline visible or out of shadow, no " +
       "fedora, his lips a normal skin tone instead of glowing neon blue, a fully lit face, a bare head with no " +
       "fedora, any recognizable facial features visible in light, a different or generic-looking person instead " +
       "of matching the reference photo's identity, him staring straight into the camera, his eyes making direct " +
       "contact with the lens, a square-on stare toward camera, passport- or headshot-style framing centered on " +
-      "his face toward the lens",
+      "his face toward the lens, eye sockets, iris, mouth cavity showing teeth, skin pores, forehead, photoreal " +
+      "human features, portrait photography, talking-head close-up on a lit face",
   },
 };
 
