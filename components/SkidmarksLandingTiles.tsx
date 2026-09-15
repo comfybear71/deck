@@ -97,15 +97,23 @@ export function SkidmarksLandingTiles({ activeKind, onSelect }: SkidmarksLanding
               title={k.enabled ? undefined : "Coming soon"}
               className={[
                 "flex flex-col items-center justify-center gap-1.5 rounded-2xl border bg-white/[0.02] px-2 py-4 text-center transition-colors",
-                accent.ring,
-                active ? "bg-white/[0.05]" : "",
+                // Real reported gap (2026-09-15): every tile used to show
+                // its own accent-colored ring *all the time*, active or
+                // not — the only difference for "selected" was a barely-
+                // visible background tint, which read on a real phone as
+                // "Music video and Sunnybank are both on." An inactive
+                // tile now gets a plain neutral border regardless of its
+                // own accent color; only the genuinely active one gets
+                // its accent ring + a visibly brighter background, so
+                // there's exactly one obvious answer to "which is on."
+                active ? `${accent.ring} bg-white/[0.08]` : "border-white/10 hover:border-white/20",
                 k.enabled ? "cursor-pointer" : "cursor-not-allowed opacity-50",
               ].join(" ")}
             >
-              <span className={accent.icon}>
+              <span className={active ? accent.icon : "text-white/40"}>
                 <TileIcon icon={k.icon} />
               </span>
-              <span className={`text-xs font-medium ${accent.label}`}>{k.label}</span>
+              <span className={`text-xs font-medium ${active ? accent.label : "text-white/50"}`}>{k.label}</span>
             </button>
           );
         })}

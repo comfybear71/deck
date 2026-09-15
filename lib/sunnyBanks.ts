@@ -84,6 +84,15 @@ export interface SunnyBanksCharacterLock {
    * strip UI) must offer Stuart an upload for that character rather
    * than rendering with no identity reference at all. */
   referenceImage?: string;
+  /** `true` for a one-episode special guest (Hans, 2026-09-15's real
+   * correction) rather than one of the six locked series regulars.
+   * Never shown in an always-on "the cast" strip — a guest only ever
+   * belongs to whichever specific episode features them, and there's no
+   * episode model yet to scope that to. Kept in this same table rather
+   * than a separate one since the lock mechanism itself (name, look,
+   * voice, reference plate) works identically either way — see this
+   * module's own doc comment. */
+  guest?: boolean;
 }
 
 /**
@@ -130,6 +139,7 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   Hans: {
     name: "Hans",
     look: "German backpacker, safari outfit, cork hat, camera around neck",
+    guest: true,
     // No voice id yet — see this module's doc comment. Never guess
     // a stand-in here; a caller must surface this as a real gap.
   },
