@@ -20,6 +20,7 @@ import { SkidmarksClipTimeline } from "./SkidmarksClipTimeline";
 import { SkidmarksScriptSequencePanel } from "./SkidmarksScriptSequencePanel";
 import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksArchiveShelf } from "./SkidmarksArchiveShelf";
+import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
 
 interface SkidmarksDetailSheetProps {
   onClose: () => void;
@@ -320,6 +321,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
               activeKind={session.projectKind}
               onSelect={selectProjectKind}
             />
+
+            {session.projectKind === "sunnybank" && <SkidmarksSunnyBanksPanel />}
 
             {session.projectKind === "music-video" && (
               <div ref={bandSectionRef}>
