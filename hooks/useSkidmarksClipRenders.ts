@@ -18,6 +18,23 @@ import type { SkidmarksClipSegment } from "@/lib/skidmarks";
  * on mount and whenever the *set* of clip ids changes (a fresh MP3
  * attach), not on every keystroke.
  *
+ * **Replaces the map on every segment-set change — never merges onto
+ * whatever was there before.** Real live bug (2026-09-15, Stuart's own
+ * report): attaching a brand-new MP3 to the same band mints an entirely
+ * new set of segment/plate ids, but this used to fold the freshly
+ * fetched renders *into* the existing map instead of starting over —
+ * so a fresh song's shelf kept showing every render from whatever song
+ * was attached before it, forever, with no way to clear. Same gap if
+ * the MP3 is removed outright (`segments` goes to `[]`): the old code
+ * skipped the fetch entirely on an empty id list and left the stale
+ * map untouched. A prior segment/plate id can never legitimately
+ * reappear once a fresh MP3 attach mints new ones, so there is no real
+ * case where carrying old entries forward is correct — a full replace
+ * on every id-set change (including a failed refetch, which means "we
+ * don't know this new set's renders," not "assume the old ones still
+ * apply") is what actually matches "this shelf reflects the currently
+ * attached song," which is the one invariant callers rely on.
+ *
  * Keyed by `persistedRenderKey(segmentId, plateId)` — a render is a
  * per-*plate* fact now (see `lib/clipRenderBlob.ts`'s module doc
  * comment), not per-clip.
@@ -29,25 +46,30 @@ export function useSkidmarksClipRenders(segments: SkidmarksClipSegment[]) {
 
   useEffect(() => {
     const segmentIds = segmentIdsKey ? segmentIdsKey.split(",") : [];
-    if (segmentIds.length === 0) return;
     let cancelled = false;
-    fetchPersistedClipRenders(segmentIds).then((outcome) => {
-      if (cancelled || !outcome.ok) return;
-      setRenders((prev) => {
-        const next = new Map(prev);
+    // No ids (MP3 removed) resolves through the same `.then()` path as
+    // a real fetch, rather than calling `setRenders` synchronously in
+    // the effect body — same replace-not-merge behavior either way,
+    // just via a microtask so this never trips the "no setState
+    // directly in an effect" rule the rest of this codebase follows.
+    const load = segmentIds.length === 0 ? Promise.resolve({ ok: true as const, renders: [] }) : fetchPersistedClipRenders(segmentIds);
+    load.then((outcome) => {
+      if (cancelled) return;
+      const next = new Map<string, PersistedClipRender>();
+      if (outcome.ok) {
         for (const render of outcome.renders) {
           next.set(persistedRenderKey(render.segmentId, render.plateId), render);
         }
-        return next;
-      });
+      }
+      setRenders(next);
     });
     return () => {
       cancelled = true;
     };
-    // Re-fetches when the *set* of clip ids changes (a fresh MP3
-    // attach), not on every shot-prompt/motion-text keystroke —
-    // `segmentIdsKey` is stable across an edit to an existing segment's
-    // own fields.
+    // Re-fetches (and fully replaces) whenever the *set* of clip ids
+    // changes (a fresh MP3 attach, or the MP3 being removed), not on
+    // every shot-prompt/motion-text keystroke — `segmentIdsKey` is
+    // stable across an edit to an existing segment's own fields.
   }, [segmentIdsKey]);
 
   const addRender = (render: PersistedClipRender) => {
