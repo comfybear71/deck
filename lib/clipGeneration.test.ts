@@ -440,6 +440,34 @@ describe("buildClipGenerationRequest", () => {
       expect(request.negativePrompt?.toLowerCase()).toContain("normal skin tone");
     });
 
+    it("defaults a locked vocal character's clip to a static Camera holds shot, never the generic push-in zoom", () => {
+      const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
+      const { prompt } = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "singing directly to camera",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,jack",
+        durationSec: 10,
+        vocalist: jackAsh,
+      });
+      expect(prompt).toContain("Camera holds");
+      expect(prompt).not.toContain("Slow cinematic push-in zoom");
+      expect(prompt.toLowerCase()).toContain("foot tap");
+    });
+
+    it("still uses the generic push-in zoom default for a vocalist with no registered lock", () => {
+      const nova = member({ id: "solar-rebel-vocals", name: "Nova", role: "Vocals" });
+      const { prompt } = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "singing directly to camera",
+        bandName: "Solar Rebel",
+        plateStillDataUrl: "data:image/jpeg;base64,nova",
+        durationSec: 10,
+        vocalist: nova,
+      });
+      expect(prompt).toContain("Slow cinematic push-in zoom");
+    });
+
     it("never injects a character lock for a vocalist with no registered lock", () => {
       const nova = member({ id: "solar-rebel-vocals", name: "Nova", role: "Vocals" });
       const request = buildClipGenerationRequest({

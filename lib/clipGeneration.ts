@@ -312,8 +312,30 @@ export const MAX_MOTION_PROMPT_LENGTH = 600;
  * now (image-to-video mode) — the multi-plate continuity phrasing this
  * used to emit for 2–3 references no longer applies, since a render is
  * always exactly one plate's still now (see this module's doc comment).
+ *
+ * 2026-09-15: for a Vocal render of a locked character, this used to
+ * return the same push-in-zoom text as everything else — directly
+ * contradicting `VOCAL_LTX_PROMPT_LOCK`'s own "Camera holds" line a
+ * few sentences earlier in the same prompt, and directly contradicting
+ * the sibling `skidmarks` project's own LTX research log
+ * (`docs/LTX_23_PROMPT_RESEARCH.md`: "Do not add push-in / orbit on a
+ * talking plate unless Stuie asks — that is how faces drift") and its
+ * proven "worked 100%" gold shape (`docs/SUNNY_BANKS_IMAGE_MOTION_STANDARD.md`),
+ * which uses a static `Camera holds` frame with only small natural
+ * body movement, never zoom or push-in, on every speaking plate. A
+ * `vocalLockedCharacter` render now gets that same static-camera shape
+ * instead, matching Stuart's own live-QA finding the same day (steady
+ * camera + head nod + foot tap "worked perfectly").
  */
-function automaticMotionHint(): string {
+function automaticMotionHint(vocalLockedCharacter: boolean): string {
+  if (vocalLockedCharacter) {
+    return (
+      "Camera holds — a static, locked-off frame for the whole clip, no push-in, no zoom, no orbit, no " +
+      "pan. All the energy comes from him instead: small, natural movement in time with the vocal, a slight " +
+      "head nod, relaxed hand gestures, a light foot tap. Same scene, subject, and lighting as the reference " +
+      "image throughout."
+    );
+  }
   return (
     "Slow cinematic push-in zoom, subtle camera movement, keep the scene, subject, and lighting consistent " +
     "with the reference image."
@@ -419,13 +441,15 @@ export interface BuildClipGenerationRequestParams {
    * into keyhole, mild pulse on door cracks") — the *primary* motion
    * instruction sent to xAI when given (non-blank); `shotPrompt`/the
    * plate still remain the visual description and reference image,
-   * unchanged. Replaces `automaticMotionHint`'s push-in/zoom phrasing
+   * unchanged. Replaces `automaticMotionHint`'s default phrasing
    * outright rather than being appended alongside it, so Stuart's own
    * explicit direction is never diluted or contradicted by the default.
    * Trimmed and capped at `MAX_MOTION_PROMPT_LENGTH`; blank/omitted
-   * keeps the automatic push-in/zoom behavior. Still read on the
-   * Vocal/Comfy-LTX path too — a typed camera-motion note is just as
-   * meaningful for that partner node's own `prompt` field. */
+   * keeps the automatic default (a static "Camera holds" shot for a
+   * locked character's Vocal clip, push-in/zoom otherwise — see
+   * `automaticMotionHint`). Still read on the Vocal/Comfy-LTX path
+   * too — a typed camera-motion note is just as meaningful for that
+   * partner node's own `prompt` field. */
   motionPrompt?: string;
   /** This plate's real, auto-computed render length — see
    * `computePlateDurationSec`/`computeLtxPlateDurationSec`. Callers
@@ -575,7 +599,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   const parts = [
     params.vocal ? VOCAL_LTX_PROMPT_LOCK : "",
     params.shotPrompt.trim(),
-    trimmedMotionPrompt || automaticMotionHint(),
+    trimmedMotionPrompt || automaticMotionHint(Boolean(params.vocal && lock)),
     params.vocal && lock ? (lock.videoPromptHallmarks ?? lock.promptHallmarks) : "",
     params.vocal && lock ? lockedCharacterVideoNote() : "",
     "Solo shot: no other people, extra characters, crowd, or background figures appear anywhere in frame at " +
