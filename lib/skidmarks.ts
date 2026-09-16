@@ -1717,6 +1717,7 @@ interface SessionGetRouteBody {
   configured?: unknown;
   state?: unknown;
   error?: unknown;
+  updatedAt?: unknown;
 }
 
 let hydrationStarted = false;
@@ -1798,6 +1799,14 @@ function readLegacySkidmarksLocalStorageSession(): SkidmarksState | null {
  */
 const LOCAL_MIRROR_STORAGE_KEY = "the-tab:skidmarks-studio-mirror";
 
+interface LocalMirrorEnvelope {
+  state: SkidmarksState;
+  /** `Date.now()` at write time — compared against Neon's own
+   * `updatedAt` on hydrate so whichever copy is actually newer wins,
+   * never just whichever one happened to load. */
+  savedAt: number;
+}
+
 /** Best-effort, synchronous, never throws — private-mode Safari, a full
  * quota, or `localStorage` simply not existing all just mean the mirror
  * write silently didn't happen this time; the real save still goes to
@@ -1808,7 +1817,8 @@ const LOCAL_MIRROR_STORAGE_KEY = "the-tab:skidmarks-studio-mirror";
 function writeLocalMirror(state: SkidmarksState): void {
   if (!isBrowser() || !sessionHasSubstantiveContent(state)) return;
   try {
-    window.localStorage.setItem(LOCAL_MIRROR_STORAGE_KEY, JSON.stringify(state));
+    const envelope: LocalMirrorEnvelope = { state, savedAt: Date.now() };
+    window.localStorage.setItem(LOCAL_MIRROR_STORAGE_KEY, JSON.stringify(envelope));
   } catch {
     // Quota exceeded, private mode, or storage disabled — nothing to do.
   }
@@ -1816,17 +1826,27 @@ function writeLocalMirror(state: SkidmarksState): void {
 
 /** Same never-throws contract as `readLegacySkidmarksLocalStorageSession`
  * — corrupt JSON, no storage, or a mirror that never got written all
- * read as `null`, never as a crash. */
-function readLocalMirror(): SkidmarksState | null {
+ * read as `null`, never as a crash. Reads the timestamped envelope
+ * (`writeLocalMirror`'s own shape); a raw pre-envelope state (should
+ * never happen post-deploy, but a stale write from mid-rollout is cheap
+ * to tolerate) reads as `null` rather than crashing normalizeState on
+ * an unexpected shape. */
+function readLocalMirrorWithTimestamp(): LocalMirrorEnvelope | null {
   if (!isBrowser()) return null;
   try {
     const raw = window.localStorage.getItem(LOCAL_MIRROR_STORAGE_KEY);
     if (!raw) return null;
-    const parsed = normalizeState(JSON.parse(raw));
-    return sessionHasSubstantiveContent(parsed) ? parsed : null;
+    const parsed = JSON.parse(raw) as Partial<LocalMirrorEnvelope>;
+    if (typeof parsed.savedAt !== "number" || !parsed.state) return null;
+    const state = normalizeState(parsed.state);
+    return sessionHasSubstantiveContent(state) ? { state, savedAt: parsed.savedAt } : null;
   } catch {
     return null;
   }
+}
+
+function readLocalMirror(): SkidmarksState | null {
+  return readLocalMirrorWithTimestamp()?.state ?? null;
 }
 
 /**
@@ -2038,8 +2058,23 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
 
     const fetched = body.state == null ? null : normalizeState(body.state);
     if (fetched && sessionHasSubstantiveContent(fetched)) {
-      // Neon already has real content — the ordinary case, including
-      // every load after the one-time recovery below has already run.
+      // Neon has real content — but a save can have failed silently
+      // right up until this exact load (2026-09-16 direct instruction:
+      // "if local is newer or has more real work than Neon, show local
+      // and push that up"). The local mirror is written synchronously
+      // on every real edit — if it's timestamped *after* Neon's own
+      // `updatedAt`, Neon's copy is the stale one, not the real one.
+      const fetchedUpdatedAt = typeof body.updatedAt === "string" ? Date.parse(body.updatedAt) : NaN;
+      const mirror = readLocalMirrorWithTimestamp();
+      if (mirror && (Number.isNaN(fetchedUpdatedAt) || mirror.savedAt > fetchedUpdatedAt)) {
+        if (applyIfSafe(mirror.state)) {
+          await pushSkidmarksSessionNow();
+          return;
+        }
+      }
+      // Neon already has real content and is at least as fresh as this
+      // phone's own mirror — the ordinary case, including every load
+      // after the one-time recovery below has already run.
       const applied = applyIfSafe(fetched);
       setSessionSync({ status: "synced" });
       if (applied) {
