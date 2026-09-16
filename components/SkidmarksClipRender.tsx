@@ -344,9 +344,13 @@ export function SkidmarksClipRender({
   const missingAudio = vocal && !mp3AudioUrl;
   // Said up front, before the paid tap — `buildClipGenerationRequest`
   // makes the same call and swaps the motion note for a static camera
-  // (audit Rule B: no zoom/push-in/orbit/pan while he sings).
+  // (audit Rule B: no zoom/push-in/orbit/pan while locked). Checked on
+  // both Vocal and Instrumental now (2026-09-16 fix) — a locked
+  // character's shadow-face lock runs on either clip type, so the
+  // warning banner needs to match `cameraWarnings`, not just the Vocal
+  // case it used to be gated on.
   const cameraHoldRequired =
-    vocal && !!vocalist && !!getSkidmarksCharacterLock(vocalist) && motionPromptMovesCamera(motionPrompt);
+    !!vocalist && !!getSkidmarksCharacterLock(vocalist) && motionPromptMovesCamera(motionPrompt);
 
   const handleRender = async () => {
     if (locked || generating || missingAudio || !payloadSeen) return;

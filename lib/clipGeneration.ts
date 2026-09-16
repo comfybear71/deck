@@ -318,19 +318,31 @@ export const MAX_MOTION_PROMPT_LENGTH = 600;
 
 /**
  * The *only* camera line this app ever adds on its own, and only when
- * Stuart left the motion box blank on a locked character's Vocal
- * render: camera holds, he moves. Blank motion on anything else means
- * exactly that — no camera line at all, nothing invented (audit Part 3:
- * "blank motion ≠ the app writes zoom"). The old factory default
+ * Stuart left the motion box blank on a locked character's clip, Vocal
+ * or Instrumental: camera holds, he moves. Blank motion on anything else
+ * means exactly that — no camera line at all, nothing invented (audit
+ * Part 3: "blank motion ≠ the app writes zoom"). The old factory default
  * ("Slow cinematic push-in zoom…") is gone; a push-in only ever reaches
  * a render if he typed it.
  */
-function defaultMotionLine(vocalLockedCharacter: boolean): string {
-  if (!vocalLockedCharacter) return "";
+function defaultMotionLine(lockedCharacter: boolean, singing: boolean): string {
+  if (!lockedCharacter) return "";
+  // Real gap found 2026-09-16 (Stuart's "Jack Ghost" spec): this used to
+  // only ever fire for a locked Vocal/Singing clip — an Instrumental/Mute
+  // one with a blank motion box got no default at all, so a locked
+  // character had nothing keeping the camera still or ruling out invented
+  // motion on that clip type. Now covers both, with wording that matches
+  // which one it actually is — a Mute clip has no vocal to nod along
+  // with, so it doesn't claim one.
+  const energyClause = singing
+    ? "a slight head nod in time with the vocal, tilting his head up and to the side, relaxed hand gestures, " +
+      "a light foot tap."
+    : "a slight head nod, a light shift of weight, relaxed hand gestures — small, natural stillness, not a " +
+      "performance.";
   return (
     "Camera holds — a static, locked-off frame for the whole clip. All the energy comes from him instead: " +
-    "a slight head nod in time with the vocal, tilting his head up and to the side, relaxed hand gestures, " +
-    "a light foot tap. Same scene, subject, and lighting as the reference image throughout."
+    energyClause +
+    " Same scene, subject, and lighting as the reference image throughout."
   );
 }
 
@@ -352,11 +364,12 @@ export function motionPromptMovesCamera(text: string | undefined): boolean {
 }
 
 /** Shown to Stuart, before the paid tap, when his own typed motion note
- * asks the camera to move on a locked character's Vocal plate. His text
- * is still sent exactly as written — user text wins (audit Part 3) —
- * this is a warning, never a silent rewrite. */
+ * asks the camera to move on a locked character's plate — Vocal or
+ * Instrumental, since both carry the shadow-face lock now (2026-09-16).
+ * His text is still sent exactly as written — user text wins (audit
+ * Part 3) — this is a warning, never a silent rewrite. */
 export const CAMERA_HOLD_REQUIRED_MESSAGE =
-  "Camera hold is what keeps his face in the hat while he sings — this motion note asks the camera to move. It will be sent exactly as you wrote it; camera moves around his face are the known way the shadow lock breaks.";
+  "Camera hold is what keeps his face hidden in the hat — this motion note asks the camera to move. It will be sent exactly as you wrote it; camera moves around his face are the known way the shadow lock breaks.";
 
 export interface ClipGenerationRequest {
   /** The full prompt sent to xAI — Stuart's own clip `shotPrompt`
@@ -373,8 +386,8 @@ export interface ClipGenerationRequest {
    * request or a Vocal one with no locked vocalist — nothing here
    * invents negative text for a character with no lock. */
   negativePrompt?: string;
-  /** Present only on a locked character's Vocal render — see
-   * `ClipCameraWarnings`. Ignored by the server. */
+  /** Present only on a locked character's clip, Vocal or Instrumental —
+   * see `ClipCameraWarnings`. Ignored by the server. */
   cameraWarnings?: ClipCameraWarnings;
   /** The selected plate's still, and nothing else — always exactly one
    * entry; kept as an array on the wire (unchanged shape from before
@@ -463,8 +476,9 @@ export interface BuildClipGenerationRequestParams {
    * unchanged. Sent exactly as typed — user text wins (audit Part 3).
    * Trimmed and capped at `MAX_MOTION_PROMPT_LENGTH` (the UI shows a
    * live counter against the same cap); blank/omitted adds a static
-   * "Camera holds" line for a locked character's Vocal clip and
-   * nothing at all otherwise — see `defaultMotionLine`. Still read on
+   * "Camera holds" line for a locked character's clip, Vocal or
+   * Instrumental, and nothing at all otherwise — see `defaultMotionLine`.
+   * Still read on
    * the Vocal/Comfy-LTX path
    * too — a typed camera-motion note is just as meaningful for that
    * partner node's own `prompt` field. */
@@ -516,9 +530,10 @@ export interface BuildClipGenerationRequestParams {
   instrumentalVideoModel?: SkidmarksInstrumentalVideoModel;
 }
 
-/** Camera-movement *warnings* for a locked character's Vocal render —
- * nothing here changes the prompt (user text wins, audit Part 3); it
- * only tells the UI what to warn about before any money is spent. */
+/** Camera-movement *warnings* for a locked character's clip, Vocal or
+ * Instrumental — nothing here changes the prompt (user text wins, audit
+ * Part 3); it only tells the UI what to warn about before any money is
+ * spent. */
 export interface ClipCameraWarnings {
   /** Stuart's own typed motion note asks the camera to move. Sent as
    * written; see `CAMERA_HOLD_REQUIRED_MESSAGE`. */
@@ -584,6 +599,30 @@ function lockedCharacterVideoNote(): string {
     "times: the hat-brim edge, a faint rim of light along the shadow's outline, or the glowing neon lips. A " +
     "pure black, featureless frame is wrong here, not the goal \u2014 deep near-black shadow with one visible " +
     "anchor point is. He must never resolve into a normal, visible human face at any point."
+  );
+}
+
+/** Real gap found 2026-09-16 (Stuart's "Jack Ghost" spec): the note above
+ * only ever ran on a Vocal/Singing render — an Instrumental/Mute locked
+ * clip got no equivalent motion-level protection at all, only its own
+ * (already-locked) starting still. This is that same shadow-face physics
+ * for the Mute case: no "while he's singing"/mouth-in-frame language
+ * (there's no singing, no lip sync, in a Mute clip), and no named
+ * "glowing neon lips" anchor — not every locked character has glowing
+ * lips (Jack Ash does; a plain lock card like Jack Ghost doesn't say so),
+ * so this only ever names the one anchor every locked character actually
+ * has: the hat-brim edge / shadow outline itself. A character whose own
+ * hallmark text does claim glowing lips still gets that stated there,
+ * same as it always has been. */
+function lockedCharacterInstrumentalVideoNote(): string {
+  return (
+    "Across this clip's motion, his face never becomes legible, well-lit, or reads as a normal, watchable " +
+    "stare at any point — the shadow-face lock holds for the whole clip, not just its first frame. The " +
+    "closer his face is to the lens, the darker and deeper the shadow under the brim, never lighter or thinner. " +
+    "But the frame must never go fully, totally black or empty — keep one small real anchor visible at all " +
+    "times: the hat-brim edge, or a faint rim of light along the shadow's outline. A pure black, featureless " +
+    "frame is wrong here, not the goal — deep near-black shadow with one visible anchor point is. He must " +
+    "never resolve into a normal, visible human face at any point. He is the only figure in frame throughout."
   );
 }
 
@@ -702,12 +741,21 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
 
   const lock = params.vocalist ? getSkidmarksCharacterLock(params.vocalist) : undefined;
   const lockedVocal = Boolean(params.vocal && lock);
+  // Real gap found 2026-09-16 (Stuart's "Jack Ghost" spec): a locked
+  // character's own look text used to be added only on a Vocal/Singing
+  // clip — an Instrumental/Mute clip got nothing but its own starting
+  // still and whatever Stuart typed that one time. The still is locked,
+  // but nothing kept the *clip* honest against drifting off it once
+  // motion started. `lockedInstrumental` mirrors `lockedVocal` for that
+  // other case so both clip types carry the same protection.
+  const lockedInstrumental = Boolean(!params.vocal && lock);
+  const locked = lockedVocal || lockedInstrumental;
   // User text wins (audit Part 3). His motion note goes out exactly as
   // typed; the only line this app adds on its own is a camera hold
-  // when the box is blank on a locked character's Vocal render. Camera
-  // moves in his own text are *warned about* (`cameraWarnings`), never
-  // rewritten.
-  const motionText = trimmedMotionPrompt || defaultMotionLine(lockedVocal);
+  // when the box is blank on a locked character's clip, Vocal or
+  // Instrumental. Camera moves in his own text are *warned about*
+  // (`cameraWarnings`), never rewritten.
+  const motionText = trimmedMotionPrompt || defaultMotionLine(locked, Boolean(params.vocal));
   const cameraWarnings: ClipCameraWarnings = {
     typedMotionMovesCamera: motionPromptMovesCamera(trimmedMotionPrompt),
     shotMovesCamera: motionPromptMovesCamera(params.shotPrompt),
@@ -727,8 +775,9 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     params.shotPrompt.trim(),
     motionText,
     params.vocal ? (lockedVocal ? VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER : VOCAL_LTX_PROMPT_LOCK) : "",
-    lockedVocal ? (lock!.videoPromptHallmarks ?? lock!.promptHallmarks) : "",
+    locked ? (lock!.videoPromptHallmarks ?? lock!.promptHallmarks) : "",
     lockedVocal ? lockedCharacterVideoNote() : "",
+    lockedInstrumental ? lockedCharacterInstrumentalVideoNote() : "",
     `Music video for ${params.bandName}. no on-screen text, no watermark.`,
   ];
 
@@ -754,7 +803,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     lockedVocal ? LOCKED_CHARACTER_SOLO_SHOT_NEGATIVE_CUES : undefined,
   ].filter((cue): cue is string => Boolean(cue));
   if (negativeCueParts.length > 0) request.negativePrompt = negativeCueParts.join(", ");
-  if (lockedVocal) request.cameraWarnings = cameraWarnings;
+  if (locked) request.cameraWarnings = cameraWarnings;
 
   if (!params.vocal) {
     // `resolveInstrumentalVideoModel` is also the fallback used here

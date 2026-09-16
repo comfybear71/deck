@@ -518,7 +518,29 @@ describe("buildClipGenerationRequest", () => {
       expect(request.negativePrompt).toBeUndefined();
     });
 
-    it("never injects the locked-character note on a Grok/Instrumental request even for a locked vocalist", () => {
+    it("real gap fixed 2026-09-16 (Jack Ghost spec): a locked vocalist's own look text now also lands on a Grok/Instrumental (Mute) request, not just Vocal — only the Vocal-only wrap and lip-sync fields stay Vocal-only", () => {
+      const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
+      const request = buildClipGenerationRequest({
+        vocal: false,
+        shotPrompt: "a door creaks open",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,door",
+        durationSec: 5,
+        vocalist: jackAsh,
+      });
+      // His own hallmarks (neon lips is his own look, not the generic note's).
+      expect(request.prompt.toLowerCase()).toContain("neon blue");
+      // The generic shadow-face lock now runs on a Mute clip too, in its
+      // own non-singing wording — never the Vocal note's "while he's singing".
+      expect(request.prompt.toLowerCase()).toContain("shadow-face lock holds");
+      expect(request.prompt.toLowerCase()).not.toContain("while he's singing");
+      expect(request.prompt.toLowerCase()).toContain("only figure in frame");
+      // Still never the Vocal backend's own lip-sync wrap, or any lip-sync fields.
+      expect(request.prompt.toLowerCase()).not.toContain("perfect lip sync");
+      expect(request.mp3AudioUrl).toBeUndefined();
+    });
+
+    it("gives a locked Instrumental clip the same static Camera holds default (with no false 'vocal' claim) when motion is blank", () => {
       const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
       const { prompt } = buildClipGenerationRequest({
         vocal: false,
@@ -528,7 +550,22 @@ describe("buildClipGenerationRequest", () => {
         durationSec: 5,
         vocalist: jackAsh,
       });
-      expect(prompt.toLowerCase()).not.toContain("neon blue");
+      expect(prompt).toContain("Camera holds");
+      expect(prompt.toLowerCase()).not.toContain("in time with the vocal");
+    });
+
+    it("warns about camera-moving motion/shot text on a locked Instrumental clip too, not just Vocal", () => {
+      const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
+      const { cameraWarnings } = buildClipGenerationRequest({
+        vocal: false,
+        shotPrompt: "a door creaks open",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,door",
+        durationSec: 5,
+        vocalist: jackAsh,
+        motionPrompt: "slow zoom into his hat",
+      });
+      expect(cameraWarnings).toEqual({ typedMotionMovesCamera: true, shotMovesCamera: false });
     });
   });
 });
@@ -632,8 +669,15 @@ describe("prompt assembly: Stuart's text on top, no hidden camera moves", () => 
     expect(shot.prompt).not.toContain("Camera override");
     expect(shot.cameraWarnings).toEqual({ typedMotionMovesCamera: false, shotMovesCamera: true });
 
+    // Real gap fixed 2026-09-16 (Jack Ghost spec): a locked character's
+    // Instrumental/Mute clip now gets the same warning a Vocal one does —
+    // it used to report `undefined` here, silently skipping the warning.
     const instrumental = buildClipGenerationRequest({ ...baseParams, vocal: false, motionPrompt: "slow zoom into the keyhole" });
-    expect(instrumental.cameraWarnings).toBeUndefined();
+    expect(instrumental.cameraWarnings).toEqual({ typedMotionMovesCamera: true, shotMovesCamera: false });
+
+    // Still never warns for an Instrumental clip with no locked vocalist at all.
+    const unlocked = buildClipGenerationRequest({ ...baseParams, vocal: false, vocalist: undefined, motionPrompt: "slow zoom into the keyhole" });
+    expect(unlocked.cameraWarnings).toBeUndefined();
   });
 });
 
