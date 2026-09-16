@@ -1640,6 +1640,14 @@ const SESSION_ENDPOINT = "/api/skidmarks/session";
  * (below, wired to `visibilitychange`/`pagehide`) is. */
 const SESSION_PUSH_DEBOUNCE_MS = 600;
 
+/** How often to quietly retry a real, still-failed save with nothing
+ * else prompting it (no new edit, no `online` event) — see
+ * `ensureSessionPersistenceWired`'s "keep retrying" doc comment. Slow
+ * enough not to hammer a connection that's genuinely, persistently
+ * down; frequent enough that a phone locked overnight with an
+ * intermittent connection still ends up saved well before morning. */
+const SESSION_UNSYNCED_RETRY_INTERVAL_MS = 60_000;
+
 export type SkidmarksSessionSyncStatus = "loading" | "synced" | "saving" | "unconfigured" | "error";
 
 /** Live, ephemeral status of the Neon round trip — see this section's
@@ -1709,6 +1717,7 @@ interface SessionGetRouteBody {
   configured?: unknown;
   state?: unknown;
   error?: unknown;
+  updatedAt?: unknown;
 }
 
 let hydrationStarted = false;
@@ -1790,6 +1799,14 @@ function readLegacySkidmarksLocalStorageSession(): SkidmarksState | null {
  */
 const LOCAL_MIRROR_STORAGE_KEY = "the-tab:skidmarks-studio-mirror";
 
+interface LocalMirrorEnvelope {
+  state: SkidmarksState;
+  /** `Date.now()` at write time — compared against Neon's own
+   * `updatedAt` on hydrate so whichever copy is actually newer wins,
+   * never just whichever one happened to load. */
+  savedAt: number;
+}
+
 /** Best-effort, synchronous, never throws — private-mode Safari, a full
  * quota, or `localStorage` simply not existing all just mean the mirror
  * write silently didn't happen this time; the real save still goes to
@@ -1800,7 +1817,8 @@ const LOCAL_MIRROR_STORAGE_KEY = "the-tab:skidmarks-studio-mirror";
 function writeLocalMirror(state: SkidmarksState): void {
   if (!isBrowser() || !sessionHasSubstantiveContent(state)) return;
   try {
-    window.localStorage.setItem(LOCAL_MIRROR_STORAGE_KEY, JSON.stringify(state));
+    const envelope: LocalMirrorEnvelope = { state, savedAt: Date.now() };
+    window.localStorage.setItem(LOCAL_MIRROR_STORAGE_KEY, JSON.stringify(envelope));
   } catch {
     // Quota exceeded, private mode, or storage disabled — nothing to do.
   }
@@ -1808,17 +1826,27 @@ function writeLocalMirror(state: SkidmarksState): void {
 
 /** Same never-throws contract as `readLegacySkidmarksLocalStorageSession`
  * — corrupt JSON, no storage, or a mirror that never got written all
- * read as `null`, never as a crash. */
-function readLocalMirror(): SkidmarksState | null {
+ * read as `null`, never as a crash. Reads the timestamped envelope
+ * (`writeLocalMirror`'s own shape); a raw pre-envelope state (should
+ * never happen post-deploy, but a stale write from mid-rollout is cheap
+ * to tolerate) reads as `null` rather than crashing normalizeState on
+ * an unexpected shape. */
+function readLocalMirrorWithTimestamp(): LocalMirrorEnvelope | null {
   if (!isBrowser()) return null;
   try {
     const raw = window.localStorage.getItem(LOCAL_MIRROR_STORAGE_KEY);
     if (!raw) return null;
-    const parsed = normalizeState(JSON.parse(raw));
-    return sessionHasSubstantiveContent(parsed) ? parsed : null;
+    const parsed = JSON.parse(raw) as Partial<LocalMirrorEnvelope>;
+    if (typeof parsed.savedAt !== "number" || !parsed.state) return null;
+    const state = normalizeState(parsed.state);
+    return sessionHasSubstantiveContent(state) ? { state, savedAt: parsed.savedAt } : null;
   } catch {
     return null;
   }
+}
+
+function readLocalMirror(): SkidmarksState | null {
+  return readLocalMirrorWithTimestamp()?.state ?? null;
 }
 
 /**
@@ -1928,6 +1956,55 @@ async function migrateInlineSessionImagesToBlob(
 }
 
 /**
+ * Hard backstop for the "session JSON carries URLs only, never image
+ * bytes" rule (2026-09-16, direct instruction after real overnight data
+ * loss). `migrateInlineSessionImagesToBlob` above is the real fix —
+ * upload, then use the real link — and now retries on every push; this
+ * is what runs *right before the wire* when that still couldn't clear
+ * everything (Blob itself unreachable, not just one picker's own
+ * upload failing). Pure and synchronous — no network, no retry, just a
+ * last-resort strip: any inline `data:` URL still present gets dropped
+ * from what's actually sent, never embedded raw in the request body.
+ * The full state (photo included) still lives in `cachedState` and the
+ * local mirror untouched — nothing is lost locally, only the Neon copy
+ * is briefly missing that one photo's bytes until Blob recovers and a
+ * later push migrates it for real.
+ */
+export function stripUnsyncableImageBytesForWire(state: SkidmarksState): SkidmarksState {
+  let changed = false;
+  const bands = state.bands.map((band) => {
+    const coverChanged = band.coverImage?.startsWith("data:") ?? false;
+    const members = band.members.map((member) => {
+      if (!member.avatarImage?.startsWith("data:")) return member;
+      changed = true;
+      return { ...member, avatarImage: undefined };
+    });
+    if (!coverChanged && members === band.members) return band;
+    changed = changed || coverChanged;
+    return { ...band, coverImage: coverChanged ? undefined : band.coverImage, members };
+  });
+
+  const mp3 = state.session.mp3;
+  const segments = mp3
+    ? mp3.segments.map((segment) => {
+        const plates = segment.plates.map((plate) => {
+          if (!plate.still?.dataUrl.startsWith("data:")) return plate;
+          changed = true;
+          return { ...plate, still: undefined };
+        });
+        return { ...segment, plates };
+      })
+    : null;
+
+  if (!changed) return state;
+  return {
+    ...state,
+    bands,
+    session: mp3 && segments ? { ...state.session, mp3: { ...mp3, segments } } : state.session,
+  };
+}
+
+/**
  * The one-time (per page load) `GET /api/skidmarks/session` —
  * triggered off `subscribeSkidmarks`'s very first subscriber. Never
  * re-triggered on a later re-subscribe (e.g. reopening the Skidmarks
@@ -1981,8 +2058,23 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
 
     const fetched = body.state == null ? null : normalizeState(body.state);
     if (fetched && sessionHasSubstantiveContent(fetched)) {
-      // Neon already has real content — the ordinary case, including
-      // every load after the one-time recovery below has already run.
+      // Neon has real content — but a save can have failed silently
+      // right up until this exact load (2026-09-16 direct instruction:
+      // "if local is newer or has more real work than Neon, show local
+      // and push that up"). The local mirror is written synchronously
+      // on every real edit — if it's timestamped *after* Neon's own
+      // `updatedAt`, Neon's copy is the stale one, not the real one.
+      const fetchedUpdatedAt = typeof body.updatedAt === "string" ? Date.parse(body.updatedAt) : NaN;
+      const mirror = readLocalMirrorWithTimestamp();
+      if (mirror && (Number.isNaN(fetchedUpdatedAt) || mirror.savedAt > fetchedUpdatedAt)) {
+        if (applyIfSafe(mirror.state)) {
+          await pushSkidmarksSessionNow();
+          return;
+        }
+      }
+      // Neon already has real content and is at least as fresh as this
+      // phone's own mirror — the ordinary case, including every load
+      // after the one-time recovery below has already run.
       const applied = applyIfSafe(fetched);
       setSessionSync({ status: "synced" });
       if (applied) {
@@ -2097,6 +2189,35 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
     }
     return;
   }
+  // Real, confirmed root cause (2026-09-16): a picked band cover/member
+  // avatar/plate photo uploads to Blob *first* and only ever falls back
+  // to embedding the raw `data:` URL inline when that upload itself
+  // fails (see `SkidmarksBandPicker`/`SkidmarksMembersModule`'s own
+  // comments) — a real, honest "never just drop the photo" choice, not
+  // a bug on its own. But once that fallback fires, the inline image
+  // then sits in `cachedState` until the next full page reload, since
+  // `migrateInlineSessionImagesToBlob` only ever ran once, at hydrate.
+  // Every `persist()` in between pushes that same oversized state again.
+  // Retrying the migration here, right before every non-keepalive push,
+  // means a Blob hiccup self-heals on the very next save instead of
+  // silently bloating every save until the tab happens to reload.
+  // Skipped for a `keepalive` flush (pagehide/backgrounding) — that one
+  // has to be fast, and blocking it on image re-uploads that might not
+  // even finish before the page is gone would defeat its whole purpose.
+  if (!keepalive && snapshot) {
+    const { state: migrated, changed } = await migrateInlineSessionImagesToBlob(snapshot);
+    if (changed) {
+      cachedState = migrated;
+      writeLocalMirror(migrated);
+      notify();
+    }
+  }
+  const preStrip = keepalive ? snapshot : cachedState;
+  // Hard rule, no exceptions, including the keepalive path (cheap and
+  // synchronous, so there's no cost to running it there too): the
+  // request body sent over the wire must never carry raw image bytes,
+  // only URLs — see `stripUnsyncableImageBytesForWire`'s doc comment.
+  const toSend = preStrip ? stripUnsyncableImageBytesForWire(preStrip) : preStrip;
   setSessionSync({ status: "saving" });
   const maxAttempts = keepalive ? 1 : SESSION_PUSH_RETRY_DELAYS_MS.length + 1;
   // Real live bug (2026-09-14): "Load failed" (a raw network-level fetch
@@ -2112,7 +2233,7 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   // error message turns the next report into a measurement instead of
   // another guess: a small number here rules that theory out entirely;
   // a multi-MB number confirms it and says exactly where to look next.
-  const payloadJson = JSON.stringify({ state: snapshot });
+  const payloadJson = JSON.stringify({ state: toSend });
   const payloadSizeMb = (new TextEncoder().encode(payloadJson).length / (1024 * 1024)).toFixed(1);
   try {
     let lastNetworkError: unknown = null;
@@ -2257,6 +2378,22 @@ function ensureSessionPersistenceWired(): void {
   window.addEventListener("online", () => {
     if (sessionSync.status === "error") void pushSkidmarksSessionNow();
   });
+  // "If the UI is not synced, block close and keep retrying" (2026-09-16
+  // direct instruction). The browser's own `beforeunload` prompt above
+  // is the actual "block close" — a real block is not possible from
+  // page script alone, that dialog is the platform's own ceiling. This
+  // is the "keep retrying" half: the `online` event and the next edit
+  // both already retry a real, substantive error, but neither one fires
+  // for a tab just sitting open, unsynced, with nothing else happening —
+  // a locked phone overnight is exactly that case. A slow, quiet
+  // interval retry while genuinely unsynced means a connection that
+  // comes and goes gets picked up eventually even with zero user action,
+  // rather than staying stuck on one failed attempt until morning.
+  // Never fires on "unconfigured" (no Neon connected here at all —
+  // retrying can't fix that) or once "synced" — only on a real "error".
+  window.setInterval(() => {
+    if (sessionSync.status === "error") void pushSkidmarksSessionNow();
+  }, SESSION_UNSYNCED_RETRY_INTERVAL_MS);
   void hydrateSkidmarksSessionOnce();
 }
 

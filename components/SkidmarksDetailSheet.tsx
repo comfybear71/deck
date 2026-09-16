@@ -390,13 +390,19 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
         )}
 
         {(sessionSync.status === "unconfigured" || sessionSync.status === "error") && (
+          // "Do not look fine" (2026-09-16 direct instruction): red, not
+          // amber, and leads with NOT SAVED in plain words rather than
+          // a reason that could scroll past unread. Your actual project
+          // is still safe on this phone (the local mirror) either way \u2014
+          // this is honestly reporting that Neon doesn't have it yet,
+          // not a warning that anything is about to be lost.
           <p
             role="status"
-            className="mx-4 mb-2 rounded-lg border border-amber-400/25 bg-amber-400/10 px-2.5 py-1.5 text-[10px] leading-snug text-amber-200/90"
+            className="mx-4 mb-2 rounded-lg border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-[10px] leading-snug text-rose-200/90"
           >
             {sessionSync.status === "unconfigured"
-              ? "Session storage isn\u2019t connected here \u2014 your edits won\u2019t survive a refresh this time."
-              : `Couldn\u2019t save your session just now \u2014 ${sessionSync.error ?? "unknown reason"}. Don\u2019t refresh until this clears \u2014 your next edit will try again.`}
+              ? "NOT SAVED \u2014 session storage isn\u2019t connected here. Your edits are safe on this phone but won\u2019t reach the server this time."
+              : `NOT SAVED \u2014 ${sessionSync.error ?? "unknown reason"}. Your project is still safe on this phone. Retrying automatically \u2014 keep this tab open.`}
           </p>
         )}
 
