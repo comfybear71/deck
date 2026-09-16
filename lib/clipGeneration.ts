@@ -670,6 +670,22 @@ const VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER =
   "perfect lip sync through his glowing neon-blue lips, clear lip movement, citing the dialogue clearly, hand " +
   "gestures are lively, dication is perfect.";
 
+/** Real bug found 2026-09-16, same live render as the "facial expressions"
+ * fix above, spotted again after that fix went out: an extra human head
+ * appeared in frame near the end of the clip. This is the exact same
+ * class of bug already fixed once in this file for Jack's face (see the
+ * `negativeCues` comment below) — the old "Solo shot: no other people,
+ * extra characters, crowd..." line lived in the *positive* prompt. Naming
+ * "other people"/"extra characters" there, even to forbid them, gives the
+ * model those exact words to key on, and it isn't reliable at honoring
+ * the "no" in front of them. Moved to the same real negative-conditioning
+ * channel `negativeCues` already uses instead of staying positive-prompt
+ * text — see `negativeSoloShotCues` below and where it's merged into
+ * `request.negativePrompt`. */
+const LOCKED_CHARACTER_SOLO_SHOT_NEGATIVE_CUES =
+  "a second person, another person in frame, a duplicate face, an extra head, twins, a crowd, extra characters, " +
+  "background figures, other people";
+
 /**
  * Builds the one real clip-render request this feature ever sends —
  * pure and synchronous, same "fully unit-testable independent of a real
@@ -713,10 +729,6 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     params.vocal ? (lockedVocal ? VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER : VOCAL_LTX_PROMPT_LOCK) : "",
     lockedVocal ? (lock!.videoPromptHallmarks ?? lock!.promptHallmarks) : "",
     lockedVocal ? lockedCharacterVideoNote() : "",
-    lockedVocal
-      ? "Solo shot: no other people, extra characters, crowd, or background figures appear anywhere in frame at " +
-        "any point in the motion, including out-of-focus or partially-visible in the background."
-      : "",
     `Music video for ${params.bandName}. no on-screen text, no watermark.`,
   ];
 
@@ -736,9 +748,13 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     startSec: params.startSec,
     endSec: params.endSec,
     vocal: params.vocal,
-    ...(params.vocal && lock?.negativeCues ? { negativePrompt: lock.negativeCues } : {}),
-    ...(lockedVocal ? { cameraWarnings } : {}),
   };
+  const negativeCueParts = [
+    params.vocal ? lock?.negativeCues : undefined,
+    lockedVocal ? LOCKED_CHARACTER_SOLO_SHOT_NEGATIVE_CUES : undefined,
+  ].filter((cue): cue is string => Boolean(cue));
+  if (negativeCueParts.length > 0) request.negativePrompt = negativeCueParts.join(", ");
+  if (lockedVocal) request.cameraWarnings = cameraWarnings;
 
   if (!params.vocal) {
     // `resolveInstrumentalVideoModel` is also the fallback used here
