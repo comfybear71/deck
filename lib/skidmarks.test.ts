@@ -1643,6 +1643,7 @@ function chainSegment(overrides: Partial<SkidmarksClipSegment> & { id: string; p
     label: "verse",
     model: "grok",
     shotPrompt: "",
+    negativePrompt: "",
     uncensoredPlateStills: false,
     selectedPlateId: null,
     ...overrides,

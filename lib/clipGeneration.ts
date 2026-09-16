@@ -378,13 +378,14 @@ export interface ClipGenerationRequest {
    * given, stored per-plate) or this module's automatic motion routing
    * hint, plus a band/no-text/no-watermark footer. */
   prompt: string;
-  /** A locked vocalist's `negativeCues` (Jack Ash today), when present —
-   * only ever set on the Vocal/Comfy-LTX path. Sent to the workflow's
-   * own real negative-conditioning node (`lib/comfyCloud.ts`'s
+  /** A locked vocalist's `negativeCues` (Jack Ash today) and/or Stuart's
+   * own typed `userNegativePrompt`, joined with `", "` when both are
+   * present — only ever set on the Vocal/Comfy-LTX path. Sent to the
+   * workflow's own real negative-conditioning node (`lib/comfyCloud.ts`'s
    * `IA2V_NODE_NEGATIVE_PROMPT`), appended onto its default negative
    * text rather than replacing it. Omitted entirely for an Instrumental
-   * request or a Vocal one with no locked vocalist — nothing here
-   * invents negative text for a character with no lock. */
+   * request, or a Vocal one with neither a locked vocalist nor a typed
+   * negative prompt — nothing here invents negative text on its own. */
   negativePrompt?: string;
   /** Present only on a locked character's clip, Vocal or Instrumental —
    * see `ClipCameraWarnings`. Ignored by the server. */
@@ -528,6 +529,18 @@ export interface BuildClipGenerationRequestParams {
    * `"h3"` default). Ignored entirely on a Vocal request; that path
    * always means Comfy Cloud LTX. */
   instrumentalVideoModel?: SkidmarksInstrumentalVideoModel;
+  /** Stuart's own typed/pasted "what to keep out of this shot" text —
+   * `lib/skidmarks.ts`'s `SkidmarksClipSegment.negativePrompt`. Merged
+   * onto the built request's real `negativePrompt` alongside a locked
+   * character's own `negativeCues` (both can be present at once) —
+   * **only when `vocal` is true**. There is no equivalent real
+   * negative-prompt channel on the Instrumental path in this app (see
+   * `ClipGenerationRequest.negativePrompt`'s doc comment) — passing this
+   * on an Instrumental request is harmless but has no effect, since
+   * nothing downstream reads it there; it isn't merged in at all rather
+   * than building a request that looks like it does something it
+   * doesn't. */
+  userNegativePrompt?: string;
 }
 
 /** Camera-movement *warnings* for a locked character's clip, Vocal or
@@ -801,6 +814,10 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   const negativeCueParts = [
     params.vocal ? lock?.negativeCues : undefined,
     lockedVocal ? LOCKED_CHARACTER_SOLO_SHOT_NEGATIVE_CUES : undefined,
+    // Stuart's own typed/pasted negative prompt — Vocal/LTX only, see
+    // `BuildClipGenerationRequestParams.userNegativePrompt`'s doc
+    // comment for why this never reaches an Instrumental request.
+    params.vocal ? params.userNegativePrompt?.trim() : undefined,
   ].filter((cue): cue is string => Boolean(cue));
   if (negativeCueParts.length > 0) request.negativePrompt = negativeCueParts.join(", ");
   if (locked) request.cameraWarnings = cameraWarnings;

@@ -89,6 +89,12 @@ interface SkidmarksClipRenderProps {
    * `SkidmarksClipStub`'s textarea edits; this control reads it, it
    * doesn't add a second prompt field. */
   shotPrompt: string;
+  /** The clip's shared negative-prompt text (`SkidmarksClipSegment
+   * .negativePrompt`) — same "one shared field, edited elsewhere,
+   * this control just reads it" shape as `shotPrompt`. Only reaches a
+   * real model on a Vocal render — see `lib/clipGeneration.ts`'s
+   * `BuildClipGenerationRequestParams.userNegativePrompt` doc comment. */
+  negativePrompt: string;
   bandName: string;
   /** The *selected* plate's still, and nothing else — `null` when no
    * plate on this clip is filled yet, in which case this component
@@ -254,6 +260,7 @@ function Spinner() {
  */
 export function SkidmarksClipRender({
   shotPrompt,
+  negativePrompt,
   bandName,
   plateStillDataUrl,
   motionPrompt,
@@ -326,9 +333,21 @@ export function SkidmarksClipRender({
       instrumentalVideoModel,
       vocalist,
       mp3AudioUrl,
+      userNegativePrompt: negativePrompt,
     });
     return describeClipPayload(request, plateStillDataUrl ?? "", motionPrompt);
-  }, [shotPrompt, bandName, plateStillDataUrl, motionPrompt, durationSec, vocal, instrumentalVideoModel, vocalist, mp3AudioUrl]);
+  }, [
+    shotPrompt,
+    negativePrompt,
+    bandName,
+    plateStillDataUrl,
+    motionPrompt,
+    durationSec,
+    vocal,
+    instrumentalVideoModel,
+    vocalist,
+    mp3AudioUrl,
+  ]);
 
   if (!plateStillDataUrl) return null;
 
@@ -381,6 +400,7 @@ export function SkidmarksClipRender({
         instrumentalVideoModel,
         vocalist,
         mp3AudioUrl,
+        userNegativePrompt: negativePrompt,
         segmentId,
         plateId,
         plateIndex,
