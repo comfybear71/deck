@@ -577,13 +577,38 @@ function lockedCharacterVideoNote(): string {
  * before it was lost, not new wording invented here. Prepended ahead of
  * the shot/motion/character-lock text below, Vocal/LTX clips only —
  * never on an Instrumental/Grok/H3 clip, which has no lip-sync and no
- * "start image as first frame" contract to state. */
+ * "start image as first frame" contract to state. Used as-is only when
+ * there's no locked character in this clip — see
+ * `VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER` below for why a locked
+ * character needs a different wording of this exact same lock. */
 const VOCAL_LTX_PROMPT_LOCK =
   "perfect lip sync, clear lip movement, citing the dialogue clearly, facial expressions and hand gestures are " +
   "lively, dication is perfect. Use the provided start image as the first frame. Same people as the start image " +
   "for the entire clip. Highly detailed stylised 3D animated feature render, clean simplified forms, believable " +
   "materials, soft overcast lighting, shallow depth of field, cinematic quality, sharp focus. Not photographic, " +
   "not a cartoon, not a photoreal human. Camera holds.";
+
+/** Real bug found 2026-09-16 from a live render: Jack Ash's shadow-face
+ * lock was still losing to a normal, lit, photoreal human face on some
+ * clips even after the darkness/camera-speed fixes above. Root cause —
+ * this exact prompt was telling the model two contradictory things in
+ * the same breath: `VOCAL_LTX_PROMPT_LOCK`'s "facial expressions ... are
+ * lively" (asking for a visible, expressive, legible face) right next to
+ * `lockedCharacterVideoNote()`'s "his face never becomes legible,
+ * well-lit ... at any point" (asking for the opposite). Given that
+ * contradiction across a very long prompt, the model was free to resolve
+ * it by picking the lit-face reading. A locked character has no visible
+ * face to be expressive with — only his glowing lips and his body do
+ * that job — so for a locked character this drops "facial expressions"
+ * entirely rather than asking for it and then forbidding it. Everything
+ * else stays byte-for-byte identical to `VOCAL_LTX_PROMPT_LOCK`. */
+const VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER =
+  "perfect lip sync through his glowing neon-blue lips, clear lip movement, citing the dialogue clearly, hand " +
+  "gestures are lively, dication is perfect. His face itself is never lit or expressive — it stays a solid " +
+  "black shadow the whole time, with only his glowing lips visible. Use the provided start image as the first " +
+  "frame. Same person as the start image for the entire clip. Highly detailed stylised 3D animated feature " +
+  "render, clean simplified forms, believable materials, soft overcast lighting, shallow depth of field, " +
+  "cinematic quality, sharp focus. Not photographic, not a cartoon, not a photoreal human. Camera holds.";
 
 /**
  * Builds the one real clip-render request this feature ever sends —
@@ -609,7 +634,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   // does — real reported failure, 2026-09-15: Jack Ash's face resolving
   // into a normal, lit human face on every single Vocal clip.
   const parts = [
-    params.vocal ? VOCAL_LTX_PROMPT_LOCK : "",
+    params.vocal ? (lock ? VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER : VOCAL_LTX_PROMPT_LOCK) : "",
     params.shotPrompt.trim(),
     trimmedMotionPrompt || automaticMotionHint(Boolean(params.vocal && lock)),
     params.vocal && lock ? (lock.videoPromptHallmarks ?? lock.promptHallmarks) : "",
