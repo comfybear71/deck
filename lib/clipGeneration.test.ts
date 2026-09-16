@@ -569,11 +569,10 @@ describe("prompt assembly: Stuart's text on top, no hidden camera moves", () => 
     expect(prompt).toBe("empty hallway, door ajar Music video for Stu Balls. no on-screen text, no watermark.");
   });
 
-  it("P4: Jack vocal keeps the lock text (shadow face, neon lips, solo) and camera verbs only if he wrote them", () => {
+  it("P4: Jack vocal keeps the lock text (shadow face, neon lips) and camera verbs only if he wrote them", () => {
     const blank = buildClipGenerationRequest({ ...baseParams });
     expect(blank.prompt.toLowerCase()).toContain("neon");
     expect(blank.prompt.toLowerCase()).toContain("shadow");
-    expect(blank.prompt).toContain("Solo shot");
     expect(blank.prompt).not.toMatch(cameraVerbs);
 
     const typed = buildClipGenerationRequest({ ...baseParams, motionPrompt: "slow zoom onto his lips" });
@@ -595,10 +594,23 @@ describe("prompt assembly: Stuart's text on top, no hidden camera moves", () => 
     expect(prompt.toLowerCase()).not.toContain("orbit");
   });
 
-  it("the solo-shot and no-motion footer lines never leak onto a non-Jack render", () => {
+  it("the no-motion footer line never leaks onto a non-Jack render", () => {
     const { prompt } = buildClipGenerationRequest({ ...baseParams, vocal: false, vocalist: undefined, shotPrompt: "crowd at the bar" });
-    expect(prompt).not.toContain("Solo shot");
     expect(prompt).not.toContain("Cinematic motion");
+  });
+
+  it("real bug (2026-09-16 live render): the 'no other people' rule no longer names 'other people'/'extra characters' inside the positive prompt — that's what let a second head sneak in — it goes out as real negative conditioning instead", () => {
+    const { prompt, negativePrompt } = buildClipGenerationRequest({ ...baseParams });
+    expect(prompt).not.toContain("Solo shot");
+    expect(prompt.toLowerCase()).not.toContain("extra characters");
+    expect(negativePrompt?.toLowerCase()).toContain("second person");
+    expect(negativePrompt?.toLowerCase()).toContain("extra head");
+  });
+
+  it("never sends the solo-shot negative cues for a vocalist with no registered lock", () => {
+    const nova = member({ id: "solar-rebel-vocals", name: "Nova" });
+    const { negativePrompt } = buildClipGenerationRequest({ ...baseParams, vocalist: nova });
+    expect(negativePrompt).toBeUndefined();
   });
 
   it("motionPromptMovesCamera catches zoom/push-in/orbit/pan/tracking/swerve wording", () => {
