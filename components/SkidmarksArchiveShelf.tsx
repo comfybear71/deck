@@ -1,9 +1,11 @@
 "use client";
 
+import { SkidmarksConfirmDialog } from "./SkidmarksConfirmDialog";
 import { useEffect, useState } from "react";
 import {
   buildArchiveZip,
   fetchArchiveSnapshot,
+  deleteSkidmarksArchivedSong,
   fetchSkidmarksArchiveIndex,
   type SkidmarksArchivedSong,
 } from "@/lib/skidmarksArchive";
@@ -68,6 +70,20 @@ export function SkidmarksArchiveShelf({ onOpenInEditor, refreshToken }: Skidmark
   const [listError, setListError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<SkidmarksArchivedSong | null>(null);
+
+  const performDelete = async (song: SkidmarksArchivedSong) => {
+    if (busyId) return;
+    setBusyId(song.id);
+    setRowError(null);
+    const outcome = await deleteSkidmarksArchivedSong(song.id);
+    if (outcome.ok) {
+      setSongs((prev) => (prev ? prev.filter((s) => s.id !== song.id) : prev));
+    } else {
+      setRowError({ id: song.id, message: `Couldn't delete — ${outcome.message}. The song is still on the shelf.` });
+    }
+    setBusyId(null);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -186,6 +202,15 @@ export function SkidmarksArchiveShelf({ onOpenInEditor, refreshToken }: Skidmark
                   >
                     Download zip
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendingDelete(song)}
+                    disabled={busyId === song.id}
+                    aria-label={`Delete ${song.fileName} (archived ${formatArchivedAt(song.archivedAt)}) from Finished Songs`}
+                    className="min-h-[36px] shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3 text-[12px] font-medium text-white/50 transition-colors hover:border-rose-400/30 hover:text-rose-300/90 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Delete
+                  </button>
                 </div>
 
                 {rowError?.id === song.id && (
@@ -198,6 +223,22 @@ export function SkidmarksArchiveShelf({ onOpenInEditor, refreshToken }: Skidmark
           </div>
         </>
       )}
+      <SkidmarksConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete this archived copy?"
+        body={
+          pendingDelete
+            ? `${pendingDelete.fileName}, archived ${formatArchivedAt(pendingDelete.archivedAt)} (${pendingDelete.clipCount} clips, ${pendingDelete.renderedPlateCount} rendered). This deletes that checkpoint for good. Other copies of the same song, and whatever is on your desk, are not touched.`
+            : ""
+        }
+        confirmLabel="Delete this copy"
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          const target = pendingDelete;
+          setPendingDelete(null);
+          if (target) void performDelete(target);
+        }}
+      />
     </div>
   );
 }

@@ -38,6 +38,7 @@ import {
   setSkidmarksClipPlateMotionPrompt,
   setSkidmarksClipPlateStill,
   setSkidmarksMemberAvatarImage,
+  setSkidmarksMemberLock,
   setSkidmarksMp3AudioUrl,
   setSkidmarksMp3Duration,
   setSkidmarksScriptSequence,
@@ -52,6 +53,7 @@ import {
   type SkidmarksClipSentPayload,
   type SkidmarksInstrumentalVideoModel,
   type SkidmarksLook,
+  type SkidmarksMemberLockCard,
   type SkidmarksMp3Attachment,
   type SkidmarksPlateStill,
   type SkidmarksProjectKind,
@@ -139,6 +141,12 @@ export function useSkidmarksStudio() {
     (bandId: string, memberId: string) => removeSkidmarksMember(bandId, memberId),
     []
   );
+  /** A member's own editable lock card — see `setSkidmarksMemberLock`. */
+  const setMemberLock = useCallback(
+    (bandId: string, memberId: string, lock: SkidmarksMemberLockCard) => setSkidmarksMemberLock(bandId, memberId, lock),
+    []
+  );
+
   const renameMember = useCallback(
     (bandId: string, memberId: string, name: string) =>
       renameSkidmarksMember(bandId, memberId, name),
@@ -389,6 +397,7 @@ export function useSkidmarksStudio() {
     addMember,
     removeMember,
     renameMember,
+    setMemberLock,
     renameBand,
     setBandCoverImage,
     setMemberAvatarImage,

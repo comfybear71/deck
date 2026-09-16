@@ -728,3 +728,47 @@ describe("generatePlateStill", () => {
     });
   });
 });
+
+/** Per-artist lock card (2026-09-16): a member's own card is the lock. */
+describe("getSkidmarksCharacterLock with a member's own lock card", () => {
+  it("a new artist with a filled card is locked, on both channels", () => {
+    const nova = member({
+      id: "solar-rebel-vocals",
+      name: "Nova",
+      lock: { lookRules: "Always a chrome visor covering the eyes, silver bob, red jacket.", neverShow: "visible eyes, a second person" },
+    });
+    const lock = getSkidmarksCharacterLock(nova);
+    expect(lock?.promptHallmarks).toBe("Always a chrome visor covering the eyes, silver bob, red jacket.");
+    expect(lock?.negativeCues).toBe("visible eyes, a second person");
+    expect(lock?.directorNote).toBe("Always a chrome visor covering the eyes, silver bob, red jacket");
+  });
+
+  it("a new artist with no card, or a blank card, has no lock", () => {
+    expect(getSkidmarksCharacterLock(member({ id: "solar-rebel-vocals", name: "Nova" }))).toBeUndefined();
+    expect(getSkidmarksCharacterLock(member({ id: "solar-rebel-vocals", name: "Nova", lock: { lookRules: "   ", neverShow: "eyes" } }))).toBeUndefined();
+  });
+
+  it("Jack Ash keeps the built-in lock while his card is blank, and his card overrides it once filled", () => {
+    const jack = member({ id: "jack-ash-frontman", name: "Jack Ash" });
+    expect(getSkidmarksCharacterLock(jack)?.promptHallmarks).toContain("fedora");
+    const edited = member({ id: "jack-ash-frontman", name: "Jack Ash", lock: { lookRules: "Red fedora now.", neverShow: "" } });
+    expect(getSkidmarksCharacterLock(edited)?.promptHallmarks).toBe("Red fedora now.");
+    expect(getSkidmarksCharacterLock(edited)?.negativeCues).toBeUndefined();
+    expect(getSkidmarksCharacterLock("jack-ash-frontman")?.promptHallmarks).toContain("fedora"); // id lookup unchanged
+  });
+
+  it("a card-locked artist gets the lock text on a Vocal still, same as Jack", () => {
+    const nova = member({ id: "solar-rebel-vocals", name: "Nova", avatarImage: "https://blob.example/nova.jpg", lock: { lookRules: "Chrome visor always on.", neverShow: "visible eyes" } });
+    const { prompt, referenceImageDataUrls, featuresLockedCharacter } = buildPlateGenerationRequest({
+      shotPrompt: "Nova at the mic",
+      vocal: true,
+      model: "ltx-lipsync",
+      bandName: "Solar Rebel",
+      vocalist: nova,
+    });
+    expect(prompt).toContain("Chrome visor always on.");
+    expect(prompt).toContain("Do not show: visible eyes.");
+    expect(referenceImageDataUrls).toEqual(["https://blob.example/nova.jpg"]);
+    expect(featuresLockedCharacter).toBe(true);
+  });
+});

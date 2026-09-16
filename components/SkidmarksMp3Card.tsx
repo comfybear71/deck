@@ -1,5 +1,6 @@
 "use client";
 
+import { SkidmarksConfirmDialog } from "./SkidmarksConfirmDialog";
 import { useEffect, useRef, useState } from "react";
 import {
   formatDuration,
@@ -213,7 +214,10 @@ export function SkidmarksMp3Card({
     }
   };
 
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
   const handleRemove = () => {
+    setConfirmRemove(false);
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioUrl(null);
     setProgress(0);
@@ -281,7 +285,7 @@ export function SkidmarksMp3Card({
 
         <button
           type="button"
-          onClick={handleRemove}
+          onClick={() => setConfirmRemove(true)}
           aria-label="Remove MP3"
           className="shrink-0 rounded-full p-1 text-white/30 transition-colors hover:bg-white/10 hover:text-white/70"
         >
@@ -343,6 +347,14 @@ export function SkidmarksMp3Card({
           onClose={() => setLyricsOpen(false)}
         />
       )}
+      <SkidmarksConfirmDialog
+        open={confirmRemove}
+        title="Remove this song from the desk?"
+        body="The MP3, its lyrics, every clip, prompt and plate on the desk go with it. Tap Archive first if you want to keep this song on the Finished Songs shelf."
+        confirmLabel="Remove song"
+        onCancel={() => setConfirmRemove(false)}
+        onConfirm={handleRemove}
+      />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { getSkidmarksCharacterLock } from "@/lib/plateGeneration";
 import { useRef, useState } from "react";
 import {
   flushSkidmarksSessionNow,
@@ -8,6 +9,7 @@ import {
   readImageFileAsDataUrl,
   type SkidmarksBand,
   type SkidmarksMember,
+  type SkidmarksMemberLockCard,
 } from "@/lib/skidmarks";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 
@@ -16,6 +18,8 @@ interface SkidmarksMembersModuleProps {
   onOpenMember: (memberId: string) => void;
   onAddMember: () => void;
   onRemoveMember: (memberId: string) => void;
+  /** Writes a member's own lock card — see `SkidmarksMemberLockCard`. */
+  onSetMemberLock: (memberId: string, lock: SkidmarksMemberLockCard) => void;
   onSetMemberAvatarImage: (memberId: string, dataUrl: string) => void;
   onRenameBand: (name: string) => void;
 }
@@ -151,6 +155,83 @@ function RemoveMemberButton({
   );
 }
 
+/**
+ * The per-artist lock card (2026-09-16 ask: a second artist must be
+ * lockable in the app, not in code). Two plain boxes. Whatever is in
+ * "What must stay true" is sent on every render this member is in;
+ * "Never show" goes on the negative channel. For Jack Ash the built-in
+ * lock stays active while his card is blank, and his card overrides it
+ * the moment it has text.
+ */
+function MemberLockCardEditor({
+  member,
+  open,
+  onToggle,
+  onChange,
+}: {
+  member: SkidmarksMember;
+  open: boolean;
+  onToggle: () => void;
+  onChange: (lock: SkidmarksMemberLockCard) => void;
+}) {
+  const card = member.lock ?? { lookRules: "", neverShow: "" };
+  const builtIn = getSkidmarksCharacterLock(member.id);
+  const active = card.lookRules.trim().length > 0 ? "own" : builtIn ? "built-in" : "none";
+  const label = active === "own" ? "Lock card: on" : active === "built-in" ? "Lock card: built-in" : "Lock card: none";
+  return (
+    <div className="pb-2 pl-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className={[
+          "min-h-[32px] rounded-full border px-3 text-[11px] font-medium transition-colors",
+          active === "none"
+            ? "border-white/10 text-white/45 hover:text-white/70"
+            : "border-emerald-400/30 bg-emerald-400/10 text-emerald-200/90",
+        ].join(" ")}
+      >
+        {label} {open ? "\u25b4" : "\u25be"}
+      </button>
+      {open && (
+        <div className="mt-2 flex flex-col gap-2">
+          <label className="flex flex-col gap-1 text-[11px] text-white/50">
+            What must stay true (sent on every render {member.name.trim() || "this member"} is in)
+            <textarea
+              value={card.lookRules}
+              onChange={(e) => onChange({ ...card, lookRules: e.target.value.slice(0, 1200) })}
+              onBlur={() => flushSkidmarksSessionNow()}
+              rows={4}
+              placeholder={builtIn ? "Blank = the built-in lock below stays active. Type here to replace it." : "e.g. Always a wide-brim black fedora, face fully in shadow, glowing neon-blue lips, solo, never looks at the lens."}
+              className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-white placeholder:text-white/30 focus:border-emerald-400/40 focus:outline-none"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] text-white/50">
+            Never show (negative prompt)
+            <textarea
+              value={card.neverShow}
+              onChange={(e) => onChange({ ...card, neverShow: e.target.value.slice(0, 600) })}
+              onBlur={() => flushSkidmarksSessionNow()}
+              rows={2}
+              placeholder="e.g. a lit face, visible eyes, teeth, a second person, a bare head"
+              className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-white placeholder:text-white/30 focus:border-emerald-400/40 focus:outline-none"
+            />
+          </label>
+          {active === "built-in" && builtIn && (
+            <details className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2">
+              <summary className="cursor-pointer text-[11px] text-white/50">Built-in lock text (active now)</summary>
+              <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-white/45">{builtIn.promptHallmarks}</p>
+              {builtIn.negativeCues && (
+                <p className="mt-1 text-[11px] leading-relaxed text-white/35">Never show: {builtIn.negativeCues}</p>
+              )}
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MemberRow({
   member,
   onOpen,
@@ -232,10 +313,12 @@ export function SkidmarksMembersModule({
   onOpenMember,
   onAddMember,
   onRemoveMember,
+  onSetMemberLock,
   onSetMemberAvatarImage,
   onRenameBand,
 }: SkidmarksMembersModuleProps) {
   const canAddMore = band.members.length < MAX_MEMBERS_PER_BAND;
+  const [lockEditorMemberId, setLockEditorMemberId] = useState<string | null>(null);
 
   const handlePickPhoto = async (memberId: string, file: File) => {
     try {
@@ -273,13 +356,20 @@ export function SkidmarksMembersModule({
         />
         <div className="flex flex-col divide-y divide-white/[0.06]">
           {band.members.map((member) => (
-            <MemberRow
-              key={member.id}
-              member={member}
-              onOpen={() => onOpenMember(member.id)}
-              onRemove={() => onRemoveMember(member.id)}
-              onPickPhoto={(file) => handlePickPhoto(member.id, file)}
-            />
+            <div key={member.id}>
+              <MemberRow
+                member={member}
+                onOpen={() => onOpenMember(member.id)}
+                onRemove={() => onRemoveMember(member.id)}
+                onPickPhoto={(file) => handlePickPhoto(member.id, file)}
+              />
+              <MemberLockCardEditor
+                member={member}
+                open={lockEditorMemberId === member.id}
+                onToggle={() => setLockEditorMemberId((v) => (v === member.id ? null : member.id))}
+                onChange={(lock) => onSetMemberLock(member.id, lock)}
+              />
+            </div>
           ))}
         </div>
       </div>

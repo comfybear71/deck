@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { SkidmarksConfirmDialog } from "./SkidmarksConfirmDialog";
 import {
   buildForceDownloadUrl,
   buildRendersZip,
@@ -142,14 +143,15 @@ export function SkidmarksRenderedClipsShelf({ renders, onRemoved }: SkidmarksRen
 
   const list = sortPersistedRenders(Array.from(renders.values()));
 
-  const handleRemove = async (render: PersistedClipRender) => {
+  const [pendingRemove, setPendingRemove] = useState<PersistedClipRender | null>(null);
+
+  const performRemove = async (render: PersistedClipRender) => {
     const key = persistedRenderKey(render.segmentId, render.plateId);
     if (removingKey) return;
     // Real reported accident (2026-09-15): Remove sits right next to
     // Download in a horizontally-scrolling row — an ordinary scroll
     // gesture on a phone can land on it and delete a render with no
     // way back. One confirm before the real delete call.
-    if (!window.confirm(`Remove this rendered clip (${render.filename})? This can't be undone.`)) return;
     setRemovingKey(key);
     setRemoveErrors((prev) => {
       if (!(key in prev)) return prev;
@@ -249,7 +251,7 @@ export function SkidmarksRenderedClipsShelf({ renders, onRemoved }: SkidmarksRen
                       </a>
                       <button
                         type="button"
-                        onClick={() => handleRemove(render)}
+                        onClick={() => setPendingRemove(render)}
                         disabled={removing}
                         aria-disabled={removing}
                         aria-label={`Remove this rendered clip (${render.filename}) \u2014 keeps the plate still`}
@@ -301,6 +303,18 @@ export function SkidmarksRenderedClipsShelf({ renders, onRemoved }: SkidmarksRen
           )}
         </>
       )}
+      <SkidmarksConfirmDialog
+        open={pendingRemove !== null}
+        title="Remove this rendered clip?"
+        body={pendingRemove ? `${pendingRemove.filename} will be deleted from the shelf and from storage. This can't be undone. The plate still and prompt stay.` : ""}
+        confirmLabel="Remove clip"
+        onCancel={() => setPendingRemove(null)}
+        onConfirm={() => {
+          const target = pendingRemove;
+          setPendingRemove(null);
+          if (target) void performRemove(target);
+        }}
+      />
     </div>
   );
 }

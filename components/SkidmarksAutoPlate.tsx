@@ -185,7 +185,7 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
         // for the xAI path. This used to stay `undefined` for every
         // Siray target, silently dropping the lock the moment a later
         // plate continued from it via "Use last plate".
-        featuresLockedCharacter = Boolean(getSkidmarksCharacterLock(vocalist.id));
+        featuresLockedCharacter = Boolean(getSkidmarksCharacterLock(vocalist));
         const sirayPrompt = buildSirayCharacterPrompt(target.shotPrompt, vocalist);
         outcome = await generatePlateStillViaSiray(sirayPrompt, vocalist.avatarImage);
       } else {

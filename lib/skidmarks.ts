@@ -231,6 +231,26 @@ export interface SkidmarksMember {
    * generated look in the avatar — it's his actual picture, not a mock. */
   avatarImage?: string;
   looks: SkidmarksLook[];
+  /** This member's own editable lock card — see `SkidmarksMemberLockCard`.
+   * When `lookRules` is non-blank it *is* the character lock for every
+   * render this member appears in (and overrides the built-in Jack Ash
+   * lock for that member). Blank/absent means "no lock" for a new
+   * artist, or the built-in one for Jack. */
+  lock?: SkidmarksMemberLockCard;
+}
+
+/**
+ * A per-artist lock card Stuart writes in the app (2026-09-16 ask:
+ * a second artist must be lockable without a code change). Plain
+ * sentences; sent on every render the member is in, same channels as
+ * the built-in Jack Ash lock — `lookRules` on the positive prompt,
+ * `neverShow` on the negative node.
+ */
+export interface SkidmarksMemberLockCard {
+  /** "What must stay true": fedora, silhouette, neon lips… */
+  lookRules: string;
+  /** "Never show": a lit face, eyes, a second person… */
+  neverShow: string;
 }
 
 export interface SkidmarksBand {
@@ -2678,6 +2698,16 @@ export function removeSkidmarksMember(bandId: string, memberId: string): void {
 
 /** Sets a member's display name — how a blank "+ Add member" row gets
  * filled in, via the generate popup's name field. */
+/** Writes a member's own lock card — see `SkidmarksMemberLockCard`. */
+export function setSkidmarksMemberLock(bandId: string, memberId: string, lock: SkidmarksMemberLockCard): void {
+  const current = getSkidmarksSnapshot();
+  const bands = current.bands.map((b) => {
+    if (b.id !== bandId) return b;
+    return { ...b, members: b.members.map((m) => (m.id === memberId ? { ...m, lock } : m)) };
+  });
+  persist({ ...current, bands });
+}
+
 export function renameSkidmarksMember(
   bandId: string,
   memberId: string,
