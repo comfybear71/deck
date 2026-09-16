@@ -562,9 +562,12 @@ function lockedCharacterVideoNote(): string {
     "featureless frame is wrong here, not the goal \u2014 deep near-black shadow with one visible anchor point " +
     "is. He must never resolve into a normal, visible human face at any zoom level. While he's singing, the " +
     "camera itself stays calm and slow \u2014 no fast pans, whips, or rapid circling around his head; quick " +
-    "camera movement around his face is what breaks the shadow lock. The energy of the shot comes from his " +
-    "own small, natural body movement instead: a slight head nod in time with the vocal, tilting his head up " +
-    "and to the side, relaxed hand gestures, a light foot tap \u2014 not from big or sudden motion of any kind."
+    "camera movement around his face is what breaks the shadow lock. This overrides any camera-movement " +
+    "language elsewhere in this description \u2014 a tracking shot, a swerving or sweeping camera move, an " +
+    "orbiting or circling shot, a whip pan \u2014 whatever else is described, the camera stays calm and steady " +
+    "on him while he's singing, full stop. The energy of the shot comes from his own small, natural body " +
+    "movement instead: a slight head nod in time with the vocal, tilting his head up and to the side, relaxed " +
+    "hand gestures, a light foot tap \u2014 not from big or sudden motion of any kind."
   );
 }
 

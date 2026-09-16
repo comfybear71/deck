@@ -69,9 +69,10 @@ function run(
   deps: ScriptSequenceRunnerDeps,
   mp3AudioUrl?: string,
   vocalist?: SkidmarksMember,
-  startAtClipIndex?: number
+  startAtClipIndex?: number,
+  shouldStop?: () => boolean
 ) {
-  return runScriptSequence(segments, "Stu Balls", deps, mp3AudioUrl, vocalist, startAtClipIndex);
+  return runScriptSequence(segments, "Stu Balls", deps, mp3AudioUrl, vocalist, startAtClipIndex, shouldStop);
 }
 
 describe("runScriptSequence", () => {
@@ -190,14 +191,11 @@ describe("runScriptSequence", () => {
     expect(deps.setPlateStill).toHaveBeenCalledTimes(2);
   });
 
-  it("real follow-up ask (2026-09-15): a locked vocalist chains within a batch of clips, then generates a fresh scene still at the batch boundary", async () => {
-    // 5 parts crosses one LOCKED_CHARACTER_CHAIN_BATCH_SIZE (3) boundary
-    // and into the start of the next batch: clip1->2, clip2->3 stay
-    // chained (real continuity for up to 3 clips in a row); clip3->4
-    // generates a fresh still for clip 4's own scene instead of reusing
-    // the same static reference photo every time ("that's not
-    // satisfactory" — Stuart's own follow-up); clip4->5 chains again,
-    // starting the next batch's own continuity.
+  it("real reverted ask (2026-09-16, backed by Stuart's own manual testing): a locked vocalist chains continuously, same as an unlocked one", async () => {
+    // Camera-motion fixes (Camera holds, no full-black frame) turned out
+    // to be the actual fix for the original drift disaster, not the
+    // chaining itself — Stuart's own manual last-frame chaining held up
+    // fine once those landed, so the batch-reset compromise is gone.
     const segments = buildScriptSequenceSegments(fiveParts(), []);
     const jackAsh = member({
       id: "jack-ash-frontman",
@@ -210,81 +208,41 @@ describe("runScriptSequence", () => {
 
     const chainFills = chainFillCalls(deps, segments[0].id);
     expect(chainFills).toHaveLength(4); // clip1->2, 2->3, 3->4, 4->5
-
-    const [toClip2, toClip3, toClip4, toClip5] = chainFills;
-    for (const still of [toClip2, toClip3]) {
+    for (const still of chainFills) {
       expect(still.dataUrl).toBe("https://blob.example/clip-lastframe.jpg");
       expect(still.source).toBe("chained");
       expect(still.featuresLockedCharacter).toBeUndefined();
     }
-    // A freshly generated still for clip 4's own scene, not the static
-    // avatarImage, uploaded the same way clip 1's own first still is.
-    expect(toClip4.dataUrl).not.toBe("https://blob.example/jack-ash-reference.jpg");
-    expect(toClip4.source).toBe("generated");
-    expect(toClip4.featuresLockedCharacter).toBe(true);
-    expect(toClip5.dataUrl).toBe("https://blob.example/clip-lastframe.jpg");
-    expect(toClip5.source).toBe("chained");
-
-    // Went through the same locked-character still pipeline as clip 1's
-    // own first still — clip 4's own shot prompt, not a generic one.
-    expect(deps.generateFirstStill).toHaveBeenCalledWith("part four", "Stu Balls", false, jackAsh);
   });
 
-  it("falls back to the static reference photo at a batch boundary when generating a fresh scene still fails", async () => {
-    const segments = buildScriptSequenceSegments(fiveParts(), []);
-    const jackAsh = member({
-      id: "jack-ash-frontman",
-      name: "Jack Ash",
-      avatarImage: "https://blob.example/jack-ash-reference.jpg",
-    });
-    const generateFirstStill = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true as const, dataUrl: "data:image/jpeg;base64,first" }) // clip 1's own first still
-      .mockResolvedValue({ ok: false as const, message: "Siray unavailable" }); // every batch-boundary attempt after
-    const deps = fakeDeps({ generateFirstStill });
-
-    const outcome = await run(segments, deps, undefined, jackAsh);
-
-    expect(outcome.ok).toBe(true);
-    const chainFills = chainFillCalls(deps, segments[0].id);
-    const toClip4 = chainFills[2];
-    expect(toClip4.dataUrl).toBe("https://blob.example/jack-ash-reference.jpg");
-    expect(toClip4.source).toBe("generated");
-    expect(toClip4.featuresLockedCharacter).toBe(true);
-  });
-
-  it("falls back to the locked reference photo mid-batch when the server couldn't capture a last frame, instead of failing the run", async () => {
-    // threeParts, not fiveParts: stays clear of the real batch boundary
-    // at clip 4 so this test isolates just the missing-last-frame
-    // safety net at clip1->clip2, which is not a real batch boundary
-    // (1 % LOCKED_CHARACTER_CHAIN_BATCH_SIZE !== 0) and so never
-    // attempts a fresh generation — it uses the static photo directly.
+  it("real ask (2026-09-16): a locked vocalist with no captured last frame stops honestly, same as an unlocked vocalist — no silent fallback photo", async () => {
     const segments = buildScriptSequenceSegments(threeParts(), []);
     const jackAsh = member({
       id: "jack-ash-frontman",
       name: "Jack Ash",
       avatarImage: "https://blob.example/jack-ash-reference.jpg",
     });
-    const renderClip = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, videoUrl: "https://blob.example/1.mp4", persisted: true }) // no lastFrameUrl
-      .mockResolvedValue({
-        ok: true,
-        videoUrl: "https://blob.example/clip.mp4",
-        persisted: true,
-        lastFrameUrl: "https://blob.example/clip-lastframe.jpg",
-      });
+    const renderClip = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      videoUrl: "https://blob.example/1.mp4",
+      persisted: true,
+      // no lastFrameUrl — server-side extraction didn't succeed.
+    });
     const deps = fakeDeps({ renderClip });
 
     const outcome = await run(segments, deps, undefined, jackAsh);
 
-    expect(outcome.ok).toBe(true);
-    const chainFills = chainFillCalls(deps, segments[0].id);
-    // clip1->2 hits the missing-last-frame safety net, not a real batch
-    // boundary — stays the plain static photo, no extra generation call.
-    expect(chainFills[0].dataUrl).toBe("https://blob.example/jack-ash-reference.jpg");
-    expect(chainFills[0].source).toBe("generated");
-    expect(deps.generateFirstStill).toHaveBeenCalledTimes(1); // clip 1's own first still only
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(0);
+      expect(outcome.message).toContain("couldn't capture");
+      expect(outcome.renderedCount).toBe(1); // clip 1 itself did render successfully
+    }
+    expect(renderClip).toHaveBeenCalledTimes(1); // never reaches clip 2 — no starting frame for it, no substitute either
+    // No fallback still was ever written — silently swapping in his
+    // reference photo instead of the missing last frame was the exact
+    // "lazy" behavior this reverted.
+    expect(chainFillCalls(deps, segments[0].id)).toHaveLength(0);
   });
 
   it("keeps chaining the real last frame for a vocalist with no registered character lock", async () => {
@@ -325,6 +283,43 @@ describe("runScriptSequence", () => {
   it("returns an honest failure for an empty segment list rather than silently succeeding", async () => {
     const outcome = await run([] as SkidmarksClipSegment[], fakeDeps());
     expect(outcome.ok).toBe(false);
+  });
+
+  it("real ask (2026-09-16): stops before the next clip starts once shouldStop returns true, never mid-render", async () => {
+    const segments = buildScriptSequenceSegments(threeParts(), []);
+    const deps = fakeDeps();
+    // Flips true only after clip 1 has already rendered — proves the
+    // stop is checked *before* clip 2 starts, not mid-clip-1.
+    let stopNow = false;
+    const shouldStop = () => stopNow;
+    deps.renderClip = vi.fn(async () => {
+      stopNow = true;
+      return {
+        ok: true as const,
+        videoUrl: "https://blob.example/1.mp4",
+        persisted: true,
+        lastFrameUrl: "https://blob.example/1-lastframe.jpg",
+      };
+    });
+
+    const outcome = await run(segments, deps, undefined, undefined, undefined, shouldStop);
+
+    expect(outcome).toEqual({
+      ok: false,
+      stopped: true,
+      failedAtClipIndex: 1,
+      message: "Stopped before clip 2 — no more clips will render.",
+      renderedCount: 1,
+    });
+    expect(deps.renderClip).toHaveBeenCalledTimes(1); // clip 1 finished; clip 2 never started
+    expect(deps.recordRender).toHaveBeenCalledTimes(1); // clip 1's real, already-paid-for render is still kept
+  });
+
+  it("never stops when shouldStop is omitted — every existing caller/test is unaffected", async () => {
+    const segments = buildScriptSequenceSegments(threeParts(), []);
+    const deps = fakeDeps();
+    const outcome = await run(segments, deps);
+    expect(outcome).toEqual({ ok: true, renderedCount: 3 });
   });
 
   describe("real reported ask (2026-09-14): resuming a partially-completed run without re-spending on already-rendered clips", () => {

@@ -29,24 +29,7 @@
 import { SKIDMARKS_SEGMENT_LABEL_META, type SkidmarksClipSegment, type SkidmarksMember, type SkidmarksPlateStill } from "./skidmarks";
 import type { PersistedClipRender } from "./clipRenders";
 import { buildClipGenerationRequest } from "./clipGeneration";
-import { getSkidmarksCharacterLock } from "./plateGeneration";
 
-/**
- * Reset a locked character's chain back to his own reference photo
- * every this-many clips, instead of never chaining at all. Stuart's
- * own middle-ground ask (2026-09-15): chaining every clip's last frame
- * forever compounds drift across a whole song (real disaster, see the
- * chaining block below); resetting on literally every clip removes all
- * continuity between shots and reads as static/repetitive over a full
- * 30-clip song. Chaining in small batches — a few clips sharing one
- * continuous scene, then a fresh reset before the next — keeps real
- * movement and scene continuity while capping how far any one bad
- * frame can compound before it's wiped out by the next reset. Set to
- * 3 (Stuart's own follow-up number, same day): a script should plan
- * for a fresh plate/new scenery at least every 3 clips to line up
- * with this reset — see the script-writing rules doc.
- */
-const LOCKED_CHARACTER_CHAIN_BATCH_SIZE = 3;
 
 export interface ScriptSequenceRunnerDeps {
   /** Resolves any still's `dataUrl` (already-`data:`, or a real Blob
@@ -100,7 +83,7 @@ export type ScriptSequenceRunEvent =
 
 export type ScriptSequenceRunOutcome =
   | { ok: true; renderedCount: number }
-  | { ok: false; failedAtClipIndex: number; message: string; renderedCount: number };
+  | { ok: false; failedAtClipIndex: number; message: string; renderedCount: number; stopped?: boolean };
 
 const SCRIPT_SEQUENCE_DURATION_SEC = 15;
 
@@ -144,7 +127,16 @@ export async function runScriptSequence(
   deps: ScriptSequenceRunnerDeps,
   mp3AudioUrl: string | undefined,
   vocalist: SkidmarksMember | undefined,
-  startAtClipIndex: number = 0
+  startAtClipIndex: number = 0,
+  /** Checked before every clip starts rendering (never mid-render — a
+   * render already in flight has already been paid for, stopping
+   * partway through it wastes that spend for nothing and still leaves
+   * a plate with no video). Real ask (2026-09-16): a way to interrupt a
+   * long "Generate & render all" batch the moment something looks
+   * wrong, instead of it burning through every remaining clip's worth
+   * of real credits before Stuart can react. `undefined` (the default)
+   * never stops early — existing callers/tests are unaffected. */
+  shouldStop?: () => boolean
 ): Promise<ScriptSequenceRunOutcome> {
   const report = (event: ScriptSequenceRunEvent) => deps.onProgress?.(event);
 
@@ -173,6 +165,15 @@ export async function runScriptSequence(
   }
 
   for (let i = Math.max(0, Math.min(startAtClipIndex, segments.length)); i < segments.length; i++) {
+    if (shouldStop?.()) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: `Stopped before clip ${i + 1} — no more clips will render.`,
+        renderedCount: i,
+        stopped: true,
+      };
+    }
     const segment = segments[i];
     const plate = segment.plates[0];
     const still = plate?.still;
@@ -253,30 +254,29 @@ export async function runScriptSequence(
     report({ type: "chaining", clipIndex: i, clipCount: segments.length });
 
     // Real reported disaster (2026-09-15): chaining every clip's last
-    // frame into the next blindly compounds drift — one clip losing the
-    // shadow-face lock even slightly means the *next* clip starts from
-    // an already-part-human frame and drifts further, and by clip 20 of
-    // 21 the locked character "doesn't even exist" anymore, all chained
-    // from one early slip. First fix reset a genuinely locked character
-    // (Jack Ash) back to his own reference photo on *every* clip — safe,
-    // but Stuart's own follow-up ask (same day): a whole song of clips
-    // that never chain reads as static/boring, nobody wants to watch
-    // that. Now chains within batches of `LOCKED_CHARACTER_CHAIN_BATCH_SIZE`
-    // clips (real continuity for a few shots at a time) and only resets
-    // to the reference photo at each batch boundary — caps how far any
-    // one bad frame can compound instead of ever letting it run for the
-    // whole song, while still giving real movement between clips.
-    const lockedVocalistReference =
-      vocalist && getSkidmarksCharacterLock(vocalist.id) && vocalist.avatarImage ? vocalist.avatarImage : undefined;
-    const startsNewBatch = (i + 1) % LOCKED_CHARACTER_CHAIN_BATCH_SIZE === 0;
-    // A locked reference is always a safe fallback, so it's also used
-    // whenever there's simply no last frame to chain from (the server
-    // couldn't extract one) — not just at a batch boundary. An unlocked
-    // vocalist with no last frame is the one real failure case, same as
-    // before this batching change.
-    const resetToReference = Boolean(lockedVocalistReference) && (startsNewBatch || !outcome.lastFrameUrl);
-
-    if (!resetToReference && !outcome.lastFrameUrl) {
+    // frame into the next blindly compounds drift when the camera swings
+    // around/zooms during the render itself — one clip losing the
+    // shadow-face lock a little means the next clip starts from an
+    // already-part-human frame and drifts further. Two rounds of fixes
+    // since then landed at the actual source: the camera-motion rules
+    // (`lib/clipGeneration.ts`'s `lockedCharacterVideoNote`/
+    // `automaticMotionHint` — camera holds, no full-black frame, no
+    // rapid movement around his head). With those in place, Stuart's
+    // own manual testing (screenshotting each render's last frame and
+    // re-uploading it as the next clip's start, by hand) chained
+    // continuously with no reset and held up fine — proving the
+    // resetting-every-few-clips compromise built after the disaster
+    // (2026-09-15/16) was solving the wrong layer of the problem.
+    // Reverted 2026-09-16 (direct ask, backed by that real evidence):
+    // back to continuous chaining for a locked character too, same as
+    // an unlocked vocalist always has — no special-cased fallback to
+    // his reference photo either, on the same direct instruction, same
+    // day: silently swapping in a different photo he didn't choose when
+    // a capture genuinely failed is "lazy," not a real fix. If the
+    // server can't capture a last frame, this stops honestly and says
+    // so — identical to how an unlocked vocalist has always behaved —
+    // rather than papering over it with a substitute.
+    if (!outcome.lastFrameUrl) {
       return {
         ok: false,
         failedAtClipIndex: i,
@@ -285,50 +285,10 @@ export async function runScriptSequence(
       };
     }
 
-    let resetStill: SkidmarksPlateStill | undefined;
-    if (resetToReference) {
-      // Real follow-up ask (2026-09-15): reusing the exact same static
-      // reference photo at every batch reset is repetitive — "that's
-      // not satisfactory." At a genuine batch boundary (not the missing-
-      // last-frame safety net below), generate a fresh still for the
-      // *next* clip's own scene instead, through the same locked-
-      // character still pipeline clip 1's own first still already uses
-      // (`deps.generateFirstStill` — full shadow-face lock hallmarks,
-      // not a bare unlocked prompt). A single still generation is far
-      // lower-risk than a multi-second video render: no motion, no
-      // camera, nothing to drift over time. Falls back to the plain
-      // static reference photo on any generation failure — strictly no
-      // worse than before this change, never blocks the run over it.
-      const nextVocal = SKIDMARKS_SEGMENT_LABEL_META[nextSegment.label]?.vocal ?? false;
-      if (startsNewBatch && vocalist) {
-        const freshOutcome = await deps.generateFirstStill(nextSegment.shotPrompt, bandName, nextVocal, vocalist);
-        if (freshOutcome.ok) {
-          const uploadOutcome = await deps.uploadStill(freshOutcome.dataUrl);
-          resetStill = {
-            dataUrl: uploadOutcome.ok ? uploadOutcome.url : freshOutcome.dataUrl,
-            source: "generated",
-            createdAt: Date.now(),
-            featuresLockedCharacter: true,
-          };
-        }
-      }
-      if (!resetStill) {
-        // `lockedVocalistReference` is the member's own already-durable
-        // `avatarImage`, not a fresh `data:` URL needing an upload.
-        resetStill = {
-          dataUrl: lockedVocalistReference!,
-          source: "generated",
-          createdAt: Date.now(),
-          featuresLockedCharacter: true,
-        };
-      }
-    }
-
-    // `outcome.lastFrameUrl` is already a durable Blob URL (server-side
-    // extraction — see this module's doc comment) — no upload left to
-    // do here.
-    const chainedStill: SkidmarksPlateStill = resetStill ?? {
-      dataUrl: outcome.lastFrameUrl!,
+    // Already a durable Blob URL (server-side extraction — see this
+    // module's doc comment) — no upload left to do here.
+    const chainedStill: SkidmarksPlateStill = {
+      dataUrl: outcome.lastFrameUrl,
       source: "chained",
       createdAt: Date.now(),
     };
