@@ -1096,6 +1096,15 @@ export interface SkidmarksMp3Attachment {
    * only governs whether playback also survives a refresh. */
   audioPersistStatus?: "uploading" | "done" | "unconfigured" | "failed";
   audioPersistError?: string;
+  /** `computeSkidmarksArchiveFingerprint(band, mp3)` of the exact
+   * band+mp3 pair most recently saved to (or opened from) Finished
+   * Songs. While the live pair still hashes to this value, nothing has
+   * changed since that checkpoint — so New/switch-band/"Open in
+   * editor" can clear the desk without uploading a duplicate row, and
+   * a second tap of Archive can say so honestly instead of listing the
+   * same song twice. Never blocks anything: a mismatch (or absence)
+   * just means "archive it first." Excluded from its own hash. */
+  lastArchivedFingerprint?: string;
 }
 
 /**
@@ -1805,6 +1814,14 @@ interface LocalMirrorEnvelope {
    * `updatedAt` on hydrate so whichever copy is actually newer wins,
    * never just whichever one happened to load. */
   savedAt: number;
+  /** `true` from the moment a real edit lands until the exact same
+   * state has been confirmed saved to Neon (`pushSkidmarksSessionNow`
+   * rewrites the mirror with `false` once the PUT succeeds and nothing
+   * newer has been edited since). This — not the phone's clock — is
+   * the honest "this phone holds work the server doesn't" signal
+   * `resolveSkidmarksHydrationWinner` trusts first; the timestamp
+   * comparison is only the tie-breaker for a mirror that *was* synced. */
+  unsynced?: boolean;
 }
 
 /** Best-effort, synchronous, never throws — private-mode Safari, a full
@@ -1814,10 +1831,10 @@ interface LocalMirrorEnvelope {
  * else here blocks on. Only ever mirrors *substantive* state (never the
  * pristine seed) so a mirror read can never come back as "real data"
  * when there wasn't any. */
-function writeLocalMirror(state: SkidmarksState): void {
+function writeLocalMirror(state: SkidmarksState, unsynced = true): void {
   if (!isBrowser() || !sessionHasSubstantiveContent(state)) return;
   try {
-    const envelope: LocalMirrorEnvelope = { state, savedAt: Date.now() };
+    const envelope: LocalMirrorEnvelope = { state, savedAt: Date.now(), unsynced };
     window.localStorage.setItem(LOCAL_MIRROR_STORAGE_KEY, JSON.stringify(envelope));
   } catch {
     // Quota exceeded, private mode, or storage disabled — nothing to do.
@@ -1839,7 +1856,9 @@ function readLocalMirrorWithTimestamp(): LocalMirrorEnvelope | null {
     const parsed = JSON.parse(raw) as Partial<LocalMirrorEnvelope>;
     if (typeof parsed.savedAt !== "number" || !parsed.state) return null;
     const state = normalizeState(parsed.state);
-    return sessionHasSubstantiveContent(state) ? { state, savedAt: parsed.savedAt } : null;
+    return sessionHasSubstantiveContent(state)
+      ? { state, savedAt: parsed.savedAt, unsynced: parsed.unsynced === true }
+      : null;
   } catch {
     return null;
   }
@@ -1878,6 +1897,72 @@ function noteContentObserved(state: SkidmarksState): void {
  */
 export function shouldPushSkidmarksSession(everHadSubstantiveContent: boolean, currentIsSubstantive: boolean): boolean {
   return !everHadSubstantiveContent || currentIsSubstantive;
+}
+
+export interface SkidmarksHydrationCandidates {
+  /** Whether any real `persist()` landed while the `GET` was in flight. */
+  editedDuringLoad: boolean;
+  /** What this page currently holds (booted from the local mirror, plus
+   * any edits since) — is it a real session, or still seed-only? */
+  localIsSubstantive: boolean;
+  /** The local mirror's own `unsynced` flag — `true` means this phone
+   * has an edit Neon never confirmed. `false` when there's no mirror. */
+  localUnsynced: boolean;
+  /** The local mirror's `savedAt`, or `null` when there's no mirror. */
+  localSavedAt: number | null;
+  /** Whether Neon's row is a real session (not `null`/seed-only). */
+  remoteIsSubstantive: boolean;
+  /** Neon's own `updated_at`, or `null` when unknown/unparseable. */
+  remoteUpdatedAt: number | null;
+}
+
+/**
+ * **Pure, directly testable** — the one decision that used to be
+ * spread across three `if`s in `hydrateSkidmarksSessionOnce`, and the
+ * fix for the audit's known failure mode #3 ("app boots empty, then
+ * loads Neon; tap too early, or save empty over full, wipes the row"):
+ *
+ * - A real session in Neon **always** beats a seed-only local state,
+ *   even when Stuart tapped a tile while the load was in flight. His
+ *   tap on the demo state is worth nothing next to a real song; the
+ *   old rule discarded the real song for it, and then the very next
+ *   push had nothing substantive-seen to guard against, so the seed
+ *   state went up and overwrote the row.
+ * - Two real sessions: local wins when it has work Neon hasn't
+ *   confirmed (an edit during the load, or a mirror still flagged
+ *   `unsynced`), or when its own timestamp is newer than Neon's (the
+ *   clock-based tie-breaker, kept for a mirror that was synced but
+ *   whose later PUT never got its response). Otherwise Neon wins — the
+ *   ordinary reopen after a clean save, and the "another device saved
+ *   more recently" case.
+ * - Nothing real in Neon: local wins if it's real, otherwise it doesn't
+ *   matter (both are seed).
+ */
+export function resolveSkidmarksHydrationWinner(c: SkidmarksHydrationCandidates): "local" | "remote" {
+  if (!c.remoteIsSubstantive) return c.localIsSubstantive ? "local" : "remote";
+  if (!c.localIsSubstantive) return "remote";
+  if (c.editedDuringLoad || c.localUnsynced) return "local";
+  if (c.localSavedAt !== null && (c.remoteUpdatedAt === null || c.localSavedAt > c.remoteUpdatedAt)) return "local";
+  return "remote";
+}
+
+/** Whether the one-time hydrate has reached a terminal outcome (applied
+ * Neon's row, kept local, or failed honestly). **No `PUT` is ever sent
+ * before this is `true`** — see `pushSkidmarksSessionNow`. Before the
+ * hydrate settles, this page load doesn't yet know what Neon holds, so
+ * a push could only ever be a blind overwrite of it. Pushes requested
+ * in that window are queued (`pushQueued`) and drained the moment the
+ * hydrate settles. Always `true` outside a browser (tests, SSR), where
+ * no hydrate ever runs and no push ever leaves the process anyway. */
+let hydrationSettled = false;
+
+function settleHydration(): void {
+  if (hydrationSettled) return;
+  hydrationSettled = true;
+  if (pushQueued && !pushInFlight) {
+    pushQueued = false;
+    void pushSkidmarksSessionNow();
+  }
 }
 
 
@@ -1996,11 +2081,16 @@ export function stripUnsyncableImageBytesForWire(state: SkidmarksState): Skidmar
       })
     : null;
 
+  const draft = state.session.scriptSequenceDraft;
+  const draftChanged = draft?.startingImageUrl?.startsWith("data:") ?? false;
+  changed = changed || draftChanged;
+
   if (!changed) return state;
+  const session = mp3 && segments ? { ...state.session, mp3: { ...mp3, segments } } : state.session;
   return {
     ...state,
     bands,
-    session: mp3 && segments ? { ...state.session, mp3: { ...mp3, segments } } : state.session,
+    session: draftChanged && draft ? { ...session, scriptSequenceDraft: { ...draft, startingImageUrl: undefined } } : session,
   };
 }
 
@@ -2021,19 +2111,26 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
   if (hydrationStarted || !isBrowser()) return;
   hydrationStarted = true;
   const editsAtStart = localEditCount;
+  // `getSkidmarksSnapshot` already booted `cachedState` from the local
+  // mirror (if any) before the first render, so "local" below is never
+  // the bare seed state when this phone holds a real session.
+  const mirrorAtStart = readLocalMirrorWithTimestamp();
 
-  // Applies `state` only if Stuart hasn't already started editing the
-  // honest empty state while this load was in flight — see
-  // `shouldApplyHydratedSkidmarksSession`'s doc comment. Returns
-  // whether it actually applied, so a caller (the recovery path below)
-  // knows whether it's also safe to push what it just applied.
-  const applyIfSafe = (state: SkidmarksState): boolean => {
-    if (!shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount)) return false;
-    cachedState = state;
-    noteContentObserved(state);
-    writeLocalMirror(state);
+  const local = (): SkidmarksState => cachedState ?? emptyState();
+  const localIsSubstantive = () => sessionHasSubstantiveContent(local());
+
+  // Neon unreachable/unconfigured/thrown: nothing to reconcile against.
+  // Keep whatever's on this phone (the mirror boot already did that);
+  // only fall back to the one-time pre-#57 legacy blob when there's
+  // still nothing real to show.
+  const recoverLocallyOnly = () => {
+    if (localIsSubstantive()) return;
+    const recovered = readLegacySkidmarksLocalStorageSession();
+    if (!recovered) return;
+    cachedState = recovered;
+    noteContentObserved(recovered);
+    writeLocalMirror(recovered);
     notify();
-    return true;
   };
 
   try {
@@ -2041,14 +2138,7 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     const body = (await res.json().catch(() => null)) as SessionGetRouteBody | null;
 
     if (!res.ok || !body || body.configured !== true) {
-      // Neon itself isn't reachable/configured right now — still worth
-      // showing a real prior session over the seed demo data if one's
-      // sitting on this phone: the live mirror first (current, kept up
-      // to date by every `persist()`), the one-time pre-#57 legacy blob
-      // only if there's no mirror — even though neither can be durably
-      // saved back to Neon yet from here.
-      const recovered = readLocalMirror() ?? readLegacySkidmarksLocalStorageSession();
-      if (recovered) applyIfSafe(recovered);
+      recoverLocallyOnly();
       setSessionSync({
         status: "unconfigured",
         error: typeof body?.error === "string" ? body.error : `HTTP ${res.status}`,
@@ -2057,71 +2147,69 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     }
 
     const fetched = body.state == null ? null : normalizeState(body.state);
+    const fetchedUpdatedAt = typeof body.updatedAt === "string" ? Date.parse(body.updatedAt) : NaN;
+    // The legacy pre-#57 blob only ever matters when neither side has
+    // anything real — read it into "local" for the decision below.
+    if (!localIsSubstantive()) recoverLocallyOnly();
+
+    const winner = resolveSkidmarksHydrationWinner({
+      editedDuringLoad: !shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount),
+      localIsSubstantive: localIsSubstantive(),
+      localUnsynced: mirrorAtStart?.unsynced ?? false,
+      localSavedAt: mirrorAtStart?.savedAt ?? null,
+      remoteIsSubstantive: !!fetched && sessionHasSubstantiveContent(fetched),
+      remoteUpdatedAt: Number.isNaN(fetchedUpdatedAt) ? null : fetchedUpdatedAt,
+    });
+
+    if (winner === "local") {
+      // This phone holds the real/newer copy — make Neon match it.
+      // Nothing to apply; `cachedState` is already what's on screen.
+      if (localIsSubstantive()) {
+        noteContentObserved(local());
+        settleHydration();
+        await pushSkidmarksSessionNow();
+      } else {
+        setSessionSync({ status: "synced" });
+      }
+      return;
+    }
+
     if (fetched && sessionHasSubstantiveContent(fetched)) {
-      // Neon has real content — but a save can have failed silently
-      // right up until this exact load (2026-09-16 direct instruction:
-      // "if local is newer or has more real work than Neon, show local
-      // and push that up"). The local mirror is written synchronously
-      // on every real edit — if it's timestamped *after* Neon's own
-      // `updatedAt`, Neon's copy is the stale one, not the real one.
-      const fetchedUpdatedAt = typeof body.updatedAt === "string" ? Date.parse(body.updatedAt) : NaN;
-      const mirror = readLocalMirrorWithTimestamp();
-      if (mirror && (Number.isNaN(fetchedUpdatedAt) || mirror.savedAt > fetchedUpdatedAt)) {
-        if (applyIfSafe(mirror.state)) {
-          await pushSkidmarksSessionNow();
-          return;
-        }
-      }
-      // Neon already has real content and is at least as fresh as this
-      // phone's own mirror — the ordinary case, including every load
-      // after the one-time recovery below has already run.
-      const applied = applyIfSafe(fetched);
+      cachedState = fetched;
+      noteContentObserved(fetched);
+      writeLocalMirror(fetched, false);
+      notify();
       setSessionSync({ status: "synced" });
-      if (applied) {
-        // Best-effort, non-blocking — never delays showing "synced" for
-        // what's usually a no-op. See `migrateInlineSessionImagesToBlob`'s
-        // own doc comment for the real 413 this closes for a session
-        // that predates the 2026-09-14 Blob fixes.
-        void migrateInlineSessionImagesToBlob(fetched).then(({ state: migrated, changed }) => {
-          if (!changed) return;
-          if (!shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount)) return;
-          cachedState = migrated;
-          writeLocalMirror(migrated);
-          notify();
-          void pushSkidmarksSessionNow();
-        });
-      }
+      // Best-effort, non-blocking — never delays showing "synced" for
+      // what's usually a no-op. See `migrateInlineSessionImagesToBlob`'s
+      // own doc comment for the real 413 this closes for a session
+      // that predates the 2026-09-14 Blob fixes.
+      const editsAtApply = localEditCount;
+      void migrateInlineSessionImagesToBlob(fetched).then(({ state: migrated, changed }) => {
+        if (!changed) return;
+        if (!shouldApplyHydratedSkidmarksSession(editsAtApply, localEditCount)) return;
+        cachedState = migrated;
+        writeLocalMirror(migrated);
+        notify();
+        void pushSkidmarksSessionNow();
+      });
       return;
     }
 
-    // Neon has nothing real yet — either a true "never saved" `null`,
-    // or a row that itself never got past the seed state. Recover a
-    // real prior local session if one exists (the live mirror first,
-    // the one-time pre-#57 legacy blob otherwise), and push it to Neon
-    // immediately so it becomes durable there too — the migration step
-    // #57 should have shipped with. `pushSkidmarksSessionNow` sets its
-    // own terminal `sessionSync` status, so nothing further to set here
-    // once it resolves.
-    const recovered = readLocalMirror() ?? readLegacySkidmarksLocalStorageSession();
-    if (recovered && applyIfSafe(recovered)) {
-      await pushSkidmarksSessionNow();
-      return;
-    }
-
+    // Neither side has anything real — a genuinely fresh studio.
     setSessionSync({ status: "synced" });
   } catch (err) {
     // Real confirmed failure mode (2026-09-16): a thrown `fetch` here
     // used to leave `cachedState` at its initial seed value with no
     // recovery at all — looking exactly like a wiped session even
     // though the mirror on this same phone still had the real one.
-    // Same recovery as the branches above: prefer the live mirror,
-    // fall back to the one-time legacy blob.
-    const recovered = readLocalMirror() ?? readLegacySkidmarksLocalStorageSession();
-    if (recovered) applyIfSafe(recovered);
+    recoverLocallyOnly();
     setSessionSync({
       status: "error",
       error: err instanceof Error ? err.message : "Could not load the saved session.",
     });
+  } finally {
+    settleHydration();
   }
 }
 
@@ -2165,6 +2253,12 @@ let pushQueued = false;
 const SESSION_PUSH_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
 
 async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
+  if (isBrowser() && !hydrationSettled) {
+    // Never a blind overwrite of a Neon row this page load hasn't read
+    // yet — see `hydrationSettled`. Drained by `settleHydration`.
+    pushQueued = true;
+    return;
+  }
   if (pushInFlight) {
     pushQueued = true;
     return;
@@ -2252,6 +2346,10 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
             error: `${typeof body.error === "string" ? body.error : `HTTP ${res.status}`} (payload ${payloadSizeMb}MB)`,
           });
         } else {
+          // Neon now holds exactly `preStrip`. If nothing newer landed
+          // while the request was out, the mirror can drop its
+          // `unsynced` flag — see `LocalMirrorEnvelope.unsynced`.
+          if (preStrip && cachedState === preStrip) writeLocalMirror(preStrip, false);
           setSessionSync({ status: "synced", lastSavedAt: Date.now() });
         }
         return;
@@ -2400,7 +2498,17 @@ function ensureSessionPersistenceWired(): void {
 let cachedState: SkidmarksState | null = null;
 
 export function getSkidmarksSnapshot(): SkidmarksState {
-  if (!cachedState) cachedState = emptyState();
+  if (!cachedState) {
+    // First read of this page load: start from this phone's own last
+    // known real session (the local mirror), never from the seed demo
+    // state, so the very first paint already shows real work and a
+    // tap before Neon answers lands on top of it rather than on a
+    // blank studio. `hydrateSkidmarksSessionOnce` then reconciles this
+    // against Neon — see `resolveSkidmarksHydrationWinner`.
+    const mirrored = readLocalMirror();
+    cachedState = mirrored ?? emptyState();
+    if (mirrored) noteContentObserved(mirrored);
+  }
   return cachedState;
 }
 
@@ -3392,11 +3500,51 @@ export function restoreSkidmarksArchivedSession(band: SkidmarksBand, mp3: Skidma
   const bands = current.bands.some((b) => b.id === band.id)
     ? current.bands.map((b) => (b.id === band.id ? band : b))
     : [band, ...current.bands];
+  // What's now live is byte-for-byte what's on the Finished Songs shelf
+  // — record that, so leaving this song again doesn't upload a second
+  // identical row (see `SkidmarksMp3Attachment.lastArchivedFingerprint`).
+  const restoredMp3: SkidmarksMp3Attachment = { ...mp3, lastArchivedFingerprint: computeSkidmarksArchiveFingerprint(band, mp3) };
   persist({
     ...current,
     bands,
-    session: { projectKind: "music-video", bandId: band.id, mp3, scriptSequenceDraft: null },
+    session: { projectKind: "music-video", bandId: band.id, mp3: restoredMp3, scriptSequenceDraft: null },
   });
+}
+
+/**
+ * Cheap, deterministic content hash (FNV-1a, 32-bit, hex) of the exact
+ * band+mp3 pair an archive snapshot would carry — `lastArchivedFingerprint`
+ * itself is excluded so recording the hash doesn't change the hash.
+ * Pure; same inputs always give the same string.
+ */
+export function computeSkidmarksArchiveFingerprint(band: SkidmarksBand, mp3: SkidmarksMp3Attachment): string {
+  const { lastArchivedFingerprint: _ignored, ...rest } = mp3;
+  void _ignored;
+  const text = JSON.stringify({ band, mp3: rest });
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${text.length.toString(16)}-${hash.toString(16).padStart(8, "0")}`;
+}
+
+/** Whether the live band+mp3 pair is already on the Finished Songs
+ * shelf unchanged — i.e. a fresh Archive would only duplicate a row. */
+export function isSkidmarksSessionAlreadyArchived(band: SkidmarksBand, mp3: SkidmarksMp3Attachment): boolean {
+  return !!mp3.lastArchivedFingerprint && mp3.lastArchivedFingerprint === computeSkidmarksArchiveFingerprint(band, mp3);
+}
+
+/** Records that the live band+mp3 pair was just saved to Finished
+ * Songs — called right after a successful `archiveSkidmarksSession`.
+ * No-op if the mp3 has changed identity since (a late result landing
+ * on a different attach), same `attachId` guard every async setter
+ * here uses. */
+export function markSkidmarksSessionArchived(attachId: string, fingerprint: string): void {
+  const current = getSkidmarksSnapshot();
+  const mp3 = current.session.mp3;
+  if (!mp3 || mp3.attachId !== attachId) return;
+  persist({ ...current, session: { ...current.session, mp3: { ...mp3, lastArchivedFingerprint: fingerprint } } });
 }
 
 /** Clears the live workspace back to "choose a band" right after a

@@ -191,11 +191,7 @@ describe("runScriptSequence", () => {
     expect(deps.setPlateStill).toHaveBeenCalledTimes(2);
   });
 
-  it("real reverted ask (2026-09-16, backed by Stuart's own manual testing): a locked vocalist chains continuously, same as an unlocked one", async () => {
-    // Camera-motion fixes (Camera holds, no full-black frame) turned out
-    // to be the actual fix for the original drift disaster, not the
-    // chaining itself — Stuart's own manual last-frame chaining held up
-    // fine once those landed, so the batch-reset compromise is gone.
+  it("audit test J4: a locked vocalist chains inside a 3-clip scene block, then clip 4 starts from a fresh generated still of its own scene", async () => {
     const segments = buildScriptSequenceSegments(fiveParts(), []);
     const jackAsh = member({
       id: "jack-ash-frontman",
@@ -204,15 +200,68 @@ describe("runScriptSequence", () => {
     });
     const deps = fakeDeps();
 
-    await run(segments, deps, undefined, jackAsh);
+    const outcome = await run(segments, deps, undefined, jackAsh);
 
-    const chainFills = chainFillCalls(deps, segments[0].id);
-    expect(chainFills).toHaveLength(4); // clip1->2, 2->3, 3->4, 4->5
-    for (const still of chainFills) {
-      expect(still.dataUrl).toBe("https://blob.example/clip-lastframe.jpg");
-      expect(still.source).toBe("chained");
-      expect(still.featuresLockedCharacter).toBeUndefined();
+    expect(outcome.ok).toBe(true);
+    expect(deps.renderClip).toHaveBeenCalledTimes(5);
+    const fills = chainFillCalls(deps, segments[0].id);
+    expect(fills).toHaveLength(4); // clip1->2, 2->3 chained; clip 4 fresh; 4->5 chained
+    expect(fills[0].source).toBe("chained");
+    expect(fills[1].source).toBe("chained");
+    expect(fills[2].source).toBe("generated");
+    expect(fills[2].dataUrl).not.toBe("https://blob.example/clip-lastframe.jpg");
+    expect(fills[2].dataUrl).not.toBe("https://blob.example/jack-ash-reference.jpg"); // never the same master photo
+    expect(fills[3].source).toBe("chained");
+    // clip 1's still + clip 4's fresh scene still — generated from clip 4's own shot prompt.
+    expect(deps.generateFirstStill).toHaveBeenCalledTimes(2);
+    expect(deps.generateFirstStill).toHaveBeenLastCalledWith("part four", "Stu Balls", false, jackAsh);
+  });
+
+  it("audit test J5/L1: renders each script part at its own length, clamped 5\u201315s, never a hardcoded 15", async () => {
+    const parts = [
+      { index: 1, title: "A", startSec: 0, endSec: 10, prompt: "ten seconds" },
+      { index: 2, title: "B", startSec: 10, endSec: 13, prompt: "three seconds" },
+      { index: 3, title: "C", startSec: 13, endSec: 53, prompt: "forty seconds" },
+    ];
+    const segments = buildScriptSequenceSegments(parts, []);
+    const deps = fakeDeps();
+
+    await run(segments, deps);
+
+    const durations = (deps.renderClip as ReturnType<typeof vi.fn>).mock.calls.map(([request]) => (request as { durationSec: number }).durationSec);
+    expect(durations).toEqual([10, 5, 15]);
+  });
+
+  it("a resume landing on a clip with no still generates one first instead of failing", async () => {
+    const segments = buildScriptSequenceSegments(threeParts(), []);
+    const deps = fakeDeps();
+
+    const outcome = await run(segments, deps, undefined, undefined, 1);
+
+    expect(outcome.ok).toBe(true);
+    expect(deps.generateFirstStill).toHaveBeenCalledTimes(1);
+    expect(deps.generateFirstStill).toHaveBeenCalledWith("part two", "Stu Balls", false, undefined);
+    expect(deps.renderClip).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops honestly when the fresh scene still at a block boundary fails, keeping every render so far", async () => {
+    const segments = buildScriptSequenceSegments(fiveParts(), []);
+    const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: "https://blob.example/jack.jpg" });
+    const generateFirstStill = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, dataUrl: "data:image/jpeg;base64,first" })
+      .mockResolvedValueOnce({ ok: false, message: "still service down" });
+    const deps = fakeDeps({ generateFirstStill });
+
+    const outcome = await run(segments, deps, undefined, jackAsh);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(3);
+      expect(outcome.renderedCount).toBe(3);
+      expect(outcome.message).toContain("still service down");
     }
+    expect(deps.renderClip).toHaveBeenCalledTimes(3);
   });
 
   it("real ask (2026-09-16): a locked vocalist with no captured last frame stops honestly, same as an unlocked vocalist — no silent fallback photo", async () => {
@@ -372,22 +421,20 @@ describe("runScriptSequence", () => {
       });
     });
 
-    it("resuming from a clip with no starting image fails honestly rather than guessing", async () => {
+    it("resuming from a clip with no starting image generates that clip's own still first, then renders on", async () => {
       const segments = buildScriptSequenceSegments(threeParts(), []);
-      // Clip 2's plate has no still — never happens in the real chained
-      // flow, but this function shouldn't assume its caller got that
-      // right either.
+      // Clip 2's plate has no still — a run stopped right after clip 1,
+      // or a scene block whose fresh still failed. Resume has to be
+      // able to carry on from here without Stuart hand-filling a plate.
       const deps = fakeDeps();
 
       const outcome = await run(segments, deps, undefined, undefined, 1);
 
-      expect(outcome).toEqual({
-        ok: false,
-        failedAtClipIndex: 1,
-        message: "Clip 2 has no starting image to render from.",
-        renderedCount: 1,
-      });
-      expect(deps.renderClip).not.toHaveBeenCalled();
+      expect(outcome).toEqual({ ok: true, renderedCount: 3 });
+      expect(deps.generateFirstStill).toHaveBeenCalledTimes(1);
+      expect(deps.generateFirstStill).toHaveBeenCalledWith("part two", "Stu Balls", false, undefined);
+      // Only clips 2 and 3 — clip 1 was already paid for before the resume.
+      expect(deps.renderClip).toHaveBeenCalledTimes(2);
     });
   });
 

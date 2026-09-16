@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildClipGenerationRequest,
+  motionPromptMovesCamera,
   computeLtxPlateDurationSec,
   computePlateDurationSec,
   computePlateTimeRange,
@@ -495,6 +496,65 @@ describe("buildClipGenerationRequest", () => {
       });
       expect(prompt.toLowerCase()).not.toContain("neon blue");
     });
+  });
+});
+
+/**
+ * Camera hold (audit Rule B / test J1): a locked character's Vocal
+ * render always ends up with a static camera, whichever of the three
+ * places (default, typed motion note, script shot text) asked otherwise.
+ */
+describe("camera hold for a locked character's Vocal render", () => {
+  const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
+  const baseParams = {
+    shotPrompt: "Jack alone on the porch at dusk",
+    bandName: "Stu Balls",
+    plateStillDataUrl: "data:image/jpeg;base64,abc",
+    durationSec: 10,
+    vocal: true,
+    vocalist: jackAsh,
+    mp3AudioUrl: "https://blob.example/song.mp3",
+  };
+
+  it("motionPromptMovesCamera catches zoom/push-in/orbit/pan/tracking/swerve wording", () => {
+    for (const text of ["slow zoom into his hat", "push-in on the lips", "orbit around him", "pan left to the door", "tracking shot down the hall", "the camera swerves past"]) {
+      expect(motionPromptMovesCamera(text)).toBe(true);
+    }
+    expect(motionPromptMovesCamera("he nods slowly, taps his foot")).toBe(false);
+    expect(motionPromptMovesCamera("")).toBe(false);
+    expect(motionPromptMovesCamera(undefined)).toBe(false);
+  });
+
+  it("replaces a typed zoom/push-in motion note with the static-camera hint and says so", () => {
+    const request = buildClipGenerationRequest({ ...baseParams, motionPrompt: "slow push-in zoom onto his face" });
+    expect(request.prompt).not.toContain("push-in zoom onto his face");
+    expect(request.prompt).toContain("Camera holds \u2014 a static, locked-off frame");
+    expect(request.cameraHold).toEqual({ motionNoteReplaced: true, shotOverrideInserted: false });
+  });
+
+  it("keeps a typed motion note that only moves him, not the camera", () => {
+    const request = buildClipGenerationRequest({ ...baseParams, motionPrompt: "he tilts his head and taps his foot" });
+    expect(request.prompt).toContain("he tilts his head and taps his foot");
+    expect(request.cameraHold).toEqual({ motionNoteReplaced: false, shotOverrideInserted: false });
+  });
+
+  it("inserts an explicit camera override right after a script shot that describes a tracking/swerving camera", () => {
+    const request = buildClipGenerationRequest({ ...baseParams, shotPrompt: "Tracking shot swerving around Jack as he sings on the porch" });
+    const shotIndex = request.prompt.indexOf("Tracking shot swerving");
+    const overrideIndex = request.prompt.indexOf("Camera override: ignore any camera movement described in the shot above");
+    expect(shotIndex).toBeGreaterThanOrEqual(0);
+    expect(overrideIndex).toBeGreaterThan(shotIndex);
+    expect(request.cameraHold?.shotOverrideInserted).toBe(true);
+  });
+
+  it("never rewrites motion on an Instrumental render or for a band with no locked character", () => {
+    const instrumental = buildClipGenerationRequest({ ...baseParams, vocal: false, motionPrompt: "slow zoom into the keyhole" });
+    expect(instrumental.prompt).toContain("slow zoom into the keyhole");
+    expect(instrumental.cameraHold).toBeUndefined();
+    const nova = member({ id: "solar-rebel-vocals", name: "Nova" });
+    const unlocked = buildClipGenerationRequest({ ...baseParams, vocalist: nova, motionPrompt: "orbit around her" });
+    expect(unlocked.prompt).toContain("orbit around her");
+    expect(unlocked.cameraHold).toBeUndefined();
   });
 });
 

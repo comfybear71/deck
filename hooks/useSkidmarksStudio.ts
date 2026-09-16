@@ -19,6 +19,7 @@ import {
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
   markSkidmarksMp3AudioUnconfigured,
+  markSkidmarksSessionArchived,
   markSkidmarksTranscriptionFailed,
   markSkidmarksTranscriptionUnconfigured,
   nudgeSkidmarksSegmentEnd,
@@ -358,6 +359,13 @@ export function useSkidmarksStudio() {
     resetSkidmarksSessionAfterArchive();
   }, []);
 
+  /** Right after a successful Archive that left the desk alone — records
+   * that the live song is now on the shelf unchanged, so leaving it
+   * later doesn't upload the same checkpoint twice. */
+  const markSessionArchived = useCallback((attachId: string, fingerprint: string) => {
+    markSkidmarksSessionArchived(attachId, fingerprint);
+  }, []);
+
   return {
     bands: state.bands,
     session: state.session,
@@ -392,5 +400,6 @@ export function useSkidmarksStudio() {
     setClipInstrumentalModel,
     restoreArchivedSession,
     clearSessionAfterArchive,
+    markSessionArchived,
   };
 }

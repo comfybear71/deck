@@ -3,12 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
 import { useSkidmarksClipRenders } from "@/hooks/useSkidmarksClipRenders";
-import { buildGeneratedLook, flushSkidmarksSessionNow, resolveChainedPlateTarget } from "@/lib/skidmarks";
+import {
+  buildGeneratedLook,
+  computeSkidmarksArchiveFingerprint,
+  flushSkidmarksSessionNow,
+  isSkidmarksSessionAlreadyArchived,
+  resolveChainedPlateTarget,
+} from "@/lib/skidmarks";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 import {
   archiveSkidmarksSession,
   fetchArchiveSnapshot,
-  removeSkidmarksArchivedSong,
   type SkidmarksArchivedSong,
 } from "@/lib/skidmarksArchive";
 import { SkidmarksLandingTiles } from "./SkidmarksLandingTiles";
@@ -71,6 +76,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     setClipInstrumentalModel,
     restoreArchivedSession,
     clearSessionAfterArchive,
+    markSessionArchived,
   } = useSkidmarksStudio();
 
   const activeBand = bands.find((b) => b.id === session.bandId);
@@ -230,6 +236,14 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
    */
   const archiveBeforeSwitch = async (): Promise<boolean> => {
     if (!activeBand || !session.mp3) return true;
+    if (isSkidmarksSessionAlreadyArchived(activeBand, session.mp3)) {
+      // Byte-for-byte what's already on the Finished Songs shelf (a
+      // checkpoint just saved, or a song opened from the shelf and not
+      // touched since) — nothing to upload, and uploading anyway would
+      // only list the same song twice. Safe to clear.
+      clearSessionAfterArchive();
+      return true;
+    }
     setArchiving(true);
     setArchiveError(null);
     // `archiveSkidmarksSession` itself has no timeout (same as the
@@ -248,7 +262,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     const outcome = await Promise.race([archiveSkidmarksSession(activeBand, session.mp3, renders.size), timedOut]);
     setArchiving(false);
     if (!outcome.ok) {
-      setArchiveError(outcome.message);
+      setArchiveError(`${outcome.message} Your song is still here — nothing was cleared.`);
       return false;
     }
     clearSessionAfterArchive();
@@ -275,17 +289,24 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
    */
   const handleArchive = async () => {
     if (archiving || !activeBand || !session.mp3) return;
-    setArchiving(true);
     setArchiveError(null);
     setArchiveSuccessMessage(null);
+    if (isSkidmarksSessionAlreadyArchived(activeBand, session.mp3)) {
+      setArchiveSuccessMessage("Already on Finished Songs — nothing has changed since that checkpoint. Your desk is untouched.");
+      return;
+    }
+    const { attachId } = session.mp3;
+    const fingerprint = computeSkidmarksArchiveFingerprint(activeBand, session.mp3);
+    setArchiving(true);
     const outcome = await archiveSkidmarksSession(activeBand, session.mp3, renders.size);
     setArchiving(false);
     if (!outcome.ok) {
       setArchiveError(`Archive failed — ${outcome.message}. Nothing was cleared; still working on this same project.`);
       return;
     }
+    markSessionArchived(attachId, fingerprint);
     setArchiveRefreshToken((t) => t + 1);
-    setArchiveSuccessMessage("Saved a checkpoint to Finished Songs. This workspace is untouched — keep working, or start a new project whenever you're ready.");
+    setArchiveSuccessMessage("Archive copy saved to Finished Songs. It is also still on your desk — keep working, or start a new project whenever you're ready.");
   };
 
   const handleSelectBand = async (bandId: string) => {
@@ -315,20 +336,26 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
    * real message on that row rather than this function swallowing it.
    */
   const handleOpenInEditor = async (song: SkidmarksArchivedSong) => {
-    if (activeBand && session.mp3) {
-      const archiveOutcome = await archiveSkidmarksSession(activeBand, session.mp3, renders.size);
-      if (!archiveOutcome.ok) {
-        throw new Error(`Couldn't archive the current song first \u2014 ${archiveOutcome.message}`);
-      }
-      clearSessionAfterArchive();
-    }
-
+    // Fetch the snapshot *before* touching the live desk: if the
+    // download itself fails, nothing here has been archived or cleared
+    // for nothing.
     const snapshotOutcome = await fetchArchiveSnapshot(song.snapshotUrl);
     if (!snapshotOutcome.ok) {
       throw new Error(snapshotOutcome.message);
     }
+    if (activeBand && session.mp3 && !isSkidmarksSessionAlreadyArchived(activeBand, session.mp3)) {
+      const archiveOutcome = await archiveSkidmarksSession(activeBand, session.mp3, renders.size);
+      if (!archiveOutcome.ok) {
+        throw new Error(`Couldn't archive the current song first \u2014 ${archiveOutcome.message}. Your desk was not touched.`);
+      }
+    }
+    // The shelf row stays. Real, confirmed scare (2026-09-16): this used
+    // to delete the row the moment the song was opened, so the only
+    // durable copy of a song became the live session — and a failed
+    // session save after that point looked like the song was gone
+    // entirely. A checkpoint is a checkpoint; opening it is not
+    // deleting it (audit test L3: "Archive does not mean delete").
     restoreArchivedSession(snapshotOutcome.snapshot.band, snapshotOutcome.snapshot.mp3);
-    await removeSkidmarksArchivedSong(song.id);
     setArchiveRefreshToken((t) => t + 1);
   };
 
@@ -382,6 +409,22 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             </button>
           </div>
         </div>
+
+        {sessionSync.status === "loading" && (
+          <p role="status" className="mx-4 mb-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] leading-snug text-white/60">
+            Showing this phone\u2019s copy \u2014 checking the server for anything newer\u2026
+          </p>
+        )}
+
+        {sessionSync.status === "synced" && (
+          // Audit test S1 starts with "wait until the UI says saved" —
+          // so the UI has to actually say it, not just go quiet.
+          <p role="status" className="mx-4 mb-2 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1.5 text-[10px] leading-snug text-emerald-200/80">
+            {sessionSync.lastSavedAt
+              ? `Saved \u2713 ${new Date(sessionSync.lastSavedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} \u2014 safe to lock the phone or close Safari.`
+              : "Saved \u2713 \u2014 this is the latest copy on the server."}
+          </p>
+        )}
 
         {sessionSync.status === "saving" && (
           // Real live bug (2026-09-14): this row used to show *nothing*

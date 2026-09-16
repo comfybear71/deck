@@ -28,7 +28,8 @@
 
 import { SKIDMARKS_SEGMENT_LABEL_META, type SkidmarksClipSegment, type SkidmarksMember, type SkidmarksPlateStill } from "./skidmarks";
 import type { PersistedClipRender } from "./clipRenders";
-import { buildClipGenerationRequest } from "./clipGeneration";
+import { buildClipGenerationRequest, computePlateDurationSec, LTX_DURATION_BOUNDS } from "./clipGeneration";
+import { getSkidmarksCharacterLock } from "./plateGeneration";
 
 
 export interface ScriptSequenceRunnerDeps {
@@ -85,7 +86,55 @@ export type ScriptSequenceRunOutcome =
   | { ok: true; renderedCount: number }
   | { ok: false; failedAtClipIndex: number; message: string; renderedCount: number; stopped?: boolean };
 
-const SCRIPT_SEQUENCE_DURATION_SEC = 15;
+/**
+ * How many consecutive clips a locked character (Jack Ash) may chain
+ * last-frame → first-frame inside one scene before the next clip has
+ * to start from a freshly generated still of *its own* scene (audit
+ * Rule B / test J4: "max 3 clips in one place, then a new generated
+ * still in a new location"). Chaining carries lighting, framing and
+ * any small drift forward; capping the chain is what stops a full
+ * song's worth of compounding. Only applies when the vocalist has a
+ * registered character lock — an unlocked band chains freely.
+ */
+export const SCENE_BLOCK_CLIP_COUNT = 3;
+
+/**
+ * The real render length for one script part: its own `(start - end)`
+ * span, clamped into the Vocal (LTX) window — the same `[5, 15]`s both
+ * backends use. Audit test J5/L1: a 10s part renders about 10s, never
+ * a hardcoded 15. Pure.
+ */
+export function scriptClipDurationSec(segment: Pick<SkidmarksClipSegment, "startSec" | "endSec">): number {
+  return computePlateDurationSec(segment.endSec - segment.startSec, 1, 0, LTX_DURATION_BOUNDS);
+}
+
+/**
+ * Generates + uploads a fresh starting still for `segment` through the
+ * locked-character still pipeline (full shadow-face lock, reference
+ * photo) — used for clip 1, for the first clip of every new scene
+ * block, and for a resume that lands on a clip with no still yet.
+ */
+async function generateSceneStill(
+  segment: SkidmarksClipSegment,
+  bandName: string,
+  vocalist: SkidmarksMember | undefined,
+  deps: ScriptSequenceRunnerDeps
+): Promise<{ ok: true; still: SkidmarksPlateStill } | { ok: false; message: string }> {
+  const vocal = SKIDMARKS_SEGMENT_LABEL_META[segment.label]?.vocal ?? false;
+  const stillOutcome = await deps.generateFirstStill(segment.shotPrompt, bandName, vocal, vocalist);
+  if (!stillOutcome.ok) return stillOutcome;
+  const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
+  const locked = !!vocalist && !!getSkidmarksCharacterLock(vocalist.id);
+  return {
+    ok: true,
+    still: {
+      dataUrl: uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl,
+      source: "generated",
+      createdAt: Date.now(),
+      ...(locked && vocal ? { featuresLockedCharacter: true } : {}),
+    },
+  };
+}
 
 /**
  * Runs the whole sequence: generates clip 1's starting still if it
@@ -144,27 +193,30 @@ export async function runScriptSequence(
     return { ok: false, failedAtClipIndex: 0, message: "No clips to render.", renderedCount: 0 };
   }
 
-  if (startAtClipIndex === 0) {
-    const first = segments[0];
-    const firstIsVocal = SKIDMARKS_SEGMENT_LABEL_META[first.label]?.vocal ?? false;
-    if (!first.plates[0]?.still) {
-      report({ type: "generating-first-still" });
-      const stillOutcome = await deps.generateFirstStill(first.shotPrompt, bandName, firstIsVocal, vocalist);
-      if (!stillOutcome.ok) {
-        return { ok: false, failedAtClipIndex: 0, message: stillOutcome.message, renderedCount: 0 };
-      }
-      const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
-      const firstStill: SkidmarksPlateStill = {
-        dataUrl: uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl,
-        source: "generated",
-        createdAt: Date.now(),
-      };
-      deps.setPlateStill(first.id, first.plates[0].id, firstStill);
-      first.plates[0].still = firstStill; // so the loop below sees it immediately, without a store re-read
+  const startIndex = Math.max(0, Math.min(startAtClipIndex, segments.length));
+  const lockedVocalist = !!vocalist && !!getSkidmarksCharacterLock(vocalist.id);
+
+  // The clip this run starts on needs a starting image before anything
+  // is spent on a render: clip 1 on a fresh run (nothing to chain from
+  // yet), or a resume landing on a clip that was never chained into
+  // (a run stopped/failed right after the previous clip, or a scene
+  // block whose fresh still failed).
+  const startSegment = segments[startIndex];
+  if (startSegment && startSegment.plates[0] && !startSegment.plates[0].still) {
+    report({ type: "generating-first-still" });
+    const stillOutcome = await generateSceneStill(startSegment, bandName, vocalist, deps);
+    if (!stillOutcome.ok) {
+      return { ok: false, failedAtClipIndex: startIndex, message: stillOutcome.message, renderedCount: startIndex };
     }
+    deps.setPlateStill(startSegment.id, startSegment.plates[0].id, stillOutcome.still);
+    startSegment.plates[0].still = stillOutcome.still; // so the loop below sees it immediately, without a store re-read
   }
 
-  for (let i = Math.max(0, Math.min(startAtClipIndex, segments.length)); i < segments.length; i++) {
+  // How many clips of the current scene block have rendered so far —
+  // the clip this run starts on is block clip 1. See `SCENE_BLOCK_CLIP_COUNT`.
+  let clipsInBlock = 0;
+
+  for (let i = startIndex; i < segments.length; i++) {
     if (shouldStop?.()) {
       return {
         ok: false,
@@ -203,7 +255,7 @@ export async function runScriptSequence(
       shotPrompt: segment.shotPrompt,
       bandName,
       plateStillDataUrl: resolvedStillDataUrl,
-      durationSec: SCRIPT_SEQUENCE_DURATION_SEC,
+      durationSec: scriptClipDurationSec(segment),
       vocal,
       instrumentalVideoModel: vocal ? undefined : "grok",
       vocalist: vocal ? vocalist : undefined,
@@ -243,6 +295,7 @@ export async function runScriptSequence(
       ...(outcome.lastFrameUrl ? { lastFrameUrl: outcome.lastFrameUrl } : {}),
     };
     deps.recordRender(render);
+    clipsInBlock += 1;
     report({ type: "clip-done", clipIndex: i, clipCount: segments.length });
 
     const nextSegment = segments[i + 1];
@@ -250,6 +303,36 @@ export async function runScriptSequence(
 
     const nextPlate = nextSegment.plates[0];
     if (!nextPlate || nextPlate.still) continue; // already has a still (shouldn't happen on a fresh build, but never overwrite it
+
+    if (lockedVocalist && clipsInBlock >= SCENE_BLOCK_CLIP_COUNT) {
+      // Scene block complete — the next clip starts from a fresh still
+      // of its own scene, never from this clip's last frame and never
+      // from the same master photo again (audit test J4). A stop
+      // request is honoured here too: a fresh still is a paid call.
+      if (shouldStop?.()) {
+        return {
+          ok: false,
+          failedAtClipIndex: i + 1,
+          message: `Stopped after clip ${i + 1} — no more clips will render.`,
+          renderedCount: i + 1,
+          stopped: true,
+        };
+      }
+      report({ type: "generating-first-still" });
+      const freshOutcome = await generateSceneStill(nextSegment, bandName, vocalist, deps);
+      if (!freshOutcome.ok) {
+        return {
+          ok: false,
+          failedAtClipIndex: i + 1,
+          message: `Clip ${i + 1} finished a ${SCENE_BLOCK_CLIP_COUNT}-clip scene block, but generating a fresh still for clip ${i + 2}'s new scene failed: ${freshOutcome.message}`,
+          renderedCount: i + 1,
+        };
+      }
+      deps.setPlateStill(nextSegment.id, nextPlate.id, freshOutcome.still);
+      nextPlate.still = freshOutcome.still; // so the next loop iteration sees it immediately, without a store re-read
+      clipsInBlock = 0;
+      continue;
+    }
 
     report({ type: "chaining", clipIndex: i, clipCount: segments.length });
 
@@ -291,6 +374,7 @@ export async function runScriptSequence(
       dataUrl: outcome.lastFrameUrl,
       source: "chained",
       createdAt: Date.now(),
+      ...(lockedVocalist && vocal ? { featuresLockedCharacter: true } : {}),
     };
     deps.setPlateStill(nextSegment.id, nextPlate.id, chainedStill);
     nextPlate.still = chainedStill; // so the next loop iteration sees it immediately, without a store re-read

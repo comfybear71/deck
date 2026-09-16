@@ -351,6 +351,29 @@ function automaticMotionHint(vocalLockedCharacter: boolean): string {
   );
 }
 
+/**
+ * Any camera-movement language that breaks a locked character's
+ * shadow-face lock on a Vocal render — Stuart's own live testing and
+ * the audit brief's Rule B: "While he is singing: camera still. No
+ * zoom, push-in, orbit, pan." Deliberately broad (a "tracking shot" or
+ * "swerving camera" in a script description counts just as much as a
+ * typed "slow zoom") — a false positive only ever costs a static frame,
+ * a false negative costs a paid render with a human face in it.
+ */
+const CAMERA_MOVE_RE =
+  /\b(zoom|zooms|zooming|push[- ]?in|pushes in|pushing in|pull[- ]?back|dolly|dollies|orbit|orbits|orbiting|circl\w*|pan|pans|panning|whip|tracking shot|tracks (?:with|around|past)|swerv\w*|sweep\w*|crane|handheld|fly[- ]?(?:in|through|over|around)|rotat\w*|spin\w*)\b/i;
+
+/** Whether some motion/shot text asks the camera itself to move. Pure. */
+export function motionPromptMovesCamera(text: string | undefined): boolean {
+  return !!text && CAMERA_MOVE_RE.test(text);
+}
+
+/** The one sentence shown to Stuart (and sent in the prompt) when his
+ * own typed motion note asked for camera movement on a locked
+ * character's Vocal plate and was replaced with a static camera. */
+export const CAMERA_HOLD_REQUIRED_MESSAGE =
+  "Camera hold is required while he sings — this motion note asks the camera to move, so the render will use a static camera instead (he moves, the camera doesn't).";
+
 export interface ClipGenerationRequest {
   /** The full prompt sent to xAI — Stuart's own clip `shotPrompt`
    * (shared across the whole plate strip, same field the still-generation
@@ -366,6 +389,9 @@ export interface ClipGenerationRequest {
    * request or a Vocal one with no locked vocalist — nothing here
    * invents negative text for a character with no lock. */
   negativePrompt?: string;
+  /** Present only on a locked character's Vocal render — see
+   * `ClipCameraHoldDecision`. Ignored by the server. */
+  cameraHold?: ClipCameraHoldDecision;
   /** The selected plate's still, and nothing else — always exactly one
    * entry; kept as an array on the wire (unchanged shape from before
    * this rework) since `app/api/skidmarks/generate-clip/route.ts` still
@@ -507,6 +533,18 @@ export interface BuildClipGenerationRequestParams {
   instrumentalVideoModel?: SkidmarksInstrumentalVideoModel;
 }
 
+/** What `buildClipGenerationRequest` decided about camera motion for a
+ * locked character's Vocal render — exposed so the UI can say so
+ * before any money is spent, not just bury it in the prompt. */
+export interface ClipCameraHoldDecision {
+  /** Stuart's own typed motion note asked the camera to move and was
+   * replaced with the static-camera hint (`CAMERA_HOLD_REQUIRED_MESSAGE`). */
+  motionNoteReplaced: boolean;
+  /** The shot description itself describes camera movement; an explicit
+   * override sentence was inserted right after it. */
+  shotOverrideInserted: boolean;
+}
+
 /**
  * The one video-specific addendum to a locked character's still-image
  * hallmarks/negative cues (`lib/plateGeneration.ts`'s
@@ -600,6 +638,17 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   const durationSec = Math.min(bounds.max, Math.max(bounds.min, Math.round(params.durationSec)));
 
   const lock = params.vocalist ? getSkidmarksCharacterLock(params.vocalist.id) : undefined;
+  const lockedVocal = Boolean(params.vocal && lock);
+  // One single source of truth for "camera holds while he sings" (audit
+  // Rule B): the automatic default, Stuart's own typed motion note, and
+  // the script's shot description used to be three separate places
+  // that could each independently ask the camera to move. Now a locked
+  // character's Vocal render always ends up with a static camera in
+  // the prompt, whichever of the three tried otherwise.
+  const motionNoteReplaced = lockedVocal && motionPromptMovesCamera(trimmedMotionPrompt);
+  const shotOverrideInserted = lockedVocal && motionPromptMovesCamera(params.shotPrompt);
+  const motionText =
+    trimmedMotionPrompt && !motionNoteReplaced ? trimmedMotionPrompt : automaticMotionHint(lockedVocal);
   // `lock.negativeCues` no longer rides along in this *positive* prompt
   // as a "Do not show: X" sentence — it goes out on the workflow's own
   // real negative-conditioning channel instead (`request.negativePrompt`
@@ -611,7 +660,11 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   const parts = [
     params.vocal ? VOCAL_LTX_PROMPT_LOCK : "",
     params.shotPrompt.trim(),
-    trimmedMotionPrompt || automaticMotionHint(Boolean(params.vocal && lock)),
+    shotOverrideInserted
+      ? "Camera override: ignore any camera movement described in the shot above — the camera holds " +
+        "completely still on him while he sings; only he moves."
+      : "",
+    motionText,
     params.vocal && lock ? (lock.videoPromptHallmarks ?? lock.promptHallmarks) : "",
     params.vocal && lock ? lockedCharacterVideoNote() : "",
     "Solo shot: no other people, extra characters, crowd, or background figures appear anywhere in frame at " +
@@ -636,6 +689,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     endSec: params.endSec,
     vocal: params.vocal,
     ...(params.vocal && lock?.negativeCues ? { negativePrompt: lock.negativeCues } : {}),
+    ...(lockedVocal ? { cameraHold: { motionNoteReplaced, shotOverrideInserted } } : {}),
   };
 
   if (!params.vocal) {
