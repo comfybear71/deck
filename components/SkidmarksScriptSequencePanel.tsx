@@ -118,6 +118,14 @@ export function SkidmarksScriptSequencePanel({
   const [running, setRunning] = useState(false);
   const [progressText, setProgressText] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  /** Real ask (2026-09-16): a way to interrupt a long "Generate & render
+   * all" batch the moment a render looks wrong, so it stops spending
+   * real credits on the rest instead of burning through every remaining
+   * clip first. A plain ref, not state — `runScriptSequence` reads it
+   * synchronously via `shouldStop` between clips, and a ref (unlike
+   * state) is always current inside that closure without needing to be
+   * re-created on every render. Reset at the start of each run. */
+  const stopRequestedRef = useRef(false);
   /** Whether a starting-image pick is mid-upload right now — purely a
    * local spinner label, never needs to survive a reload the way the
    * uploaded URL itself does (`scriptSequenceDraft.startingImageUrl`),
@@ -224,15 +232,18 @@ export function SkidmarksScriptSequencePanel({
     setResult(
       outcome.ok
         ? { ok: true, message: `All ${outcome.renderedCount} clips rendered and chained.` }
-        : {
-            ok: false,
-            message: `Stopped at clip ${outcome.failedAtClipIndex + 1} (${outcome.renderedCount} clip${outcome.renderedCount === 1 ? "" : "s"} rendered so far): ${outcome.message}`,
+        : !outcome.ok && outcome.stopped
+          ? { ok: true, message: `Stopped — ${outcome.renderedCount} clip${outcome.renderedCount === 1 ? "" : "s"} rendered before you stopped it. Nothing else was spent.` }
+          : {
+              ok: false,
+              message: `Stopped at clip ${outcome.failedAtClipIndex + 1} (${outcome.renderedCount} clip${outcome.renderedCount === 1 ? "" : "s"} rendered so far): ${outcome.message}`,
           }
     );
   };
 
   const handleResume = async () => {
     if (running || !incompleteRun) return;
+    stopRequestedRef.current = false;
     setRunning(true);
     setResult(null);
     setProgressText(`Resuming at clip ${incompleteRun.resumeIndex + 1} of ${incompleteRun.total}…`);
@@ -244,7 +255,8 @@ export function SkidmarksScriptSequencePanel({
       buildRunnerDeps(),
       mp3AudioUrl,
       vocalist,
-      incompleteRun.resumeIndex
+      incompleteRun.resumeIndex,
+      () => stopRequestedRef.current
     );
 
     flushSkidmarksSessionNow();
@@ -306,6 +318,7 @@ export function SkidmarksScriptSequencePanel({
       return;
     }
 
+    stopRequestedRef.current = false;
     setRunning(true);
     setResult(null);
     setProgressText("Building the clip timeline…");
@@ -354,7 +367,7 @@ export function SkidmarksScriptSequencePanel({
       flushSkidmarksSessionNow();
     }
 
-    const outcome = await runScriptSequence(segments, band.name, buildRunnerDeps(), mp3AudioUrl, vocalist);
+    const outcome = await runScriptSequence(segments, band.name, buildRunnerDeps(), mp3AudioUrl, vocalist, 0, () => stopRequestedRef.current);
 
     // The starting image was a one-time input for *this* run — clear it
     // so it's never silently reused on a later, different script. The
@@ -370,6 +383,29 @@ export function SkidmarksScriptSequencePanel({
   return (
     <div className="flex flex-col gap-2.5 rounded-2xl border border-rose-400/25 bg-rose-400/[0.03] p-4">
       <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">Script sequence</p>
+
+      {running && (
+        // Real ask (2026-09-16): a way to stop a batch mid-render the
+        // moment something looks wrong, so it doesn't keep spending real
+        // credits on every clip left. Never interrupts a render already
+        // in flight (already paid for either way) — it just stops the
+        // *next* one from starting, on the next check between clips
+        // (`runScriptSequence`'s `shouldStop`). Sits at the top,
+        // unmissable, rather than down by the render button Stuart would
+        // have to scroll back to while a batch is running.
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-2">
+          <span className="text-[12px] leading-relaxed text-rose-100">Rendering — see something wrong?</span>
+          <button
+            type="button"
+            onClick={() => {
+              stopRequestedRef.current = true;
+            }}
+            className="shrink-0 rounded-full bg-rose-400 px-3 py-1.5 text-[13px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80"
+          >
+            Stop
+          </button>
+        </div>
+      )}
 
       {incompleteRun && (
         <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2">
