@@ -28,3 +28,11 @@ Lyric/mouth-on punch → LTX only
 Open/travel/break → Grok or H3; never LTX
 Angle variety → Seedance via SIRAY when live; until then stills + cut variety
 Don't plan a beat on a tool that can't do it
+
+REFERENCES
+Melies cinematic techniques glossary — https://melies.co/cinematic-techniques
+Camera moves, framing/shot size, angles, lighting, composition, lenses,
+color/film look, time/motion, in-camera/optical effects, editing
+transitions, atmosphere, genre looks — real named terms + prompt phrasing.
+Vocabulary source for shot prompts / motion prompts only — not a tool or
+model this app calls (no API, no key, nothing wired).
