@@ -1,5 +1,6 @@
 "use client";
 
+import { SkidmarksConfirmDialog } from "./SkidmarksConfirmDialog";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -617,7 +618,12 @@ function SkidmarksPlateBox({
     }
   };
 
-  const handleClear = () => {
+  const [confirmClear, setConfirmClear] = useState(false);
+  /** Every remove/clear goes through the in-app confirm first
+   * (2026-09-16 ask: no delete without an "are you sure"). */
+  const handleClear = () => setConfirmClear(true);
+  const performClear = () => {
+    setConfirmClear(false);
     onSetStill(null);
     setMenuOpen(false);
     setLightboxOpen(false);
@@ -910,6 +916,15 @@ function SkidmarksPlateBox({
           {error}
         </p>
       )}
+
+      <SkidmarksConfirmDialog
+        open={confirmClear}
+        title="Remove this still?"
+        body="The picture on this plate will be cleared. Any render already made from it stays on the shelf. You can generate or upload a new one after."
+        confirmLabel="Remove still"
+        onCancel={() => setConfirmClear(false)}
+        onConfirm={performClear}
+      />
 
       {hasStill && lightboxOpen && (
         <SkidmarksPlateLightbox

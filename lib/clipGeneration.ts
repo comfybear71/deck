@@ -700,7 +700,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   const trimmedMotionPrompt = params.motionPrompt?.trim().slice(0, MAX_MOTION_PROMPT_LENGTH) || "";
   const durationSec = Math.min(bounds.max, Math.max(bounds.min, Math.round(params.durationSec)));
 
-  const lock = params.vocalist ? getSkidmarksCharacterLock(params.vocalist.id) : undefined;
+  const lock = params.vocalist ? getSkidmarksCharacterLock(params.vocalist) : undefined;
   const lockedVocal = Boolean(params.vocal && lock);
   // User text wins (audit Part 3). His motion note goes out exactly as
   // typed; the only line this app adds on its own is a camera hold

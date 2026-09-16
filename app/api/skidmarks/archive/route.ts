@@ -1,4 +1,4 @@
-import { list, put } from "@vercel/blob";
+import { del, list, put } from "@vercel/blob";
 import { NextResponse } from "next/server";
 
 /**
@@ -177,6 +177,25 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, songs: next });
     }
 
+    if (body.action === "delete") {
+      // A real, deliberate delete from the shelf (2026-09-16): the row
+      // AND its snapshot file, otherwise `recoverOrphanedSnapshots`
+      // would faithfully bring the "deleted" song straight back on the
+      // next list read. Only ever reached through the in-app confirm.
+      const id = typeof body.id === "string" ? body.id : "";
+      if (!id) {
+        return NextResponse.json({ error: "Missing `id`." }, { status: 400 });
+      }
+      const current = await readIndex();
+      const target = current.find((s) => isRecordWithId(s) && s.id === id) as { snapshotUrl?: unknown } | undefined;
+      if (target && typeof target.snapshotUrl === "string") {
+        await del(target.snapshotUrl);
+      }
+      const next = current.filter((s) => !(isRecordWithId(s) && s.id === id));
+      await writeIndex(next);
+      return NextResponse.json({ ok: true, songs: next });
+    }
+
     if (body.action === "remove") {
       const id = typeof body.id === "string" ? body.id : "";
       if (!id) {
@@ -188,7 +207,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, songs: next });
     }
 
-    return NextResponse.json({ error: "Unknown `action` \u2014 expected \"add\" or \"remove\"." }, { status: 400 });
+    return NextResponse.json({ error: "Unknown `action` \u2014 expected \"add\", \"remove\" or \"delete\"." }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Vercel Blob is not configured." },

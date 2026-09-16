@@ -191,8 +191,21 @@ export const SKIDMARKS_CHARACTER_LOCKS: Record<string, SkidmarksCharacterLock> =
   },
 };
 
-export function getSkidmarksCharacterLock(memberId: string): SkidmarksCharacterLock | undefined {
-  return SKIDMARKS_CHARACTER_LOCKS[memberId];
+export function getSkidmarksCharacterLock(member: SkidmarksMember | string): SkidmarksCharacterLock | undefined {
+  if (typeof member === "string") return SKIDMARKS_CHARACTER_LOCKS[member];
+  // A lock card written in the app wins over the built-in registry —
+  // that's how a second artist gets locked without a code change, and
+  // how Jack's own text can be edited on the phone.
+  const card = member.lock;
+  if (card && card.lookRules.trim().length > 0) {
+    const neverShow = card.neverShow.trim();
+    return {
+      promptHallmarks: card.lookRules.trim(),
+      ...(neverShow ? { negativeCues: neverShow } : {}),
+      directorNote: card.lookRules.trim().split(/[.\n]/)[0]?.trim() || undefined,
+    };
+  }
+  return SKIDMARKS_CHARACTER_LOCKS[member.id];
 }
 
 /**
@@ -215,7 +228,7 @@ export function getSkidmarksCharacterLock(memberId: string): SkidmarksCharacterL
  * un-locked member is unaffected.
  */
 export function shotPromptMentionsLockedCharacter(shotPrompt: string, member: SkidmarksMember): boolean {
-  if (!getSkidmarksCharacterLock(member.id)) return false;
+  if (!getSkidmarksCharacterLock(member)) return false;
   const firstName = member.name.trim().split(/\s+/)[0];
   if (!firstName) return false;
   const escaped = firstName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -404,7 +417,7 @@ export function buildPlateGenerationRequest(
   // shot that wasn't going to feature anyone, so applying it on signal 2
   // alone (no literal name mention yet) costs nothing on a shot that
   // truly has no one in it.
-  const lockedVocalist = vocalist && getSkidmarksCharacterLock(vocalist.id) ? vocalist : undefined;
+  const lockedVocalist = vocalist && getSkidmarksCharacterLock(vocalist) ? vocalist : undefined;
   const instrumentalCastMention =
     !vocal &&
     !!lockedVocalist &&
@@ -451,7 +464,7 @@ export function buildPlateGenerationRequest(
   // the Vocal case the "Feature \u2026 the vocalist" line above is
   // scoped to.
   if (characterInFrame && vocalist) {
-    const lock = getSkidmarksCharacterLock(vocalist.id);
+    const lock = getSkidmarksCharacterLock(vocalist);
     if (lock) {
       parts.push(lock.promptHallmarks);
       if (lock.negativeCues) parts.push(`Do not show: ${lock.negativeCues}.`);
@@ -641,7 +654,7 @@ export async function resolvePlateReferenceDataUrl(src: string): Promise<string>
  * `planAutoPlateFill`).
  */
 export function buildSirayCharacterPrompt(positionPrompt: string, vocalist?: SkidmarksMember): string {
-  const lock = vocalist ? getSkidmarksCharacterLock(vocalist.id) : undefined;
+  const lock = vocalist ? getSkidmarksCharacterLock(vocalist) : undefined;
   if (!lock) return positionPrompt;
   const parts = [positionPrompt.trim(), lock.promptHallmarks];
   if (lock.negativeCues) parts.push(`Do not show: ${lock.negativeCues}.`);

@@ -284,7 +284,7 @@ export function SkidmarksScriptSequencePanel({
     onSetScriptSequence(segments);
 
     const vocalist = resolveVocalistForPrompt(band.members);
-    const lock = vocalist ? getSkidmarksCharacterLock(vocalist.id) : undefined;
+    const lock = vocalist ? getSkidmarksCharacterLock(vocalist) : undefined;
     if (lock && vocalist?.avatarImage) {
       for (const segment of segments) {
         const plate = segment.plates[0];

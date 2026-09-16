@@ -202,6 +202,26 @@ export async function removeSkidmarksArchivedSong(id: string): Promise<ArchiveMu
   }
 }
 
+/** Deletes a shelf row *and* its snapshot file — the deliberate,
+ * confirmed "Delete" on a Finished Songs row. `removeSkidmarksArchivedSong`
+ * above only drops the row, which orphan recovery would undo. */
+export async function deleteSkidmarksArchivedSong(id: string): Promise<ArchiveMutationOutcome> {
+  try {
+    const res = await fetch(ARCHIVE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", id }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { ok: false, message: typeof body?.error === "string" ? body.error : `HTTP ${res.status}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Network error." };
+  }
+}
+
 export type FetchArchiveSnapshotOutcome =
   | { ok: true; snapshot: SkidmarksArchiveSnapshot }
   | { ok: false; message: string };
@@ -315,7 +335,7 @@ function stripAudioExtension(fileName: string): string {
  */
 export function buildSongBriefText(song: SkidmarksArchivedSong, snapshot: SkidmarksArchiveSnapshot): string {
   const vocalist = resolveVocalistForPrompt(snapshot.band.members);
-  const artistLine = vocalist ? getSkidmarksCharacterLock(vocalist.id)?.directorNote ?? "" : "";
+  const artistLine = vocalist ? getSkidmarksCharacterLock(vocalist)?.directorNote ?? "" : "";
   const lengthText = song.durationSec !== null ? formatDuration(song.durationSec) : "";
   return [
     `Song: ${stripAudioExtension(song.fileName)}`,

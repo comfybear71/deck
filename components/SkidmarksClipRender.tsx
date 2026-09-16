@@ -346,7 +346,7 @@ export function SkidmarksClipRender({
   // makes the same call and swaps the motion note for a static camera
   // (audit Rule B: no zoom/push-in/orbit/pan while he sings).
   const cameraHoldRequired =
-    vocal && !!vocalist && !!getSkidmarksCharacterLock(vocalist.id) && motionPromptMovesCamera(motionPrompt);
+    vocal && !!vocalist && !!getSkidmarksCharacterLock(vocalist) && motionPromptMovesCamera(motionPrompt);
 
   const handleRender = async () => {
     if (locked || generating || missingAudio || !payloadSeen) return;

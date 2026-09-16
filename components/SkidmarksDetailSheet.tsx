@@ -1,5 +1,6 @@
 "use client";
 
+import { SkidmarksConfirmDialog } from "./SkidmarksConfirmDialog";
 import { useEffect, useRef, useState } from "react";
 import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
 import { useSkidmarksClipRenders } from "@/hooks/useSkidmarksClipRenders";
@@ -56,6 +57,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     addMember,
     removeMember,
     renameMember,
+    setMemberLock,
     renameBand,
     setBandCoverImage,
     setMemberAvatarImage,
@@ -204,7 +206,24 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     setChainNote({ ok: true, message: "Filled the next clip's first plate from this one's last frame." });
   };
 
+  /** One in-app confirm for the destructive taps that live at this
+   * level (band trash, member trash). See `SkidmarksConfirmDialog`. */
+  const [pendingConfirm, setPendingConfirm] = useState<{ title: string; body: string; confirmLabel: string; run: () => void } | null>(null);
+
   const handleRemoveBand = (bandId: string) => {
+    const band = bands.find((b) => b.id === bandId);
+    const isLive = bandId === activeBand?.id && !!session.mp3;
+    setPendingConfirm({
+      title: `Delete band ${band?.name?.trim() || "(unnamed)"}?`,
+      body: isLive
+        ? "This band is on your desk with a song. Deleting it removes the band AND that song from the desk. Songs already on the Finished Songs shelf are not touched. Tap Archive first if you want to keep this one."
+        : "This removes the band and its members. Songs already on the Finished Songs shelf are not touched.",
+      confirmLabel: "Delete band",
+      run: () => performRemoveBand(bandId),
+    });
+  };
+
+  const performRemoveBand = (bandId: string) => {
     if (bandId === activeBand?.id) setOpenMemberId(null);
     removeBand(bandId);
   };
@@ -504,7 +523,16 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                       band={activeBand}
                       onOpenMember={setOpenMemberId}
                       onAddMember={() => addMember(activeBand.id)}
-                      onRemoveMember={(memberId) => removeMember(activeBand.id, memberId)}
+                      onRemoveMember={(memberId) => {
+                        const member = activeBand.members.find((m) => m.id === memberId);
+                        setPendingConfirm({
+                          title: `Remove ${member?.name?.trim() || "this member"}?`,
+                          body: "Their photo, looks and lock card go with them. Clips already rendered stay on the shelf.",
+                          confirmLabel: "Remove member",
+                          run: () => removeMember(activeBand.id, memberId),
+                        });
+                      }}
+                      onSetMemberLock={(memberId, lock) => setMemberLock(activeBand.id, memberId, lock)}
                       onSetMemberAvatarImage={(memberId, dataUrl) =>
                         setMemberAvatarImage(activeBand.id, memberId, dataUrl)
                       }
@@ -614,6 +642,18 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
           onClose={() => setOpenMemberId(null)}
         />
       )}
+      <SkidmarksConfirmDialog
+        open={pendingConfirm !== null}
+        title={pendingConfirm?.title ?? ""}
+        body={pendingConfirm?.body ?? ""}
+        confirmLabel={pendingConfirm?.confirmLabel ?? "Delete"}
+        onCancel={() => setPendingConfirm(null)}
+        onConfirm={() => {
+          const action = pendingConfirm;
+          setPendingConfirm(null);
+          action?.run();
+        }}
+      />
     </div>
   );
 }

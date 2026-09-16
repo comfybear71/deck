@@ -40,3 +40,13 @@ Those are the only things that clear the desk. They **archive the current song f
 ## Before you turn the phone off
 
 Look at the top of the sheet. Green **Saved ✓** means you are done. If it says Saving, give it a few seconds. If it says NOT SAVED, your work is still on the phone; leave Safari as it is and it will save when the signal is back.
+
+## Deleting anything
+
+Every bin, remove, clear and delete button now asks "Are you sure?" first, with a big Cancel button on top. Nothing is deleted on one tap any more. That covers: a band, a member, the MP3 on the desk, a plate's still, a rendered clip, and a copy on the Finished Songs shelf.
+
+Deleting a copy on the shelf deletes that one checkpoint for good. Other copies of the same song and whatever is on your desk are left alone.
+
+## Locking a new artist
+
+Open a band, tap the **Lock card** button under a member. Two boxes: "What must stay true" and "Never show". Whatever you write is sent on every render that member is in, the same way Jack's built-in lock is. Jack keeps his built-in lock while his card is blank; type in his card and it replaces it.

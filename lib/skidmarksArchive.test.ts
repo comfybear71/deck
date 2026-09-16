@@ -16,6 +16,7 @@ import {
   buildSongBriefText,
   buildSongPlanText,
   fetchArchiveSnapshot,
+  deleteSkidmarksArchivedSong,
   fetchSkidmarksArchiveIndex,
   generateArchiveId,
   removeSkidmarksArchivedSong,
@@ -141,6 +142,23 @@ describe("fetchSkidmarksArchiveIndex / addSkidmarksArchivedSong / removeSkidmark
     fetchMock.mockResolvedValueOnce(jsonResponse(502, { error: "Vercel Blob is not configured." }));
     const outcome = await removeSkidmarksArchivedSong("song-1");
     expect(outcome).toEqual({ ok: false, message: "Vercel Blob is not configured." });
+  });
+});
+
+describe("deleteSkidmarksArchivedSong", () => {
+  it("posts a delete action (row + snapshot file) with just the id", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, songs: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const outcome = await deleteSkidmarksArchivedSong("abc");
+    expect(outcome).toEqual({ ok: true });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ action: "delete", id: "abc" });
+  });
+
+  it("reports an honest failure when the route errors", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "Blob down" }), { status: 502 })));
+    const outcome = await deleteSkidmarksArchivedSong("abc");
+    expect(outcome).toEqual({ ok: false, message: "Blob down" });
   });
 });
 

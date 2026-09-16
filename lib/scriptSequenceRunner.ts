@@ -124,7 +124,7 @@ async function generateSceneStill(
   const stillOutcome = await deps.generateFirstStill(segment.shotPrompt, bandName, vocal, vocalist);
   if (!stillOutcome.ok) return stillOutcome;
   const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
-  const locked = !!vocalist && !!getSkidmarksCharacterLock(vocalist.id);
+  const locked = !!vocalist && !!getSkidmarksCharacterLock(vocalist);
   return {
     ok: true,
     still: {
@@ -194,7 +194,7 @@ export async function runScriptSequence(
   }
 
   const startIndex = Math.max(0, Math.min(startAtClipIndex, segments.length));
-  const lockedVocalist = !!vocalist && !!getSkidmarksCharacterLock(vocalist.id);
+  const lockedVocalist = !!vocalist && !!getSkidmarksCharacterLock(vocalist);
   // "Build timeline" pre-fills every plate with the vocalist's own
   // master photo so Stuart can eyeball the timeline before spending.
   // That photo is a placeholder, not a scene still: if the run treated
