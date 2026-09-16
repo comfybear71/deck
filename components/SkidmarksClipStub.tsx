@@ -12,6 +12,7 @@ import {
   type SkidmarksBand,
   type SkidmarksClipPlateSlot,
   type SkidmarksClipSegment,
+  type SkidmarksClipSentPayload,
   type SkidmarksInstrumentalVideoModel,
   type SkidmarksMember,
   type SkidmarksModelId,
@@ -47,6 +48,7 @@ interface SkidmarksClipStubProps {
   /** This plate's own stored camera-motion text — per-plate now, see
    * `SkidmarksClipPlateSlot.motionPrompt`'s doc comment. */
   onSetPlateMotionPrompt: (plateId: string, motionPrompt: string) => void;
+  onSetPlateLastSent: (plateId: string, sent: SkidmarksClipSentPayload) => void;
   /** The H3/Grok switch inside `SkidmarksClipRender`'s Render confirm —
    * see `lib/skidmarks.ts`'s `SkidmarksInstrumentalVideoModel`/
    * `setSkidmarksSegmentInstrumentalVideoModel`. Only meaningful (and
@@ -1032,6 +1034,7 @@ export function SkidmarksClipStub({
   onRemovePlate,
   onSelectPlate,
   onSetPlateMotionPrompt,
+  onSetPlateLastSent,
   onSetClipInstrumentalModel,
   renderedPlateIds,
   renderLocked,
@@ -1132,6 +1135,8 @@ export function SkidmarksClipStub({
           plateStillDataUrl={selectedPlate.still?.dataUrl ?? null}
           motionPrompt={selectedPlate.motionPrompt ?? ""}
           onSetMotionPrompt={(value) => onSetPlateMotionPrompt(selectedPlate.id, value)}
+          lastSent={selectedPlate.lastSent}
+          onSent={(sent) => onSetPlateLastSent(selectedPlate.id, sent)}
           durationSec={durationSec}
           vocal={vocal}
           instrumentalVideoModel={instrumentalVideoModel}

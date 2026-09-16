@@ -600,8 +600,39 @@ export interface SkidmarksClipSegment {
  * but a `null` call to `setSkidmarksClipPlateStill` clears `still` back
  * to unset on the *same* slot rather than removing it — removing the
  * slot outright is the separate `removeSkidmarksClipPlate`. */
+/**
+ * Exactly what the last render of a plate sent to its engine — recorded
+ * on the plate (text and URLs only, never image bytes) so a finished
+ * clip can show "What was sent" after a refresh, and so fifty-six
+ * renders can be compared: if `startImageUrl` is the same on all of
+ * them, that is the bug, not the model (audit Part 4).
+ */
+export interface SkidmarksClipSentPayload {
+  engine: "LTX" | "Grok" | "H3";
+  /** The duration the engine was actually asked for, after clamping. */
+  durationSec: number;
+  /** The plate still's own URL at send time. */
+  startImageUrl: string;
+  /** Always `null` — this app never sends an end image. Stored so the
+   * panel can say NONE from the record, not from an assumption. */
+  endImageUrl: null;
+  /** The full positive prompt after every app-written block. */
+  prompt: string;
+  /** Stuart's own text (shot + motion), for the two-colour split. */
+  userText: string;
+  /** The full negative prompt (engine default + Jack's cues), or "". */
+  negativePrompt: string;
+  /** Audio slice, Vocal only. */
+  audioStartSec?: number;
+  audioEndSec?: number;
+  sentAt: number;
+}
+
 export interface SkidmarksClipPlateSlot {
   id: string;
+  /** See `SkidmarksClipSentPayload`. Set right before each real render
+   * call for this plate; survives refresh with the session. */
+  lastSent?: SkidmarksClipSentPayload;
   /** The real still for this slot, once one exists — either a photo
    * Stuart uploaded or a real image `lib/plateGeneration.ts` generated
    * via xAI's Grok Imagine API (`app/api/skidmarks/generate-still/
@@ -3431,6 +3462,15 @@ export function setSkidmarksSegmentSelectedPlate(segmentId: string, plateId: str
  * exception to the "one shared field per clip" plating lock (see
  * `SkidmarksClipPlateSlot.motionPrompt`'s doc comment for why). No-ops
  * if the segment or that specific plate slot doesn't exist. */
+/** Records what a plate's render is about to send — see
+ * `SkidmarksClipSentPayload`. */
+export function setSkidmarksClipPlateLastSent(segmentId: string, plateId: string, sent: SkidmarksClipSentPayload): void {
+  updateSkidmarksSegment(segmentId, (segment) => ({
+    ...segment,
+    plates: segment.plates.map((plate) => (plate.id === plateId ? { ...plate, lastSent: sent } : plate)),
+  }));
+}
+
 export function setSkidmarksClipPlateMotionPrompt(
   segmentId: string,
   plateId: string,

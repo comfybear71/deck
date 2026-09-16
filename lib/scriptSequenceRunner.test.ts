@@ -217,6 +217,42 @@ describe("runScriptSequence", () => {
     expect(deps.generateFirstStill).toHaveBeenLastCalledWith("part four", "Stu Balls", false, jackAsh);
   });
 
+  it("audit Part 4: plates pre-filled with the master photo by Build timeline are placeholders — only clip 1 renders from it, the rest chain or get a fresh scene still", async () => {
+    const segments = buildScriptSequenceSegments(fiveParts(), []);
+    const master = "https://blob.example/jack-ash-reference.jpg";
+    const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: master });
+    for (const segment of segments) {
+      segment.plates[0].still = { dataUrl: master, source: "generated", createdAt: 1, featuresLockedCharacter: true };
+    }
+    const deps = fakeDeps();
+
+    const outcome = await run(segments, deps, undefined, jackAsh);
+
+    expect(outcome.ok).toBe(true);
+    const startImages = (deps.renderClip as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([request]) => (request as { referenceImageDataUrls: string[] }).referenceImageDataUrls[0]
+    );
+    expect(startImages[0]).toBe(master); // clip 1 may start on it
+    for (const url of startImages.slice(1)) expect(url).not.toBe(master); // nothing else does
+    const fills = chainFillCalls(deps, segments[0].id);
+    expect(fills.map((f) => f.source)).toEqual(["chained", "chained", "generated", "chained"]);
+  });
+
+  it("never overwrites a real still Stuart accepted, even mid-run", async () => {
+    const segments = buildScriptSequenceSegments(threeParts(), []);
+    const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: "https://blob.example/master.jpg" });
+    segments[1].plates[0].still = { dataUrl: "https://blob.example/his-own-scene.jpg", source: "upload", createdAt: 1 };
+    const deps = fakeDeps();
+
+    await run(segments, deps, undefined, jackAsh);
+
+    expect(chainFillCalls(deps, segments[0].id).some((f) => f.dataUrl === "https://blob.example/clip-lastframe.jpg" && false)).toBe(false);
+    const startImages = (deps.renderClip as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([request]) => (request as { referenceImageDataUrls: string[] }).referenceImageDataUrls[0]
+    );
+    expect(startImages[1]).toBe("https://blob.example/his-own-scene.jpg");
+  });
+
   it("audit test J5/L1: renders each script part at its own length, clamped 5\u201315s, never a hardcoded 15", async () => {
     const parts = [
       { index: 1, title: "A", startSec: 0, endSec: 10, prompt: "ten seconds" },

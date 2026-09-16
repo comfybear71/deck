@@ -34,6 +34,7 @@ import {
   selectSkidmarksBand,
   selectSkidmarksProjectKind,
   setSkidmarksBandCoverImage,
+  setSkidmarksClipPlateLastSent,
   setSkidmarksClipPlateMotionPrompt,
   setSkidmarksClipPlateStill,
   setSkidmarksMemberAvatarImage,
@@ -48,6 +49,7 @@ import {
   subscribeSkidmarksSessionSync,
   type SkidmarksBand,
   type SkidmarksClipSegment,
+  type SkidmarksClipSentPayload,
   type SkidmarksInstrumentalVideoModel,
   type SkidmarksLook,
   type SkidmarksMp3Attachment,
@@ -332,6 +334,13 @@ export function useSkidmarksStudio() {
     []
   );
 
+  /** What a plate's render just sent — see `SkidmarksClipSentPayload`. */
+  const setClipPlateLastSent = useCallback(
+    (segmentId: string, plateId: string, sent: SkidmarksClipSentPayload) =>
+      setSkidmarksClipPlateLastSent(segmentId, plateId, sent),
+    []
+  );
+
   /** The H3/Grok switch inside `SkidmarksClipRender`'s Render confirm —
    * see `setSkidmarksSegmentInstrumentalVideoModel`'s doc comment. */
   const setClipInstrumentalModel = useCallback(
@@ -397,6 +406,7 @@ export function useSkidmarksStudio() {
     removeClipPlate,
     selectClipPlate,
     setClipPlateMotionPrompt,
+    setClipPlateLastSent,
     setClipInstrumentalModel,
     restoreArchivedSession,
     clearSessionAfterArchive,

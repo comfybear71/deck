@@ -195,6 +195,17 @@ export async function runScriptSequence(
 
   const startIndex = Math.max(0, Math.min(startAtClipIndex, segments.length));
   const lockedVocalist = !!vocalist && !!getSkidmarksCharacterLock(vocalist.id);
+  // "Build timeline" pre-fills every plate with the vocalist's own
+  // master photo so Stuart can eyeball the timeline before spending.
+  // That photo is a placeholder, not a scene still: if the run treated
+  // it as "already has a still," every clip would start on the same
+  // picture and end near it — the real cause of fifty-six identical
+  // last frames (audit Part 4). Only the clip this run starts on may
+  // render from it; every later plate still holding it gets chained
+  // into or given a fresh scene still exactly as if it were empty.
+  const masterPhotoUrl = vocalist?.avatarImage;
+  const isPlaceholderStill = (still: SkidmarksPlateStill | undefined) =>
+    !!still && !!masterPhotoUrl && still.dataUrl === masterPhotoUrl;
 
   // The clip this run starts on needs a starting image before anything
   // is spent on a render: clip 1 on a fresh run (nothing to chain from
@@ -302,7 +313,8 @@ export async function runScriptSequence(
     if (!nextSegment) break; // last clip — nothing left to chain into
 
     const nextPlate = nextSegment.plates[0];
-    if (!nextPlate || nextPlate.still) continue; // already has a still (shouldn't happen on a fresh build, but never overwrite it
+    if (!nextPlate) continue;
+    if (nextPlate.still && !isPlaceholderStill(nextPlate.still)) continue; // a real still Stuart accepted — never overwrite it
 
     if (lockedVocalist && clipsInBlock >= SCENE_BLOCK_CLIP_COUNT) {
       // Scene block complete — the next clip starts from a fresh still

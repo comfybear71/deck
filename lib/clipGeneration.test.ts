@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildClipGenerationRequest,
+  describeClipPayload,
+  LTX_DEFAULT_NEGATIVE_PROMPT,
   motionPromptMovesCamera,
   computeLtxPlateDurationSec,
   computePlateDurationSec,
@@ -590,6 +592,63 @@ describe("prompt assembly: Stuart's text on top, no hidden camera moves", () => 
 
     const instrumental = buildClipGenerationRequest({ ...baseParams, vocal: false, motionPrompt: "slow zoom into the keyhole" });
     expect(instrumental.cameraWarnings).toBeUndefined();
+  });
+});
+
+/**
+ * Audit Part 4 — why fifty-six clips ended on the same frame, and the
+ * payload panel that proves what is sent.
+ */
+describe("Part 4: no stay-on-the-start-image lock, and an honest payload record", () => {
+  const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
+  const vocalParams = {
+    shotPrompt: "Jack on the porch",
+    bandName: "Stu Balls",
+    plateStillDataUrl: "data:image/jpeg;base64,abc",
+    durationSec: 12,
+    vocal: true,
+    vocalist: jackAsh,
+    mp3AudioUrl: "https://blob.example/song.mp3",
+    startSec: 30,
+    endSec: 42,
+    plateIndex: 0,
+    plateCount: 1,
+  };
+
+  it("a Vocal render no longer tells LTX to stay on the start image, or to look like a 3D animated feature", () => {
+    const { prompt } = buildClipGenerationRequest(vocalParams);
+    expect(prompt.toLowerCase()).not.toContain("start image");
+    expect(prompt.toLowerCase()).not.toContain("as the first frame");
+    expect(prompt.toLowerCase()).not.toContain("for the entire clip");
+    expect(prompt.toLowerCase()).not.toContain("3d animated");
+    expect(prompt.toLowerCase()).not.toContain("photoreal human");
+    expect(prompt).toContain("perfect lip sync"); // the lip-sync lock itself stays
+  });
+
+  it("describeClipPayload reports engine, real duration, start image, End image NONE, full prompts and the audio slice", () => {
+    const request = buildClipGenerationRequest({ ...vocalParams, motionPrompt: "small nod" });
+    const payload = describeClipPayload(request, "https://blob.example/still.jpg", "small nod");
+    expect(payload.engine).toBe("LTX");
+    expect(payload.durationSec).toBe(12);
+    expect(payload.startImageUrl).toBe("https://blob.example/still.jpg");
+    expect(payload.endImageUrl).toBeNull();
+    expect(payload.prompt).toBe(request.prompt);
+    expect(payload.userText).toBe("Jack on the porch small nod");
+    expect(payload.prompt.startsWith(payload.userText)).toBe(true);
+    expect(payload.negativePrompt.startsWith(LTX_DEFAULT_NEGATIVE_PROMPT)).toBe(true);
+    expect(payload.negativePrompt.toLowerCase()).toContain("face lit or visible");
+    expect(payload.audioStartSec).toBe(30);
+    expect(payload.audioEndSec).toBe(42);
+  });
+
+  it("describeClipPayload names Grok/H3 for an Instrumental render and reports no negative prompt", () => {
+    const grok = buildClipGenerationRequest({ ...vocalParams, vocal: false, vocalist: undefined, instrumentalVideoModel: "grok" });
+    expect(describeClipPayload(grok, "https://blob.example/a.jpg", "").engine).toBe("Grok");
+    const h3 = buildClipGenerationRequest({ ...vocalParams, vocal: false, vocalist: undefined, instrumentalVideoModel: "h3" });
+    const payload = describeClipPayload(h3, "https://blob.example/a.jpg", undefined);
+    expect(payload.engine).toBe("H3");
+    expect(payload.negativePrompt).toBe("");
+    expect(payload.audioStartSec).toBeUndefined();
   });
 });
 

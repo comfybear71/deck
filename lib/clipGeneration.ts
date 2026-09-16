@@ -140,7 +140,12 @@
  */
 
 import { getSkidmarksCharacterLock } from "./plateGeneration";
-import { resolveInstrumentalVideoModel, type SkidmarksInstrumentalVideoModel, type SkidmarksMember } from "./skidmarks";
+import {
+  resolveInstrumentalVideoModel,
+  type SkidmarksClipSentPayload,
+  type SkidmarksInstrumentalVideoModel,
+  type SkidmarksMember,
+} from "./skidmarks";
 
 /** Per-plate render duration range — Grok's documented ceiling is 15s;
  * 5s is the floor this feature has always used. Real per-plate duration
@@ -589,12 +594,58 @@ function lockedCharacterVideoNote(): string {
  * the shot/motion/character-lock text below, Vocal/LTX clips only —
  * never on an Instrumental/Grok/H3 clip, which has no lip-sync and no
  * "start image as first frame" contract to state. */
+/**
+ * The Vocal (Comfy Cloud LTX) lip-sync lock — the *only* backend text
+ * a Vocal render carries. Audit Part 4 stripped the rest: "Use the
+ * provided start image as the first frame. Same people as the start
+ * image for the entire clip." told the model to stay on the still,
+ * which is how fifty-six clips ended on their own first frame; and
+ * "stylised 3D animated feature render… not a photoreal human" was a
+ * style the app chose, not Stuart. Jack's look lives in Jack's lock.
+ */
 const VOCAL_LTX_PROMPT_LOCK =
   "perfect lip sync, clear lip movement, citing the dialogue clearly, facial expressions and hand gestures are " +
-  "lively, dication is perfect. Use the provided start image as the first frame. Same people as the start image " +
-  "for the entire clip. Highly detailed stylised 3D animated feature render, clean simplified forms, believable " +
-  "materials, soft overcast lighting, shallow depth of field, cinematic quality, sharp focus. Not photographic, " +
-  "not a cartoon, not a photoreal human.";
+  "lively, dication is perfect.";
+
+/** Comfy's own default negative text on the LTX graph's negative node
+ * (`lib/comfyCloud.ts` appends Jack's cues after it). Lives here, not
+ * in `comfyCloud.ts`, so the client-side "what will be sent" panel can
+ * show the real full negative string without importing `sharp`. */
+export const LTX_DEFAULT_NEGATIVE_PROMPT = "pc game, console game, video game, cartoon, childish, ugly";
+
+/**
+ * The exact payload panel (audit Part 4) — built from the same request
+ * the render sends, so it can never drift from it. Pure.
+ */
+export function describeClipPayload(
+  request: ClipGenerationRequest,
+  startImageUrl: string,
+  motionPrompt: string | undefined
+): SkidmarksClipSentPayload {
+  const engine: SkidmarksClipSentPayload["engine"] = request.vocal
+    ? "LTX"
+    : resolveInstrumentalVideoModel(request.videoBackend) === "h3"
+      ? "H3"
+      : "Grok";
+  const negativePrompt = request.vocal
+    ? [LTX_DEFAULT_NEGATIVE_PROMPT, request.negativePrompt].filter((t) => !!t).join(", ")
+    : "";
+  const userText = [request.shotPrompt, motionPrompt?.trim().slice(0, MAX_MOTION_PROMPT_LENGTH) ?? ""]
+    .filter((t) => t.length > 0)
+    .join(" ");
+  return {
+    engine,
+    durationSec: request.durationSec,
+    startImageUrl,
+    endImageUrl: null,
+    prompt: request.prompt,
+    userText,
+    negativePrompt,
+    ...(typeof request.audioStartSec === "number" ? { audioStartSec: request.audioStartSec } : {}),
+    ...(typeof request.audioEndSec === "number" ? { audioEndSec: request.audioEndSec } : {}),
+    sentAt: Date.now(),
+  };
+}
 
 /**
  * Builds the one real clip-render request this feature ever sends —

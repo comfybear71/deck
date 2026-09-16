@@ -73,6 +73,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     removeClipPlate,
     selectClipPlate,
     setClipPlateMotionPrompt,
+    setClipPlateLastSent,
     setClipInstrumentalModel,
     restoreArchivedSession,
     clearSessionAfterArchive,
@@ -586,6 +587,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                     onRemoveClipPlate={removeClipPlate}
                     onSelectClipPlate={selectClipPlate}
                     onSetClipPlateMotionPrompt={setClipPlateMotionPrompt}
+                    onSetClipPlateLastSent={setClipPlateLastSent}
                     onSetClipInstrumentalModel={setClipInstrumentalModel}
                     chainNote={chainNote}
                     onDismissChainNote={() => setChainNote(null)}
