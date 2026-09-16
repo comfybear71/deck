@@ -34,6 +34,10 @@ import {
   SEGMENT_NUDGE_STEP_SEC,
   shouldApplyHydratedSkidmarksSession,
   shouldPushSkidmarksSession,
+  resolveSkidmarksHydrationWinner,
+  computeSkidmarksArchiveFingerprint,
+  isSkidmarksSessionAlreadyArchived,
+  markSkidmarksSessionArchived,
   SKIDMARKS_MODELS,
   stripUnsyncableImageBytesForWire,
   selectSkidmarksBand,
@@ -1841,5 +1845,96 @@ describe("setSkidmarksScriptSequenceDraft", () => {
     setSkidmarksScriptSequenceDraft({ script: "old band's script" });
     createSkidmarksBand();
     expect(getSkidmarksSnapshot().session.scriptSequenceDraft).toBeNull();
+  });
+});
+
+/**
+ * `resolveSkidmarksHydrationWinner` — the audit's known failure mode #3
+ * (app boots, Neon loads, a tap during the load used to discard the
+ * real row, then the next push overwrote it with seed state).
+ */
+describe("resolveSkidmarksHydrationWinner", () => {
+  const base = {
+    editedDuringLoad: false,
+    localIsSubstantive: true,
+    localUnsynced: false,
+    localSavedAt: 1000,
+    remoteIsSubstantive: true,
+    remoteUpdatedAt: 2000,
+  };
+
+  it("audit failure mode #3: a real Neon row always beats a seed-only local state, even after a tap during the load", () => {
+    expect(resolveSkidmarksHydrationWinner({ ...base, localIsSubstantive: false, editedDuringLoad: true })).toBe("remote");
+    expect(resolveSkidmarksHydrationWinner({ ...base, localIsSubstantive: false })).toBe("remote");
+  });
+
+  it("keeps local when a real edit landed while the load was in flight", () => {
+    expect(resolveSkidmarksHydrationWinner({ ...base, editedDuringLoad: true })).toBe("local");
+  });
+
+  it("keeps local when the mirror still holds work Neon never confirmed, whatever the clocks say", () => {
+    expect(resolveSkidmarksHydrationWinner({ ...base, localUnsynced: true, localSavedAt: 1, remoteUpdatedAt: 999999 })).toBe("local");
+  });
+
+  it("keeps local when its own timestamp is newer than Neon's, or Neon's is unknown", () => {
+    expect(resolveSkidmarksHydrationWinner({ ...base, localSavedAt: 3000 })).toBe("local");
+    expect(resolveSkidmarksHydrationWinner({ ...base, remoteUpdatedAt: null })).toBe("local");
+  });
+
+  it("takes Neon's copy on an ordinary clean reopen (synced mirror, Neon at least as fresh)", () => {
+    expect(resolveSkidmarksHydrationWinner(base)).toBe("remote");
+    expect(resolveSkidmarksHydrationWinner({ ...base, localSavedAt: null })).toBe("remote");
+  });
+
+  it("with nothing real in Neon, keeps whatever real session this phone has", () => {
+    expect(resolveSkidmarksHydrationWinner({ ...base, remoteIsSubstantive: false })).toBe("local");
+    expect(resolveSkidmarksHydrationWinner({ ...base, remoteIsSubstantive: false, localIsSubstantive: false })).toBe("remote");
+  });
+});
+
+/**
+ * Archive fingerprint — "Archive does not mean delete" (audit L3) and
+ * no duplicate rows for an unchanged song.
+ */
+describe("archive fingerprint", () => {
+  it("is stable for the same band+mp3 and ignores its own stored value", () => {
+    const state = getSkidmarksSnapshot();
+    const band = state.bands.find((b) => b.id === state.session.bandId)!;
+    const mp3 = state.session.mp3!;
+    const fp = computeSkidmarksArchiveFingerprint(band, mp3);
+    expect(fp).toBe(computeSkidmarksArchiveFingerprint(band, { ...mp3, lastArchivedFingerprint: fp }));
+    expect(fp).not.toBe(computeSkidmarksArchiveFingerprint({ ...band, name: "Renamed" }, mp3));
+  });
+
+  it("markSkidmarksSessionArchived records the checkpoint, and any later edit un-marks it", () => {
+    const before = getSkidmarksSnapshot();
+    const band = before.bands.find((b) => b.id === before.session.bandId)!;
+    const mp3 = before.session.mp3!;
+    expect(isSkidmarksSessionAlreadyArchived(band, mp3)).toBe(false);
+
+    markSkidmarksSessionArchived(mp3.attachId, computeSkidmarksArchiveFingerprint(band, mp3));
+    const marked = getSkidmarksSnapshot().session.mp3!;
+    expect(isSkidmarksSessionAlreadyArchived(band, marked)).toBe(true);
+
+    setSkidmarksMp3Duration(marked.attachId, 123);
+    const edited = getSkidmarksSnapshot().session.mp3!;
+    expect(isSkidmarksSessionAlreadyArchived(band, edited)).toBe(false);
+  });
+
+  it("ignores a late mark for an mp3 that is no longer the live one", () => {
+    const before = getSkidmarksSnapshot();
+    const band = before.bands.find((b) => b.id === before.session.bandId)!;
+    const mp3 = before.session.mp3!;
+    markSkidmarksSessionArchived("some-other-attach", computeSkidmarksArchiveFingerprint(band, mp3));
+    expect(getSkidmarksSnapshot().session.mp3!.lastArchivedFingerprint).toBeUndefined();
+  });
+
+  it("restoring an archived song marks it as already on the shelf, so leaving it again never duplicates the row", () => {
+    const before = getSkidmarksSnapshot();
+    const band = before.bands.find((b) => b.id === before.session.bandId)!;
+    const mp3 = before.session.mp3!;
+    restoreSkidmarksArchivedSession(band, mp3);
+    const restored = getSkidmarksSnapshot();
+    expect(isSkidmarksSessionAlreadyArchived(band, restored.session.mp3!)).toBe(true);
   });
 });

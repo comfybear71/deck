@@ -273,10 +273,11 @@ function routingFramingHint(vocal: boolean, model: SkidmarksModelId): string {
       "still."
     );
   }
-  if (model === "h3") {
-    return "Simple, clean single-subject still, minimal composition.";
-  }
-  return "Wide dynamic cinematic music-video establishing shot, strong sense of place and camera angle.";
+  // Instrumental stills: no factory framing line at all (audit Part 3
+  // — hidden text may only constrain Jack, never add composition or
+  // camera language he didn't write). The "Wide dynamic … camera
+  // angle" and "Simple, clean single-subject" defaults are gone.
+  return "";
 }
 
 export interface PlateGenerationRequest {

@@ -140,7 +140,12 @@
  */
 
 import { getSkidmarksCharacterLock } from "./plateGeneration";
-import { resolveInstrumentalVideoModel, type SkidmarksInstrumentalVideoModel, type SkidmarksMember } from "./skidmarks";
+import {
+  resolveInstrumentalVideoModel,
+  type SkidmarksClipSentPayload,
+  type SkidmarksInstrumentalVideoModel,
+  type SkidmarksMember,
+} from "./skidmarks";
 
 /** Per-plate render duration range — Grok's documented ceiling is 15s;
  * 5s is the floor this feature has always used. Real per-plate duration
@@ -312,44 +317,46 @@ export function computePlateTimeRange(
 export const MAX_MOTION_PROMPT_LENGTH = 600;
 
 /**
- * Motion language for a single-plate render when Stuart hasn't typed
- * his own motion direction — the video-render equivalent of
- * `lib/plateGeneration.ts`'s `routingFramingHint`, but for camera
- * *motion* rather than framing. Always the single-image push-in phrasing
- * now (image-to-video mode) — the multi-plate continuity phrasing this
- * used to emit for 2–3 references no longer applies, since a render is
- * always exactly one plate's still now (see this module's doc comment).
- *
- * 2026-09-15: for a Vocal render of a locked character, this used to
- * return the same push-in-zoom text as everything else — directly
- * contradicting `VOCAL_LTX_PROMPT_LOCK`'s own "Camera holds" line a
- * few sentences earlier in the same prompt, and directly contradicting
- * the sibling `skidmarks` project's own LTX research log
- * (`docs/LTX_23_PROMPT_RESEARCH.md`: "Do not add push-in / orbit on a
- * talking plate unless Stuie asks — that is how faces drift") and its
- * proven "worked 100%" gold shape (`docs/SUNNY_BANKS_IMAGE_MOTION_STANDARD.md`),
- * which uses a static `Camera holds` frame with only small natural
- * body movement, never zoom or push-in, on every speaking plate. A
- * `vocalLockedCharacter` render now gets that same static-camera shape
- * instead, matching Stuart's own live-QA finding the same day (steady
- * camera + head nod + foot tap "worked perfectly"; his same-day
- * follow-up confirmed hand gestures and tilting his head up and to
- * the side are also safe and never altered his character).
+ * The *only* camera line this app ever adds on its own, and only when
+ * Stuart left the motion box blank on a locked character's Vocal
+ * render: camera holds, he moves. Blank motion on anything else means
+ * exactly that — no camera line at all, nothing invented (audit Part 3:
+ * "blank motion ≠ the app writes zoom"). The old factory default
+ * ("Slow cinematic push-in zoom…") is gone; a push-in only ever reaches
+ * a render if he typed it.
  */
-function automaticMotionHint(vocalLockedCharacter: boolean): string {
-  if (vocalLockedCharacter) {
-    return (
-      "Camera holds — a static, locked-off frame for the whole clip, no push-in, no zoom, no orbit, no " +
-      "pan. All the energy comes from him instead: small, natural movement in time with the vocal — a slight " +
-      "head nod, tilting his head up and to the side, relaxed hand gestures, a light foot tap. Same scene, " +
-      "subject, and lighting as the reference image throughout."
-    );
-  }
+function defaultMotionLine(vocalLockedCharacter: boolean): string {
+  if (!vocalLockedCharacter) return "";
   return (
-    "Slow cinematic push-in zoom, subtle camera movement, keep the scene, subject, and lighting consistent " +
-    "with the reference image."
+    "Camera holds — a static, locked-off frame for the whole clip. All the energy comes from him instead: " +
+    "a slight head nod in time with the vocal, tilting his head up and to the side, relaxed hand gestures, " +
+    "a light foot tap. Same scene, subject, and lighting as the reference image throughout."
   );
 }
+
+/**
+ * Any camera-movement language that breaks a locked character's
+ * shadow-face lock on a Vocal render — Stuart's own live testing and
+ * the audit brief's Rule B: "While he is singing: camera still. No
+ * zoom, push-in, orbit, pan." Deliberately broad (a "tracking shot" or
+ * "swerving camera" in a script description counts just as much as a
+ * typed "slow zoom") — a false positive only ever costs a static frame,
+ * a false negative costs a paid render with a human face in it.
+ */
+const CAMERA_MOVE_RE =
+  /\b(zoom|zooms|zooming|push[- ]?in|pushes in|pushing in|pull[- ]?back|dolly|dollies|orbit|orbits|orbiting|circl\w*|pan|pans|panning|whip|tracking shot|tracks (?:with|around|past)|swerv\w*|sweep\w*|crane|handheld|fly[- ]?(?:in|through|over|around)|rotat\w*|spin\w*)\b/i;
+
+/** Whether some motion/shot text asks the camera itself to move. Pure. */
+export function motionPromptMovesCamera(text: string | undefined): boolean {
+  return !!text && CAMERA_MOVE_RE.test(text);
+}
+
+/** Shown to Stuart, before the paid tap, when his own typed motion note
+ * asks the camera to move on a locked character's Vocal plate. His text
+ * is still sent exactly as written — user text wins (audit Part 3) —
+ * this is a warning, never a silent rewrite. */
+export const CAMERA_HOLD_REQUIRED_MESSAGE =
+  "Camera hold is what keeps his face in the hat while he sings — this motion note asks the camera to move. It will be sent exactly as you wrote it; camera moves around his face are the known way the shadow lock breaks.";
 
 export interface ClipGenerationRequest {
   /** The full prompt sent to xAI — Stuart's own clip `shotPrompt`
@@ -366,6 +373,9 @@ export interface ClipGenerationRequest {
    * request or a Vocal one with no locked vocalist — nothing here
    * invents negative text for a character with no lock. */
   negativePrompt?: string;
+  /** Present only on a locked character's Vocal render — see
+   * `ClipCameraWarnings`. Ignored by the server. */
+  cameraWarnings?: ClipCameraWarnings;
   /** The selected plate's still, and nothing else — always exactly one
    * entry; kept as an array on the wire (unchanged shape from before
    * this rework) since `app/api/skidmarks/generate-clip/route.ts` still
@@ -450,13 +460,12 @@ export interface BuildClipGenerationRequestParams {
    * into keyhole, mild pulse on door cracks") — the *primary* motion
    * instruction sent to xAI when given (non-blank); `shotPrompt`/the
    * plate still remain the visual description and reference image,
-   * unchanged. Replaces `automaticMotionHint`'s default phrasing
-   * outright rather than being appended alongside it, so Stuart's own
-   * explicit direction is never diluted or contradicted by the default.
-   * Trimmed and capped at `MAX_MOTION_PROMPT_LENGTH`; blank/omitted
-   * keeps the automatic default (a static "Camera holds" shot for a
-   * locked character's Vocal clip, push-in/zoom otherwise — see
-   * `automaticMotionHint`). Still read on the Vocal/Comfy-LTX path
+   * unchanged. Sent exactly as typed — user text wins (audit Part 3).
+   * Trimmed and capped at `MAX_MOTION_PROMPT_LENGTH` (the UI shows a
+   * live counter against the same cap); blank/omitted adds a static
+   * "Camera holds" line for a locked character's Vocal clip and
+   * nothing at all otherwise — see `defaultMotionLine`. Still read on
+   * the Vocal/Comfy-LTX path
    * too — a typed camera-motion note is just as meaningful for that
    * partner node's own `prompt` field. */
   motionPrompt?: string;
@@ -507,6 +516,18 @@ export interface BuildClipGenerationRequestParams {
   instrumentalVideoModel?: SkidmarksInstrumentalVideoModel;
 }
 
+/** Camera-movement *warnings* for a locked character's Vocal render —
+ * nothing here changes the prompt (user text wins, audit Part 3); it
+ * only tells the UI what to warn about before any money is spent. */
+export interface ClipCameraWarnings {
+  /** Stuart's own typed motion note asks the camera to move. Sent as
+   * written; see `CAMERA_HOLD_REQUIRED_MESSAGE`. */
+  typedMotionMovesCamera: boolean;
+  /** The shot description itself describes camera movement. Sent as
+   * written. */
+  shotMovesCamera: boolean;
+}
+
 /**
  * The one video-specific addendum to a locked character's still-image
  * hallmarks/negative cues (`lib/plateGeneration.ts`'s
@@ -550,24 +571,19 @@ export interface BuildClipGenerationRequestParams {
  * movement instead of onto camera motion.
  */
 function lockedCharacterVideoNote(): string {
+  // Constrains Jack only. Never names a camera move (push-in, zoom,
+  // orbit, pan) even to forbid it — naming one in the positive prompt
+  // teaches the model to expect it (audit Part 3, rule 4).
   return (
     "Across this clip's motion, his glowing neon-blue lips are only ever visible while his mouth is actually " +
     "in frame \u2014 never invented on a shot where his face turns away or his mouth leaves frame. His face " +
     "never becomes legible, well-lit, or reads as a normal, watchable stare at any point in the motion, even " +
-    "while he's singing \u2014 the shadow-face lock holds for the whole clip, not just its first frame. This " +
-    "matters most exactly when the camera pushes in close or zooms tight on him: the shadow gets darker and " +
-    "deeper the closer the camera gets, never lighter or thinner. But the frame must never go fully, totally " +
-    "black or empty \u2014 even at the tightest close-up, keep one small real anchor visible at all times: the " +
-    "hat-brim edge, a faint rim of light along the shadow's outline, or the glowing neon lips. A pure black, " +
-    "featureless frame is wrong here, not the goal \u2014 deep near-black shadow with one visible anchor point " +
-    "is. He must never resolve into a normal, visible human face at any zoom level. While he's singing, the " +
-    "camera itself stays calm and slow \u2014 no fast pans, whips, or rapid circling around his head; quick " +
-    "camera movement around his face is what breaks the shadow lock. This overrides any camera-movement " +
-    "language elsewhere in this description \u2014 a tracking shot, a swerving or sweeping camera move, an " +
-    "orbiting or circling shot, a whip pan \u2014 whatever else is described, the camera stays calm and steady " +
-    "on him while he's singing, full stop. The energy of the shot comes from his own small, natural body " +
-    "movement instead: a slight head nod in time with the vocal, tilting his head up and to the side, relaxed " +
-    "hand gestures, a light foot tap \u2014 not from big or sudden motion of any kind."
+    "while he's singing \u2014 the shadow-face lock holds for the whole clip, not just its first frame. The " +
+    "closer his face is to the lens, the darker and deeper the shadow under the brim, never lighter or thinner. " +
+    "But the frame must never go fully, totally black or empty \u2014 keep one small real anchor visible at all " +
+    "times: the hat-brim edge, a faint rim of light along the shadow's outline, or the glowing neon lips. A " +
+    "pure black, featureless frame is wrong here, not the goal \u2014 deep near-black shadow with one visible " +
+    "anchor point is. He must never resolve into a normal, visible human face at any point."
   );
 }
 
@@ -581,12 +597,58 @@ function lockedCharacterVideoNote(): string {
  * there's no locked character in this clip — see
  * `VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER` below for why a locked
  * character needs a different wording of this exact same lock. */
+/**
+ * The Vocal (Comfy Cloud LTX) lip-sync lock — the *only* backend text
+ * a Vocal render carries. Audit Part 4 stripped the rest: "Use the
+ * provided start image as the first frame. Same people as the start
+ * image for the entire clip." told the model to stay on the still,
+ * which is how fifty-six clips ended on their own first frame; and
+ * "stylised 3D animated feature render… not a photoreal human" was a
+ * style the app chose, not Stuart. Jack's look lives in Jack's lock.
+ */
 const VOCAL_LTX_PROMPT_LOCK =
   "perfect lip sync, clear lip movement, citing the dialogue clearly, facial expressions and hand gestures are " +
-  "lively, dication is perfect. Use the provided start image as the first frame. Same people as the start image " +
-  "for the entire clip. Highly detailed stylised 3D animated feature render, clean simplified forms, believable " +
-  "materials, soft overcast lighting, shallow depth of field, cinematic quality, sharp focus. Not photographic, " +
-  "not a cartoon, not a photoreal human. Camera holds.";
+  "lively, dication is perfect.";
+
+/** Comfy's own default negative text on the LTX graph's negative node
+ * (`lib/comfyCloud.ts` appends Jack's cues after it). Lives here, not
+ * in `comfyCloud.ts`, so the client-side "what will be sent" panel can
+ * show the real full negative string without importing `sharp`. */
+export const LTX_DEFAULT_NEGATIVE_PROMPT = "pc game, console game, video game, cartoon, childish, ugly";
+
+/**
+ * The exact payload panel (audit Part 4) — built from the same request
+ * the render sends, so it can never drift from it. Pure.
+ */
+export function describeClipPayload(
+  request: ClipGenerationRequest,
+  startImageUrl: string,
+  motionPrompt: string | undefined
+): SkidmarksClipSentPayload {
+  const engine: SkidmarksClipSentPayload["engine"] = request.vocal
+    ? "LTX"
+    : resolveInstrumentalVideoModel(request.videoBackend) === "h3"
+      ? "H3"
+      : "Grok";
+  const negativePrompt = request.vocal
+    ? [LTX_DEFAULT_NEGATIVE_PROMPT, request.negativePrompt].filter((t) => !!t).join(", ")
+    : "";
+  const userText = [request.shotPrompt, motionPrompt?.trim().slice(0, MAX_MOTION_PROMPT_LENGTH) ?? ""]
+    .filter((t) => t.length > 0)
+    .join(" ");
+  return {
+    engine,
+    durationSec: request.durationSec,
+    startImageUrl,
+    endImageUrl: null,
+    prompt: request.prompt,
+    userText,
+    negativePrompt,
+    ...(typeof request.audioStartSec === "number" ? { audioStartSec: request.audioStartSec } : {}),
+    ...(typeof request.audioEndSec === "number" ? { audioEndSec: request.audioEndSec } : {}),
+    sentAt: Date.now(),
+  };
+}
 
 /** Real bug found 2026-09-16 from a live render: Jack Ash's shadow-face
  * lock was still losing to a normal, lit, photoreal human face on some
@@ -596,19 +658,17 @@ const VOCAL_LTX_PROMPT_LOCK =
  * lively" (asking for a visible, expressive, legible face) right next to
  * `lockedCharacterVideoNote()`'s "his face never becomes legible,
  * well-lit ... at any point" (asking for the opposite). Given that
- * contradiction across a very long prompt, the model was free to resolve
- * it by picking the lit-face reading. A locked character has no visible
- * face to be expressive with — only his glowing lips and his body do
- * that job — so for a locked character this drops "facial expressions"
- * entirely rather than asking for it and then forbidding it. Everything
- * else stays byte-for-byte identical to `VOCAL_LTX_PROMPT_LOCK`. */
+ * contradiction, the model was free to resolve it by picking the
+ * lit-face reading. A locked character has no visible face to be
+ * expressive with — only his glowing lips and his body do that job —
+ * so for a locked character this drops "facial expressions" entirely
+ * rather than asking for it and then forbidding it. Everything else
+ * stays byte-for-byte identical to `VOCAL_LTX_PROMPT_LOCK`, including
+ * staying just as short post-audit-Part-4 — no style/start-image text
+ * reintroduced here either. */
 const VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER =
   "perfect lip sync through his glowing neon-blue lips, clear lip movement, citing the dialogue clearly, hand " +
-  "gestures are lively, dication is perfect. His face itself is never lit or expressive — it stays a solid " +
-  "black shadow the whole time, with only his glowing lips visible. Use the provided start image as the first " +
-  "frame. Same person as the start image for the entire clip. Highly detailed stylised 3D animated feature " +
-  "render, clean simplified forms, believable materials, soft overcast lighting, shallow depth of field, " +
-  "cinematic quality, sharp focus. Not photographic, not a cartoon, not a photoreal human. Camera holds.";
+  "gestures are lively, dication is perfect.";
 
 /**
  * Builds the one real clip-render request this feature ever sends —
@@ -625,6 +685,17 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   const durationSec = Math.min(bounds.max, Math.max(bounds.min, Math.round(params.durationSec)));
 
   const lock = params.vocalist ? getSkidmarksCharacterLock(params.vocalist.id) : undefined;
+  const lockedVocal = Boolean(params.vocal && lock);
+  // User text wins (audit Part 3). His motion note goes out exactly as
+  // typed; the only line this app adds on its own is a camera hold
+  // when the box is blank on a locked character's Vocal render. Camera
+  // moves in his own text are *warned about* (`cameraWarnings`), never
+  // rewritten.
+  const motionText = trimmedMotionPrompt || defaultMotionLine(lockedVocal);
+  const cameraWarnings: ClipCameraWarnings = {
+    typedMotionMovesCamera: motionPromptMovesCamera(trimmedMotionPrompt),
+    shotMovesCamera: motionPromptMovesCamera(params.shotPrompt),
+  };
   // `lock.negativeCues` no longer rides along in this *positive* prompt
   // as a "Do not show: X" sentence — it goes out on the workflow's own
   // real negative-conditioning channel instead (`request.negativePrompt`
@@ -633,15 +704,20 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   // text, doesn't suppress it as reliably as true negative conditioning
   // does — real reported failure, 2026-09-15: Jack Ash's face resolving
   // into a normal, lit human face on every single Vocal clip.
+  // Stuart's own text first, always. Everything after it is either the
+  // Vocal backend's lip-sync lock or Jack's own lock — never a camera
+  // move he didn't write.
   const parts = [
-    params.vocal ? (lock ? VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER : VOCAL_LTX_PROMPT_LOCK) : "",
     params.shotPrompt.trim(),
-    trimmedMotionPrompt || automaticMotionHint(Boolean(params.vocal && lock)),
-    params.vocal && lock ? (lock.videoPromptHallmarks ?? lock.promptHallmarks) : "",
-    params.vocal && lock ? lockedCharacterVideoNote() : "",
-    "Solo shot: no other people, extra characters, crowd, or background figures appear anywhere in frame at " +
-      "any point in the motion, including out-of-focus or partially-visible in the background.",
-    `Music video for ${params.bandName}. Cinematic motion, no on-screen text, no watermark.`,
+    motionText,
+    params.vocal ? (lockedVocal ? VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER : VOCAL_LTX_PROMPT_LOCK) : "",
+    lockedVocal ? (lock!.videoPromptHallmarks ?? lock!.promptHallmarks) : "",
+    lockedVocal ? lockedCharacterVideoNote() : "",
+    lockedVocal
+      ? "Solo shot: no other people, extra characters, crowd, or background figures appear anywhere in frame at " +
+        "any point in the motion, including out-of-focus or partially-visible in the background."
+      : "",
+    `Music video for ${params.bandName}. no on-screen text, no watermark.`,
   ];
 
   const request: ClipGenerationRequest = {
@@ -661,6 +737,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     endSec: params.endSec,
     vocal: params.vocal,
     ...(params.vocal && lock?.negativeCues ? { negativePrompt: lock.negativeCues } : {}),
+    ...(lockedVocal ? { cameraWarnings } : {}),
   };
 
   if (!params.vocal) {

@@ -19,6 +19,7 @@ import {
   markSkidmarksAnalysisFailed,
   markSkidmarksMp3AudioFailed,
   markSkidmarksMp3AudioUnconfigured,
+  markSkidmarksSessionArchived,
   markSkidmarksTranscriptionFailed,
   markSkidmarksTranscriptionUnconfigured,
   nudgeSkidmarksSegmentEnd,
@@ -33,6 +34,7 @@ import {
   selectSkidmarksBand,
   selectSkidmarksProjectKind,
   setSkidmarksBandCoverImage,
+  setSkidmarksClipPlateLastSent,
   setSkidmarksClipPlateMotionPrompt,
   setSkidmarksClipPlateStill,
   setSkidmarksMemberAvatarImage,
@@ -47,6 +49,7 @@ import {
   subscribeSkidmarksSessionSync,
   type SkidmarksBand,
   type SkidmarksClipSegment,
+  type SkidmarksClipSentPayload,
   type SkidmarksInstrumentalVideoModel,
   type SkidmarksLook,
   type SkidmarksMp3Attachment,
@@ -331,6 +334,13 @@ export function useSkidmarksStudio() {
     []
   );
 
+  /** What a plate's render just sent — see `SkidmarksClipSentPayload`. */
+  const setClipPlateLastSent = useCallback(
+    (segmentId: string, plateId: string, sent: SkidmarksClipSentPayload) =>
+      setSkidmarksClipPlateLastSent(segmentId, plateId, sent),
+    []
+  );
+
   /** The H3/Grok switch inside `SkidmarksClipRender`'s Render confirm —
    * see `setSkidmarksSegmentInstrumentalVideoModel`'s doc comment. */
   const setClipInstrumentalModel = useCallback(
@@ -356,6 +366,13 @@ export function useSkidmarksStudio() {
   const clearSessionAfterArchive = useCallback(() => {
     analysisTokenRef.current += 1;
     resetSkidmarksSessionAfterArchive();
+  }, []);
+
+  /** Right after a successful Archive that left the desk alone — records
+   * that the live song is now on the shelf unchanged, so leaving it
+   * later doesn't upload the same checkpoint twice. */
+  const markSessionArchived = useCallback((attachId: string, fingerprint: string) => {
+    markSkidmarksSessionArchived(attachId, fingerprint);
   }, []);
 
   return {
@@ -389,8 +406,10 @@ export function useSkidmarksStudio() {
     removeClipPlate,
     selectClipPlate,
     setClipPlateMotionPrompt,
+    setClipPlateLastSent,
     setClipInstrumentalModel,
     restoreArchivedSession,
     clearSessionAfterArchive,
+    markSessionArchived,
   };
 }
