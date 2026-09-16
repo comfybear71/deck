@@ -1640,6 +1640,14 @@ const SESSION_ENDPOINT = "/api/skidmarks/session";
  * (below, wired to `visibilitychange`/`pagehide`) is. */
 const SESSION_PUSH_DEBOUNCE_MS = 600;
 
+/** How often to quietly retry a real, still-failed save with nothing
+ * else prompting it (no new edit, no `online` event) — see
+ * `ensureSessionPersistenceWired`'s "keep retrying" doc comment. Slow
+ * enough not to hammer a connection that's genuinely, persistently
+ * down; frequent enough that a phone locked overnight with an
+ * intermittent connection still ends up saved well before morning. */
+const SESSION_UNSYNCED_RETRY_INTERVAL_MS = 60_000;
+
 export type SkidmarksSessionSyncStatus = "loading" | "synced" | "saving" | "unconfigured" | "error";
 
 /** Live, ephemeral status of the Neon round trip — see this section's
@@ -1928,6 +1936,55 @@ async function migrateInlineSessionImagesToBlob(
 }
 
 /**
+ * Hard backstop for the "session JSON carries URLs only, never image
+ * bytes" rule (2026-09-16, direct instruction after real overnight data
+ * loss). `migrateInlineSessionImagesToBlob` above is the real fix —
+ * upload, then use the real link — and now retries on every push; this
+ * is what runs *right before the wire* when that still couldn't clear
+ * everything (Blob itself unreachable, not just one picker's own
+ * upload failing). Pure and synchronous — no network, no retry, just a
+ * last-resort strip: any inline `data:` URL still present gets dropped
+ * from what's actually sent, never embedded raw in the request body.
+ * The full state (photo included) still lives in `cachedState` and the
+ * local mirror untouched — nothing is lost locally, only the Neon copy
+ * is briefly missing that one photo's bytes until Blob recovers and a
+ * later push migrates it for real.
+ */
+export function stripUnsyncableImageBytesForWire(state: SkidmarksState): SkidmarksState {
+  let changed = false;
+  const bands = state.bands.map((band) => {
+    const coverChanged = band.coverImage?.startsWith("data:") ?? false;
+    const members = band.members.map((member) => {
+      if (!member.avatarImage?.startsWith("data:")) return member;
+      changed = true;
+      return { ...member, avatarImage: undefined };
+    });
+    if (!coverChanged && members === band.members) return band;
+    changed = changed || coverChanged;
+    return { ...band, coverImage: coverChanged ? undefined : band.coverImage, members };
+  });
+
+  const mp3 = state.session.mp3;
+  const segments = mp3
+    ? mp3.segments.map((segment) => {
+        const plates = segment.plates.map((plate) => {
+          if (!plate.still?.dataUrl.startsWith("data:")) return plate;
+          changed = true;
+          return { ...plate, still: undefined };
+        });
+        return { ...segment, plates };
+      })
+    : null;
+
+  if (!changed) return state;
+  return {
+    ...state,
+    bands,
+    session: mp3 && segments ? { ...state.session, mp3: { ...mp3, segments } } : state.session,
+  };
+}
+
+/**
  * The one-time (per page load) `GET /api/skidmarks/session` —
  * triggered off `subscribeSkidmarks`'s very first subscriber. Never
  * re-triggered on a later re-subscribe (e.g. reopening the Skidmarks
@@ -2120,7 +2177,12 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
       notify();
     }
   }
-  const toSend = keepalive ? snapshot : cachedState;
+  const preStrip = keepalive ? snapshot : cachedState;
+  // Hard rule, no exceptions, including the keepalive path (cheap and
+  // synchronous, so there's no cost to running it there too): the
+  // request body sent over the wire must never carry raw image bytes,
+  // only URLs — see `stripUnsyncableImageBytesForWire`'s doc comment.
+  const toSend = preStrip ? stripUnsyncableImageBytesForWire(preStrip) : preStrip;
   setSessionSync({ status: "saving" });
   const maxAttempts = keepalive ? 1 : SESSION_PUSH_RETRY_DELAYS_MS.length + 1;
   // Real live bug (2026-09-14): "Load failed" (a raw network-level fetch
@@ -2281,6 +2343,22 @@ function ensureSessionPersistenceWired(): void {
   window.addEventListener("online", () => {
     if (sessionSync.status === "error") void pushSkidmarksSessionNow();
   });
+  // "If the UI is not synced, block close and keep retrying" (2026-09-16
+  // direct instruction). The browser's own `beforeunload` prompt above
+  // is the actual "block close" — a real block is not possible from
+  // page script alone, that dialog is the platform's own ceiling. This
+  // is the "keep retrying" half: the `online` event and the next edit
+  // both already retry a real, substantive error, but neither one fires
+  // for a tab just sitting open, unsynced, with nothing else happening —
+  // a locked phone overnight is exactly that case. A slow, quiet
+  // interval retry while genuinely unsynced means a connection that
+  // comes and goes gets picked up eventually even with zero user action,
+  // rather than staying stuck on one failed attempt until morning.
+  // Never fires on "unconfigured" (no Neon connected here at all —
+  // retrying can't fix that) or once "synced" — only on a real "error".
+  window.setInterval(() => {
+    if (sessionSync.status === "error") void pushSkidmarksSessionNow();
+  }, SESSION_UNSYNCED_RETRY_INTERVAL_MS);
   void hydrateSkidmarksSessionOnce();
 }
 

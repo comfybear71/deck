@@ -35,6 +35,7 @@ import {
   shouldApplyHydratedSkidmarksSession,
   shouldPushSkidmarksSession,
   SKIDMARKS_MODELS,
+  stripUnsyncableImageBytesForWire,
   selectSkidmarksBand,
   setSkidmarksClipPlateMotionPrompt,
   setSkidmarksClipPlateStill,
@@ -1505,6 +1506,76 @@ describe("shouldPushSkidmarksSession", () => {
 
   it("real reported disaster (2026-09-16): refuses the push once a real session has been seen but the current state has gone thin", () => {
     expect(shouldPushSkidmarksSession(true, false)).toBe(false);
+  });
+});
+
+/**
+ * `stripUnsyncableImageBytesForWire` — the hard "session JSON carries
+ * URLs only, never image bytes" backstop (2026-09-16 direct
+ * instruction), for whenever `migrateInlineSessionImagesToBlob`'s own
+ * upload-and-swap couldn't clear an inline `data:` URL before a push.
+ */
+describe("stripUnsyncableImageBytesForWire", () => {
+  const seedBand: SkidmarksBand = {
+    id: "jack-ash",
+    name: "Jack Ash",
+    tagline: "Dirt roads & bad decisions",
+    coverSeed: 1,
+    editIcon: "pencil",
+    members: [],
+  };
+
+  function stateWith(overrides: Partial<SkidmarksState>): SkidmarksState {
+    return {
+      bands: [seedBand],
+      session: { projectKind: null, bandId: null, mp3: null, scriptSequenceDraft: null },
+      removedSeedBandIds: [],
+      ...overrides,
+    };
+  }
+
+  it("returns the same state unchanged (same reference) when nothing inline is present", () => {
+    const state = stateWith({});
+    expect(stripUnsyncableImageBytesForWire(state)).toBe(state);
+  });
+
+  it("strips an inline data: URL band cover image, leaving a real URL cover image untouched", () => {
+    const withDataCover = stateWith({ bands: [{ ...seedBand, coverImage: "data:image/jpeg;base64,abc123" }] });
+    expect(stripUnsyncableImageBytesForWire(withDataCover).bands[0].coverImage).toBeUndefined();
+
+    const withRealCover = stateWith({ bands: [{ ...seedBand, coverImage: "https://blob.example/cover.jpg" }] });
+    expect(stripUnsyncableImageBytesForWire(withRealCover).bands[0].coverImage).toBe("https://blob.example/cover.jpg");
+  });
+
+  it("strips an inline data: URL member avatar", () => {
+    const withDataAvatar = stateWith({
+      bands: [
+        {
+          ...seedBand,
+          members: [{ id: "m1", name: "Jack Ash", emoji: "🎤", looks: [], avatarImage: "data:image/jpeg;base64,xyz" }],
+        },
+      ],
+    });
+    expect(stripUnsyncableImageBytesForWire(withDataAvatar).bands[0].members[0].avatarImage).toBeUndefined();
+  });
+
+  it("strips an inline data: URL plate still, never a real Blob URL one", () => {
+    const mp3 = createMp3Attachment("song.mp3", 30);
+    mp3.segments[0].plates[0].still = { dataUrl: "data:image/jpeg;base64,plate", source: "upload", createdAt: 1 };
+    const withDataStill = stateWith({
+      session: { projectKind: "music-video", bandId: "jack-ash", mp3, scriptSequenceDraft: null },
+    });
+    const stripped = stripUnsyncableImageBytesForWire(withDataStill);
+    expect(stripped.session.mp3?.segments[0].plates[0].still).toBeUndefined();
+
+    const mp3Real = createMp3Attachment("song.mp3", 30);
+    mp3Real.segments[0].plates[0].still = { dataUrl: "https://blob.example/plate.jpg", source: "upload", createdAt: 1 };
+    const withRealStill = stateWith({
+      session: { projectKind: "music-video", bandId: "jack-ash", mp3: mp3Real, scriptSequenceDraft: null },
+    });
+    expect(stripUnsyncableImageBytesForWire(withRealStill).session.mp3?.segments[0].plates[0].still?.dataUrl).toBe(
+      "https://blob.example/plate.jpg"
+    );
   });
 });
 
