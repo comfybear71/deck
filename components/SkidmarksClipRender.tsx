@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   buildClipGenerationRequest,
   CAMERA_HOLD_REQUIRED_MESSAGE,
@@ -216,6 +216,25 @@ export function SkidmarksClipRender({
   const [paidButNotSaved, setPaidButNotSaved] = useState(false);
   const [justPersisted, setJustPersisted] = useState(false);
 
+  // Same builder the real render uses, on the same inputs — the preview
+  // can't drift from what's sent. `plateStillDataUrl` is only carried,
+  // never read, for the prompt text itself.
+  const promptPreview = useMemo(() => {
+    const request = buildClipGenerationRequest({
+      shotPrompt,
+      bandName,
+      plateStillDataUrl: plateStillDataUrl ?? "",
+      motionPrompt,
+      durationSec,
+      vocal,
+      instrumentalVideoModel,
+      vocalist,
+      mp3AudioUrl,
+    });
+    const typed = [shotPrompt.trim(), motionPrompt.trim()].filter((t) => t.length > 0).join(" ");
+    return { prompt: request.prompt, hasExtras: request.prompt !== typed };
+  }, [shotPrompt, bandName, plateStillDataUrl, motionPrompt, durationSec, vocal, instrumentalVideoModel, vocalist, mp3AudioUrl]);
+
   if (!plateStillDataUrl) return null;
 
   const estimatedCost = vocal
@@ -340,10 +359,30 @@ export function SkidmarksClipRender({
         />
       )}
 
+      {!generating && (
+        <p className="-mt-1 text-right text-[10px] text-white/35" aria-live="polite">
+          {motionPrompt.length}/{MAX_MOTION_PROMPT_LENGTH}
+        </p>
+      )}
+
       {!generating && cameraHoldRequired && (
         <p role="status" className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-2.5 py-1.5 text-[10px] leading-snug text-amber-100/90">
           {CAMERA_HOLD_REQUIRED_MESSAGE}
         </p>
+      )}
+
+      {!generating && (
+        // Audit Part 3, rule 6: the exact text the backend receives, so
+        // nothing hidden ever surprises him. Collapsed by default. His
+        // own text is always the start of it; anything after is the
+        // Vocal lip-sync lock, Jack's lock, or the no-text footer.
+        <details className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2">
+          <summary className="cursor-pointer select-none text-[11px] font-medium text-white/50">
+            Prompt {vocal ? "LTX" : instrumentalVideoModel === "h3" ? "H3" : "Grok"} will get
+            {promptPreview.hasExtras ? " — your text first, lock text after" : " — exactly your text"}
+          </summary>
+          <p className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-white/60">{promptPreview.prompt}</p>
+        </details>
       )}
 
       {!generating && (
