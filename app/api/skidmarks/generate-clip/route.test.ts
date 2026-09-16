@@ -1230,7 +1230,17 @@ describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) rend
     const differing = Object.keys(template).filter(
       (id) => JSON.stringify(graph[id]) !== JSON.stringify(template[id])
     );
-    expect(differing.sort()).toEqual(["269", "276", "340:296", "340:319", "340:331", "340:349", "341"]);
+    expect(differing.sort()).toEqual([
+      "269",
+      "276",
+      "340:285",
+      "340:286",
+      "340:296",
+      "340:319",
+      "340:331",
+      "340:349",
+      "341",
+    ]);
     // Prompt enhancer forced off, every render.
     expect((graph["340:349"] as { inputs: { value: boolean } }).inputs.value).toBe(false);
   });

@@ -354,12 +354,13 @@ describe("downloadComfyCloudOutput", () => {
 
 describe("buildLtx23Ia2vWorkflow", () => {
   // Always patched, regardless of the optional `negativePrompt` input —
-  // `340:296` (refine strength) and `340:349` (prompt enhancer) both
-  // have real unconditional defaults applied on every call.
+  // `340:296` (refine strength), `340:349` (prompt enhancer), and
+  // `340:285`/`340:286` (the two noise seeds, 2026-09-16 fix) all have
+  // real unconditional values applied on every call.
   // `340:314` (negative prompt) is deliberately NOT in this list — it's
   // only patched when `negativePrompt` is actually given, see the
   // dedicated tests below.
-  const PATCHED_NODE_IDS = ["269", "276", "340:296", "340:319", "340:331", "340:349", "341"];
+  const PATCHED_NODE_IDS = ["269", "276", "340:285", "340:286", "340:296", "340:319", "340:331", "340:349", "341"];
 
   function build(overrides: Partial<Parameters<typeof buildLtx23Ia2vWorkflow>[0]> = {}) {
     return buildLtx23Ia2vWorkflow({
@@ -429,6 +430,31 @@ describe("buildLtx23Ia2vWorkflow", () => {
   it("always forces the prompt enhancer off, regardless of the template's own shipped default", () => {
     const graph = build();
     expect((graph["340:349"] as { inputs: { value: boolean } }).inputs.value).toBe(false);
+  });
+
+  it("real bug (2026-09-16, live-reported): 'render plate again' returned the exact same clip three times — the two RandomNoise seeds were never patched off the template's fixed literals", () => {
+    const graph = build();
+    const baseSeed = (graph["340:285"] as { inputs: { noise_seed: number } }).inputs.noise_seed;
+    const refineSeed = (graph["340:286"] as { inputs: { noise_seed: number } }).inputs.noise_seed;
+    const template = LTX_23_IA2V_TEMPLATE as unknown as Record<string, { inputs: { noise_seed: number } }>;
+    const templateBaseSeed = template["340:285"].inputs.noise_seed;
+    const templateRefineSeed = template["340:286"].inputs.noise_seed;
+    expect(baseSeed).not.toBe(templateBaseSeed);
+    expect(refineSeed).not.toBe(templateRefineSeed);
+    expect(Number.isInteger(baseSeed)).toBe(true);
+    expect(Number.isInteger(refineSeed)).toBe(true);
+  });
+
+  it("gives the base pass and the refine pass independent seeds, and a fresh one on every call — never the same fixed number twice", () => {
+    const first = build();
+    const second = build();
+    const firstBase = (first["340:285"] as { inputs: { noise_seed: number } }).inputs.noise_seed;
+    const firstRefine = (first["340:286"] as { inputs: { noise_seed: number } }).inputs.noise_seed;
+    const secondBase = (second["340:285"] as { inputs: { noise_seed: number } }).inputs.noise_seed;
+    expect(firstBase).not.toBe(firstRefine);
+    // Astronomically unlikely to collide by chance across two real calls —
+    // a real regression back to a fixed literal is what this actually guards.
+    expect(firstBase).not.toBe(secondBase);
   });
 
   it("real finding (2026-09-15): the template has no identity/face-lock LoRA at all — a live export from Stuart's own account confirmed it, correcting an earlier wrong assumption", () => {
