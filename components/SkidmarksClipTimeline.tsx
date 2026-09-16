@@ -7,6 +7,7 @@ import {
   type SkidmarksAnalysisStatus,
   type SkidmarksBand,
   type SkidmarksClipSegment,
+  type SkidmarksClipSentPayload,
   type SkidmarksInstrumentalVideoModel,
   type SkidmarksPlateStill,
   type SkidmarksSegmentsSource,
@@ -63,6 +64,9 @@ interface SkidmarksClipTimelineProps {
   onRemoveClipPlate: (segmentId: string, plateId: string) => void;
   onSelectClipPlate: (segmentId: string, plateId: string) => void;
   onSetClipPlateMotionPrompt: (segmentId: string, plateId: string, motionPrompt: string) => void;
+  /** Records the exact payload a plate's render sent — see
+   * `lib/skidmarks.ts`'s `SkidmarksClipSentPayload`. */
+  onSetClipPlateLastSent: (segmentId: string, plateId: string, sent: SkidmarksClipSentPayload) => void;
   /** The H3/Grok switch inside `SkidmarksClipRender`'s Render confirm —
    * see `lib/skidmarks.ts`'s `SkidmarksInstrumentalVideoModel`. */
   onSetClipInstrumentalModel: (segmentId: string, model: SkidmarksInstrumentalVideoModel) => void;
@@ -107,6 +111,7 @@ function SegmentRow({
   onRemovePlate,
   onSelectPlate,
   onSetPlateMotionPrompt,
+  onSetPlateLastSent,
   onSetInstrumentalModel,
   onNudgeStart,
   onNudgeEnd,
@@ -138,6 +143,7 @@ function SegmentRow({
   onRemovePlate: (plateId: string) => void;
   onSelectPlate: (plateId: string) => void;
   onSetPlateMotionPrompt: (plateId: string, motionPrompt: string) => void;
+  onSetPlateLastSent: (plateId: string, sent: SkidmarksClipSentPayload) => void;
   onSetInstrumentalModel: (model: SkidmarksInstrumentalVideoModel) => void;
   /** The header's double-tap-to-edit time fields
    * (`SkidmarksClipTimingHeaderEdit`, rendered directly below) — see
@@ -241,6 +247,7 @@ function SegmentRow({
             onRemovePlate={onRemovePlate}
             onSelectPlate={onSelectPlate}
             onSetPlateMotionPrompt={onSetPlateMotionPrompt}
+            onSetPlateLastSent={onSetPlateLastSent}
             onSetClipInstrumentalModel={onSetInstrumentalModel}
             renderedPlateIds={renderedPlateIds}
             renderLocked={renderLocked}
@@ -380,6 +387,7 @@ export function SkidmarksClipTimeline({
   onRemoveClipPlate,
   onSelectClipPlate,
   onSetClipPlateMotionPrompt,
+  onSetClipPlateLastSent,
   onSetClipInstrumentalModel,
   onNudgeSegmentStart,
   onNudgeSegmentEnd,
@@ -486,6 +494,7 @@ export function SkidmarksClipTimeline({
                   onSetPlateMotionPrompt={(plateId, motionPrompt) =>
                     onSetClipPlateMotionPrompt(segment.id, plateId, motionPrompt)
                   }
+                  onSetPlateLastSent={(plateId, sent) => onSetClipPlateLastSent(segment.id, plateId, sent)}
                   onSetInstrumentalModel={(model) => onSetClipInstrumentalModel(segment.id, model)}
                   onNudgeStart={(deltaSec) => onNudgeSegmentStart(segment.id, deltaSec)}
                   onNudgeEnd={(deltaSec) => onNudgeSegmentEnd(segment.id, deltaSec)}

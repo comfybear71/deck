@@ -184,7 +184,9 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt).not.toContain("the vocalist");
     expect(prompt).not.toContain("Do not show:");
     expect(prompt).not.toContain("neon blue");
-    expect(prompt).toContain("Wide dynamic cinematic music-video establishing shot");
+    // Audit Part 3: no factory framing/camera line on an Instrumental still.
+    expect(prompt).not.toContain("Wide dynamic cinematic music-video establishing shot");
+    expect(prompt).not.toContain("camera angle");
     expect(referenceImageDataUrls).toEqual([]);
   });
 
@@ -401,19 +403,21 @@ describe("buildPlateGenerationRequest", () => {
       vocalist: member({ id: "generic-singer", name: "Rio" }),
     });
     expect(prompt).not.toContain("lip-sync-ready");
-    expect(prompt).toContain("Wide dynamic cinematic music-video establishing shot");
+    expect(prompt).not.toContain("Wide dynamic cinematic music-video establishing shot");
     // The vocalist auto-include rule is about `vocal`, not the model tag.
     expect(prompt).toContain("Feature Rio, the vocalist, in the scene.");
   });
 
-  it("routes an H3-tagged still to plain, single-subject framing", () => {
+  it("audit Part 3: an H3-tagged still gets his shot text and the footer only — no factory framing line", () => {
     const { prompt } = buildPlateGenerationRequest({
       shotPrompt: "a lone chair in an empty room",
       vocal: false,
       model: "h3",
       bandName: BAND_NAME,
     });
-    expect(prompt).toContain("Simple, clean single-subject still");
+    expect(prompt.startsWith("a lone chair in an empty room")).toBe(true);
+    expect(prompt).not.toContain("Simple, clean single-subject still");
+    expect(prompt).not.toContain("Wide dynamic");
   });
 
   it("mentions a generic vocalist by name without inventing hallmarks they were never locked with", () => {

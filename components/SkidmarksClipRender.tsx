@@ -1,18 +1,88 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   buildClipGenerationRequest,
+  CAMERA_HOLD_REQUIRED_MESSAGE,
+  describeClipPayload,
   estimateClipRenderCostUsd,
   estimateH3ClipRenderCostUsd,
   estimateLtxClipRenderCostUsd,
   generateSkidmarksClip,
   MAX_MOTION_PROMPT_LENGTH,
+  motionPromptMovesCamera,
 } from "@/lib/clipGeneration";
 import { buildClipRenderFilename } from "@/lib/clipRenderBlob";
 import type { PersistedClipRender } from "@/lib/clipRenders";
-import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
-import type { SkidmarksInstrumentalVideoModel, SkidmarksMember } from "@/lib/skidmarks";
+import { getSkidmarksCharacterLock, resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
+import type { SkidmarksClipSentPayload, SkidmarksInstrumentalVideoModel, SkidmarksMember } from "@/lib/skidmarks";
+
+const PAYLOAD_PANEL_SEEN_KEY = "the-tab:skidmarks-payload-panel-seen";
+
+function formatClock(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec - m * 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/** Audit Part 4's panel — every field the brief lists, from the record,
+ * never from an assumption. His own text is highlighted; app text is
+ * the dim remainder. */
+function SentPayloadPanel({ payload }: { payload: SkidmarksClipSentPayload }) {
+  const userIndex = payload.userText ? payload.prompt.indexOf(payload.userText) : -1;
+  const before = userIndex > 0 ? payload.prompt.slice(0, userIndex) : "";
+  const after = userIndex >= 0 ? payload.prompt.slice(userIndex + payload.userText.length) : payload.prompt;
+  return (
+    <div className="mt-2 flex flex-col gap-2 text-[11px] leading-relaxed">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-white/60">
+        <dt className="text-white/40">Engine</dt>
+        <dd>{payload.engine}</dd>
+        <dt className="text-white/40">Duration</dt>
+        <dd>{payload.durationSec}s (what the engine is asked for)</dd>
+        <dt className="text-white/40">Start image</dt>
+        <dd className="min-w-0">
+          {payload.startImageUrl ? (
+            <span className="flex items-center gap-2">
+              {/* eslint-disable-next-line @next/next/no-img-element -- Blob/data URL thumbnail */}
+              <img src={payload.startImageUrl} alt="" className="h-10 w-10 shrink-0 rounded-md object-cover" />
+              <span className="truncate text-white/40">{payload.startImageUrl}</span>
+            </span>
+          ) : (
+            <span className="text-rose-300/90">none yet</span>
+          )}
+        </dd>
+        <dt className="text-white/40">End image</dt>
+        <dd className="font-semibold text-white/70">NONE</dd>
+        {typeof payload.audioStartSec === "number" && typeof payload.audioEndSec === "number" && (
+          <>
+            <dt className="text-white/40">Audio slice</dt>
+            <dd>
+              {formatClock(payload.audioStartSec)} \u2013 {formatClock(payload.audioEndSec)}
+            </dd>
+          </>
+        )}
+      </dl>
+      <div>
+        <p className="text-white/40">Positive prompt <span className="text-amber-200/80">(your text)</span> + <span className="text-white/35">(app text)</span></p>
+        <p className="mt-1 whitespace-pre-wrap break-words">
+          {userIndex >= 0 ? (
+            <>
+              <span className="text-white/35">{before}</span>
+              <span className="text-amber-200/90">{payload.userText}</span>
+              <span className="text-white/35">{after}</span>
+            </>
+          ) : (
+            <span className="text-white/35">{payload.prompt}</span>
+          )}
+        </p>
+      </div>
+      <div>
+        <p className="text-white/40">Negative prompt</p>
+        <p className="mt-1 whitespace-pre-wrap break-words text-white/35">{payload.negativePrompt || "(none for this engine)"}</p>
+      </div>
+    </div>
+  );
+}
 
 interface SkidmarksClipRenderProps {
   /** The clip's shared shot-prompt text — same field
@@ -30,6 +100,11 @@ interface SkidmarksClipRenderProps {
    * or mix up each plate's own motion direction. */
   motionPrompt: string;
   onSetMotionPrompt: (value: string) => void;
+  /** What this plate's last render actually sent, if any — shown as
+   * "What was sent" (audit Part 4). */
+  lastSent?: SkidmarksClipSentPayload;
+  /** Called with the exact payload right before the real render call. */
+  onSent: (sent: SkidmarksClipSentPayload) => void;
   /** This plate's real, auto-computed render length — see
    * `lib/clipGeneration.ts`'s `computePlateDurationSec`/
    * `computeLtxPlateDurationSec`. */
@@ -183,6 +258,8 @@ export function SkidmarksClipRender({
   plateStillDataUrl,
   motionPrompt,
   onSetMotionPrompt,
+  lastSent,
+  onSent,
   durationSec,
   vocal,
   instrumentalVideoModel,
@@ -213,6 +290,45 @@ export function SkidmarksClipRender({
    * error. */
   const [paidButNotSaved, setPaidButNotSaved] = useState(false);
   const [justPersisted, setJustPersisted] = useState(false);
+  /** Audit Part 4: "Do not send until he can open that once. After he
+   * trusts it, collapse it." Once the payload panel has been opened on
+   * this phone, Render is live and the panel starts collapsed. A
+   * per-viewer convenience only, so `localStorage` is right for it;
+   * every read/write is guarded (private mode, blocked storage). */
+  const [payloadSeen, setPayloadSeen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(PAYLOAD_PANEL_SEEN_KEY) === "1";
+    } catch {
+      return true; // no storage at all — never block Render on it
+    }
+  });
+  const markPayloadSeen = () => {
+    setPayloadSeen(true);
+    try {
+      window.localStorage.setItem(PAYLOAD_PANEL_SEEN_KEY, "1");
+    } catch {
+      // Private mode / storage blocked — the in-memory flag still unlocks Render.
+    }
+  };
+
+  // Same builder the real render uses, on the same inputs — the preview
+  // can't drift from what's sent. `plateStillDataUrl` is only carried,
+  // never read, for the prompt text itself.
+  const promptPreview = useMemo(() => {
+    const request = buildClipGenerationRequest({
+      shotPrompt,
+      bandName,
+      plateStillDataUrl: plateStillDataUrl ?? "",
+      motionPrompt,
+      durationSec,
+      vocal,
+      instrumentalVideoModel,
+      vocalist,
+      mp3AudioUrl,
+    });
+    return describeClipPayload(request, plateStillDataUrl ?? "", motionPrompt);
+  }, [shotPrompt, bandName, plateStillDataUrl, motionPrompt, durationSec, vocal, instrumentalVideoModel, vocalist, mp3AudioUrl]);
 
   if (!plateStillDataUrl) return null;
 
@@ -226,9 +342,14 @@ export function SkidmarksClipRender({
   // slice \u2014 an honest, disabled state instead of a request the
   // server would have to reject anyway.
   const missingAudio = vocal && !mp3AudioUrl;
+  // Said up front, before the paid tap — `buildClipGenerationRequest`
+  // makes the same call and swaps the motion note for a static camera
+  // (audit Rule B: no zoom/push-in/orbit/pan while he sings).
+  const cameraHoldRequired =
+    vocal && !!vocalist && !!getSkidmarksCharacterLock(vocalist.id) && motionPromptMovesCamera(motionPrompt);
 
   const handleRender = async () => {
-    if (locked || generating || missingAudio) return;
+    if (locked || generating || missingAudio || !payloadSeen) return;
     const trimmedPrompt = shotPrompt.trim();
     if (!trimmedPrompt) {
       setError("Add a shot prompt first — Render needs something to go on.");
@@ -264,6 +385,11 @@ export function SkidmarksClipRender({
         startSec,
         endSec,
       });
+      // Audit Part 4: log exactly what is going out, on the plate, so a
+      // finished clip can show "What was sent" and fifty-six renders
+      // can be compared by start image. Recorded with the plate's own
+      // URL (never the resolved bytes).
+      onSent(describeClipPayload(request, plateStillDataUrl, motionPrompt));
       const outcome = await generateSkidmarksClip(request);
       if (outcome.ok) {
         if (outcome.persisted) {
@@ -334,6 +460,45 @@ export function SkidmarksClipRender({
       )}
 
       {!generating && (
+        <p className="-mt-1 text-right text-[10px] text-white/35" aria-live="polite">
+          {motionPrompt.length}/{MAX_MOTION_PROMPT_LENGTH}
+        </p>
+      )}
+
+      {!generating && cameraHoldRequired && (
+        <p role="status" className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-2.5 py-1.5 text-[10px] leading-snug text-amber-100/90">
+          {CAMERA_HOLD_REQUIRED_MESSAGE}
+        </p>
+      )}
+
+      {!generating && (
+        // Audit Part 4: the exact payload, from the same builder the
+        // render uses. Open by default until it has been opened once on
+        // this phone; Render stays disabled until then.
+        <details
+          open={!payloadSeen}
+          onToggle={(e) => {
+            if ((e.currentTarget as HTMLDetailsElement).open) markPayloadSeen();
+          }}
+          className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2"
+        >
+          <summary className="cursor-pointer select-none text-[11px] font-medium text-white/50">
+            Prompt {promptPreview.engine} will get{payloadSeen ? "" : " — open this once before Render"}
+          </summary>
+          <SentPayloadPanel payload={promptPreview} />
+        </details>
+      )}
+
+      {!generating && lastSent && (
+        <details className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2">
+          <summary className="cursor-pointer select-none text-[11px] font-medium text-white/50">
+            What was sent — {lastSent.engine}, {new Date(lastSent.sentAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+          </summary>
+          <SentPayloadPanel payload={lastSent} />
+        </details>
+      )}
+
+      {!generating && (
         <div className="flex items-center justify-between gap-2">
           {vocal ? (
             // Vocal only ever has one real backend (Comfy Cloud LTX,
@@ -393,11 +558,12 @@ export function SkidmarksClipRender({
           <button
             type="button"
             onClick={handleRender}
-            disabled={locked || missingAudio}
-            aria-disabled={locked || missingAudio}
+            disabled={locked || missingAudio || !payloadSeen}
+            aria-disabled={locked || missingAudio || !payloadSeen}
+            title={!payloadSeen ? "Open the \u201cPrompt … will get\u201d panel once first" : undefined}
             className={[
               "w-1/2 rounded-full px-3.5 py-2 text-center text-[12px] font-semibold transition-colors",
-              locked || missingAudio
+              locked || missingAudio || !payloadSeen
                 ? "cursor-not-allowed bg-white/[0.04] text-white/30"
                 : "bg-rose-400 text-zinc-950 hover:bg-rose-300 active:bg-rose-400/85",
             ].join(" ")}

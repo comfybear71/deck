@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildClipGenerationRequest,
+  describeClipPayload,
+  LTX_DEFAULT_NEGATIVE_PROMPT,
+  motionPromptMovesCamera,
   computeLtxPlateDurationSec,
   computePlateDurationSec,
   computePlateTimeRange,
@@ -144,7 +147,7 @@ describe("buildClipGenerationRequest", () => {
     expect(referenceImageDataUrls).toEqual(["data:image/jpeg;base64,door"]);
   });
 
-  it("uses the automatic single-image push-in motion hint when no motionPrompt is given", () => {
+  it("audit P3: adds no camera line at all when no motionPrompt is given on an Instrumental clip", () => {
     const { prompt } = buildClipGenerationRequest({
       vocal: false,
       shotPrompt: "a door creaks open",
@@ -152,7 +155,8 @@ describe("buildClipGenerationRequest", () => {
       plateStillDataUrl: "data:image/jpeg;base64,door",
       durationSec: 5,
     });
-    expect(prompt).toContain("Slow cinematic push-in zoom");
+    expect(prompt).toBe("a door creaks open Music video for Jack Ash. no on-screen text, no watermark.");
+    expect(prompt.toLowerCase()).not.toMatch(/push-in|zoom|orbit|\bpan\b|cinematic motion/);
   });
 
   it("lets an explicit motionPrompt override the automatic motion hint outright, not append alongside it", () => {
@@ -180,7 +184,7 @@ describe("buildClipGenerationRequest", () => {
     expect(prompt).toContain("slow zoom into keyhole,\nmild pulse on door cracks");
   });
 
-  it("trims a motionPrompt and falls back to the automatic hint when it's blank/whitespace-only", () => {
+  it("treats a whitespace-only motionPrompt as blank — no camera line, nothing invented", () => {
     const { prompt } = buildClipGenerationRequest({
       vocal: false,
       shotPrompt: "a door creaks open",
@@ -189,7 +193,7 @@ describe("buildClipGenerationRequest", () => {
       durationSec: 5,
       motionPrompt: "   ",
     });
-    expect(prompt).toContain("Slow cinematic push-in zoom");
+    expect(prompt).toBe("a door creaks open Music video for Jack Ash. no on-screen text, no watermark.");
   });
 
   it("caps an overlong motionPrompt at MAX_MOTION_PROMPT_LENGTH rather than sending it verbatim", () => {
@@ -455,7 +459,7 @@ describe("buildClipGenerationRequest", () => {
       expect(prompt.toLowerCase()).toContain("foot tap");
     });
 
-    it("still uses the generic push-in zoom default for a vocalist with no registered lock", () => {
+    it("adds no camera line for a vocalist with no registered lock when motion is blank", () => {
       const nova = member({ id: "solar-rebel-vocals", name: "Nova", role: "Vocals" });
       const { prompt } = buildClipGenerationRequest({
         vocal: true,
@@ -465,7 +469,8 @@ describe("buildClipGenerationRequest", () => {
         durationSec: 10,
         vocalist: nova,
       });
-      expect(prompt).toContain("Slow cinematic push-in zoom");
+      expect(prompt.toLowerCase()).not.toMatch(/push-in|zoom|orbit|\bpan\b|camera holds/);
+      expect(prompt.startsWith("singing directly to camera")).toBe(true);
     });
 
     it("never injects a character lock for a vocalist with no registered lock", () => {
@@ -495,6 +500,155 @@ describe("buildClipGenerationRequest", () => {
       });
       expect(prompt.toLowerCase()).not.toContain("neon blue");
     });
+  });
+});
+
+/**
+ * Audit Part 3 — "user text wins, hidden text may only constrain Jack,
+ * no secret zoom." P1–P4 verbatim from the brief, plus the warnings.
+ */
+describe("prompt assembly: Stuart's text on top, no hidden camera moves", () => {
+  const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
+  const baseParams = {
+    shotPrompt: "Jack at the farm, still camera.",
+    bandName: "Stu Balls",
+    plateStillDataUrl: "data:image/jpeg;base64,abc",
+    durationSec: 10,
+    vocal: true,
+    vocalist: jackAsh,
+    mp3AudioUrl: "https://blob.example/song.mp3",
+  };
+  const cameraVerbs = /push-in|zoom|orbit|\bpan\b|dolly|whip/i;
+
+  it("P1: Jack vocal, motion empty — sent prompt has no push-in, zoom, orbit or pan anywhere", () => {
+    const { prompt } = buildClipGenerationRequest({ ...baseParams });
+    expect(prompt.startsWith("Jack at the farm, still camera.")).toBe(true);
+    expect(prompt).toContain("Camera holds");
+    expect(prompt).not.toMatch(cameraVerbs);
+  });
+
+  it("P2: typed motion is sent as written, right after the shot, with no factory line after it", () => {
+    const { prompt } = buildClipGenerationRequest({ ...baseParams, motionPrompt: "camera holds, small head nod." });
+    expect(prompt.startsWith("Jack at the farm, still camera. camera holds, small head nod.")).toBe(true);
+    expect(prompt).not.toContain("Camera holds \u2014 a static, locked-off frame");
+    expect(prompt).not.toMatch(cameraVerbs);
+  });
+
+  it("P3: Instrumental, motion empty — no automatic slow cinematic push-in zoom, no camera line at all", () => {
+    const { prompt } = buildClipGenerationRequest({ ...baseParams, vocal: false, vocalist: undefined, shotPrompt: "empty hallway, door ajar" });
+    expect(prompt).toBe("empty hallway, door ajar Music video for Stu Balls. no on-screen text, no watermark.");
+  });
+
+  it("P4: Jack vocal keeps the lock text (shadow face, neon lips, solo) and camera verbs only if he wrote them", () => {
+    const blank = buildClipGenerationRequest({ ...baseParams });
+    expect(blank.prompt.toLowerCase()).toContain("neon");
+    expect(blank.prompt.toLowerCase()).toContain("shadow");
+    expect(blank.prompt).toContain("Solo shot");
+    expect(blank.prompt).not.toMatch(cameraVerbs);
+
+    const typed = buildClipGenerationRequest({ ...baseParams, motionPrompt: "slow zoom onto his lips" });
+    expect(typed.prompt).toContain("slow zoom onto his lips");
+    expect(typed.prompt.match(/zoom/gi)).toHaveLength(1); // his one, nothing of the app's
+  });
+
+  it("the Vocal LTX lock no longer carries its own \"Camera holds.\" sentence — the hold comes only from the blank-motion default", () => {
+    const nova = member({ id: "solar-rebel-vocals", name: "Nova" });
+    const { prompt } = buildClipGenerationRequest({ ...baseParams, vocalist: nova, motionPrompt: "slow pan across the stage" });
+    expect(prompt).toContain("slow pan across the stage");
+    expect(prompt).not.toContain("Camera holds");
+  });
+
+  it("the Jack video note never names a camera move, even to forbid one", () => {
+    const { prompt } = buildClipGenerationRequest({ ...baseParams });
+    expect(prompt.toLowerCase()).not.toContain("pushes in");
+    expect(prompt.toLowerCase()).not.toContain("zooms");
+    expect(prompt.toLowerCase()).not.toContain("orbit");
+  });
+
+  it("the solo-shot and no-motion footer lines never leak onto a non-Jack render", () => {
+    const { prompt } = buildClipGenerationRequest({ ...baseParams, vocal: false, vocalist: undefined, shotPrompt: "crowd at the bar" });
+    expect(prompt).not.toContain("Solo shot");
+    expect(prompt).not.toContain("Cinematic motion");
+  });
+
+  it("motionPromptMovesCamera catches zoom/push-in/orbit/pan/tracking/swerve wording", () => {
+    for (const text of ["slow zoom into his hat", "push-in on the lips", "orbit around him", "pan left to the door", "tracking shot down the hall", "the camera swerves past"]) {
+      expect(motionPromptMovesCamera(text)).toBe(true);
+    }
+    expect(motionPromptMovesCamera("he nods slowly, taps his foot")).toBe(false);
+    expect(motionPromptMovesCamera("")).toBe(false);
+    expect(motionPromptMovesCamera(undefined)).toBe(false);
+  });
+
+  it("warns (never rewrites) when his typed motion or shot moves the camera on a Jack vocal", () => {
+    const typed = buildClipGenerationRequest({ ...baseParams, motionPrompt: "slow push-in onto his face" });
+    expect(typed.prompt).toContain("slow push-in onto his face");
+    expect(typed.cameraWarnings).toEqual({ typedMotionMovesCamera: true, shotMovesCamera: false });
+
+    const shot = buildClipGenerationRequest({ ...baseParams, shotPrompt: "Tracking shot swerving around Jack as he sings" });
+    expect(shot.prompt.startsWith("Tracking shot swerving around Jack as he sings")).toBe(true);
+    expect(shot.prompt).not.toContain("Camera override");
+    expect(shot.cameraWarnings).toEqual({ typedMotionMovesCamera: false, shotMovesCamera: true });
+
+    const instrumental = buildClipGenerationRequest({ ...baseParams, vocal: false, motionPrompt: "slow zoom into the keyhole" });
+    expect(instrumental.cameraWarnings).toBeUndefined();
+  });
+});
+
+/**
+ * Audit Part 4 — why fifty-six clips ended on the same frame, and the
+ * payload panel that proves what is sent.
+ */
+describe("Part 4: no stay-on-the-start-image lock, and an honest payload record", () => {
+  const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
+  const vocalParams = {
+    shotPrompt: "Jack on the porch",
+    bandName: "Stu Balls",
+    plateStillDataUrl: "data:image/jpeg;base64,abc",
+    durationSec: 12,
+    vocal: true,
+    vocalist: jackAsh,
+    mp3AudioUrl: "https://blob.example/song.mp3",
+    startSec: 30,
+    endSec: 42,
+    plateIndex: 0,
+    plateCount: 1,
+  };
+
+  it("a Vocal render no longer tells LTX to stay on the start image, or to look like a 3D animated feature", () => {
+    const { prompt } = buildClipGenerationRequest(vocalParams);
+    expect(prompt.toLowerCase()).not.toContain("start image");
+    expect(prompt.toLowerCase()).not.toContain("as the first frame");
+    expect(prompt.toLowerCase()).not.toContain("for the entire clip");
+    expect(prompt.toLowerCase()).not.toContain("3d animated");
+    expect(prompt.toLowerCase()).not.toContain("photoreal human");
+    expect(prompt).toContain("perfect lip sync"); // the lip-sync lock itself stays
+  });
+
+  it("describeClipPayload reports engine, real duration, start image, End image NONE, full prompts and the audio slice", () => {
+    const request = buildClipGenerationRequest({ ...vocalParams, motionPrompt: "small nod" });
+    const payload = describeClipPayload(request, "https://blob.example/still.jpg", "small nod");
+    expect(payload.engine).toBe("LTX");
+    expect(payload.durationSec).toBe(12);
+    expect(payload.startImageUrl).toBe("https://blob.example/still.jpg");
+    expect(payload.endImageUrl).toBeNull();
+    expect(payload.prompt).toBe(request.prompt);
+    expect(payload.userText).toBe("Jack on the porch small nod");
+    expect(payload.prompt.startsWith(payload.userText)).toBe(true);
+    expect(payload.negativePrompt.startsWith(LTX_DEFAULT_NEGATIVE_PROMPT)).toBe(true);
+    expect(payload.negativePrompt.toLowerCase()).toContain("face lit or visible");
+    expect(payload.audioStartSec).toBe(30);
+    expect(payload.audioEndSec).toBe(42);
+  });
+
+  it("describeClipPayload names Grok/H3 for an Instrumental render and reports no negative prompt", () => {
+    const grok = buildClipGenerationRequest({ ...vocalParams, vocal: false, vocalist: undefined, instrumentalVideoModel: "grok" });
+    expect(describeClipPayload(grok, "https://blob.example/a.jpg", "").engine).toBe("Grok");
+    const h3 = buildClipGenerationRequest({ ...vocalParams, vocal: false, vocalist: undefined, instrumentalVideoModel: "h3" });
+    const payload = describeClipPayload(h3, "https://blob.example/a.jpg", undefined);
+    expect(payload.engine).toBe("H3");
+    expect(payload.negativePrompt).toBe("");
+    expect(payload.audioStartSec).toBeUndefined();
   });
 });
 

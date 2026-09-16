@@ -90,6 +90,7 @@
  * `COMFY_URL` (blank = Comfy Cloud) — nothing else is invented.
  */
 import sharp from "sharp";
+import { LTX_DEFAULT_NEGATIVE_PROMPT } from "./clipGeneration";
 import LTX_23_IA2V_TEMPLATE from "@/workflow/LTX_2.3_IA2V_Cloud.json";
 
 /** Confirmed against the original Skidmarks repo's own `.env.example`
@@ -675,7 +676,7 @@ const IA2V_NODE_SAVE = "341";
  * node's text. The real levers turned out to be the prompt enhancer
  * and the refine pass's strength, both below. */
 const IA2V_NODE_NEGATIVE_PROMPT = "340:314";
-const IA2V_DEFAULT_NEGATIVE_PROMPT = "pc game, console game, video game, cartoon, childish, ugly";
+const IA2V_DEFAULT_NEGATIVE_PROMPT = LTX_DEFAULT_NEGATIVE_PROMPT;
 /** Node `340:296`, `LTXVImgToVideoInplace` — the short (4-step),
  * high-resolution refinement pass that runs *after* the low-res base
  * pass and upscale (node `340:325`, a separate `LTXVImgToVideoInplace`
