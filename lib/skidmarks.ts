@@ -2097,6 +2097,30 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
     }
     return;
   }
+  // Real, confirmed root cause (2026-09-16): a picked band cover/member
+  // avatar/plate photo uploads to Blob *first* and only ever falls back
+  // to embedding the raw `data:` URL inline when that upload itself
+  // fails (see `SkidmarksBandPicker`/`SkidmarksMembersModule`'s own
+  // comments) — a real, honest "never just drop the photo" choice, not
+  // a bug on its own. But once that fallback fires, the inline image
+  // then sits in `cachedState` until the next full page reload, since
+  // `migrateInlineSessionImagesToBlob` only ever ran once, at hydrate.
+  // Every `persist()` in between pushes that same oversized state again.
+  // Retrying the migration here, right before every non-keepalive push,
+  // means a Blob hiccup self-heals on the very next save instead of
+  // silently bloating every save until the tab happens to reload.
+  // Skipped for a `keepalive` flush (pagehide/backgrounding) — that one
+  // has to be fast, and blocking it on image re-uploads that might not
+  // even finish before the page is gone would defeat its whole purpose.
+  if (!keepalive && snapshot) {
+    const { state: migrated, changed } = await migrateInlineSessionImagesToBlob(snapshot);
+    if (changed) {
+      cachedState = migrated;
+      writeLocalMirror(migrated);
+      notify();
+    }
+  }
+  const toSend = keepalive ? snapshot : cachedState;
   setSessionSync({ status: "saving" });
   const maxAttempts = keepalive ? 1 : SESSION_PUSH_RETRY_DELAYS_MS.length + 1;
   // Real live bug (2026-09-14): "Load failed" (a raw network-level fetch
@@ -2112,7 +2136,7 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   // error message turns the next report into a measurement instead of
   // another guess: a small number here rules that theory out entirely;
   // a multi-MB number confirms it and says exactly where to look next.
-  const payloadJson = JSON.stringify({ state: snapshot });
+  const payloadJson = JSON.stringify({ state: toSend });
   const payloadSizeMb = (new TextEncoder().encode(payloadJson).length / (1024 * 1024)).toFixed(1);
   try {
     let lastNetworkError: unknown = null;
