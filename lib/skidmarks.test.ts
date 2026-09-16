@@ -33,6 +33,7 @@ import {
   restoreSkidmarksArchivedSession,
   SEGMENT_NUDGE_STEP_SEC,
   shouldApplyHydratedSkidmarksSession,
+  shouldPushSkidmarksSession,
   SKIDMARKS_MODELS,
   selectSkidmarksBand,
   setSkidmarksClipPlateMotionPrompt,
@@ -1482,6 +1483,28 @@ describe("shouldApplyHydratedSkidmarksSession", () => {
   it("discards the fetched session once any local edit landed while it was in flight", () => {
     expect(shouldApplyHydratedSkidmarksSession(5, 6)).toBe(false);
     expect(shouldApplyHydratedSkidmarksSession(0, 3)).toBe(false);
+  });
+});
+
+/**
+ * `shouldPushSkidmarksSession` — real, confirmed data-loss case
+ * (2026-09-16): once this page load has ever seen a real session, a
+ * push must never be allowed to overwrite Neon with a thin/seed-only
+ * state, no matter how `cachedState` ended up that way. See
+ * `pushSkidmarksSessionNow`'s use of this guard.
+ */
+describe("shouldPushSkidmarksSession", () => {
+  it("allows the push before this page load has ever seen a real session (the ordinary first-save case)", () => {
+    expect(shouldPushSkidmarksSession(false, false)).toBe(true);
+    expect(shouldPushSkidmarksSession(false, true)).toBe(true);
+  });
+
+  it("allows the push once a real session has been seen, as long as what's being pushed is still substantive", () => {
+    expect(shouldPushSkidmarksSession(true, true)).toBe(true);
+  });
+
+  it("real reported disaster (2026-09-16): refuses the push once a real session has been seen but the current state has gone thin", () => {
+    expect(shouldPushSkidmarksSession(true, false)).toBe(false);
   });
 });
 

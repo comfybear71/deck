@@ -1767,6 +1767,91 @@ function readLegacySkidmarksLocalStorageSession(): SkidmarksState | null {
   }
 }
 
+/**
+ * **Crash/offline mirror — added 2026-09-16 after real, confirmed data
+ * loss.** #57 removed `localStorage` as this feature's state of record
+ * on purpose (Neon is the one durable copy, see this section's own doc
+ * comment) — but that left Neon as the *only* copy of anything not yet
+ * successfully `PUT`. A real live failure showed exactly why that's not
+ * enough on its own: a save that's been silently failing (a payload
+ * that won't go through) followed by a refresh shows whatever Neon last
+ * *did* successfully receive — which can be visibly older than what
+ * Stuart was just looking at, and reads exactly like his work vanished,
+ * because past that point it genuinely hadn't been saved anywhere.
+ *
+ * This key is deliberately separate from `LEGACY_LOCAL_STORAGE_KEY` (a
+ * one-time pre-#57 recovery of a blob nothing writes to anymore) — this
+ * one is a live, ongoing mirror, rewritten on every real `persist()`.
+ * It is never the primary source of truth and never silently wins over
+ * a real, substantive Neon row on an ordinary successful load — see
+ * `hydrateSkidmarksSessionOnce`'s use of it, only on a failed/empty
+ * load, and `shouldPushSkidmarksSession`'s doc comment for the matching
+ * write-side guard this pairs with.
+ */
+const LOCAL_MIRROR_STORAGE_KEY = "the-tab:skidmarks-studio-mirror";
+
+/** Best-effort, synchronous, never throws — private-mode Safari, a full
+ * quota, or `localStorage` simply not existing all just mean the mirror
+ * write silently didn't happen this time; the real save still goes to
+ * Neon regardless, this is a bonus safety net, not a dependency anything
+ * else here blocks on. Only ever mirrors *substantive* state (never the
+ * pristine seed) so a mirror read can never come back as "real data"
+ * when there wasn't any. */
+function writeLocalMirror(state: SkidmarksState): void {
+  if (!isBrowser() || !sessionHasSubstantiveContent(state)) return;
+  try {
+    window.localStorage.setItem(LOCAL_MIRROR_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Quota exceeded, private mode, or storage disabled — nothing to do.
+  }
+}
+
+/** Same never-throws contract as `readLegacySkidmarksLocalStorageSession`
+ * — corrupt JSON, no storage, or a mirror that never got written all
+ * read as `null`, never as a crash. */
+function readLocalMirror(): SkidmarksState | null {
+  if (!isBrowser()) return null;
+  try {
+    const raw = window.localStorage.getItem(LOCAL_MIRROR_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = normalizeState(JSON.parse(raw));
+    return sessionHasSubstantiveContent(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Has *this page load* ever seen `cachedState` hold real, substantive
+ * content — via a successful hydrate or any real `persist()`? Feeds
+ * `shouldPushSkidmarksSession`'s guard: once true, it never resets for
+ * the rest of this page load (a real session, once seen, should never
+ * later look like it was never there).
+ */
+let hadSubstantiveContentThisLoad = false;
+
+function noteContentObserved(state: SkidmarksState): void {
+  if (sessionHasSubstantiveContent(state)) hadSubstantiveContentThisLoad = true;
+}
+
+/**
+ * **Pure, directly testable** — the write-side twin of
+ * `shouldApplyHydratedSkidmarksSession`. Real, confirmed failure mode
+ * this closes: if `cachedState` ever ends up thin/seed-only through any
+ * bug or race *after* this page load has already seen a real session
+ * (a failed hydrate falling through to empty state, a bad merge, a
+ * future regression nobody's found yet), the very next `persist()`
+ * would otherwise `PUT` that thin state and overwrite Neon's real row
+ * — turning one in-memory glitch into permanent, durable data loss.
+ * Once this page load has ever seen substantive content, a push is
+ * only ever allowed to go through when what's being pushed is *also*
+ * substantive; an empty/seed state is never allowed to overwrite a real
+ * session, full stop, no matter how it got that way.
+ */
+export function shouldPushSkidmarksSession(everHadSubstantiveContent: boolean, currentIsSubstantive: boolean): boolean {
+  return !everHadSubstantiveContent || currentIsSubstantive;
+}
+
 
 /**
  * One-time cleanup for a session hydrated from *before* the 2026-09-14
@@ -1868,6 +1953,8 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
   const applyIfSafe = (state: SkidmarksState): boolean => {
     if (!shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount)) return false;
     cachedState = state;
+    noteContentObserved(state);
+    writeLocalMirror(state);
     notify();
     return true;
   };
@@ -1879,10 +1966,12 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     if (!res.ok || !body || body.configured !== true) {
       // Neon itself isn't reachable/configured right now — still worth
       // showing a real prior session over the seed demo data if one's
-      // sitting on this phone (see `LEGACY_LOCAL_STORAGE_KEY`'s doc
-      // comment), even though it can't be durably saved back yet.
-      const legacy = readLegacySkidmarksLocalStorageSession();
-      if (legacy) applyIfSafe(legacy);
+      // sitting on this phone: the live mirror first (current, kept up
+      // to date by every `persist()`), the one-time pre-#57 legacy blob
+      // only if there's no mirror — even though neither can be durably
+      // saved back to Neon yet from here.
+      const recovered = readLocalMirror() ?? readLegacySkidmarksLocalStorageSession();
+      if (recovered) applyIfSafe(recovered);
       setSessionSync({
         status: "unconfigured",
         error: typeof body?.error === "string" ? body.error : `HTTP ${res.status}`,
@@ -1905,6 +1994,7 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
           if (!changed) return;
           if (!shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount)) return;
           cachedState = migrated;
+          writeLocalMirror(migrated);
           notify();
           void pushSkidmarksSessionNow();
         });
@@ -1914,19 +2004,28 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
 
     // Neon has nothing real yet — either a true "never saved" `null`,
     // or a row that itself never got past the seed state. Recover a
-    // real prior local session if one exists, and push it to Neon
+    // real prior local session if one exists (the live mirror first,
+    // the one-time pre-#57 legacy blob otherwise), and push it to Neon
     // immediately so it becomes durable there too — the migration step
     // #57 should have shipped with. `pushSkidmarksSessionNow` sets its
     // own terminal `sessionSync` status, so nothing further to set here
     // once it resolves.
-    const legacy = readLegacySkidmarksLocalStorageSession();
-    if (legacy && applyIfSafe(legacy)) {
+    const recovered = readLocalMirror() ?? readLegacySkidmarksLocalStorageSession();
+    if (recovered && applyIfSafe(recovered)) {
       await pushSkidmarksSessionNow();
       return;
     }
 
     setSessionSync({ status: "synced" });
   } catch (err) {
+    // Real confirmed failure mode (2026-09-16): a thrown `fetch` here
+    // used to leave `cachedState` at its initial seed value with no
+    // recovery at all — looking exactly like a wiped session even
+    // though the mirror on this same phone still had the real one.
+    // Same recovery as the branches above: prefer the live mirror,
+    // fall back to the one-time legacy blob.
+    const recovered = readLocalMirror() ?? readLegacySkidmarksLocalStorageSession();
+    if (recovered) applyIfSafe(recovered);
     setSessionSync({
       status: "error",
       error: err instanceof Error ? err.message : "Could not load the saved session.",
@@ -1980,6 +2079,24 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   }
   pushInFlight = true;
   const snapshot = cachedState;
+  // Real, confirmed failure mode (2026-09-16) this guard closes: never
+  // let a thin/seed-only state overwrite a real session in Neon just
+  // because that's what `cachedState` happens to hold right now — see
+  // `shouldPushSkidmarksSession`'s doc comment. This is a refusal, not
+  // a network failure, so it never enters the retry-with-backoff path
+  // below at all; retrying the exact same thin state wouldn't help.
+  if (!shouldPushSkidmarksSession(hadSubstantiveContentThisLoad, snapshot !== null && sessionHasSubstantiveContent(snapshot))) {
+    setSessionSync({
+      status: "error",
+      error: "Not saved — refusing to overwrite your real project with an empty one. Don't refresh; reload the app in a fresh tab instead.",
+    });
+    pushInFlight = false;
+    if (pushQueued) {
+      pushQueued = false;
+      void pushSkidmarksSessionNow(keepalive);
+    }
+    return;
+  }
   setSessionSync({ status: "saving" });
   const maxAttempts = keepalive ? 1 : SESSION_PUSH_RETRY_DELAYS_MS.length + 1;
   // Real live bug (2026-09-14): "Load failed" (a raw network-level fetch
@@ -2128,6 +2245,18 @@ function ensureSessionPersistenceWired(): void {
       e.returnValue = "";
     }
   });
+  // Real gap (2026-09-16): a save that failed while offline (airplane
+  // mode, a dead patch of signal) only ever retried on the *next* edit
+  // — if Stuart typed one prompt, lost signal, and didn't type anything
+  // else, that prompt just sat failed forever once the retry schedule
+  // ran out, even after connectivity came back. The browser's own
+  // `online` event is the honest signal that a retry might actually
+  // succeed now; only fires a fresh push when the last one is still
+  // sitting on a real, substantive error, never as a no-op retry of an
+  // already-synced session.
+  window.addEventListener("online", () => {
+    if (sessionSync.status === "error") void pushSkidmarksSessionNow();
+  });
   void hydrateSkidmarksSessionOnce();
 }
 
@@ -2174,6 +2303,8 @@ export function subscribeSkidmarks(listener: () => void): () => void {
 function persist(next: SkidmarksState) {
   cachedState = next;
   localEditCount += 1;
+  noteContentObserved(next);
+  writeLocalMirror(next);
   notify();
   schedulePush();
 }
