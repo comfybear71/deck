@@ -89,3 +89,97 @@ describe("parseScriptSequence", () => {
     expect(parts[0]).toMatchObject({ startSec: 0, endSec: 15 });
   });
 });
+
+/** 2026-09-16 real ask: a script from a different AI, pasted straight
+ * in — markdown `###` headings (no trailing period after the bracket)
+ * and a labelled `**Positive Prompt:**` / `**Negative Prompt:**` body
+ * per part, instead of one continuous unlabelled blob. */
+const LABELLED_SCRIPT =
+  "### Part 1 (0:00 - 0:15) — Anchor Start [Duration: 15s]\n" +
+  "**Positive Prompt:** Wide cinematic shot of a dark, foggy avenue. A shrouded silhouette walks into the mist.\n" +
+  "**Negative Prompt:** humans, clear human details, faces, skin, open eyes, crowds\n" +
+  "\n" +
+  "### Part 2 (0:15 - 0:30) — Prompt 2 [Duration: 15s]\n" +
+  "**Positive Prompt:** The camera tracks forward through the misty avenue.\n" +
+  "**Negative Prompt:** humans, clear human details, faces, skin, sudden camera jumps\n" +
+  "\n" +
+  "### Part 3 (0:30 - 0:45) — No Negative Given [Duration: 15s]\n" +
+  "**Positive Prompt:** A plain shot with no negative prompt written for it at all.\n" +
+  "\n" +
+  "### Part 4 (0:45 - 1:00) — Anchor End [Duration: 15s]\n";
+
+describe("parseScriptSequence — labelled Positive/Negative Prompt format", () => {
+  it("real reported script: parses all 4 parts of the labelled markdown format", () => {
+    const parts = parseScriptSequence(LABELLED_SCRIPT);
+    expect(parts).toHaveLength(4);
+    expect(parts.map((p) => p.index)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("reads the header's own start/end times and title, same as the original format", () => {
+    const parts = parseScriptSequence(LABELLED_SCRIPT);
+    expect(parts[0]).toMatchObject({ startSec: 0, endSec: 15, title: "Anchor Start" });
+    expect(parts[1]).toMatchObject({ startSec: 15, endSec: 30, title: "Prompt 2" });
+  });
+
+  it("strips the **Positive Prompt:** label and keeps just the description as prompt", () => {
+    const parts = parseScriptSequence(LABELLED_SCRIPT);
+    expect(parts[0].prompt).toBe(
+      "Wide cinematic shot of a dark, foggy avenue. A shrouded silhouette walks into the mist."
+    );
+    expect(parts[0].prompt).not.toContain("Positive Prompt");
+    expect(parts[0].prompt).not.toContain("*");
+  });
+
+  it("splits the **Negative Prompt:** label out into its own field, label stripped", () => {
+    const parts = parseScriptSequence(LABELLED_SCRIPT);
+    expect(parts[0].negativePrompt).toBe("humans, clear human details, faces, skin, open eyes, crowds");
+    expect(parts[1].negativePrompt).toBe("humans, clear human details, faces, skin, sudden camera jumps");
+    expect(parts[0].negativePrompt).not.toContain("Negative Prompt");
+  });
+
+  it("leaves negativePrompt undefined (not an empty string) for a part that never wrote one", () => {
+    const parts = parseScriptSequence(LABELLED_SCRIPT);
+    expect(parts[2].negativePrompt).toBeUndefined();
+    expect(parts[2].prompt).toBe("A plain shot with no negative prompt written for it at all.");
+  });
+
+  it("real case from Stuart's own paste: a heading with no body at all parses with an empty prompt, not skipped or crashed on", () => {
+    const parts = parseScriptSequence(LABELLED_SCRIPT);
+    expect(parts[3]).toMatchObject({ index: 4, title: "Anchor End", prompt: "" });
+    expect(parts[3].negativePrompt).toBeUndefined();
+  });
+
+  it("real reported script (2026-09-16): Stuart's actual pasted 'shrouded silhouette' script parses in full, negative prompts included", () => {
+    const real =
+      "### Part 1 (0:00 - 0:15) — Anchor Start [Duration: 15s]\n" +
+      "**Positive Prompt:** Wide cinematic shot of a dark, foggy avenue lined with tall, skeletal winter trees. A single shrouded, hunched silhouette in a heavy dark coat walks away from the camera into the thick, glowing blue mist. Locked static angle mimicking the reference image exactly. Low contrast, eerie atmosphere, slow-motion drifting fog.\n" +
+      "**Negative Prompt:** humans, clear human details, faces, skin, open eyes, crowds, vibrant colors, cheerful elements, warm lighting, bright lights\n" +
+      "\n" +
+      "### Part 2 (0:15 - 0:30) — Prompt 2 [Duration: 15s]\n" +
+      "**Positive Prompt:** The camera slowly tracks forward through the misty avenue of dark trees. The silhouette ahead recedes further into the heavy, cold blue haze.\n" +
+      "**Negative Prompt:** humans, clear human details, faces, skin, open eyes, crowds, vibrant colors, cheerful elements, warm lighting, bright lights, sudden camera jumps\n" +
+      "\n" +
+      "### Part 20 (4:45 - 4:59) — Anchor End [Duration: 14s]\n";
+    const parts = parseScriptSequence(real);
+    expect(parts).toHaveLength(3);
+    expect(parts[0].index).toBe(1);
+    expect(parts[0].prompt.startsWith("Wide cinematic shot of a dark, foggy avenue")).toBe(true);
+    expect(parts[0].negativePrompt).toBe(
+      "humans, clear human details, faces, skin, open eyes, crowds, vibrant colors, cheerful elements, warm lighting, bright lights"
+    );
+    expect(parts[1].negativePrompt?.endsWith("sudden camera jumps")).toBe(true);
+    // Part 20 — no description written under it at all, same as the real paste.
+    expect(parts[2]).toMatchObject({ index: 20, title: "Anchor End", prompt: "" });
+    expect(parts[2].negativePrompt).toBeUndefined();
+  });
+
+  it("still parses the original unlabelled Liquid Horizon format exactly as before — no negativePrompt anywhere", () => {
+    const parts = parseScriptSequence(
+      "Part 1 (0:00 - 0:15) — Title[Duration: 15 seconds]. Plain description, no labels at all." +
+        "Part 2 (0:15 - 0:30) — Title2[Duration: 15 seconds]. Second plain description."
+    );
+    expect(parts).toHaveLength(2);
+    expect(parts[0].prompt).toBe("Plain description, no labels at all.");
+    expect(parts[0].negativePrompt).toBeUndefined();
+  });
+});

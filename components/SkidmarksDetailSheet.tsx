@@ -66,6 +66,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     removeMp3,
     setMp3Duration,
     setSegmentShotPrompt,
+    setSegmentNegativePrompt,
     nudgeSegmentStart,
     nudgeSegmentEnd,
     setClipPlateStill,
@@ -608,6 +609,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                     renders={renders}
                     onPersisted={handlePersisted}
                     onSetSegmentShotPrompt={setSegmentShotPrompt}
+                    onSetSegmentNegativePrompt={setSegmentNegativePrompt}
                     onNudgeSegmentStart={nudgeSegmentStart}
                     onNudgeSegmentEnd={nudgeSegmentEnd}
                     onSetClipPlateStill={setClipPlateStill}

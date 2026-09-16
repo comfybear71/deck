@@ -388,6 +388,7 @@ function buildManifestText(song: SkidmarksArchivedSong, snapshot: SkidmarksArchi
   snapshot.mp3.segments.forEach((segment, i) => {
     lines.push(`Clip ${i + 1} (${segment.startSec.toFixed(0)}s\u2013${segment.endSec.toFixed(0)}s, ${segment.label}):`);
     lines.push(`  Shot prompt: ${segment.shotPrompt || "(none)"}`);
+    if (segment.negativePrompt) lines.push(`  Negative prompt: ${segment.negativePrompt}`);
     segment.plates.forEach((plate, plateIndex) => {
       const letter = segment.plates.length > 1 ? String.fromCharCode(97 + plateIndex) : "";
       const status = plate.still ? "filled" : "empty";

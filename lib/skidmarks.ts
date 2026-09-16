@@ -579,6 +579,21 @@ export interface SkidmarksClipSegment {
    * per-plate field — see this interface's doc comment for why. Does
    * **not** drive `model` — see `setSkidmarksSegmentShotPrompt`. */
   shotPrompt: string;
+  /** Plain-language "what to keep out of this shot" — the counterpart
+   * to `shotPrompt`, added 2026-09-16 (a pasted script that actually
+   * specified negative prompts per part, which this feature had no
+   * field to hold before, so they were silently dropped). Same "one
+   * shared value for the whole plate strip" shape as `shotPrompt`, for
+   * the same reason. Defaults to `""` — an unwritten negative prompt is
+   * not an error, just nothing extra to avoid. Only ever reaches a real
+   * model on a **Vocal/LTX** render (`lib/clipGeneration.ts`'s
+   * `buildClipGenerationRequest`, merged onto the real negative-
+   * conditioning channel `lib/comfyCloud.ts` already sends a locked
+   * character's own cues on) — an Instrumental clip's Grok/H3 backends
+   * have no negative-prompt parameter in this app at all, so this field
+   * is stored and shown for an Instrumental clip but nothing sends it
+   * anywhere; see that function's doc comment. */
+  negativePrompt: string;
   /** SIRAY's narrow carve-out: **uncensored plate stills only** — never
    * read by anything animation-related (the stub "Generate Clips"
    * button only ever looks at `model`, which can't be SIRAY — see
@@ -834,6 +849,7 @@ function buildDefaultSegment(
     label,
     model: defaultSegmentModel(label),
     shotPrompt: "",
+    negativePrompt: "",
     uncensoredPlateStills: false,
     plates: [buildBlankPlateSlot()],
     selectedPlateId: null,
@@ -944,6 +960,7 @@ export function buildScriptSequenceSegments(
       label: vocal ? "vocal" : "instrumental",
       model: vocal ? "ltx-lipsync" : "grok",
       shotPrompt: part.prompt,
+      negativePrompt: part.negativePrompt ?? "",
       uncensoredPlateStills: false,
       plates: [buildBlankPlateSlot()],
       selectedPlateId: null,
@@ -1364,7 +1381,7 @@ export function createMp3Attachment(
  *   back to the vocal/instrumental default. Never re-derives a model
  *   from anything else — a segment's `model` is either what Stuart
  *   picked or the cost-locked default, nothing in between.
- * - `shotPrompt` — missing/non-string backfills to `""`.
+ * - `shotPrompt`/`negativePrompt` — missing/non-string backfills to `""`.
  * - `uncensoredPlateStills` — missing/non-boolean backfills to `false`.
  *
  * Older stored fields this segment shape no longer has (a legacy
@@ -1448,6 +1465,10 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
   const r = raw as Partial<SkidmarksClipSegment> & Record<string, unknown>;
   const vocal = SKIDMARKS_SEGMENT_LABEL_META[raw.label]?.vocal ?? false;
   const shotPrompt = typeof r.shotPrompt === "string" ? r.shotPrompt : "";
+  // Missing on any session saved before 2026-09-16 (the field didn't
+  // exist yet) — backfills to "" same as `shotPrompt` always has, not
+  // an error state.
+  const negativePrompt = typeof r.negativePrompt === "string" ? r.negativePrompt : "";
   const uncensoredPlateStills = typeof r.uncensoredPlateStills === "boolean" ? r.uncensoredPlateStills : false;
   const rawPlates = Array.isArray(r.plates) ? r.plates : undefined;
   const plates =
@@ -1477,6 +1498,7 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
     label: raw.label,
     model: remapLegacySkidmarksModel(String(raw.model), vocal),
     shotPrompt,
+    negativePrompt,
     uncensoredPlateStills,
     plates,
     selectedPlateId,
@@ -3397,6 +3419,13 @@ export function setSkidmarksSegmentInstrumentalVideoModel(
  * only ever updates the prompt text now. */
 export function setSkidmarksSegmentShotPrompt(segmentId: string, shotPrompt: string): void {
   updateSkidmarksSegment(segmentId, (s) => ({ ...s, shotPrompt }));
+}
+
+/** The counterpart "what to keep out of this shot" field — see
+ * `SkidmarksClipSegment.negativePrompt`'s doc comment for what this
+ * actually reaches (Vocal/LTX only). */
+export function setSkidmarksSegmentNegativePrompt(segmentId: string, negativePrompt: string): void {
+  updateSkidmarksSegment(segmentId, (s) => ({ ...s, negativePrompt }));
 }
 
 export interface ChainedPlateTarget {

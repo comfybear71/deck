@@ -44,6 +44,7 @@ import {
   setSkidmarksScriptSequence,
   setSkidmarksScriptSequenceDraft,
   setSkidmarksSegmentInstrumentalVideoModel,
+  setSkidmarksSegmentNegativePrompt,
   setSkidmarksSegmentSelectedPlate,
   setSkidmarksSegmentShotPrompt,
   subscribeSkidmarks,
@@ -270,6 +271,11 @@ export function useSkidmarksStudio() {
     []
   );
 
+  const setSegmentNegativePrompt = useCallback(
+    (segmentId: string, negativePrompt: string) => setSkidmarksSegmentNegativePrompt(segmentId, negativePrompt),
+    []
+  );
+
   /** The compact −1s/+1s stepper's own handlers — see
    * `nudgeSkidmarksSegmentStart`/`nudgeSkidmarksSegmentEnd`'s doc
    * comments. Stuart's 2026-09-13 ask: ElevenLabs Scribe timing is
@@ -406,6 +412,7 @@ export function useSkidmarksStudio() {
     removeMp3,
     setMp3Duration,
     setSegmentShotPrompt,
+    setSegmentNegativePrompt,
     nudgeSegmentStart,
     nudgeSegmentEnd,
     setClipPlateStill,

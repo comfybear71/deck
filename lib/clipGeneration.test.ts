@@ -650,6 +650,46 @@ describe("prompt assembly: Stuart's text on top, no hidden camera moves", () => 
     expect(negativePrompt).toBeUndefined();
   });
 
+  it("real ask (2026-09-16): a script-pasted negative prompt reaches the real negativePrompt on a Vocal clip, even with no locked character", () => {
+    const nova = member({ id: "solar-rebel-vocals", name: "Nova" });
+    const { negativePrompt } = buildClipGenerationRequest({
+      ...baseParams,
+      vocalist: nova,
+      userNegativePrompt: "humans, clear human details, faces, skin",
+    });
+    expect(negativePrompt).toBe("humans, clear human details, faces, skin");
+  });
+
+  it("joins a typed negative prompt onto a locked character's own negative cues, not one replacing the other", () => {
+    const { negativePrompt } = buildClipGenerationRequest({
+      ...baseParams,
+      userNegativePrompt: "sudden camera jumps",
+    });
+    expect(negativePrompt?.toLowerCase()).toContain("second person");
+    expect(negativePrompt?.toLowerCase()).toContain("sudden camera jumps");
+  });
+
+  it("trims a typed negative prompt and never sends an empty one", () => {
+    const nova = member({ id: "solar-rebel-vocals", name: "Nova" });
+    const { negativePrompt } = buildClipGenerationRequest({
+      ...baseParams,
+      vocalist: nova,
+      userNegativePrompt: "   ",
+    });
+    expect(negativePrompt).toBeUndefined();
+  });
+
+  it("never sends a typed negative prompt on an Instrumental request — no real negative-prompt channel exists there", () => {
+    const nova = member({ id: "solar-rebel-vocals", name: "Nova" });
+    const { negativePrompt } = buildClipGenerationRequest({
+      ...baseParams,
+      vocal: false,
+      vocalist: nova,
+      userNegativePrompt: "humans, faces",
+    });
+    expect(negativePrompt).toBeUndefined();
+  });
+
   it("motionPromptMovesCamera catches zoom/push-in/orbit/pan/tracking/swerve wording", () => {
     for (const text of ["slow zoom into his hat", "push-in on the lips", "orbit around him", "pan left to the door", "tracking shot down the hall", "the camera swerves past"]) {
       expect(motionPromptMovesCamera(text)).toBe(true);

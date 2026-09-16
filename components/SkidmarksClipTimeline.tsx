@@ -51,6 +51,7 @@ interface SkidmarksClipTimelineProps {
   renders: Map<string, PersistedClipRender>;
   onPersisted: (render: PersistedClipRender) => void;
   onSetSegmentShotPrompt: (segmentId: string, shotPrompt: string) => void;
+  onSetSegmentNegativePrompt: (segmentId: string, negativePrompt: string) => void;
   /** The compact −1s/+1s stepper's own handlers — see
    * `lib/skidmarks.ts`'s `nudgeSkidmarksSegmentStart`/
    * `nudgeSkidmarksSegmentEnd`. Stuart's 2026-09-13 ask: ElevenLabs
@@ -106,6 +107,7 @@ function SegmentRow({
   expanded,
   onToggle,
   onSetShotPrompt,
+  onSetNegativePrompt,
   onSetPlateStill,
   onAddPlate,
   onRemovePlate,
@@ -138,6 +140,7 @@ function SegmentRow({
   expanded: boolean;
   onToggle: () => void;
   onSetShotPrompt: (shotPrompt: string) => void;
+  onSetNegativePrompt: (negativePrompt: string) => void;
   onSetPlateStill: (plateId: string, still: SkidmarksPlateStill | null) => void;
   onAddPlate: () => void;
   onRemovePlate: (plateId: string) => void;
@@ -242,6 +245,7 @@ function SegmentRow({
             band={band}
             previousStill={previousStill}
             onSetShotPrompt={onSetShotPrompt}
+            onSetNegativePrompt={onSetNegativePrompt}
             onSetPlateStill={onSetPlateStill}
             onAddPlate={onAddPlate}
             onRemovePlate={onRemovePlate}
@@ -382,6 +386,7 @@ export function SkidmarksClipTimeline({
   renders,
   onPersisted,
   onSetSegmentShotPrompt,
+  onSetSegmentNegativePrompt,
   onSetClipPlateStill,
   onAddClipPlate,
   onRemoveClipPlate,
@@ -487,6 +492,7 @@ export function SkidmarksClipTimeline({
                   expanded={expandedIds.has(segment.id)}
                   onToggle={() => toggleExpanded(segment.id)}
                   onSetShotPrompt={(shotPrompt) => onSetSegmentShotPrompt(segment.id, shotPrompt)}
+                  onSetNegativePrompt={(negativePrompt) => onSetSegmentNegativePrompt(segment.id, negativePrompt)}
                   onSetPlateStill={(plateId, still) => onSetClipPlateStill(segment.id, plateId, still)}
                   onAddPlate={() => onAddClipPlate(segment.id)}
                   onRemovePlate={(plateId) => onRemoveClipPlate(segment.id, plateId)}

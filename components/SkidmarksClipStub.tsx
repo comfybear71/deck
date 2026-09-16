@@ -39,6 +39,10 @@ interface SkidmarksClipStubProps {
    * it instead (see this component's doc comment). */
   previousStill?: SkidmarksPlateStill;
   onSetShotPrompt: (shotPrompt: string) => void;
+  /** The counterpart "what to keep out of this shot" field — see
+   * `lib/skidmarks.ts`'s `SkidmarksClipSegment.negativePrompt` doc
+   * comment for what this actually reaches (Vocal/LTX only). */
+  onSetNegativePrompt: (negativePrompt: string) => void;
   onSetPlateStill: (plateId: string, still: SkidmarksPlateStill | null) => void;
   onAddPlate: () => void;
   onRemovePlate: (plateId: string) => void;
@@ -1044,6 +1048,7 @@ export function SkidmarksClipStub({
   band,
   previousStill,
   onSetShotPrompt,
+  onSetNegativePrompt,
   onSetPlateStill,
   onAddPlate,
   onRemovePlate,
@@ -1135,6 +1140,17 @@ export function SkidmarksClipStub({
         className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] leading-relaxed text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
       />
 
+      <textarea
+        value={segment.negativePrompt}
+        onChange={(e) => onSetNegativePrompt(e.target.value)}
+        placeholder="Keep out of this shot (optional) — only sent on a Singing clip, not Mute"
+        rows={2}
+        maxLength={SHOT_PROMPT_MAX_LENGTH}
+        aria-label="Negative prompt"
+        title="Only reaches the video model on a Singing (Vocal) clip — Mute (Instrumental) clips have no negative-prompt channel to send this on."
+        className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-white/80 placeholder:text-white/25 focus:border-rose-400/40 focus:outline-none"
+      />
+
       {selectedPlate && (
         // `key={selectedPlate.id}` forces a full remount when Stuart
         // switches which plate is selected — a stale "just rendered"
@@ -1146,6 +1162,7 @@ export function SkidmarksClipStub({
         <SkidmarksClipRender
           key={selectedPlate.id}
           shotPrompt={segment.shotPrompt}
+          negativePrompt={segment.negativePrompt}
           bandName={band.name}
           plateStillDataUrl={selectedPlate.still?.dataUrl ?? null}
           motionPrompt={selectedPlate.motionPrompt ?? ""}
