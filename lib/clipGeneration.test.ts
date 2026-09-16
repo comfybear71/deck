@@ -444,6 +444,36 @@ describe("buildClipGenerationRequest", () => {
       expect(request.negativePrompt?.toLowerCase()).toContain("normal skin tone");
     });
 
+    it("real bug (2026-09-16 live render): never asks for 'facial expressions' on a locked character — that directly contradicted the shadow-face lock and produced a normal lit face", () => {
+      const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
+      const { prompt } = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "singing directly to camera",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,jack",
+        durationSec: 10,
+        vocalist: jackAsh,
+      });
+      expect(prompt.toLowerCase()).not.toContain("facial expressions");
+      // The rest of the original lock wording must still be there, unchanged.
+      expect(prompt).toContain("perfect lip sync");
+      expect(prompt).toContain("hand gestures are lively");
+      expect(prompt).toContain("dication is perfect");
+    });
+
+    it("still asks for 'facial expressions' for a vocalist with no registered lock — only a locked character drops it", () => {
+      const nova = member({ id: "solar-rebel-vocals", name: "Nova", role: "Vocals" });
+      const { prompt } = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "singing directly to camera",
+        bandName: "Solar Rebel",
+        plateStillDataUrl: "data:image/jpeg;base64,nova",
+        durationSec: 10,
+        vocalist: nova,
+      });
+      expect(prompt.toLowerCase()).toContain("facial expressions");
+    });
+
     it("defaults a locked vocal character's clip to a static Camera holds shot, never the generic push-in zoom", () => {
       const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
       const { prompt } = buildClipGenerationRequest({

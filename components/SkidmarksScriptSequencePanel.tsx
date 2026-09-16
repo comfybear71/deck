@@ -393,14 +393,14 @@ export function SkidmarksScriptSequencePanel({
         // (`runScriptSequence`'s `shouldStop`). Sits at the top,
         // unmissable, rather than down by the render button Stuart would
         // have to scroll back to while a batch is running.
-        <div className="flex items-center justify-between gap-2 rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-2">
-          <span className="text-[12px] leading-relaxed text-rose-100">Rendering — see something wrong?</span>
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-1.5">
+          <span className="text-[11px] leading-relaxed text-rose-100">Rendering…</span>
           <button
             type="button"
             onClick={() => {
               stopRequestedRef.current = true;
             }}
-            className="shrink-0 rounded-full bg-rose-400 px-3 py-1.5 text-[13px] font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80"
+            className="shrink-0 rounded-full bg-rose-400 px-2.5 py-1 text-[11px] font-medium text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80"
           >
             Stop
           </button>
@@ -408,17 +408,18 @@ export function SkidmarksScriptSequencePanel({
       )}
 
       {incompleteRun && (
-        <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2">
-          <span className="text-[12px] leading-relaxed text-amber-100">
-            Clip {incompleteRun.resumeIndex + 1} of {incompleteRun.total} didn&apos;t finish — {incompleteRun.resumeIndex} rendered so far.
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] px-3 py-1.5">
+          <span className="text-[11px] leading-relaxed text-amber-100">
+            Clip {incompleteRun.resumeIndex + 1}/{incompleteRun.total} didn&apos;t finish
           </span>
           <button
             type="button"
             onClick={handleResume}
             disabled={running}
-            className="shrink-0 rounded-full bg-amber-300 px-3 py-1.5 text-[13px] font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
+            title="Resumes from where it stopped — starting fresh instead would re-render and re-charge for clips already done."
+            className="shrink-0 rounded-full bg-amber-300 px-2.5 py-1 text-[11px] font-medium text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {running ? "Rendering…" : `Resume — ${incompleteRun.total - incompleteRun.resumeIndex} left`}
+            {running ? "Rendering…" : `Resume · ${incompleteRun.total - incompleteRun.resumeIndex} left`}
           </button>
         </div>
       )}
@@ -445,32 +446,28 @@ export function SkidmarksScriptSequencePanel({
             None
           </span>
         )}
-        <div className="flex flex-1 flex-col gap-1">
-          <span className="text-[11px] text-white/40">
-            {startingImageUrl
-              ? "Clip 1 will start from your picture, not a fresh generated one."
-              : "Optional: clip 1's starting image — skips generating one."}
+        <div className="flex flex-1 items-center gap-2">
+          <span className="text-[11px] text-white/40" title="Optional — sets clip 1's starting image and skips generating one.">
+            {startingImageUrl ? "Clip 1 starts from your picture." : "Clip 1 image"}
           </span>
-          <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => startingImageInputRef.current?.click()}
+            disabled={running || startingImagePicking}
+            className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {startingImagePicking ? "Uploading…" : startingImageUrl ? "Change" : "Upload"}
+          </button>
+          {startingImageUrl && (
             <button
               type="button"
-              onClick={() => startingImageInputRef.current?.click()}
-              disabled={running || startingImagePicking}
-              className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={handleRemoveStartingImage}
+              disabled={running}
+              className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-white/50 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {startingImagePicking ? "Uploading…" : startingImageUrl ? "Change" : "Upload"}
+              Remove
             </button>
-            {startingImageUrl && (
-              <button
-                type="button"
-                onClick={handleRemoveStartingImage}
-                disabled={running}
-                className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] font-medium text-white/50 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Remove
-              </button>
-            )}
-          </div>
+          )}
           {startingImageError && <span className="text-[11px] text-rose-300/90">{startingImageError}</span>}
         </div>
         <input
@@ -487,30 +484,30 @@ export function SkidmarksScriptSequencePanel({
       </div>
 
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-white/40">
-          {incompleteRun
-            ? "Use Resume above — starting fresh here would re-render (and re-charge for) the clips already done."
-            : parts.length > 0
-              ? `Found ${parts.length} part${parts.length === 1 ? "" : "s"}.`
-              : "No parts found yet."}
+        <span
+          className="text-[11px] text-white/40"
+          title={incompleteRun ? "Use Resume above — starting fresh would re-render and re-charge for clips already done." : undefined}
+        >
+          {parts.length > 0 ? `${parts.length} part${parts.length === 1 ? "" : "s"}` : "No parts yet"}
         </span>
         <div className="flex gap-2">
           <button
             type="button"
             onClick={handleBuildTimeline}
             disabled={running || parts.length === 0 || !!incompleteRun}
-            title="Builds the timeline and pre-fills every plate with the locked reference photo — free, no rendering yet, so you can check every plate first."
-            className="rounded-full border border-white/15 bg-white/[0.03] px-3.5 py-2 text-sm font-semibold text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+            title="Pre-fills every plate with the locked reference photo — free, no rendering yet, so you can check every plate first."
+            className="rounded-full border border-white/15 bg-white/[0.03] px-3 py-1.5 text-[12px] font-medium text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Build timeline
+            Timeline
           </button>
           <button
             type="button"
             onClick={handleRun}
             disabled={running || parts.length === 0 || !!incompleteRun}
-            className="rounded-full bg-rose-400 px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60"
+            title={parts.length > 0 ? `Renders all ${parts.length} clips` : undefined}
+            className="rounded-full bg-rose-400 px-3 py-1.5 text-[12px] font-medium text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {running ? "Rendering…" : `Generate & render all${parts.length > 0 ? ` ${parts.length}` : ""}`}
+            {running ? "Rendering…" : "Generate"}
           </button>
         </div>
       </div>

@@ -593,7 +593,10 @@ function lockedCharacterVideoNote(): string {
  * before it was lost, not new wording invented here. Prepended ahead of
  * the shot/motion/character-lock text below, Vocal/LTX clips only —
  * never on an Instrumental/Grok/H3 clip, which has no lip-sync and no
- * "start image as first frame" contract to state. */
+ * "start image as first frame" contract to state. Used as-is only when
+ * there's no locked character in this clip — see
+ * `VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER` below for why a locked
+ * character needs a different wording of this exact same lock. */
 /**
  * The Vocal (Comfy Cloud LTX) lip-sync lock — the *only* backend text
  * a Vocal render carries. Audit Part 4 stripped the rest: "Use the
@@ -647,6 +650,26 @@ export function describeClipPayload(
   };
 }
 
+/** Real bug found 2026-09-16 from a live render: Jack Ash's shadow-face
+ * lock was still losing to a normal, lit, photoreal human face on some
+ * clips even after the darkness/camera-speed fixes above. Root cause —
+ * this exact prompt was telling the model two contradictory things in
+ * the same breath: `VOCAL_LTX_PROMPT_LOCK`'s "facial expressions ... are
+ * lively" (asking for a visible, expressive, legible face) right next to
+ * `lockedCharacterVideoNote()`'s "his face never becomes legible,
+ * well-lit ... at any point" (asking for the opposite). Given that
+ * contradiction, the model was free to resolve it by picking the
+ * lit-face reading. A locked character has no visible face to be
+ * expressive with — only his glowing lips and his body do that job —
+ * so for a locked character this drops "facial expressions" entirely
+ * rather than asking for it and then forbidding it. Everything else
+ * stays byte-for-byte identical to `VOCAL_LTX_PROMPT_LOCK`, including
+ * staying just as short post-audit-Part-4 — no style/start-image text
+ * reintroduced here either. */
+const VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER =
+  "perfect lip sync through his glowing neon-blue lips, clear lip movement, citing the dialogue clearly, hand " +
+  "gestures are lively, dication is perfect.";
+
 /**
  * Builds the one real clip-render request this feature ever sends —
  * pure and synchronous, same "fully unit-testable independent of a real
@@ -687,7 +710,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   const parts = [
     params.shotPrompt.trim(),
     motionText,
-    params.vocal ? VOCAL_LTX_PROMPT_LOCK : "",
+    params.vocal ? (lockedVocal ? VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER : VOCAL_LTX_PROMPT_LOCK) : "",
     lockedVocal ? (lock!.videoPromptHallmarks ?? lock!.promptHallmarks) : "",
     lockedVocal ? lockedCharacterVideoNote() : "",
     lockedVocal
