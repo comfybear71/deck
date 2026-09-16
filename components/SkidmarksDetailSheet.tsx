@@ -81,6 +81,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [archiveSuccessMessage, setArchiveSuccessMessage] = useState<string | null>(null);
   const [archiveRefreshToken, setArchiveRefreshToken] = useState(0);
 
   const bandSectionRef = useRef<HTMLDivElement | null>(null);
@@ -255,9 +256,36 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     return true;
   };
 
+  /**
+   * The manual "Archive" button — real, confirmed disaster (2026-09-16):
+   * this used to just call `archiveBeforeSwitch`, which clears the live
+   * workspace on any reported success. `archiveSkidmarksSession` itself
+   * is two real network steps (upload the snapshot, then list it in the
+   * index) — a snapshot can land safely in Blob while the index write
+   * after it fails, races, or the tab dies mid-request, and if anything
+   * in that gap made `outcome.ok` read true when the song wasn't
+   * actually durably recoverable, the workspace got wiped for nothing.
+   * Direct instruction after that: a deliberate tap of "Archive" is a
+   * **checkpoint**, not a "start fresh" action — it saves a snapshot
+   * and leaves the live session exactly as it was, full stop, success
+   * or failure. Only the dedicated "start a new project" paths
+   * (`archiveBeforeSwitch`, unchanged below — New, picking a different
+   * band, opening a different archived song) still clear anything, and
+   * only because clearing is the actual point of those actions.
+   */
   const handleArchive = async () => {
-    if (archiving) return;
-    await archiveBeforeSwitch();
+    if (archiving || !activeBand || !session.mp3) return;
+    setArchiving(true);
+    setArchiveError(null);
+    setArchiveSuccessMessage(null);
+    const outcome = await archiveSkidmarksSession(activeBand, session.mp3, renders.size);
+    setArchiving(false);
+    if (!outcome.ok) {
+      setArchiveError(`Archive failed — ${outcome.message}. Nothing was cleared; still working on this same project.`);
+      return;
+    }
+    setArchiveRefreshToken((t) => t + 1);
+    setArchiveSuccessMessage("Saved a checkpoint to Finished Songs. This workspace is untouched — keep working, or start a new project whenever you're ready.");
   };
 
   const handleSelectBand = async (bandId: string) => {
@@ -468,6 +496,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                     {archiveError && (
                       <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
                         {archiveError}
+                      </p>
+                    )}
+                    {archiveSuccessMessage && (
+                      <p role="status" className="text-[11px] leading-snug text-emerald-300/90">
+                        {archiveSuccessMessage}
                       </p>
                     )}
                   </div>

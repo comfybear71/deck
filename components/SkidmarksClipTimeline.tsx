@@ -162,6 +162,15 @@ function SegmentRow({
   mp3AudioUrl?: string;
 }) {
   const meta = SKIDMARKS_SEGMENT_LABEL_META[segment.label];
+  // Real ask (2026-09-16): "I cannot tell which one has been rendered
+  // and which is still left" — collapsing every clip hid the one thing
+  // Stuart actually needed to scan the whole timeline at a glance,
+  // forcing him to open each row (or count) to find out. A clip with no
+  // plates at all never reads as "rendered" just because the (empty)
+  // every-plate check trivially passes.
+  const renderedPlateCount = segment.plates.filter((p) => renderedPlateIds.has(p.id)).length;
+  const allPlatesRendered = segment.plates.length > 0 && renderedPlateCount === segment.plates.length;
+  const somePlatesRendered = renderedPlateCount > 0 && !allPlatesRendered;
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.02]">
@@ -195,6 +204,28 @@ function SegmentRow({
           ].join(" ")}
         >
           {meta.label}
+        </span>
+        <span className="ml-auto shrink-0" aria-hidden="true">
+          {allPlatesRendered ? (
+            <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4 text-emerald-400">
+              <circle cx="10" cy="10" r="9" fill="currentColor" fillOpacity="0.15" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M6 10.2l2.6 2.6L14.2 7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          ) : somePlatesRendered ? (
+            <span
+              className="block h-4 w-4 rounded-full border-[1.3px] border-amber-300/70"
+              style={{ background: "conic-gradient(rgb(252 211 77 / 0.5) calc(100% * var(--frac)), transparent 0)", ["--frac" as string]: renderedPlateCount / segment.plates.length }}
+            />
+          ) : (
+            <span className="block h-4 w-4 rounded-full border-[1.3px] border-white/15" />
+          )}
+        </span>
+        <span className="sr-only">
+          {allPlatesRendered
+            ? "Rendered"
+            : somePlatesRendered
+              ? `${renderedPlateCount} of ${segment.plates.length} plates rendered`
+              : "Not rendered yet"}
         </span>
       </div>
 

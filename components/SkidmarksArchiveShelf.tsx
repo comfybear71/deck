@@ -55,9 +55,15 @@ function formatArchivedAt(ms: number): string {
  * copy of anything, only a static row per archived song — the *only*
  * place plates/prompts/timeline become editable again is the top
  * workspace, after "Open in editor" restores that exact song into it.
+ *
+ * **Expanded by default** (2026-09-16 direct instruction, after a real
+ * scare: Stuart's own archived song was sitting right here the whole
+ * time, but he never saw it because the shelf starts collapsed) — "a
+ * row cannot hide." A song genuinely showing up here should never be
+ * one extra tap away from being mistaken for gone.
  */
 export function SkidmarksArchiveShelf({ onOpenInEditor, refreshToken }: SkidmarksArchiveShelfProps) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [songs, setSongs] = useState<SkidmarksArchivedSong[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);

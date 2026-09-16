@@ -27,19 +27,106 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 const ARCHIVE_INDEX_PATHNAME = "skidmarks/archive/index.json";
+const ARCHIVE_PATH_PREFIX = "skidmarks/archive/";
+const SNAPSHOT_PATHNAME_RE = /^skidmarks\/archive\/([^/]+)\/snapshot\.json$/;
+
+function isRecordWithId(value: unknown): value is { id: string } {
+  return !!value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string";
+}
+
+/**
+ * **Real, confirmed recovery need (2026-09-16)**: `archiveSkidmarksSession`
+ * (`lib/skidmarksArchive.ts`) uploads a song's full snapshot first, then
+ * separately POSTs it into this index — two steps, not one. A snapshot
+ * can land safely in Blob while the index write after it fails (or
+ * never ran, or raced with something else), leaving a real, complete,
+ * fully-restorable song sitting in storage with no row on the shelf and
+ * no way to find it — indistinguishable from data loss to Stuart, even
+ * though nothing was actually gone.
+ *
+ * Every index read now self-heals: lists every real `snapshot.json`
+ * under the archive prefix, and any one whose id isn't already in the
+ * index gets read back and re-added automatically — the *next* time
+ * the shelf loads, an orphaned song reappears on its own, no special
+ * "recover" action needed. Best-effort per orphan (one snapshot that
+ * fails to parse never blocks the others, or the songs that were
+ * already properly indexed) — this only ever *adds* rows back, it
+ * never removes or overwrites an existing one.
+ */
+async function recoverOrphanedSnapshots(indexed: unknown[]): Promise<unknown[]> {
+  const knownIds = new Set(indexed.filter(isRecordWithId).map((s) => s.id));
+  let blobs: { pathname: string; url: string; uploadedAt: Date }[];
+  try {
+    ({ blobs } = await list({ prefix: ARCHIVE_PATH_PREFIX }));
+  } catch {
+    return []; // Blob itself unreachable — nothing to recover this pass, not a crash.
+  }
+
+  const recovered: unknown[] = [];
+  for (const blob of blobs) {
+    const match = blob.pathname.match(SNAPSHOT_PATHNAME_RE);
+    if (!match) continue;
+    const id = match[1];
+    if (knownIds.has(id)) continue;
+    try {
+      const res = await fetch(blob.url);
+      if (!res.ok) continue;
+      const snapshot = (await res.json()) as { band?: { id?: unknown; name?: unknown; coverImage?: unknown }; mp3?: unknown };
+      const band = snapshot.band;
+      const mp3 = snapshot.mp3 as
+        | { fileName?: unknown; durationSec?: unknown; segments?: unknown[]; audioUrl?: unknown }
+        | undefined;
+      if (!band || typeof band.id !== "string" || typeof band.name !== "string" || !mp3 || typeof mp3.fileName !== "string") {
+        continue; // Not a real, complete song snapshot — skip rather than list a broken row.
+      }
+      const segments = Array.isArray(mp3.segments) ? mp3.segments : [];
+      const renderedPlateCount = segments.reduce((sum: number, seg) => {
+        const plates = (seg as { plates?: unknown[] })?.plates;
+        if (!Array.isArray(plates)) return sum;
+        return sum + plates.filter((p) => (p as { still?: unknown })?.still).length;
+      }, 0);
+      recovered.push({
+        id,
+        bandId: band.id,
+        bandName: band.name,
+        coverImage: typeof band.coverImage === "string" ? band.coverImage : undefined,
+        fileName: mp3.fileName,
+        archivedAt: blob.uploadedAt instanceof Date ? blob.uploadedAt.getTime() : Date.now(),
+        durationSec: typeof mp3.durationSec === "number" ? mp3.durationSec : null,
+        clipCount: segments.length,
+        renderedPlateCount,
+        snapshotUrl: blob.url,
+        audioUrl: typeof mp3.audioUrl === "string" ? mp3.audioUrl : undefined,
+      });
+    } catch {
+      continue; // One unreadable/corrupt orphan never blocks the rest.
+    }
+  }
+  return recovered;
+}
 
 async function readIndex(): Promise<unknown[]> {
   const { blobs } = await list({ prefix: ARCHIVE_INDEX_PATHNAME });
   const indexBlob = blobs.find((b) => b.pathname === ARCHIVE_INDEX_PATHNAME);
-  if (!indexBlob) return [];
-  try {
-    const res = await fetch(indexBlob.url);
-    if (!res.ok) return [];
-    const parsed = await res.json();
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
+  let indexed: unknown[] = [];
+  if (indexBlob) {
+    try {
+      const res = await fetch(indexBlob.url);
+      if (res.ok) {
+        const parsed = await res.json();
+        indexed = Array.isArray(parsed) ? parsed : [];
+      }
+    } catch {
+      // Falls through to the recovery scan below with an empty `indexed`.
+    }
   }
+
+  const recovered = await recoverOrphanedSnapshots(indexed);
+  if (recovered.length === 0) return indexed;
+
+  const merged = [...recovered, ...indexed];
+  await writeIndex(merged);
+  return merged;
 }
 
 async function writeIndex(songs: unknown[]): Promise<void> {
@@ -68,10 +155,6 @@ interface ArchivePostBody {
   action?: unknown;
   song?: unknown;
   id?: unknown;
-}
-
-function isRecordWithId(value: unknown): value is { id: string } {
-  return !!value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string";
 }
 
 export async function POST(request: Request) {
