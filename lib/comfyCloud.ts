@@ -717,6 +717,33 @@ const IA2V_NODE_REFINE_STRENGTH = "340:296";
  * the whole point of hand-writing a locked character's prompt is that
  * exact wording reaches the model, not an LLM's paraphrase of it. */
 const IA2V_NODE_PROMPT_ENHANCE = "340:349";
+/** Real bug found 2026-09-16, live-reported: "rendering plate again"
+ * three times in a row on the same plate produced the exact same clip
+ * every time, despite the prompt genuinely changing between renders.
+ * Root cause: nodes `340:285` and `340:286`, both `RandomNoise`, feed
+ * the base pass and the refine pass their actual noise — and the
+ * template ships them at fixed literal values (`42` and
+ * `75505595210544`), which this module never patched. Every request
+ * this app has ever sent reused those exact same two numbers, so the
+ * video model started from the same noise every single time; on an
+ * identical starting image with a prompt that only changed in a small
+ * way (the locked character's own long hallmark/lock text dominates
+ * the string), the same noise seed is enough on its own to produce the
+ * same or near-identical result, independent of whether the prompt
+ * text actually moved. Fixed by generating a fresh seed for each node
+ * on every call, same as ComfyUI's own "randomize after every run" seed
+ * widget behavior — not a fixed default, not reused between the two
+ * nodes (they were already meant to be decorrelated: two different
+ * fixed values in the template, not one shared one). */
+const IA2V_NODE_BASE_NOISE_SEED = "340:285";
+const IA2V_NODE_REFINE_NOISE_SEED = "340:286";
+
+/** A ComfyUI-shaped random seed — large enough to avoid real-world
+ * collisions between renders, well inside `Number.MAX_SAFE_INTEGER` so
+ * it survives JSON round-tripping as an ordinary number. */
+function randomLtxNoiseSeed(): number {
+  return Math.floor(Math.random() * 1_000_000_000_000);
+}
 
 type TemplateNode = { class_type?: string; inputs?: Record<string, unknown> };
 
@@ -734,8 +761,8 @@ function patchNodeInputs(graph: Record<string, unknown>, nodeId: string, patch: 
 
 /**
  * Builds the one workflow graph this feature submits: a
- * `structuredClone` of `workflow/LTX_2.3_IA2V_Cloud.json` with exactly
- * five node inputs patched. The clone is per call on purpose —
+ * `structuredClone` of `workflow/LTX_2.3_IA2V_Cloud.json` with the node
+ * inputs below patched. The clone is per call on purpose —
  * concurrent requests on the same warm serverless instance must not be
  * able to patch each other's graph, and the imported template object
  * itself is never mutated.
@@ -750,6 +777,8 @@ function patchNodeInputs(graph: Record<string, unknown>, nodeId: string, patch: 
  * | `340:314` `CLIPTextEncode` | `text` | default negative + `negativePrompt`, only when given (see that node's doc comment — inert at this graph's `cfg: 1`, kept anyway) |
  * | `340:296` `LTXVImgToVideoInplace` | `strength` | `refineStrength` ?? `LTX_IA2V_DEFAULT_REFINE_STRENGTH` |
  * | `340:349` `PrimitiveBoolean` | `value` | always `false` — prompt enhancer forced off |
+ * | `340:285` `RandomNoise` | `noise_seed` | fresh random seed every call — see `IA2V_NODE_BASE_NOISE_SEED`'s doc comment |
+ * | `340:286` `RandomNoise` | `noise_seed` | fresh random seed every call, independent of the one above |
  *
  * **Everything else in the graph stays exactly as the template has it**
  * — the checkpoint, the samplers, the VAE chain. Don't "improve" any of
@@ -777,6 +806,8 @@ export function buildLtx23Ia2vWorkflow(inputs: Ltx23Ia2vWorkflowInputs): Record<
     strength: inputs.refineStrength ?? LTX_IA2V_DEFAULT_REFINE_STRENGTH,
   });
   patchNodeInputs(graph, IA2V_NODE_PROMPT_ENHANCE, { value: false });
+  patchNodeInputs(graph, IA2V_NODE_BASE_NOISE_SEED, { noise_seed: randomLtxNoiseSeed() });
+  patchNodeInputs(graph, IA2V_NODE_REFINE_NOISE_SEED, { noise_seed: randomLtxNoiseSeed() });
 
   return graph;
 }
