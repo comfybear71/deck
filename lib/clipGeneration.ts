@@ -643,7 +643,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
       ? "Solo shot: no other people, extra characters, crowd, or background figures appear anywhere in frame at " +
         "any point in the motion, including out-of-focus or partially-visible in the background."
       : "",
-    `Music video for ${params.bandName}. No on-screen text, no watermark.`,
+    `Music video for ${params.bandName}. no on-screen text, no watermark.`,
   ];
 
   const request: ClipGenerationRequest = {

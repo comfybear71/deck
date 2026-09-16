@@ -153,7 +153,7 @@ describe("buildClipGenerationRequest", () => {
       plateStillDataUrl: "data:image/jpeg;base64,door",
       durationSec: 5,
     });
-    expect(prompt).toBe("a door creaks open Music video for Jack Ash. No on-screen text, no watermark.");
+    expect(prompt).toBe("a door creaks open Music video for Jack Ash. no on-screen text, no watermark.");
     expect(prompt.toLowerCase()).not.toMatch(/push-in|zoom|orbit|\bpan\b|cinematic motion/);
   });
 
@@ -191,7 +191,7 @@ describe("buildClipGenerationRequest", () => {
       durationSec: 5,
       motionPrompt: "   ",
     });
-    expect(prompt).toBe("a door creaks open Music video for Jack Ash. No on-screen text, no watermark.");
+    expect(prompt).toBe("a door creaks open Music video for Jack Ash. no on-screen text, no watermark.");
   });
 
   it("caps an overlong motionPrompt at MAX_MOTION_PROMPT_LENGTH rather than sending it verbatim", () => {
@@ -534,7 +534,7 @@ describe("prompt assembly: Stuart's text on top, no hidden camera moves", () => 
 
   it("P3: Instrumental, motion empty — no automatic slow cinematic push-in zoom, no camera line at all", () => {
     const { prompt } = buildClipGenerationRequest({ ...baseParams, vocal: false, vocalist: undefined, shotPrompt: "empty hallway, door ajar" });
-    expect(prompt).toBe("empty hallway, door ajar Music video for Stu Balls. No on-screen text, no watermark.");
+    expect(prompt).toBe("empty hallway, door ajar Music video for Stu Balls. no on-screen text, no watermark.");
   });
 
   it("P4: Jack vocal keeps the lock text (shadow face, neon lips, solo) and camera verbs only if he wrote them", () => {
