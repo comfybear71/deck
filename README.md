@@ -2196,9 +2196,12 @@ now (see "Explicitly out of scope" below).
   - A **"Try one line"** form — pick any character who has a real
     reference plate, then a **Location** native `<select>` of six locked
     park plates (`SUNNY_BANKS_LOCATIONS`, default Office Storefront).
-    Speak/Hold send that location still as `startImageDataUrl` (the LTX
-    first frame) plus `locationId`/`locationImage` alongside
-    `characterName`. Not a sequencer. **Speak** needs a locked ElevenLabs voice as well:
+    Speak/Hold still POST that location still as `startImageDataUrl`
+    (the location canvas — Image 1) plus `locationId`/`locationImage`
+    alongside `characterName`. The **route** then overlays the
+    character hero as Image 2 via xAI edits (Studio
+    `plateCastIntoGen`), and only the composed still goes to LTX node
+    `269`. Not a sequencer. Not a second Comfy image node. **Speak** needs a locked ElevenLabs voice as well:
     type a line, tap "Generate speak beat" to render one real clip via
     `POST /api/skidmarks/sunnybank/generate-speak-beat`: ElevenLabs
     text-to-speech (`lib/elevenLabsSpeech.ts`, keyed off the same

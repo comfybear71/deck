@@ -13,6 +13,7 @@ import {
   SUNNY_BANKS_HOLD_DURATION_SEC,
   type SunnyBanksCharacterLock,
 } from "@/lib/sunnyBanks";
+import { compositeSunnyBanksCharacterOntoLocation } from "@/lib/sunnyBanksComposite";
 import {
   buildLtx23Ia2vWorkflow,
   downloadComfyCloudOutput,
@@ -42,6 +43,15 @@ import {
  * (`276`) is required. Silence is the honest input for a no-dialogue
  * beat; inventing a dummy spoken line just to satisfy the graph would
  * be a silent ElevenLabs bill on every Hold.
+ *
+ * **Plate overlay (2026-09-17)** — copied from original Studio, not a
+ * new Comfy node. Studio `plateCastIntoGen` draws the character onto
+ * the location with xAI edits (Image 1 = empty place, Image 2 = hero
+ * card). `src/lib/ltxCloudIa2v.ts` then patches that composed
+ * `plateFile` onto node `269` only. This route now does both steps:
+ * `startImageDataUrl` is the location canvas, `characterName` loads
+ * the hero overlay, the composed still is what Comfy LoadImage gets.
+ * Gold Hold/Speak strings unchanged. The LTX JSON is not edited.
  *
  * **Real per-beat pathname/shelf, resume-on-failure, last-frame
  * chaining between beats — all deliberately out of scope for this
@@ -82,10 +92,10 @@ interface GenerateSpeakBeatRequestBody {
    * is a Speak beat — the original contract, so existing callers don't
    * have to learn a new field. */
   kind?: unknown;
-  /** Optional park-plate id from `SUNNY_BANKS_LOCATIONS`. The LTX first
-   * frame is still `startImageDataUrl` (the panel resolves that still
-   * client-side). Accepted so the path rides alongside `characterName`;
-   * not required, never a second image node. */
+  /** Optional park-plate id from `SUNNY_BANKS_LOCATIONS` — used only
+   * to name the place in the compositor prompt. The location *canvas*
+   * is `startImageDataUrl` (Image 1). The character hero from
+   * `characterName` is Image 2. LTX still has one LoadImage. */
   locationId?: unknown;
   locationImage?: unknown;
 }
@@ -106,6 +116,7 @@ export async function POST(request: Request) {
   const characterName = typeof body.characterName === "string" ? body.characterName.trim() : "";
   const line = typeof body.line === "string" ? body.line.trim() : "";
   const startImageDataUrl = typeof body.startImageDataUrl === "string" ? body.startImageDataUrl : "";
+  const locationId = typeof body.locationId === "string" ? body.locationId.trim() : "";
 
   if (!characterName || !startImageDataUrl || (kind === "speak" && !line)) {
     return NextResponse.json(
@@ -200,6 +211,15 @@ export async function POST(request: Request) {
     prompt = buildSunnyBanksSpeakingPrompt(character, line);
   }
 
+  const plated = await compositeSunnyBanksCharacterOntoLocation({
+    locationDataUrl: startImageDataUrl,
+    character,
+    locationId,
+  });
+  if (!plated.ok) {
+    return NextResponse.json({ error: plated.error, code: plated.code }, { status: plated.status });
+  }
+
   return runLtxAndPersist({
     character,
     kind,
@@ -207,7 +227,7 @@ export async function POST(request: Request) {
     durationSec,
     audioBytes,
     audioContentType,
-    startImageDataUrl,
+    startImageDataUrl: plated.dataUrl,
     creds,
   });
 }
