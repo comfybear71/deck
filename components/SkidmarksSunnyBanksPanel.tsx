@@ -88,33 +88,45 @@ export function SkidmarksSunnyBanksPanel() {
     <div className="flex flex-col gap-4">
       <div>
         <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-white/40">Cast</p>
-        <div className="flex flex-wrap gap-2">
+        {/* Square thumbnails, horizontal scroll — same shape as the
+            "Choose a band" cover strip (`SkidmarksBandPicker`), swapped
+            in 2026-09-17 for the old wrapping row of round chips
+            (Stuart's own ask, a cast that outgrows one row shouldn't
+            wrap to a second). `overscroll-x-contain` +
+            `-webkit-overflow-scrolling:touch` match the plate strip's
+            own iOS Safari momentum-scroll fix
+            (`SkidmarksClipStub.tsx`) since this strip sits inside the
+            same vertically-scrolling sheet; no `touch-pan-x` needed on
+            the tiles themselves since they carry no press-and-hold/drag
+            gesture of their own, just a static portrait + name. */}
+        <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 pl-0.5 pr-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
           {SERIES_REGULARS.map((c) => {
             const ready = !!(c.voiceId && c.referenceImage);
             return (
               <div
                 key={c.name}
                 className={[
-                  "flex items-center gap-2 rounded-full border px-2.5 py-1.5 text-[12px]",
+                  "relative flex h-20 w-20 shrink-0 overflow-hidden rounded-xl",
                   ready
-                    ? "border-amber-300/30 bg-amber-300/[0.06] text-amber-100"
-                    : "border-white/10 bg-white/[0.02] text-white/40",
+                    ? "bg-amber-300/[0.04] ring-1 ring-inset ring-amber-300/30"
+                    : "bg-white/[0.02] ring-1 ring-inset ring-white/10",
                 ].join(" ")}
               >
                 {c.referenceImage ? (
                   // eslint-disable-next-line @next/next/no-img-element -- a fixed small static asset, not worth next/image here
-                  <img
-                    src={c.referenceImage}
-                    alt=""
-                    className="h-6 w-6 rounded-full object-cover ring-1 ring-white/15"
-                  />
+                  <img src={c.referenceImage} alt="" className="absolute inset-0 h-full w-full object-cover" />
                 ) : (
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-white/15 text-[8px] text-white/25">
+                  <span className="flex h-full w-full items-center justify-center border border-dashed border-white/15 text-[10px] text-white/25">
                     ?
                   </span>
                 )}
-                {c.name}
-                {!ready && <span className="text-[10px] text-white/30">not ready</span>}
+                <span aria-hidden className="absolute inset-x-0 bottom-0 h-9 bg-gradient-to-t from-black/85 via-black/40 to-transparent" />
+                <span className="absolute inset-x-0 bottom-0 flex flex-col gap-0.5 px-1.5 py-1 text-center">
+                  <span className={["line-clamp-1 text-[10px] font-semibold", ready ? "text-amber-100" : "text-white/60"].join(" ")}>
+                    {c.name}
+                  </span>
+                  {!ready && <span className="text-[8px] leading-tight text-white/40">not ready</span>}
+                </span>
               </div>
             );
           })}
