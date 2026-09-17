@@ -2216,9 +2216,13 @@ now (see "Explicitly out of scope" below).
     the episode name, split act buffers, carry a locked park plate into
     `startImageDataUrl` for following rows, and append action /
     appearance text after the gold prompt.
-    `=== LABEL ===` scene headers (e.g. `=== THE EPISODE TAG ===`) stay
+    `=== LABEL ===` scene headers (e.g. `=== THE EPISODE TAG ===`,
+    `=== ACT III — CROWD CUTAWAY ===`) stay
     in the in-memory parse array as sequence chunks, not queue rows;
-    blank and tag-only lines also skip the spreadsheet. Render POST
+    blank and tag-only lines also skip the spreadsheet. Empty `Crowd:`
+    (any non-CAST `Name:`) is not a queue row. `[Character Dazza wrapped
+    in bandages]` (no colon) stamps `appearanceModifier` on the next
+    speaker. Render POST
     sends `line` / `action` / `appearanceModifier` / `locationId`
     (`action` after gold, never into TTS; gold look strings untouched).
     Queue rows do not scroll horizontally on a 390px phone. A **Done**
