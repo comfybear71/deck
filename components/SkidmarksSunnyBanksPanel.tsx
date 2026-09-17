@@ -359,6 +359,29 @@ function extractGodScriptTags(raw: string): {
   return { rest, locationId, actions, appearanceModifiers };
 }
 
+/** iPhone paste of a URL-encoded script lands as literal `%20` / `%0A`
+ * (Stuart live QA: the textarea filled with percent signs instead of
+ * spaces and line breaks). Decode that blob before the parser runs.
+ * Leaves a normal typed script alone — including a lone `%` in dialogue. */
+export function decodeSunnyBanksPastedScript(text: string): string {
+  if (!/%(?:20|0[AaDd])/i.test(text)) return text;
+  const encodedNewlines = (text.match(/%0[AaDd]/gi) ?? []).length;
+  const realNewlines = (text.match(/\r|\n/g) ?? []).length;
+  const encodedSpaces = (text.match(/%20/g) ?? []).length;
+  const looksEncoded =
+    (encodedNewlines > 0 && encodedNewlines >= realNewlines) || encodedSpaces >= 3;
+  if (!looksEncoded) return text;
+  try {
+    return decodeURIComponent(text.replace(/\+/g, " "));
+  } catch {
+    return text
+      .replace(/%0D%0A/gi, "\n")
+      .replace(/%0A/gi, "\n")
+      .replace(/%0D/gi, "\n")
+      .replace(/%20/g, " ");
+  }
+}
+
 /** Append `[Action:]` text after a gold prompt. Does not rewrite gold. */
 export function appendSunnyBanksActionToPrompt(prompt: string, action: string | undefined): string {
   const extra = action?.trim() ?? "";
@@ -885,10 +908,11 @@ export function SkidmarksSunnyBanksPanel() {
     workspaceTitle.trim() || workspaceLabelFromScripts(actScripts, "Sunny Banks episode", actIds);
 
   const handleScriptChange = (value: string) => {
-    const doc = parseSunnyBanksGodDocument(value, activeAct);
+    const decoded = decodeSunnyBanksPastedScript(value);
+    const doc = parseSunnyBanksGodDocument(decoded, activeAct);
     if (doc.episodeTitle) setWorkspaceTitle(doc.episodeTitle);
     if (!doc.hasActHeaders) {
-      setActScripts((prev) => ({ ...prev, [activeAct]: value }));
+      setActScripts((prev) => ({ ...prev, [activeAct]: decoded }));
       return;
     }
     const nextIds = mergeSunnyBanksActIds(actIds, doc.actIds);
@@ -1124,6 +1148,17 @@ export function SkidmarksSunnyBanksPanel() {
                 <textarea
                   value={scriptText}
                   onChange={(e) => handleScriptChange(e.target.value)}
+                  onPaste={(e) => {
+                    const raw =
+                      e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
+                    const decoded = decodeSunnyBanksPastedScript(raw);
+                    if (decoded === raw) return;
+                    e.preventDefault();
+                    const el = e.currentTarget;
+                    const start = el.selectionStart ?? el.value.length;
+                    const end = el.selectionEnd ?? el.value.length;
+                    handleScriptChange(`${el.value.slice(0, start)}${decoded}${el.value.slice(end)}`);
+                  }}
                   disabled={running}
                   placeholder={"Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"}
                   rows={5}

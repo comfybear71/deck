@@ -11,12 +11,32 @@ import {
   parseSunnyBanksGodDocument,
   parseSunnyBanksSceneHeader,
   parseSunnyBanksScriptBlock,
+  decodeSunnyBanksPastedScript,
   resolveSunnyBanksScriptLocationId,
   sunnyBanksQueueChunks,
   SUNNY_BANKS_ACTS,
   toSunnyBanksActId,
 } from "./SkidmarksSunnyBanksPanel";
 import { SUNNY_BANKS_CAST, SUNNY_BANKS_LOCATIONS, buildSunnyBanksSpeakingPrompt } from "@/lib/sunnyBanks";
+
+describe("decodeSunnyBanksPastedScript", () => {
+  it("turns a URL-encoded paste into real spaces and newlines", () => {
+    const encoded =
+      "this%20morning.%0AShazza:%20We%20will%20need%20everybody%20to%20purchase%20their%20drop%20bear%20kit%20or%20some%20drop%20bear%20repellent%20to%20keep%20you%20safe.%0A";
+    expect(decodeSunnyBanksPastedScript(encoded)).toBe(
+      "this morning.\nShazza: We will need everybody to purchase their drop bear kit or some drop bear repellent to keep you safe.\n"
+    );
+    const chunks = parseSunnyBanksScriptBlock(decodeSunnyBanksPastedScript(encoded));
+    expect(chunks.some((chunk) => chunk.characterName === "Shazza" && chunk.line.startsWith("We will need"))).toBe(
+      true
+    );
+  });
+
+  it("leaves a normal typed script alone, including a lone percent", () => {
+    const plain = "Shazza: You right?\nDazza: Yeah nah, 20% off.";
+    expect(decodeSunnyBanksPastedScript(plain)).toBe(plain);
+  });
+});
 
 describe("parseSunnyBanksScriptBlock", () => {
   it("skips blank lines and splits on newlines", () => {
