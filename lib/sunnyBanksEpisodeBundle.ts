@@ -8,7 +8,7 @@ import { buildStoreZip } from "./zipDownload";
  */
 
 export interface SunnyBanksEpisodePromptEntry {
-  act: "I" | "II" | "III";
+  act: string;
   index: number;
   characterName: string;
   kind: "speak" | "hold";
@@ -18,7 +18,7 @@ export interface SunnyBanksEpisodePromptEntry {
 }
 
 export interface SunnyBanksEpisodeClipEntry {
-  act: "I" | "II" | "III";
+  act: string;
   index: number;
   characterName: string;
   lineLabel: string;
@@ -29,7 +29,8 @@ export interface SunnyBanksEpisodeClipEntry {
 export interface SunnyBanksEpisodeBundleInput {
   title: string;
   defaultLocationId: string;
-  actScripts: { I: string; II: string; III: string };
+  actIds: readonly string[];
+  actScripts: Record<string, string>;
   prompts: SunnyBanksEpisodePromptEntry[];
   clips: SunnyBanksEpisodeClipEntry[];
 }
@@ -48,9 +49,9 @@ function encodeUtf8(value: string): Uint8Array {
   return new TextEncoder().encode(value);
 }
 
-function buildScriptTxt(actScripts: SunnyBanksEpisodeBundleInput["actScripts"]): string {
-  return (["I", "II", "III"] as const)
-    .map((act) => `# Act ${act}\n${actScripts[act].trimEnd()}`)
+function buildScriptTxt(actIds: readonly string[], actScripts: Record<string, string>): string {
+  return actIds
+    .map((act) => `# Act ${act}\n${(actScripts[act] ?? "").trimEnd()}`)
     .join("\n\n");
 }
 
@@ -59,6 +60,7 @@ export function buildSunnyBanksEpisodeBundle(input: SunnyBanksEpisodeBundleInput
   filename: string;
 } {
   const title = input.title.trim() || "Sunny Banks episode";
+  const actIds = input.actIds.length > 0 ? [...input.actIds] : Object.keys(input.actScripts);
   const clips = input.clips.map((clip) => ({
     act: clip.act,
     index: clip.index,
@@ -68,14 +70,16 @@ export function buildSunnyBanksEpisodeBundle(input: SunnyBanksEpisodeBundleInput
     durationSec: clip.durationSec ?? null,
   }));
   const zipBytes = buildStoreZip([
-    { name: "script.txt", data: encodeUtf8(buildScriptTxt(input.actScripts)) },
+    { name: "script.txt", data: encodeUtf8(buildScriptTxt(actIds, input.actScripts)) },
     {
       name: "prompts.json",
       data: encodeUtf8(`${JSON.stringify(input.prompts, null, 2)}\n`),
     },
     {
       name: "clips.json",
-      data: encodeUtf8(`${JSON.stringify({ title, defaultLocationId: input.defaultLocationId, clips }, null, 2)}\n`),
+      data: encodeUtf8(
+        `${JSON.stringify({ title, defaultLocationId: input.defaultLocationId, actIds, clips }, null, 2)}\n`
+      ),
     },
   ]);
   return { zipBytes, filename: slugifySunnyBanksEpisodeFilename(title) };

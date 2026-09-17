@@ -2197,7 +2197,11 @@ now (see "Explicitly out of scope" below).
     `<select>` of six locked park plates (`SUNNY_BANKS_LOCATIONS`,
     default Office Storefront) that seeds each parsed row.     A swipeable
     **Act I / Act II / Act III** row sits at the **top** of that card
-    and swaps three in-memory script buffers (not a Neon act table).
+    (`touch-pan-x`, `flex-nowrap`, overflow-x). **+ Add Act** at the
+    far right appends the next roman in-memory buffer (IV, V, …, cap
+    20) with an empty script — not a Neon act table. Save and the
+    episode zip walk every `actIds` entry so a typed Act IV is not
+    dropped. The three EP02 seed acts still open first.
     The textarea and queued rows collapse behind **Show Script Text &
     Queued Lines** (default closed). The Script card uses
     `touch-pan-y overscroll-y-contain`; queue rows use

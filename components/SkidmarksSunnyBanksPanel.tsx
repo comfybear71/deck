@@ -60,8 +60,12 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * **Dense queue + Act pills + in-memory workspace shelf (2026-09-17)** —
  * queue rows are one spreadsheet-style line (not stacked cards) so a
  * phone isn't a tall scroll of identical containers. Act I/II/III
- * pills sit at the top of the Script card and swap three script
- * buffers in this component — not a Neon act table. The textarea and
+ * pills sit at the top of the Script card in one horizontal
+ * `touch-pan-x` strip. The strip opens on Act I/II/III (EP02 seed)
+ * and **+ Add Act** appends the next roman bucket (IV, V, …) with an
+ * empty script buffer — still this component's in-memory maps, not a
+ * Neon act table. Save and the episode zip walk `actIds` in order so
+ * a typed Act IV is not dropped. The textarea and
  * queued rows collapse behind "Show Script Text & Queued Lines"
  * (default closed) so a 46-line EP02 paste doesn't bury the Clips
  * strip. The bottom shelf snapshots those buffers + location ids +
@@ -117,8 +121,45 @@ type BeatKind = "speak" | "hold";
 
 type RowStatus = "idle" | "rendering" | "done" | "failed";
 
-export const SUNNY_BANKS_ACTS = ["I", "II", "III"] as const;
-export type SunnyBanksActId = (typeof SUNNY_BANKS_ACTS)[number];
+export const SUNNY_BANKS_INITIAL_ACTS = ["I", "II", "III"] as const;
+/** Seed default — EP02 opens on these three. Extra acts are roman
+ * IDs appended in memory (`nextSunnyBanksActId`), not a schema. */
+export const SUNNY_BANKS_ACTS = SUNNY_BANKS_INITIAL_ACTS;
+export type SunnyBanksActId = string;
+
+/** Phone-row ceiling so a mashed + cannot spawn an unbounded pill
+ * strip. 20 is XX; past that the button disables. */
+export const MAX_SUNNY_BANKS_ACTS = 20;
+
+const ROMAN_VALUES: ReadonlyArray<readonly [number, string]> = [
+  [100, "C"],
+  [90, "XC"],
+  [50, "L"],
+  [40, "XL"],
+  [10, "X"],
+  [9, "IX"],
+  [5, "V"],
+  [4, "IV"],
+  [1, "I"],
+];
+
+export function toSunnyBanksActId(indexFromOne: number): SunnyBanksActId {
+  if (indexFromOne <= 0) return String(indexFromOne);
+  let remaining = indexFromOne;
+  let out = "";
+  for (const [value, numeral] of ROMAN_VALUES) {
+    while (remaining >= value) {
+      out += numeral;
+      remaining -= value;
+    }
+  }
+  return out;
+}
+
+/** Next roman after the current ordered list (I, II, III → IV). */
+export function nextSunnyBanksActId(existing: readonly string[]): SunnyBanksActId {
+  return toSunnyBanksActId(existing.length + 1);
+}
 
 export interface SunnyBanksScriptChunk {
   raw: string;
@@ -153,6 +194,7 @@ interface EpisodeWorkspace {
   fingerprint: string;
   label: string;
   defaultLocationId: SunnyBanksLocationId;
+  actIds: SunnyBanksActId[];
   activeAct: SunnyBanksActId;
   actScripts: ActKeyed<string>;
   characterOverrides: ActKeyed<Record<number, string>>;
@@ -174,16 +216,21 @@ const LOCATION_LIST = Object.values(SUNNY_BANKS_LOCATIONS);
 const PLATE_CAST = CAST_LIST.filter((c) => c.referenceImage);
 const FALLBACK_CHARACTER_NAME = PLATE_CAST[0]?.name ?? "";
 
-function emptyActRecord<T>(make: () => T): ActKeyed<T> {
-  return { I: make(), II: make(), III: make() };
+function emptyActRecord<T>(make: () => T, actIds: readonly string[] = SUNNY_BANKS_INITIAL_ACTS): ActKeyed<T> {
+  const next: ActKeyed<T> = {};
+  for (const act of actIds) {
+    next[act] = make();
+  }
+  return next;
 }
 
-function cloneActRecord<T>(value: ActKeyed<T>): ActKeyed<T> {
-  return {
-    I: structuredClone(value.I),
-    II: structuredClone(value.II),
-    III: structuredClone(value.III),
-  };
+function cloneActRecord<T>(value: ActKeyed<T>, actIds?: readonly string[]): ActKeyed<T> {
+  const keys = actIds ?? Object.keys(value);
+  const next: ActKeyed<T> = {};
+  for (const act of keys) {
+    if (act in value) next[act] = structuredClone(value[act]);
+  }
+  return next;
 }
 
 function escapeRegExp(value: string): string {
@@ -250,9 +297,13 @@ function statusPillClass(status: RowStatus): string {
   return "bg-white/10 text-white/55";
 }
 
-function workspaceLabelFromScripts(actScripts: ActKeyed<string>, fallback: string): string {
-  for (const act of SUNNY_BANKS_ACTS) {
-    const first = actScripts[act]
+function workspaceLabelFromScripts(
+  actScripts: ActKeyed<string>,
+  fallback: string,
+  actIds: readonly string[]
+): string {
+  for (const act of actIds) {
+    const first = (actScripts[act] ?? "")
       .split(/\r?\n/)
       .map((line) => line.trim())
       .find(Boolean);
@@ -266,6 +317,7 @@ function workspaceLabelFromScripts(actScripts: ActKeyed<string>, fallback: strin
  * the workspace id, never as a uniqueness gate that would skip a save. */
 export function fingerprintWorkspace(snapshot: {
   defaultLocationId: string;
+  actIds: readonly string[];
   activeAct: string;
   actScripts: ActKeyed<string>;
   characterOverrides: ActKeyed<Record<number, string>>;
@@ -288,15 +340,16 @@ export function mintWorkspaceId(savedAt: number, seq: number, fingerprint: strin
 }
 
 export function collectRenderedClips(args: {
+  actIds: readonly string[];
   actScripts: ActKeyed<string>;
   runtimeMap: ActKeyed<Record<number, RowRuntime>>;
   characterOverrides: ActKeyed<Record<number, string>>;
 }): SunnyBanksRenderedClip[] {
   const clips: SunnyBanksRenderedClip[] = [];
-  for (const act of SUNNY_BANKS_ACTS) {
-    const chunks = parseSunnyBanksScriptBlock(args.actScripts[act]);
-    const runtimes = args.runtimeMap[act];
-    const overrides = args.characterOverrides[act];
+  for (const act of args.actIds) {
+    const chunks = parseSunnyBanksScriptBlock(args.actScripts[act] ?? "");
+    const runtimes = args.runtimeMap[act] ?? {};
+    const overrides = args.characterOverrides[act] ?? {};
     chunks.forEach((chunk, index) => {
       const stored = runtimes[index];
       if (!stored || stored.lineKey !== chunk.raw || stored.status !== "done" || !stored.videoUrl) {
@@ -329,6 +382,7 @@ function ChevronIcon({ open }: { open: boolean }) {
 }
 
 export function SkidmarksSunnyBanksPanel() {
+  const [actIds, setActIds] = useState<SunnyBanksActId[]>(() => [...SUNNY_BANKS_INITIAL_ACTS]);
   const [activeAct, setActiveAct] = useState<SunnyBanksActId>("I");
   const [actScripts, setActScripts] = useState<ActKeyed<string>>(() => DROP_BEARS_SEED.actScripts);
   const [defaultLocationId, setDefaultLocationId] = useState<SunnyBanksLocationId>(
@@ -352,14 +406,15 @@ export function SkidmarksSunnyBanksPanel() {
   const [scriptOpen, setScriptOpen] = useState(false);
   const [workspaceTitle, setWorkspaceTitle] = useState(DROP_BEARS_TITLE);
   const [bundleError, setBundleError] = useState<string | null>(null);
+  const actStripRef = useRef<HTMLDivElement>(null);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
   const workspaceSaveSeqRef = useRef(0);
 
-  const scriptText = actScripts[activeAct];
-  const characterOverrides = characterOverridesByAct[activeAct];
-  const locationOverrides = locationOverridesByAct[activeAct];
-  const runtimeMap = runtimeMapByAct[activeAct];
+  const scriptText = actScripts[activeAct] ?? "";
+  const characterOverrides = characterOverridesByAct[activeAct] ?? {};
+  const locationOverrides = locationOverridesByAct[activeAct] ?? {};
+  const runtimeMap = runtimeMapByAct[activeAct] ?? {};
   const parsed = useMemo(() => parseSunnyBanksScriptBlock(scriptText), [scriptText]);
   const running = runningKind !== null;
 
@@ -380,14 +435,17 @@ export function SkidmarksSunnyBanksPanel() {
   });
 
   const renderedClips = collectRenderedClips({
+    actIds,
     actScripts,
     runtimeMap: runtimeMapByAct,
     characterOverrides: characterOverridesByAct,
   });
-  const clipsByAct = SUNNY_BANKS_ACTS.map((act) => ({
-    act,
-    clips: renderedClips.filter((clip) => clip.act === act),
-  })).filter((group) => group.clips.length > 0);
+  const clipsByAct = actIds
+    .map((act) => ({
+      act,
+      clips: renderedClips.filter((clip) => clip.act === act),
+    }))
+    .filter((group) => group.clips.length > 0);
 
   const pendingRows = queue.filter((row) => runtimeFor(row.index, row.chunk.raw).status !== "done");
 
@@ -467,7 +525,7 @@ export function SkidmarksSunnyBanksPanel() {
     const writeRuntime = (index: number, next: RowRuntime) => {
       setRuntimeMapByAct((prev) => ({
         ...prev,
-        [act]: { ...prev[act], [index]: next },
+        [act]: { ...(prev[act] ?? {}), [index]: next },
       }));
     };
     try {
@@ -545,10 +603,10 @@ export function SkidmarksSunnyBanksPanel() {
       locationId: string;
       prompt: string;
     }> = [];
-    for (const act of SUNNY_BANKS_ACTS) {
-      const chunks = parseSunnyBanksScriptBlock(actScripts[act]);
-      const overrides = characterOverridesByAct[act];
-      const locations = locationOverridesByAct[act];
+    for (const act of actIds) {
+      const chunks = parseSunnyBanksScriptBlock(actScripts[act] ?? "");
+      const overrides = characterOverridesByAct[act] ?? {};
+      const locations = locationOverridesByAct[act] ?? {};
       chunks.forEach((chunk, index) => {
         const characterName = overrides[index] ?? chunk.characterName;
         const lock = getSunnyBanksCharacterLock(characterName);
@@ -574,17 +632,33 @@ export function SkidmarksSunnyBanksPanel() {
   };
 
   const resolvedWorkspaceTitle = () =>
-    workspaceTitle.trim() || workspaceLabelFromScripts(actScripts, "Sunny Banks episode");
+    workspaceTitle.trim() || workspaceLabelFromScripts(actScripts, "Sunny Banks episode", actIds);
+
+  const handleAddAct = () => {
+    if (running || actIds.length >= MAX_SUNNY_BANKS_ACTS) return;
+    const id = nextSunnyBanksActId(actIds);
+    setActIds((prev) => [...prev, id]);
+    setActScripts((prev) => ({ ...prev, [id]: "" }));
+    setCharacterOverridesByAct((prev) => ({ ...prev, [id]: {} }));
+    setLocationOverridesByAct((prev) => ({ ...prev, [id]: {} }));
+    setRuntimeMapByAct((prev) => ({ ...prev, [id]: {} }));
+    setActiveAct(id);
+    window.setTimeout(() => {
+      actStripRef.current?.scrollTo({ left: actStripRef.current.scrollWidth, behavior: "smooth" });
+    }, 0);
+  };
 
   const handleSaveWorkspace = () => {
     workspaceSaveSeqRef.current += 1;
     const savedAt = Date.now();
-    const actScriptsSnapshot = cloneActRecord(actScripts);
-    const characterOverridesSnapshot = cloneActRecord(characterOverridesByAct);
-    const locationOverridesSnapshot = cloneActRecord(locationOverridesByAct);
-    const runtimeMapSnapshot = cloneActRecord(runtimeMapByAct);
+    const actIdsSnapshot = [...actIds];
+    const actScriptsSnapshot = cloneActRecord(actScripts, actIdsSnapshot);
+    const characterOverridesSnapshot = cloneActRecord(characterOverridesByAct, actIdsSnapshot);
+    const locationOverridesSnapshot = cloneActRecord(locationOverridesByAct, actIdsSnapshot);
+    const runtimeMapSnapshot = cloneActRecord(runtimeMapByAct, actIdsSnapshot);
     const fingerprint = fingerprintWorkspace({
       defaultLocationId,
+      actIds: actIdsSnapshot,
       activeAct,
       actScripts: actScriptsSnapshot,
       characterOverrides: characterOverridesSnapshot,
@@ -597,6 +671,7 @@ export function SkidmarksSunnyBanksPanel() {
       fingerprint,
       label: resolvedWorkspaceTitle(),
       defaultLocationId,
+      actIds: actIdsSnapshot,
       activeAct,
       actScripts: actScriptsSnapshot,
       characterOverrides: characterOverridesSnapshot,
@@ -613,6 +688,7 @@ export function SkidmarksSunnyBanksPanel() {
       const { zipBytes, filename } = buildSunnyBanksEpisodeBundle({
         title: resolvedWorkspaceTitle(),
         defaultLocationId,
+        actIds,
         actScripts,
         prompts: collectEpisodePrompts(),
         clips: renderedClips,
@@ -632,11 +708,12 @@ export function SkidmarksSunnyBanksPanel() {
     if (running) return;
     setWorkspaceTitle(workspace.label);
     setDefaultLocationId(workspace.defaultLocationId);
+    setActIds(workspace.actIds.length > 0 ? [...workspace.actIds] : [...SUNNY_BANKS_INITIAL_ACTS]);
     setActiveAct(workspace.activeAct);
-    setActScripts(cloneActRecord(workspace.actScripts));
-    setCharacterOverridesByAct(cloneActRecord(workspace.characterOverrides));
-    setLocationOverridesByAct(cloneActRecord(workspace.locationOverrides));
-    setRuntimeMapByAct(cloneActRecord(workspace.runtimeMap));
+    setActScripts(cloneActRecord(workspace.actScripts, workspace.actIds));
+    setCharacterOverridesByAct(cloneActRecord(workspace.characterOverrides, workspace.actIds));
+    setLocationOverridesByAct(cloneActRecord(workspace.locationOverrides, workspace.actIds));
+    setRuntimeMapByAct(cloneActRecord(workspace.runtimeMap, workspace.actIds));
     setProgressText(null);
   };
 
@@ -691,13 +768,14 @@ export function SkidmarksSunnyBanksPanel() {
         ) : (
           <>
             <div
+              ref={actStripRef}
               role="tablist"
               aria-label="Act"
-              className="flex gap-1.5 overflow-x-auto overscroll-x-contain touch-pan-x pb-0.5 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]"
+              className="flex flex-row flex-nowrap gap-2 overflow-x-auto overscroll-x-contain whitespace-nowrap touch-pan-x pb-2 [-webkit-overflow-scrolling:touch] [scrollbar-width:none]"
             >
-              {SUNNY_BANKS_ACTS.map((act) => {
+              {actIds.map((act) => {
                 const selected = act === activeAct;
-                const lineCount = parseSunnyBanksScriptBlock(actScripts[act]).length;
+                const lineCount = parseSunnyBanksScriptBlock(actScripts[act] ?? "").length;
                 return (
                   <button
                     key={act}
@@ -718,6 +796,14 @@ export function SkidmarksSunnyBanksPanel() {
                   </button>
                 );
               })}
+              <button
+                type="button"
+                onClick={handleAddAct}
+                disabled={running || actIds.length >= MAX_SUNNY_BANKS_ACTS}
+                className="min-h-[40px] shrink-0 rounded-full bg-white/[0.04] px-3.5 text-[12px] font-semibold text-white/80 ring-1 ring-inset ring-white/10 disabled:opacity-60"
+              >
+                + Add Act
+              </button>
             </div>
             <select
               value={defaultLocationId}
@@ -785,7 +871,7 @@ export function SkidmarksSunnyBanksPanel() {
                               onChange={(e) =>
                                 setCharacterOverridesByAct((prev) => ({
                                   ...prev,
-                                  [activeAct]: { ...prev[activeAct], [row.index]: e.target.value },
+                                  [activeAct]: { ...(prev[activeAct] ?? {}), [row.index]: e.target.value },
                                 }))
                               }
                               disabled={running}
@@ -812,7 +898,7 @@ export function SkidmarksSunnyBanksPanel() {
                                 setLocationOverridesByAct((prev) => ({
                                   ...prev,
                                   [activeAct]: {
-                                    ...prev[activeAct],
+                                    ...(prev[activeAct] ?? {}),
                                     [row.index]: e.target.value as SunnyBanksLocationId,
                                   },
                                 }))
