@@ -2210,6 +2210,11 @@ now (see "Explicitly out of scope" below).
     dense one-row queue (`parseSunnyBanksScriptBlock` in
     `components/SkidmarksSunnyBanksPanel.tsx`: `Name:` / `Name says:`,
     empty dialogue = Hold, continuation lines keep the last speaker).
+    God Script headers in that same paste (`# EPISODE:`, `=== ACT`,
+    `[Location: id]`, `[Action: text]`) set the episode name, split
+    act buffers, carry a locked park plate into `startImageDataUrl` for
+    following rows, and append action text after the gold prompt —
+    still in-memory, no layout change.
     Each row is one spreadsheet-style line: character `<select>` (CAST
     keyed by name, full lock still loaded on the server for gold
     prompts), truncated line fragment, location `<select>`, Idle /

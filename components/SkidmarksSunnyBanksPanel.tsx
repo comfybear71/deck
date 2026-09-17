@@ -68,7 +68,10 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * a typed Act IV is not dropped. The textarea and
  * queued rows collapse behind "Show Script Text & Queued Lines"
  * (default closed) so a 46-line EP02 paste doesn't bury the Clips
- * strip. The bottom shelf snapshots those buffers + location ids +
+ * strip. `# EPISODE:`, `=== ACT`, `[Location: id]`, and `[Action: text]`
+ * in a pasted God Script update the episode name, act buffers, park
+ * plate (`startImageDataUrl` at render), and prompt suffix in memory —
+ * not a Neon schema, not a layout change. The bottom shelf snapshots those buffers + location ids +
  * finished clip URLs as a named workspace card for this open
  * detail-sheet only (`mintWorkspaceId` = timestamp + seq + content
  * fingerprint — never clobbers an earlier card). A red ✕ drops that
@@ -167,6 +170,17 @@ export interface SunnyBanksScriptChunk {
   characterName: string;
   line: string;
   kind: BeatKind;
+  /** Locked park plate for this row and later rows, from `[Location: id]`. */
+  locationId?: SunnyBanksLocationId;
+  /** Extra LTX prompt context from `[Action: text]` — not spoken TTS. */
+  action?: string;
+}
+
+export interface SunnyBanksGodDocument {
+  episodeTitle: string | null;
+  hasActHeaders: boolean;
+  actIds: SunnyBanksActId[];
+  actScripts: Record<string, string>;
 }
 
 interface GenerateBeatResponseBody {
@@ -249,20 +263,165 @@ function matchSpeakerPrefix(raw: string): { name: string; rest: string } | null 
   return null;
 }
 
+/** `# EPISODE: title` — trailing text is the workspace name. */
+export function parseSunnyBanksEpisodeHeader(raw: string): { title: string } | null {
+  const match = raw.match(/^#\s*EPISODE:\s*(.*)$/i);
+  if (!match) return null;
+  return { title: (match[1] ?? "").trim() };
+}
+
+/** A line that contains `=== ACT I` / `=== ACT 2` names that act buffer. */
+export function parseSunnyBanksActHeader(raw: string): SunnyBanksActId | null {
+  const match = raw.match(/===\s*ACT\s+([IVXLCDM]+|\d+)/i);
+  if (!match) return null;
+  const token = match[1];
+  if (/^\d+$/.test(token)) {
+    const indexFromOne = Number(token);
+    if (indexFromOne < 1 || indexFromOne > MAX_SUNNY_BANKS_ACTS) return null;
+    return toSunnyBanksActId(indexFromOne);
+  }
+  return token.toUpperCase();
+}
+
+/** Map `[Location: id]` onto one of the six locked park plates. */
+export function resolveSunnyBanksScriptLocationId(token: string): SunnyBanksLocationId | undefined {
+  const trimmed = token.trim();
+  if (!trimmed) return undefined;
+  const direct = getSunnyBanksLocation(trimmed);
+  if (direct) return direct.id;
+  const slug = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  const slugged = getSunnyBanksLocation(slug);
+  if (slugged) return slugged.id;
+  const lower = trimmed.toLowerCase();
+  for (const location of LOCATION_LIST) {
+    if (location.label.toLowerCase() === lower) return location.id;
+  }
+  return undefined;
+}
+
+function extractGodScriptTags(raw: string): {
+  rest: string;
+  locationId?: SunnyBanksLocationId;
+  actions: string[];
+} {
+  let locationId: SunnyBanksLocationId | undefined;
+  const actions: string[] = [];
+  const rest = raw
+    .replace(/\[Location:\s*([^\]]*)\]/gi, (_, token: string) => {
+      const resolved = resolveSunnyBanksScriptLocationId(token);
+      if (resolved) locationId = resolved;
+      return " ";
+    })
+    .replace(/\[Action:\s*([^\]]*)\]/gi, (_, token: string) => {
+      const action = token.replace(/\s+/g, " ").trim();
+      if (action) actions.push(action);
+      return " ";
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+  return { rest, locationId, actions };
+}
+
+/** Append `[Action:]` text after a gold prompt. Does not rewrite gold. */
+export function appendSunnyBanksActionToPrompt(prompt: string, action: string | undefined): string {
+  const extra = action?.trim() ?? "";
+  if (!extra) return prompt;
+  return `${prompt} ${extra}`;
+}
+
+export function mergeSunnyBanksActIds(
+  existing: readonly string[],
+  incoming: readonly string[]
+): SunnyBanksActId[] {
+  const next: SunnyBanksActId[] = [...existing];
+  for (const id of incoming) {
+    if (!next.includes(id) && next.length < MAX_SUNNY_BANKS_ACTS) next.push(id);
+  }
+  return next;
+}
+
+/**
+ * Split a God Script document into per-act buffers. `# EPISODE:` and
+ * `=== ACT` lines are not stored in those buffers. In-memory only.
+ */
+export function parseSunnyBanksGodDocument(text: string, fallbackActId: string = "I"): SunnyBanksGodDocument {
+  let episodeTitle: string | null = null;
+  let hasActHeaders = false;
+  let currentAct: SunnyBanksActId = fallbackActId;
+  const order: SunnyBanksActId[] = [];
+  const linesByAct: Record<string, string[]> = {};
+
+  const touch = (act: SunnyBanksActId) => {
+    if (!linesByAct[act]) {
+      linesByAct[act] = [];
+      order.push(act);
+    }
+  };
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const raw = rawLine.trim();
+    const episode = parseSunnyBanksEpisodeHeader(raw);
+    if (episode) {
+      if (episode.title) episodeTitle = episode.title;
+      continue;
+    }
+    const act = parseSunnyBanksActHeader(raw);
+    if (act) {
+      hasActHeaders = true;
+      currentAct = act;
+      touch(currentAct);
+      continue;
+    }
+    touch(currentAct);
+    linesByAct[currentAct].push(rawLine.replace(/[ \t]+$/g, ""));
+  }
+
+  if (order.length === 0) touch(fallbackActId);
+
+  let inheritedLocation: SunnyBanksLocationId | undefined;
+  for (const act of order) {
+    const body = linesByAct[act] ?? [];
+    const hasOwnLocation = body.some((line) => Boolean(extractGodScriptTags(line.trim()).locationId));
+    if (!hasOwnLocation && inheritedLocation) {
+      body.unshift(`[Location: ${inheritedLocation}]`);
+    }
+    for (const line of body) {
+      const loc = extractGodScriptTags(line.trim()).locationId;
+      if (loc) inheritedLocation = loc;
+    }
+    linesByAct[act] = body;
+  }
+
+  const actScripts: Record<string, string> = {};
+  for (const act of order) {
+    actScripts[act] = (linesByAct[act] ?? []).join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
+  }
+  return { episodeTitle, hasActHeaders, actIds: order, actScripts };
+}
+
 /**
  * Split a pasted script on newlines into Speak/Hold chunks.
  * Looks up speakers against `SUNNY_BANKS_CAST` keys (name-keyed
  * records, never a guessed id). Empty dialogue after a speaker prefix
  * is a Hold. A line with no prefix continues the previous speaker.
- * Blank lines are skipped. Does not touch gold prompt strings.
+ * Blank lines are skipped. God Script headers (`# EPISODE:`, `=== ACT`,
+ * `[Location: id]`, `[Action: text]`) are not queue rows. Does not
+ * touch gold prompt strings.
  */
 export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[] {
   const chunks: SunnyBanksScriptChunk[] = [];
   let previousName = "";
+  let currentLocation: SunnyBanksLocationId | undefined;
+  let pendingActions: string[] = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const raw = rawLine.trim();
     if (!raw) continue;
-    const matched = matchSpeakerPrefix(raw);
+    if (parseSunnyBanksEpisodeHeader(raw) || parseSunnyBanksActHeader(raw)) continue;
+    const tagged = extractGodScriptTags(raw);
+    if (tagged.locationId) currentLocation = tagged.locationId;
+    if (tagged.actions.length > 0) pendingActions = [...pendingActions, ...tagged.actions];
+    if (!tagged.rest) continue;
+    const matched = matchSpeakerPrefix(tagged.rest);
     let characterName: string;
     let line: string;
     if (matched) {
@@ -271,15 +430,20 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       previousName = matched.name;
     } else {
       characterName = previousName || FALLBACK_CHARACTER_NAME;
-      line = raw;
+      line = tagged.rest;
       if (characterName) previousName = characterName;
     }
-    chunks.push({
-      raw,
+    const action = pendingActions.join(" ").trim();
+    pendingActions = [];
+    const chunk: SunnyBanksScriptChunk = {
+      raw: tagged.rest,
       characterName,
       line,
       kind: line.length > 0 ? "speak" : "hold",
-    });
+    };
+    if (currentLocation) chunk.locationId = currentLocation;
+    if (action) chunk.action = action;
+    chunks.push(chunk);
   }
   return chunks;
 }
@@ -427,7 +591,7 @@ export function SkidmarksSunnyBanksPanel() {
 
   const queue = parsed.map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
-    const locationId = locationOverrides[index] ?? defaultLocationId;
+    const locationId = locationOverrides[index] ?? chunk.locationId ?? defaultLocationId;
     const character = getSunnyBanksCharacterLock(characterName);
     const location = getSunnyBanksLocation(locationId) ?? SUNNY_BANKS_LOCATIONS[SUNNY_BANKS_DEFAULT_LOCATION_ID];
     const line = chunk.line;
@@ -611,13 +775,14 @@ export function SkidmarksSunnyBanksPanel() {
       chunks.forEach((chunk, index) => {
         const characterName = overrides[index] ?? chunk.characterName;
         const lock = getSunnyBanksCharacterLock(characterName);
-        const locationId = locations[index] ?? defaultLocationId;
+        const locationId = locations[index] ?? chunk.locationId ?? defaultLocationId;
         const kind: BeatKind = chunk.line.length > 0 ? "speak" : "hold";
-        const prompt = lock
+        const gold = lock
           ? kind === "hold"
             ? buildSunnyBanksHoldPrompt(lock)
             : buildSunnyBanksSpeakingPrompt(lock, chunk.line)
           : "";
+        const prompt = appendSunnyBanksActionToPrompt(gold, chunk.action);
         prompts.push({
           act,
           index,
@@ -634,6 +799,54 @@ export function SkidmarksSunnyBanksPanel() {
 
   const resolvedWorkspaceTitle = () =>
     workspaceTitle.trim() || workspaceLabelFromScripts(actScripts, "Sunny Banks episode", actIds);
+
+  const handleScriptChange = (value: string) => {
+    const doc = parseSunnyBanksGodDocument(value, activeAct);
+    if (doc.episodeTitle) setWorkspaceTitle(doc.episodeTitle);
+    if (!doc.hasActHeaders) {
+      setActScripts((prev) => ({ ...prev, [activeAct]: value }));
+      return;
+    }
+    const nextIds = mergeSunnyBanksActIds(actIds, doc.actIds);
+    setActIds(nextIds);
+    setActScripts((prev) => {
+      const next = { ...prev };
+      for (const id of nextIds) {
+        if (!(id in next)) next[id] = "";
+      }
+      for (const id of doc.actIds) {
+        next[id] = doc.actScripts[id] ?? "";
+      }
+      if (!doc.actIds.includes(activeAct)) next[activeAct] = "";
+      return next;
+    });
+    setCharacterOverridesByAct((prev) => {
+      const next = { ...prev };
+      for (const id of nextIds) {
+        if (!(id in next)) next[id] = {};
+      }
+      for (const id of doc.actIds) next[id] = {};
+      return next;
+    });
+    setLocationOverridesByAct((prev) => {
+      const next = { ...prev };
+      for (const id of nextIds) {
+        if (!(id in next)) next[id] = {};
+      }
+      for (const id of doc.actIds) next[id] = {};
+      return next;
+    });
+    setRuntimeMapByAct((prev) => {
+      const next = { ...prev };
+      for (const id of nextIds) {
+        if (!(id in next)) next[id] = {};
+      }
+      return next;
+    });
+    if (!doc.actIds.includes(activeAct) && doc.actIds[0]) {
+      setActiveAct(doc.actIds[0]);
+    }
+  };
 
   const handleAddAct = () => {
     if (running || actIds.length >= MAX_SUNNY_BANKS_ACTS) return;
@@ -837,12 +1050,7 @@ export function SkidmarksSunnyBanksPanel() {
               <div className="flex touch-pan-y flex-col gap-2.5 overscroll-y-contain">
                 <textarea
                   value={scriptText}
-                  onChange={(e) =>
-                    setActScripts((prev) => ({
-                      ...prev,
-                      [activeAct]: e.target.value,
-                    }))
-                  }
+                  onChange={(e) => handleScriptChange(e.target.value)}
                   disabled={running}
                   placeholder={"Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"}
                   rows={5}
