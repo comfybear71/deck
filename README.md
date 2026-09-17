@@ -2209,7 +2209,13 @@ now (see "Explicitly out of scope" below).
     default-open **Clips** shelf after the script (same card size and
     `touch-pan-x` as `SkidmarksRenderedClipsShelf` (`w-44` / `h-28`,
     inline `<video controls playsInline>`), sectioned Act I / II / III
-    with a divider between acts — not a lightbox). A collapsible
+    with a divider between acts — not a lightbox). The panel **opens on
+    Crash Lab EP02 Drop Bears** (`mgen_20260827092841004_ea9`: 46
+    already-rendered Speak clips, streamed from
+    `skidmarks.aiglitch.app` — Act I caravan park, Act II BBQ shelter,
+    Act III Unit 9 + announcement). In-memory seed only; Render skips
+    lines that already have a clip so those 46 are not billed again.
+    A collapsible
     **Episode workspace** bar sits under that strip, same reading
     order as music-video rendered-clips then archive. Speak/Hold still POST that location still as `startImageDataUrl`
     (the location canvas — Image 1) plus `locationId`/`locationImage`

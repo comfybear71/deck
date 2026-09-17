@@ -14,6 +14,7 @@ import {
   SUNNY_BANKS_LOCATIONS,
   type SunnyBanksLocationId,
 } from "@/lib/sunnyBanks";
+import { buildSunnyBanksDropBearsSeed } from "@/lib/sunnyBanksDropBears";
 
 /**
  * Sunny Banks' own first real screen (2026-09-15) — the thing that
@@ -73,7 +74,15 @@ import {
  * (`mintWorkspaceId` = timestamp + seq + content fingerprint) instead
  * of reusing `Date.now()` as a key that could collide on a double-tap.
  * Each saved card has a red ✕ that drops that snapshot only.
+ *
+ * **EP02 Drop Bears seed (2026-09-17)** — the panel opens on Crash Lab
+ * job `mgen_20260827092841004_ea9` (46 already-rendered Speak clips)
+ * so the Clips strip can be judged with real MP4s. Still in-memory, still
+ * this component. No re-render, no Crash Lab chrome, no new Neon table.
+ * Playback hits skidmarks.aiglitch.app while that host stays ungated.
  */
+
+const DROP_BEARS_SEED = buildSunnyBanksDropBearsSeed();
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
 /** The always-on cast strip only ever shows the locked series regulars
@@ -304,18 +313,18 @@ function ChevronIcon({ open }: { open: boolean }) {
 
 export function SkidmarksSunnyBanksPanel() {
   const [activeAct, setActiveAct] = useState<SunnyBanksActId>("I");
-  const [actScripts, setActScripts] = useState<ActKeyed<string>>(() => emptyActRecord(() => ""));
+  const [actScripts, setActScripts] = useState<ActKeyed<string>>(() => DROP_BEARS_SEED.actScripts);
   const [defaultLocationId, setDefaultLocationId] = useState<SunnyBanksLocationId>(
-    SUNNY_BANKS_DEFAULT_LOCATION_ID
+    DROP_BEARS_SEED.defaultLocationId
   );
   const [characterOverridesByAct, setCharacterOverridesByAct] = useState<ActKeyed<Record<number, string>>>(
     () => emptyActRecord(() => ({}))
   );
   const [locationOverridesByAct, setLocationOverridesByAct] = useState<
     ActKeyed<Record<number, SunnyBanksLocationId>>
-  >(() => emptyActRecord(() => ({})));
-  const [runtimeMapByAct, setRuntimeMapByAct] = useState<ActKeyed<Record<number, RowRuntime>>>(() =>
-    emptyActRecord(() => ({}))
+  >(() => DROP_BEARS_SEED.locationOverrides);
+  const [runtimeMapByAct, setRuntimeMapByAct] = useState<ActKeyed<Record<number, RowRuntime>>>(
+    () => DROP_BEARS_SEED.runtimeMap
   );
   const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
   const [runningIndex, setRunningIndex] = useState<number | null>(null);
@@ -360,14 +369,16 @@ export function SkidmarksSunnyBanksPanel() {
     clips: renderedClips.filter((clip) => clip.act === act),
   })).filter((group) => group.clips.length > 0);
 
-  const overlayCostUsd = queue.length * ESTIMATED_STILL_COST_USD;
-  const holdVideoCostUsd = queue.filter((row) => row.kind === "hold").length * HOLD_COST_USD;
-  const speakCount = queue.filter((row) => row.kind === "speak").length;
+  const pendingRows = queue.filter((row) => runtimeFor(row.index, row.chunk.raw).status !== "done");
+
+  const overlayCostUsd = pendingRows.length * ESTIMATED_STILL_COST_USD;
+  const holdVideoCostUsd = pendingRows.filter((row) => row.kind === "hold").length * HOLD_COST_USD;
+  const speakCount = pendingRows.filter((row) => row.kind === "speak").length;
 
   const canRenderAll =
-    queue.length > 0 &&
+    pendingRows.length > 0 &&
     !running &&
-    queue.every((row) => {
+    pendingRows.every((row) => {
       if (!row.character || !row.location.image) return false;
       if (row.kind === "speak") return !!row.character.voiceId && row.line.length > 0;
       return !!resolveSunnyBanksStartImage(row.character);
@@ -442,6 +453,7 @@ export function SkidmarksSunnyBanksPanel() {
     try {
       for (let i = 0; i < queue.length; i += 1) {
         const row = queue[i];
+        if (runtimeFor(row.index, row.chunk.raw).status === "done") continue;
         const lock = getSunnyBanksCharacterLock(row.characterName);
         if (!lock || !row.location.image) {
           writeRuntime(i, {
@@ -763,16 +775,18 @@ export function SkidmarksSunnyBanksPanel() {
                 ? `Rendering line ${(runningIndex ?? 0) + 1} of ${queue.length}…`
                 : queue.length === 0
                   ? "Render lines"
-                  : `Render ${queue.length} line${queue.length === 1 ? "" : "s"}`}
+                  : pendingRows.length === 0
+                    ? "Clips already loaded"
+                    : `Render ${pendingRows.length} line${pendingRows.length === 1 ? "" : "s"}`}
             </button>
             <p className="text-[10px] leading-snug text-white/40">
-              One clip at a time — overlay ~${overlayCostUsd.toFixed(2)}
-              {queue.filter((row) => row.kind === "hold").length > 0
-                ? `, hold video ~$${holdVideoCostUsd.toFixed(2)}`
-                : ""}
-              {speakCount > 0 ? `, speak video ~$0.13/s after TTS` : ""}
-              . Stops if a line fails so later lines are not billed. Route still loads the
-              full character lock by name for the gold prompts.
+              {pendingRows.length === 0
+                ? "Existing Crash Lab clips are already in the strip below. Edit a line to render a new one — one clip at a time, never a batch of these 46."
+                : `One clip at a time — overlay ~$${overlayCostUsd.toFixed(2)}${
+                    pendingRows.filter((row) => row.kind === "hold").length > 0
+                      ? `, hold video ~$${holdVideoCostUsd.toFixed(2)}`
+                      : ""
+                  }${speakCount > 0 ? `, speak video ~$0.13/s after TTS` : ""}. Stops if a line fails so later lines are not billed. Route still loads the full character lock by name for the gold prompts.`}
             </p>
           </>
         )}
