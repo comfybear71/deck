@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildSunnyBanksHoldBeatPathname,
@@ -6,6 +8,7 @@ import {
   buildSunnyBanksSpeakingPrompt,
   buildUnit4sLine,
   getSunnyBanksCharacterLock,
+  resolveSunnyBanksStartImage,
   SUNNY_BANKS_CAST,
   SUNNY_BANKS_STYLE_LOCK,
 } from "./sunnyBanks";
@@ -36,6 +39,16 @@ describe("SUNNY_BANKS_CAST", () => {
     // Not sent yet — an undefined reference must stay undefined, never a
     // guessed/invented path a caller could 404 on.
     expect(SUNNY_BANKS_CAST.Hans.referenceImage).toBeUndefined();
+  });
+
+  it("live-QA (2026-09-17): sheet characters have a single-subject hero still; Unit 4S is already one figure", () => {
+    expect(SUNNY_BANKS_CAST.Shazza.heroImage).toBe("/skidmarks/sunnybanks/shazza-hero.jpg");
+    expect(SUNNY_BANKS_CAST.Dazza.heroImage).toBe("/skidmarks/sunnybanks/dazza-hero.jpg");
+    expect(SUNNY_BANKS_CAST.Nan.heroImage).toBe("/skidmarks/sunnybanks/nan-hero.jpg");
+    expect(SUNNY_BANKS_CAST.Nuggets.heroImage).toBe("/skidmarks/sunnybanks/nuggets-hero.jpg");
+    expect(SUNNY_BANKS_CAST["Ranger Bazza"].heroImage).toBe("/skidmarks/sunnybanks/ranger-bazza-hero.jpg");
+    expect(SUNNY_BANKS_CAST["Unit 4S"].heroImage).toBeUndefined();
+    expect(SUNNY_BANKS_CAST.Hans.heroImage).toBeUndefined();
   });
 
   it("real reported ask (2026-09-15): only Hans is a guest — the six series regulars aren't", () => {
@@ -77,12 +90,46 @@ describe("buildSunnyBanksSpeakingPrompt", () => {
   });
 });
 
+describe("resolveSunnyBanksStartImage", () => {
+  it("prefers the hero still so LTX never receives the turnaround sheet as the first frame", () => {
+    expect(resolveSunnyBanksStartImage(SUNNY_BANKS_CAST.Shazza)).toBe(
+      "/skidmarks/sunnybanks/shazza-hero.jpg"
+    );
+    expect(resolveSunnyBanksStartImage(SUNNY_BANKS_CAST.Shazza)).not.toBe(
+      SUNNY_BANKS_CAST.Shazza.referenceImage
+    );
+  });
+
+  it("falls back to the reference plate when there is no hero file (Unit 4S is already a single figure)", () => {
+    expect(resolveSunnyBanksStartImage(SUNNY_BANKS_CAST["Unit 4S"])).toBe(
+      "/skidmarks/sunnybanks/unit-4s-reference.jpg"
+    );
+  });
+});
+
+describe("Sunny Banks hero still files", () => {
+  it("every heroImage path is a real file under public/", () => {
+    for (const character of Object.values(SUNNY_BANKS_CAST)) {
+      if (!character.heroImage) continue;
+      expect(existsSync(resolve(process.cwd(), `public${character.heroImage}`))).toBe(true);
+    }
+  });
+});
+
 describe("buildSunnyBanksHoldPrompt", () => {
   it("carries no dialogue and locks the camera, matching the gold hold shape", () => {
     const prompt = buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST["Ranger Bazza"]);
     expect(prompt).toContain("No dialogue. Camera holds, no cuts.");
     expect(prompt).toContain(SUNNY_BANKS_STYLE_LOCK);
     expect(prompt).not.toContain(" says:");
+  });
+
+  it("already describes one person on the start image — the multi-Shazza Hold was the sheet, not this string", () => {
+    const prompt = buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Shazza);
+    expect(prompt).toContain("Use the provided start image as the first frame.");
+    expect(prompt).toContain("Same person and objects as the start image.");
+    expect(prompt).toContain("No dialogue. Camera holds, no cuts.");
+    expect(prompt).not.toContain("character plate");
   });
 });
 

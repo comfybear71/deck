@@ -82,8 +82,23 @@ export interface SunnyBanksCharacterLock {
    * ever reaching xAI/Comfy — same as any other reference image in this
    * app. `undefined` means no plate yet; a caller (the eventual cast-
    * strip UI) must offer Stuart an upload for that character rather
-   * than rendering with no identity reference at all. */
+   * than rendering with no identity reference at all.
+   *
+   * For five of the six regulars this is a **turnaround sheet** (several
+   * poses on one canvas — live-QA, 2026-09-17: sending that sheet to
+   * LTX as the Hold/Speak first frame animated a grid of Shazzas). Keep
+   * it as the character bible; the start still LTX actually animates is
+   * `heroImage` when set. Unit 4S's plate is already a single figure, so
+   * it has no separate hero file. */
   referenceImage?: string;
+  /** Single-subject start still — one cropped cell from `referenceImage`,
+   * minted once into `public/skidmarks/sunnybanks/*-hero.jpg`, never a
+   * runtime canvas crop (iPhone Safari first; magic bounding boxes in
+   * the panel are how this would silently drift the next time a sheet is
+   * replaced). Hold and Speak, and the cast thumbnails, use this so what
+   * Stuart sees is what LTX holds. `undefined` falls back to
+   * `referenceImage` via `resolveSunnyBanksStartImage`. */
+  heroImage?: string;
   /** `true` for a one-episode special guest (Hans, 2026-09-15's real
    * correction) rather than one of the six locked series regulars.
    * Never shown in an always-on "the cast" strip — a guest only ever
@@ -121,6 +136,9 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
     look: "big blonde hair, leopard-print top, cigarette, arms folded",
     voiceId: "Vuun8WKmo2MZSUXgLPGw",
     referenceImage: "/skidmarks/sunnybanks/shazza-reference.jpg",
+    // Top row, 2nd body from left on the 1248×832 sheet (arms folded,
+    // cigarette — the gold look). Extract { left: 358, top: 74, width: 258, height: 400 }.
+    heroImage: "/skidmarks/sunnybanks/shazza-hero.jpg",
   },
   Dazza: {
     name: "Dazza",
@@ -129,12 +147,16 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
       "on the plate — later: wild mullet, stained blue singlet, stubbies, beer can",
     voiceId: "Kn29eGLhsovCLwKvKi2q",
     referenceImage: "/skidmarks/sunnybanks/dazza-reference.jpg",
+    // Front-left full figure on the 1168×784 sheet. Extract { left: 20, top: 8, width: 290, height: 470 }.
+    heroImage: "/skidmarks/sunnybanks/dazza-hero.jpg",
   },
   Nan: {
     name: "Nan",
     look: "tiny elderly woman, hair bun, round glasses, purple housecoat, teacup, cricket bat",
     voiceId: "u57uR2xbwGdASNetz0GB",
     referenceImage: "/skidmarks/sunnybanks/nan-reference.jpg",
+    // Front-left full figure (bat + teacup + bunny slippers). Extract { left: 40, top: 20, width: 260, height: 420 }.
+    heroImage: "/skidmarks/sunnybanks/nan-hero.jpg",
   },
   Hans: {
     name: "Hans",
@@ -148,6 +170,8 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
     look: "skinny teen, buzz cut, blue and yellow jersey, meat pie",
     voiceId: "URQwIuGxmxWfCgwXuDxA",
     referenceImage: "/skidmarks/sunnybanks/nuggets-reference.jpg",
+    // Front-left full figure with pie. Extract { left: 30, top: 8, width: 280, height: 500 }.
+    heroImage: "/skidmarks/sunnybanks/nuggets-hero.jpg",
   },
   "Ranger Bazza": {
     name: "Ranger Bazza",
@@ -160,6 +184,9 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
       "on a lanyard, or oversized Akubra, high-vis vest, mountain bike",
     voiceId: "lT1zujgSfYwPzAlTNE9z",
     referenceImage: "/skidmarks/sunnybanks/ranger-bazza-reference.jpg",
+    // Top row, 2nd body from left (¾, whistle) on the 1248×832 sheet.
+    // Extract { left: 390, top: 90, width: 250, height: 430 }.
+    heroImage: "/skidmarks/sunnybanks/ranger-bazza-hero.jpg",
   },
   "Unit 4S": {
     name: "Unit 4S",
@@ -175,6 +202,20 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
 
 export function getSunnyBanksCharacterLock(name: string): SunnyBanksCharacterLock | undefined {
   return SUNNY_BANKS_CAST[name];
+}
+
+/**
+ * The still Hold/Speak actually sends LTX as the first frame, and the
+ * still the cast strip shows. Prefers the single-subject `heroImage`
+ * so a turnaround sheet never reaches Comfy as the start canvas (live
+ * QA: Shazza Hold animated every cell on `shazza-reference.jpg` because
+ * `buildSunnyBanksHoldPrompt` honestly says "use the provided start
+ * image as the first frame / same person and objects"). Falls back to
+ * `referenceImage` when there is no hero file (Unit 4S, Hans). Keyed
+ * by the character's own lock, never a synthetic `characterId`.
+ */
+export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock): string | undefined {
+  return character.heroImage ?? character.referenceImage;
 }
 
 /**
@@ -270,6 +311,12 @@ export function buildSunnyBanksHoldBeatPathname(characterName: string, timestamp
  * server-side extraction Skidmarks' music-video chaining already uses;
  * Sunny Banks reuses it as-is, never the old client-side `<video>`
  * capture that failed live three times there).
+ *
+ * Wording is gold and stays as-is. It already assumes the start image
+ * is **one** person ("Same person and objects as the start image") —
+ * the 2026-09-17 multi-Shazza Hold was the sheet being that start
+ * image, not this string asking for a crowd. Callers must pass
+ * `resolveSunnyBanksStartImage`, not the bible sheet.
  */
 export function buildSunnyBanksHoldPrompt(character: SunnyBanksCharacterLock): string {
   return (
