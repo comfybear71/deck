@@ -1,0 +1,423 @@
+{
+  "jobId": "mgen_20260827092841004_ea9",
+  "folderName": "EP02 - DROP BEARS DILEMMA 04_ea9",
+  "styleId": "sunny_banks",
+  "title": "EP02 — Drop Bears Dilemma",
+  "sourceHost": "https://skidmarks.aiglitch.app",
+  "beats": [
+    {
+      "act": "I",
+      "speaker": "Ranger Bazza",
+      "line": "Well here we go another day at Sunnybank’s Caravan Park.",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827094639838_g8v_6e1721fc549ab60f9c3d7b3b07937d980ef0e02b6614537ec08526348acc6de0.mp4",
+      "voiceFile": "01_01_Ranger_Bazza_Well-here-we-go-another-day-at-Sunny_mtbc7h8p.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Ranger Bazza",
+      "line": "I wonder what adventures will happen today. Let’s go and catch up with shazza",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827094736782_sp7_41e88458af6a1c31b5a01575628cc1c3c7fb2ea83a90acbef331f3b7d5818829.mp4",
+      "voiceFile": "beat_cxm4b9v_mtbc7k34.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Shazza",
+      "line": "Ranger Bazza, ya flaming Gumboot?",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827095326838_y6z_20af84106dc96a3ad0fadf72667747d26217242c3367791846737cd657cdec3d.mp4",
+      "voiceFile": "02_01_Shazza_Ranger-Bazza-ya-flaming-Gumboot_mtbcdhfx.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Shazza",
+      "line": "We need to do something about raising revenue at the park. Got any ideas?",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827095417566_h2p_f4c1e03a3630db1950d08462b2ea8547ec3fe34bc0d511dd82840133837db2aa.mp4",
+      "voiceFile": "beat_503chvo_mtbcdjt1.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Ranger Bazza",
+      "line": "I have no idea shazza let’s ask Daza. He’s always good for an idea.",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827100200181_pjx_40d47fde2eb9c279dcb2f53779714bf84b0523c5d561f7238278424b5b219b6e.mp4",
+      "voiceFile": "03_01_Ranger_Bazza_I-have-no-idea-shazza-lets-ask-Daza-_mtbcqme3.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Shazza",
+      "line": "Hey Daza, get over here got something to ask you",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827100240716_btj_ea4c623b4aee7ef08db09201412d3a472154ffac92ac74d4c8451652e8813627.mp4",
+      "voiceFile": "03_02_Shazza_Hey-Daza-get-over-here-got-something_mtbcr6wn.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Dazza",
+      "line": ". Hold your horses. [pause][yells] Yeah, no worries. I’m coming",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827121411707_mm3_fbf477359fd17dc88dc798f0df706caf0b47cb35eb450076aabf15d3c1e74148.mp4",
+      "voiceFile": "04_01_Dazza_Hold-your-horses-pauseyells-Yeah-no-_mtbhgyiy.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Shazza",
+      "line": "We’re after a new ideas dazza. To Make some extra money. Got any.",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827124937886_i1a_27933979059c4b150a5aaa8561859b68bbcea3a6c3d4b1219e622e7f2f9a7d7c.mp4",
+      "voiceFile": "05_01_Shazza_Were-after-a-new-ideas-dazza-To-Make_mtbir2jc.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Dazza",
+      "line": "Yeah, I’ve got one word for you shazza [pause] [excitingly] Drop Bears!",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827125404635_tj2_740ce39799b1d151be873b8354b506fdcff6cd9133a7e8c0ca9d6373bef845f8.mp4",
+      "voiceFile": "06_01_Dazza_Yeah-Ive-got-one-word-for-you-shazza_mtbiwiep.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Ranger Bazza",
+      "line": "Hang on there I’m just putting on my same game multi someone say drop bears?",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827130514223_iie_68f97eb32347791c4e2296838c4298055925670baa659c67bb7f6b51a125d8ad.mp4",
+      "voiceFile": "07_01_Ranger_Bazza_Hang-on-there-Im-just-putting-on-my-_mtbj2qfb.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Shazza",
+      "line": "Yeah naaah, [pause] that’s a great idea dazza, you’re a genius!",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827131229887_ea6_6a00aeeca4bf3ea79baebbe1c9e738c574612e219656130da7e4bf0f1433b604.mp4",
+      "voiceFile": "08_01_Shazza_Yeah-naaah-pause-thats-a-great-idea-_mtbjk28k.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Shazza",
+      "line": "Australia’s best Joke, and I know exactly what to do.",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827131309582_9l1_94a7275bf05390c3e5b2781f8c0a7241eff52b6b348649f0565b41f911d7adb1.mp4",
+      "voiceFile": "beat_nq1p1kx_mtbjk5um.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "I",
+      "speaker": "Shazza",
+      "line": "Let’s go Daza I need a hand.",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260827131407298_cpm_523dac1e25535639d5179f4599f2eca34e394c9a803d43d58f9f639d706c7d31.mp4",
+      "voiceFile": "beat_883s37u_mtbjkb2s.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "Nuggets. Don’t you walk off.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827145523326_rwy_ca29238553270bd7626001ee51ae9f466c4b97f5b7d5fb0f941296aeffbcb7ac.mp4",
+      "voiceFile": "09_01_Shazza_Nuggets-Dont-you-walk-off_mtbn8f3l.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "I need a favour and you’re the only bloke for it.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827145607797_5ei_60820c1e1a3711f1a5016adc860297e0eee91876af9598d1cfdf67945a6f062c.mp4",
+      "voiceFile": "beat_ida2ts2_mtbn8igu.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "Dazza’s had a ripper idea!. Drop Bears. I need your mob. The Unit 4s.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827145930850_n53_58637752e9b0f920b3a2844ac96722221dc7ce9f37f031a1d730bb8eecb95068.mp4",
+      "voiceFile": "10_01_Shazza_Dazzas-had-a-ripper-idea-Drop-Bears-_mtbncrps.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "Koala suits. Big nails on the gloves. Spiky fingernails. Proper claws.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827150022313_q3j_ffc2631a16002279f40b3e91c9fb2ac8bcf00225d7fe74c1be5e653e10b64113.mp4",
+      "voiceFile": "10_02_Shazza_Koala-suits-Big-nails-on-the-gloves-_mtbndmch.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "Then we get the drop bags up.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827150257282_lsc_1af61d5572d2c09f13b1a3cca1c9a7b64b6e87a50f261b649682a550e00423ed.mp4",
+      "voiceFile": "beat_mdqwywm_mtbndq6s.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Nuggets",
+      "line": "Nah. They won’t be into it. They got bigger problems",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827150334563_12i_a95b7f4f1ad9f60c8f3e45c9af7b18fd1edf60a16528a5339cac33d70374407c.mp4",
+      "voiceFile": "11_01_Nuggets_Nah-They-wont-be-into-it-They-got-bi_mtbng4wb.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Nuggets",
+      "line": "The Unit 4s won’t wanna do it Shazza.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827150412661_n9c_5fb6bdff089997fbf894068361e6beda10e2d127c228ea60e49d46323c3e90a9.mp4",
+      "voiceFile": "11_02_Nuggets_The-Unit-4s-wont-wanna-do-it-Shazza_mtbngv1e.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Nuggets",
+      "line": "They’re not putting koala suits on for you.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827200725259_93y_afe60b34af10cbe655ed33f7e8632f8b23b14b94c451eb43afc878601f516d9f.mp4",
+      "voiceFile": "beat_b2h2hdz_mtbngz4s.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "Come on Nuggets talk them into it.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827151042823_n4b_e38b1cc72baf247d15f52bfa1e6cdcb068e9c186c55a6f1c0a3508500c5efab5.mp4",
+      "voiceFile": "12_01_Shazza_Come-on-Nuggets-talk-them-into-it_mtbnqa6v.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "I’ll buy ya a Meat pie and Iced coffee.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827151123149_ug0_ffd726191e94b3ae29d25bdc2583938b9e3164ec9e21419341e14459f9e1d2af.mp4",
+      "voiceFile": "beat_3mjwhj9_mtbnqduw.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "You know, the good one from the servo.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827151218967_emh_d2ef832b0f20e91e88a15f6ed1234a010e5759d60eb6fad0b92a22a047fd3241.mp4",
+      "voiceFile": "beat_vuntdh0_mtbnqj7r.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "You help me dress them and get the bags ready, that’s the deal.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827200825205_f9a_543c1b26c68f3b0ce1e1af1b2b6726b4ed6f7d5a8e052e9c5f2f94ec25ab370d.mp4",
+      "voiceFile": "12_04_Shazza_You-help-me-dress-them-and-get-the-b_mtbnrir3.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Unit 4S",
+      "line": "Kkoh-lah clahh …yup yup naaahhh",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827201256311_1hn_b362c4784c5c2eea6bd4763228ff60b8be0c2ef4244f1ffac40236657b71e629.mp4",
+      "voiceFile": "13_01_The_Unit_4s_Kkoh-lah-clahh-yup-yup-naaahhh_mtbyktq3.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Nuggets",
+      "line": "See. That’s them saying no. I think.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260827200902666_fw0_efef649f1e6540ef643137c6fd7506be26830e014649a8f517734319220b0736.mp4",
+      "voiceFile": "13_02_Nuggets_See-Thats-them-saying-no-I-think_mtbydzzq.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Unit 4S",
+      "line": "…yup yup naaahhh",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260828032126135_nun_74ecea33b197b6b62aff0fe1dc08cf59b0ed4a976d54eb78d6aa8981d29ac2e5.mp4",
+      "voiceFile": "15_02_The_Unit_4s_yup-yup-naaahhh_mtcdwc8s.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Unit 4S",
+      "line": "Yup yup naaaah, yup yup yup nah, yup, nah, naaaaaaaahhhh",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260828032651519_7og_0ec9637797176263ce1aad2edfae7955897759366a1862e998fecd901c647e44.mp4",
+      "voiceFile": "15_02_The_Unit_4s_Yup-yup-naaaah-yup-yup-yup-nah-yup-n_mtce2q1q.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "I don’t care what anyone thinks. I think they look great. They will fool anyone.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260828033045489_uda_1888b576142cb10ff74f152a94049080ed8e1a6b8c631c9e5b9c697a91b1fbb1.mp4",
+      "voiceFile": "16_01_Shazza_I-dont-care-what-anyone-thinks-I-thi_mtce7wdy.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "This is the best plan we’ve ever had at Sunny Banks. Let’s go nuggets.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260828033209436_z5y_f613b8d01ab02260b43f70c2543e1babce74b215296578d8104e8eb7efa43e67.mp4",
+      "voiceFile": "beat_kxpj4fj_mtce80lq.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "Koala suits. Big nails on the gloves. Spiky fingernails. Proper claws.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260828033735296_wvi_31891900721a0719c9720908c96e142ce552ca8ddb5364763187537c9e528f1a.mp4",
+      "voiceFile": "17_02_Shazza_Koala-suits-Big-nails-on-the-gloves-_mtcegjs5.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Shazza",
+      "line": "Then we get the drop bags up.",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260828033920965_l85_e79c54608f49ea22d1c5c712096eedd7edea48957f7f7510123d94b0dbf07f2b.mp4",
+      "voiceFile": "beat_vwrtirh_mtcegoch.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Nuggets",
+      "line": "I still don’t think it’s a good idea shazza, I don’t think it’s gonna work,",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260828034315209_uth_062abd9bdcab9bdbf33880a39ac0203199abff038e5133811ab7726ac5b5bb17.mp4",
+      "voiceFile": "18_01_Nuggets_I-still-dont-think-its-a-good-idea-s_mtcena01.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Nuggets",
+      "line": "what is the drop bag?",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260828034538290_xmt_99d97f532d5a07c1ad0ff57fe454d09d52bd064dc079d1ee97acfa46e3fcd6bf.mp4",
+      "voiceFile": "beat_c7k128z_mtcendyz.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "II",
+      "speaker": "Nuggets",
+      "line": "And why do you have them?",
+      "locationId": "tin_shed_mower",
+      "clipFile": "ltx_20260828034647956_060_96050cbadddf92db6c372eae62e060bf59962d1c7623155696cf7e4e338dc0b3.mp4",
+      "voiceFile": "beat_6ahnvbs_mtceninh.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "III",
+      "speaker": "Shazza",
+      "line": "Help me with the sign it’s been 100 days now since the last drop bear",
+      "locationId": "caravan_interior",
+      "clipFile": "ltx_20260828035814732_gnf_9021c0e6d2477b34b07dc6add20b8746f3e82ab6ba7a364df11743dcb8342fdf.mp4",
+      "voiceFile": "19_01_Shazza_Help-me-with-the-sign-its-been-100-d_mtcf5ry3.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "III",
+      "speaker": "Shazza",
+      "line": "attack. Where’s Baza? I’ve got a plan.",
+      "locationId": "caravan_interior",
+      "clipFile": "ltx_20260828035933860_lvl_8ce42dccb7d9ba908b18fe9b5c66d6faaeba1fcb3292269584e03b5ce8d73ab2.mp4",
+      "voiceFile": "19_02_Shazza_attack-Wheres-Baza-Ive-got-a-plan_mtcf7j79.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "III",
+      "speaker": "Dazza",
+      "line": "These drop bear attacks are getting worse every year geez shazza is there anything we",
+      "locationId": "caravan_interior",
+      "clipFile": "ltx_20260828041022160_33n_f05157b6c1a04f8a7eb7ea01caad7df5d7c6de6336c183422afabeb5e56eb213.mp4",
+      "voiceFile": "20_01_Dazza_These-drop-bear-attacks-are-getting-_mtcflc90.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "III",
+      "speaker": "Dazza",
+      "line": "We can do about it?",
+      "locationId": "caravan_interior",
+      "clipFile": "ltx_20260828041151438_vhx_16623d53612b29f4778e9176ff9494410d9f5a4eb3372080050184b9f78557f6.mp4",
+      "voiceFile": "20_02_Dazza_We-can-do-about-it_mtcfp78t.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "III",
+      "speaker": "Dazza",
+      "line": "I would hate to see this happen to anyone else.",
+      "locationId": "caravan_interior",
+      "clipFile": "ltx_20260828041258462_eg6_86d11469b4e9cf32893908c93f22e4cb5bdddb3635026010757146984e0258b5.mp4",
+      "voiceFile": "beat_foly898_mtcflkrr.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "III",
+      "speaker": "Shazza",
+      "line": "That’s perfect, Bazza, now we just have to put our little plan into action",
+      "locationId": "caravan_interior",
+      "clipFile": "ltx_20260828041803173_9lo_ad4f2366a397a2c2359d0f673b4e3d53bbda5ea1536e7940b4800c9178e16a2a.mp4",
+      "voiceFile": "21_01_Shazza_Thats-perfect-Bazza-now-we-just-have_mtcfwm5j.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "III",
+      "speaker": "Shazza",
+      "line": "Hey listen everybody, [yells] I need everyone’s attention! We’ve just had another drop bear dilemma.",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260831061111932_3jm_a1a599cc3064bbf21e70d2369719acf18d544c883693f484243c0a5ded29a0ea.mp4",
+      "voiceFile": "24_01_Shazza_Hey-listen-everybody-yells-I-need-ev_mtgu8jtr.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "III",
+      "speaker": "Shazza",
+      "line": "One of the staff members was attacked by a drop bear this morning.",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260831061240022_lsp_2727e97606915c4208961626ed8e4508f25fa70a255d5d0020f581d7b649b98f.mp4",
+      "voiceFile": "beat_xihnibg_mtgu8okh.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "III",
+      "speaker": "Shazza",
+      "line": "We will need everybody to purchase their drop bear kit or some drop bear repellent",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260831062833962_tqu_7c831aa1e3df7c416af9a7734c29b12634dfb4e49da17e72391e5f4aef4d9892.mp4",
+      "voiceFile": "beat_j0vnje6_mtgu8u69.mp3",
+      "durationSec": null
+    },
+    {
+      "act": "III",
+      "speaker": "Shazza",
+      "line": "to keep you safe.",
+      "locationId": "main_entrance_sign",
+      "clipFile": "ltx_20260831062914830_ilg_38d3be0e8b657910922a3ec796e14cf3af34d3212c5df527838309af692f8d96.mp4",
+      "voiceFile": "beat_dt91sfy_mtgu905c.mp3",
+      "durationSec": null
+    }
+  ]
+}
