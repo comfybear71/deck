@@ -2226,9 +2226,12 @@ now (see "Explicitly out of scope" below).
     lines that already have a clip so those 46 are not billed again.
     A named **Save Project Workspace** control under that strip mints a
     unique in-memory card (timestamp + seq + content fingerprint) with
-    a red ✕; **Download Episode Bundle** zips `script.txt`, gold
-    Speak/Hold prompts, and clip URL paths — not MP4 bytes, not a Neon
-    row. Speak/Hold still POST that location still as `startImageDataUrl`
+    a red ✕; **Download Episode Bundle** (`lib/sunnyBanksEpisodeBundle.ts`)
+    fetches each clip's MP4 and matching driving-audio MP3 (Crash Lab
+    `voiceFile` for EP02 seed clips, or an explicit `audioUrl`) into
+    `video/NN.mp4` and `audio/NN.mp3`, with `script.txt` / gold prompts /
+    URL records under `data/`. A dropped fetch is skipped so the zip
+    still downloads. Not a Neon row. Speak/Hold still POST that location still as `startImageDataUrl`
     (the location canvas — Image 1) plus `locationId`/`locationImage`
     alongside `characterName`. The **route** (`lib/sunnyBanksComposite.ts`)
     then overlays the character hero as Image 2 via xAI edits (Studio
@@ -2271,8 +2274,9 @@ now (see "Explicitly out of scope" below).
     episode table. Each save mints a new card (`timestamp` + seq +
     content fingerprint) instead of reusing a colliding `Date.now()`
     key. A red ✕ on the card deletes that snapshot only. **Download
-    Episode Bundle** zips script + gold prompts + clip URL paths, not
-    the MP4 files. Sunny Banks
+    Episode Bundle** fetches MP4/MP3 bytes into `video/` and `audio/`
+    (best-effort; CORS or a dead stream omits that file) and keeps
+    script/prompts/URL records under `data/`. Sunny Banks
     has no song MP3; TTS is generated at render time.
   - **Still not the episode wizard** — Grok's own earlier scope was
     "render one speak beat, then stop." There is still no Neon

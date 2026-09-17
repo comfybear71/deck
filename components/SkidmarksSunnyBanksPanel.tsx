@@ -72,9 +72,10 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * finished clip URLs as a named workspace card for this open
  * detail-sheet only (`mintWorkspaceId` = timestamp + seq + content
  * fingerprint — never clobbers an earlier card). A red ✕ drops that
- * snapshot. **Download Episode Bundle** zips `script.txt`, the gold
- * Speak/Hold prompt array, and finished clip URL paths — not the MP4
- * bytes. No `localStorage`, no new session schema. Sunny Banks has no
+ * snapshot. **Download Episode Bundle** zips `data/script.txt`, the gold
+ * Speak/Hold prompt array, clip URL records, and best-effort MP4/MP3
+ * bytes under `video/` and `audio/` (`lib/sunnyBanksEpisodeBundle.ts`).
+ * No `localStorage`, no new session schema. Sunny Banks has no
  * song MP3; driving audio is TTS at render time.
  *
  * **iPhone Safari vertical scroll (2026-09-17)** — the script wrapper
@@ -682,10 +683,10 @@ export function SkidmarksSunnyBanksPanel() {
     setShelfOpen(true);
   };
 
-  const handleDownloadEpisodeBundle = () => {
+  const handleDownloadEpisodeBundle = async () => {
     setBundleError(null);
     try {
-      const { zipBytes, filename } = buildSunnyBanksEpisodeBundle({
+      const { zipBytes, filename } = await buildSunnyBanksEpisodeBundle({
         title: resolvedWorkspaceTitle(),
         defaultLocationId,
         actIds,
