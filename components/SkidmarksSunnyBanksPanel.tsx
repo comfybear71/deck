@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
@@ -169,7 +169,7 @@ export function SkidmarksSunnyBanksPanel() {
   const [locationOverrides, setLocationOverrides] = useState<Record<number, SunnyBanksLocationId>>(
     {}
   );
-  const [runtimes, setRuntimes] = useState<RowRuntime[]>([]);
+  const [runtimeMap, setRuntimeMap] = useState<Record<number, RowRuntime>>({});
   const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
   const [runningIndex, setRunningIndex] = useState<number | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
@@ -179,15 +179,11 @@ export function SkidmarksSunnyBanksPanel() {
   const parsed = useMemo(() => parseSunnyBanksScriptBlock(scriptText), [scriptText]);
   const running = runningKind !== null;
 
-  useEffect(() => {
-    setRuntimes((prev) =>
-      parsed.map((chunk, index) => {
-        const existing = prev[index];
-        if (existing && existing.lineKey === chunk.raw) return existing;
-        return { lineKey: chunk.raw, status: "idle" };
-      })
-    );
-  }, [parsed]);
+  const runtimeFor = (index: number, raw: string): RowRuntime => {
+    const stored = runtimeMap[index];
+    if (stored && stored.lineKey === raw) return stored;
+    return { lineKey: raw, status: "idle" };
+  };
 
   const queue = parsed.map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
@@ -273,24 +269,22 @@ export function SkidmarksSunnyBanksPanel() {
         const row = queue[i];
         const lock = getSunnyBanksCharacterLock(row.characterName);
         if (!lock || !row.location.image) {
-          setRuntimes((prev) => {
-            const next = [...prev];
-            next[i] = {
+          setRuntimeMap((prev) => ({
+            ...prev,
+            [i]: {
               lineKey: row.chunk.raw,
               status: "failed",
               error: "Character or location is missing.",
-            };
-            return next;
-          });
+            },
+          }));
           break;
         }
         setRunningKind(row.kind);
         setRunningIndex(i);
-        setRuntimes((prev) => {
-          const next = [...prev];
-          next[i] = { lineKey: row.chunk.raw, status: "rendering" };
-          return next;
-        });
+        setRuntimeMap((prev) => ({
+          ...prev,
+          [i]: { lineKey: row.chunk.raw, status: "rendering" },
+        }));
         setProgressText(
           row.kind === "hold"
             ? `Line ${i + 1} of ${queue.length} — holding ${lock.name} at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
@@ -307,34 +301,31 @@ export function SkidmarksSunnyBanksPanel() {
             startImageDataUrl,
           });
           if (!result.ok) {
-            setRuntimes((prev) => {
-              const next = [...prev];
-              next[i] = { lineKey: row.chunk.raw, status: "failed", error: result.message };
-              return next;
-            });
+            setRuntimeMap((prev) => ({
+              ...prev,
+              [i]: { lineKey: row.chunk.raw, status: "failed", error: result.message },
+            }));
             setProgressText(`Stopped at line ${i + 1} — later lines were not billed.`);
             break;
           }
-          setRuntimes((prev) => {
-            const next = [...prev];
-            next[i] = {
+          setRuntimeMap((prev) => ({
+            ...prev,
+            [i]: {
               lineKey: row.chunk.raw,
               status: "done",
               videoUrl: result.videoUrl,
               durationSec: result.durationSec,
-            };
-            return next;
-          });
+            },
+          }));
         } catch (err) {
-          setRuntimes((prev) => {
-            const next = [...prev];
-            next[i] = {
+          setRuntimeMap((prev) => ({
+            ...prev,
+            [i]: {
               lineKey: row.chunk.raw,
               status: "failed",
               error: err instanceof Error ? err.message : "Could not render this line.",
-            };
-            return next;
-          });
+            },
+          }));
           setProgressText(`Stopped at line ${i + 1} — later lines were not billed.`);
           break;
         }
@@ -430,7 +421,7 @@ export function SkidmarksSunnyBanksPanel() {
             {queue.length > 0 && (
               <ol className="flex flex-col gap-2.5">
                 {queue.map((row) => {
-                  const runtime = runtimes[row.index];
+                  const runtime = runtimeFor(row.index, row.chunk.raw);
                   const status = row.index === runningIndex ? "rendering" : runtime?.status ?? "idle";
                   return (
                     <li
