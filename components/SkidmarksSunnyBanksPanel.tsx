@@ -854,7 +854,7 @@ export function SkidmarksSunnyBanksPanel() {
               </div>
             )}
 
-            {queue.length > 0 && !canRenderAll && !running && (
+            {pendingRows.length > 0 && !canRenderAll && !running && (
               <p className="text-[10px] leading-snug text-white/40">
                 Every line needs a plated character. Speak needs a locked voice. Change the
                 dropdown or the script — Hans has no plate yet.
