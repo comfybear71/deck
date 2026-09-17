@@ -2257,11 +2257,14 @@ now (see "Explicitly out of scope" below).
     Crash Lab EP02 Drop Bears** (`mgen_20260827092841004_ea9`: 46
     already-rendered Speak clips, streamed from
     `skidmarks.aiglitch.app` — Act I caravan park, Act II BBQ shelter,
-    Act III Unit 9 + announcement). In-memory seed only; Render skips
+    Act III Unit 9 + announcement). Opens on that seed unless Neon
+    already has a live Sunny Banks copy; Render skips
     lines that already have a clip so those 46 are not billed again.
-    A named **Save Project Workspace** control under that strip mints a
-    unique in-memory card (timestamp + seq + content fingerprint) with
-    a red ✕; **Download Episode Bundle** (`lib/sunnyBanksEpisodeBundle.ts`)
+    A named **Save Project Workspace** control under that strip writes
+    the whole episode (every act) onto the existing Neon session row —
+    one card per episode name, subtitle `3 acts · 46 clips` not `Act II`.
+    Live working copy persists beside the shelf so refresh does not
+    empty it. A red ✕ drops that named card only; **Download Episode Bundle** (`lib/sunnyBanksEpisodeBundle.ts`)
     fetches each clip's MP4 and matching driving-audio MP3 (Crash Lab
     `voiceFile` for EP02 seed clips, or an explicit `audioUrl`) into
     `video/NN.mp4` and `audio/NN.mp3`, with `script.txt` / gold prompts /
@@ -2304,11 +2307,11 @@ now (see "Explicitly out of scope" below).
     dialogue"), `buildSunnyBanksHoldPrompt` as the motion text. One clip at a
     time; a failed line stops the rest so they are not billed.
     A named **Save Project Workspace** control at the bottom of the
-    panel snapshots the three act scripts, location ids, and finished
-    clip URLs for this open sheet only — not `localStorage`, not a Neon
-    episode table. Each save mints a new card (`timestamp` + seq +
-    content fingerprint) instead of reusing a colliding `Date.now()`
-    key. A red ✕ on the card deletes that snapshot only. **Download
+    panel writes every act script, location id, and finished clip URL
+    onto the existing Neon session row — not `localStorage`, not a new
+    episode/beat table. Same episode name updates that one card. Live
+    working copy persists beside the shelf so a refresh or ✕ on a named
+    card does not wipe the episode. **Download
     Episode Bundle** fetches MP4/MP3 bytes into `video/` and `audio/`
     (best-effort; CORS or a dead stream omits that file) and keeps
     script/prompts/URL records under `data/`. Sunny Banks

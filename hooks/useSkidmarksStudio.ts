@@ -67,6 +67,7 @@ const EMPTY_STATE: SkidmarksState = {
   bands: [],
   session: { projectKind: null, bandId: null, mp3: null, scriptSequenceDraft: null },
   removedSeedBandIds: [],
+  sunnyBanks: null,
 };
 
 const LOADING_SESSION_SYNC_STATE: SkidmarksSessionSyncState = { status: "loading" };

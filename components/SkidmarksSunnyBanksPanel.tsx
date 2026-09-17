@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { triggerBlobDownload } from "@/lib/clipRenders";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
@@ -17,8 +17,26 @@ import {
   SUNNY_BANKS_LOCATIONS,
   type SunnyBanksLocationId,
 } from "@/lib/sunnyBanks";
-import { buildSunnyBanksDropBearsSeed, DROP_BEARS_TITLE } from "@/lib/sunnyBanksDropBears";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
+import {
+  deleteSunnyBanksWorkspace,
+  getSkidmarksSnapshot,
+  getSunnyBanksLiveOrDefault,
+  openSunnyBanksWorkspace,
+  patchSunnyBanksLive,
+  saveSunnyBanksProjectWorkspace,
+  subscribeSkidmarks,
+} from "@/lib/skidmarks";
+import {
+  cloneActRecord,
+  describeSunnyBanksWorkspace,
+  fingerprintWorkspace,
+  mintWorkspaceId,
+  SUNNY_BANKS_INITIAL_ACTS,
+  type SunnyBanksActKeyed,
+  type SunnyBanksRowRuntime,
+  type SunnyBanksWorkspaceSnapshot,
+} from "@/lib/sunnyBanksWorkspace";
 
 /**
  * Sunny Banks' own first real screen (2026-09-15) — the thing that
@@ -63,23 +81,22 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * pills sit at the top of the Script card in one horizontal
  * `touch-pan-x` strip. The strip opens on Act I/II/III (EP02 seed)
  * and **+ Add Act** appends the next roman bucket (IV, V, …) with an
- * empty script buffer — still this component's in-memory maps, not a
- * Neon act table. Save and the episode zip walk `actIds` in order so
+ * empty script buffer — still not a Neon act table. Save and the episode zip walk `actIds` in order so
  * a typed Act IV is not dropped. The textarea and
  * queued rows collapse behind "Show Script Text & Queued Lines"
  * (default closed) so a 46-line EP02 paste doesn't bury the Clips
  * strip. `# EPISODE:`, `=== ACT`, `[Location: id]`, `[Action: text]`,
  * and `[Character Name: look]` in a pasted God Script update the
  * episode name, act buffers, park plate (`startImageDataUrl` at
- * render), prompt suffix, and per-row `appearanceModifier` in memory —
- * not a Neon schema, not a layout change. The bottom shelf snapshots those buffers + location ids +
- * finished clip URLs as a named workspace card for this open
- * detail-sheet only (`mintWorkspaceId` = timestamp + seq + content
- * fingerprint — never clobbers an earlier card). A red ✕ drops that
- * snapshot. **Download Episode Bundle** zips `data/script.txt`, the gold
+ * render), prompt suffix, and per-row `appearanceModifier`. The bottom
+ * shelf snapshots those buffers + location ids + finished clip URLs as
+ * a named workspace card on the existing Neon session row (one card per
+ * episode name covering every act). A red ✕ drops that named card only
+ * — not the live working copy. **Download Episode Bundle** zips `data/script.txt`, the gold
  * Speak/Hold prompt array, clip URL records, and best-effort MP4/MP3
  * bytes under `video/` and `audio/` (`lib/sunnyBanksEpisodeBundle.ts`).
- * No `localStorage`, no new session schema. Sunny Banks has no
+ * No `localStorage`, no new episode/beat table — the existing Neon
+ * session row holds live + named cards. Sunny Banks has no
  * song MP3; driving audio is TTS at render time.
  *
  * **iPhone Safari vertical scroll (2026-09-17)** — the script wrapper
@@ -121,19 +138,19 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * same reading order as music-video rendered clips then archive),
  * same card size and `touch-pan-x` as `SkidmarksRenderedClipsShelf`
  * (`w-44` / `h-28`, inline controls), sectioned Act I / II / III.
- * Workspace save always mints a new card (`mintWorkspaceId` =
- * timestamp + seq + content fingerprint) instead of reusing
- * `Date.now()` as a key that could collide on a double-tap.
- * Each saved card has a red ✕ that drops that snapshot only.
+ * Workspace save writes the whole live episode (every act, not the
+ * open Act pill) onto the existing Neon session row. Same episode
+ * name replaces that card. Live working copy persists beside the
+ * shelf so a refresh or a closed sheet does not reseed EP02. ✕
+ * drops that named card only.
  *
  * **EP02 Drop Bears seed (2026-09-17)** — the panel opens on Crash Lab
  * job `mgen_20260827092841004_ea9` (46 already-rendered Speak clips)
- * so the Clips strip can be judged with real MP4s. Still in-memory, still
- * this component. No re-render, no Crash Lab chrome, no new Neon table.
- * Playback hits skidmarks.aiglitch.app while that host stays ungated.
+ * so the Clips strip can be judged with real MP4s unless Neon already
+ * has a live Sunny Banks copy. No re-render, no Crash Lab chrome, no
+ * new Neon table. Playback hits skidmarks.aiglitch.app while that host
+ * stays ungated.
  */
-
-const DROP_BEARS_SEED = buildSunnyBanksDropBearsSeed();
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
 /** The always-on cast strip only ever shows the locked series regulars
@@ -150,11 +167,11 @@ const SPEAKER_NAMES = Object.keys(SUNNY_BANKS_CAST).sort((a, b) => b.length - a.
 type BeatKind = "speak" | "hold";
 export type SunnyBanksChunkKind = BeatKind | "scene";
 
-type RowStatus = "idle" | "rendering" | "done" | "failed";
+type RowStatus = SunnyBanksRowRuntime["status"];
 
-export const SUNNY_BANKS_INITIAL_ACTS = ["I", "II", "III"] as const;
 /** Seed default — EP02 opens on these three. Extra acts are roman
  * IDs appended in memory (`nextSunnyBanksActId`), not a schema. */
+export { SUNNY_BANKS_INITIAL_ACTS, fingerprintWorkspace, mintWorkspaceId };
 export const SUNNY_BANKS_ACTS = SUNNY_BANKS_INITIAL_ACTS;
 export type SunnyBanksActId = string;
 
@@ -237,21 +254,9 @@ interface GenerateBeatResponseBody {
   audioMuxError?: unknown;
 }
 
-type RowRuntime = {
-  lineKey: string;
-  status: RowStatus;
-  videoUrl?: string;
-  durationSec?: number;
-  error?: string;
-  audioMuxed?: boolean;
-  /** Speaker + dialogue at render time — used to keep a Done clip when
-   * the script is re-parsed (tags added, paste, undo) without a matching
-   * index/lineKey. */
-  characterName?: string;
-  line?: string;
-};
+type RowRuntime = SunnyBanksRowRuntime;
 
-type ActKeyed<T> = Record<SunnyBanksActId, T>;
+type ActKeyed<T> = SunnyBanksActKeyed<T>;
 
 /** One-level undo of the Script card — previous textarea / act
  * buffers + the runtime map they were compiled against. In-memory
@@ -266,19 +271,7 @@ interface ScriptUndoSnapshot {
   workspaceTitle: string;
 }
 
-interface EpisodeWorkspace {
-  id: string;
-  savedAt: number;
-  fingerprint: string;
-  label: string;
-  defaultLocationId: SunnyBanksLocationId;
-  actIds: SunnyBanksActId[];
-  activeAct: SunnyBanksActId;
-  actScripts: ActKeyed<string>;
-  characterOverrides: ActKeyed<Record<number, string>>;
-  locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
-  runtimeMap: ActKeyed<Record<number, RowRuntime>>;
-}
+type EpisodeWorkspace = SunnyBanksWorkspaceSnapshot;
 
 export interface SunnyBanksRenderedClip {
   act: SunnyBanksActId;
@@ -293,23 +286,6 @@ const HOLD_COST_USD = estimateLtxClipRenderCostUsd(SUNNY_BANKS_HOLD_DURATION_SEC
 const LOCATION_LIST = Object.values(SUNNY_BANKS_LOCATIONS);
 const PLATE_CAST = CAST_LIST.filter((c) => c.referenceImage);
 const FALLBACK_CHARACTER_NAME = PLATE_CAST[0]?.name ?? "";
-
-function emptyActRecord<T>(make: () => T, actIds: readonly string[] = SUNNY_BANKS_INITIAL_ACTS): ActKeyed<T> {
-  const next: ActKeyed<T> = {};
-  for (const act of actIds) {
-    next[act] = make();
-  }
-  return next;
-}
-
-function cloneActRecord<T>(value: ActKeyed<T>, actIds?: readonly string[]): ActKeyed<T> {
-  const keys = actIds ?? Object.keys(value);
-  const next: ActKeyed<T> = {};
-  for (const act of keys) {
-    if (act in value) next[act] = structuredClone(value[act]);
-  }
-  return next;
-}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -873,33 +849,6 @@ function workspaceLabelFromScripts(
   return fallback;
 }
 
-/** djb2 of the snapshot payload — same scripts + same clip URLs hash
- * the same; a new render URL or a typed edit does not. Used as part of
- * the workspace id, never as a uniqueness gate that would skip a save. */
-export function fingerprintWorkspace(snapshot: {
-  defaultLocationId: string;
-  actIds: readonly string[];
-  activeAct: string;
-  actScripts: ActKeyed<string>;
-  characterOverrides: ActKeyed<Record<number, string>>;
-  locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
-  runtimeMap: ActKeyed<Record<number, RowRuntime>>;
-}): string {
-  const payload = JSON.stringify(snapshot);
-  let hash = 5381;
-  for (let i = 0; i < payload.length; i += 1) {
-    hash = (hash * 33) ^ payload.charCodeAt(i);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
-/** Always a new card. Timestamp + monotonic seq so two saves in the
- * same millisecond cannot share a React key; fingerprint records what
- * was saved without replacing an earlier card. */
-export function mintWorkspaceId(savedAt: number, seq: number, fingerprint: string): string {
-  return `ws-${savedAt}-${seq}-${fingerprint}`;
-}
-
 export function collectRenderedClips(args: {
   actIds: readonly string[];
   actScripts: ActKeyed<string>;
@@ -945,44 +894,34 @@ function ChevronIcon({ open }: { open: boolean }) {
 }
 
 export function SkidmarksSunnyBanksPanel() {
-  const [actIds, setActIds] = useState<SunnyBanksActId[]>(() => [...SUNNY_BANKS_INITIAL_ACTS]);
-  const [activeAct, setActiveAct] = useState<SunnyBanksActId>("I");
-  const [actScripts, setActScripts] = useState<ActKeyed<string>>(() => DROP_BEARS_SEED.actScripts);
-  const [defaultLocationId, setDefaultLocationId] = useState<SunnyBanksLocationId>(
-    DROP_BEARS_SEED.defaultLocationId
-  );
-  const [characterOverridesByAct, setCharacterOverridesByAct] = useState<ActKeyed<Record<number, string>>>(
-    () => emptyActRecord(() => ({}))
-  );
-  const [locationOverridesByAct, setLocationOverridesByAct] = useState<
-    ActKeyed<Record<number, SunnyBanksLocationId>>
-  >(() => DROP_BEARS_SEED.locationOverrides);
-  const [runtimeMapByAct, setRuntimeMapByAct] = useState<ActKeyed<Record<number, RowRuntime>>>(
-    () => DROP_BEARS_SEED.runtimeMap
-  );
+  const studioState = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
+  const live = studioState.sunnyBanks?.live ?? getSunnyBanksLiveOrDefault(studioState);
+  const workspaces = studioState.sunnyBanks?.workspaces ?? [];
+  const actIds = live.actIds;
+  const activeAct = live.activeAct;
+  const actScripts = live.actScripts;
+  const defaultLocationId = live.defaultLocationId;
+  const characterOverridesByAct = live.characterOverrides;
+  const locationOverridesByAct = live.locationOverrides;
+  const runtimeMapByAct = live.runtimeMap;
+  const workspaceTitle = live.workspaceTitle;
   const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
   const [runningIndex, setRunningIndex] = useState<number | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
-  const [workspaces, setWorkspaces] = useState<EpisodeWorkspace[]>([]);
   const [shelfOpen, setShelfOpen] = useState(false);
   const [clipsOpen, setClipsOpen] = useState(true);
   const [scriptOpen, setScriptOpen] = useState(false);
-  const [workspaceTitle, setWorkspaceTitle] = useState(DROP_BEARS_TITLE);
   const [scriptUndo, setScriptUndo] = useState<ScriptUndoSnapshot | null>(null);
   const [bundleError, setBundleError] = useState<string | null>(null);
   const actStripRef = useRef<HTMLDivElement>(null);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
-  const workspaceSaveSeqRef = useRef(0);
 
   const scriptText = actScripts[activeAct] ?? "";
   const characterOverrides = characterOverridesByAct[activeAct] ?? {};
   const locationOverrides = locationOverridesByAct[activeAct] ?? {};
-  const parsed = useMemo(() => parseSunnyBanksScriptBlock(scriptText), [scriptText]);
-  const remappedRuntime = useMemo(
-    () => preserveRenderedRuntimes(parsed, runtimeMapByAct[activeAct] ?? {}),
-    [parsed, runtimeMapByAct, activeAct]
-  );
+  const parsed = parseSunnyBanksScriptBlock(scriptText);
+  const remappedRuntime = preserveRenderedRuntimes(parsed, runtimeMapByAct[activeAct] ?? {});
   const running = runningKind !== null;
 
   const runtimeFor = (index: number, raw: string): RowRuntime => {
@@ -1108,9 +1047,12 @@ export function SkidmarksSunnyBanksPanel() {
         characterName: next.characterName ?? row?.characterName,
         line: next.line ?? row?.line ?? "",
       };
-      setRuntimeMapByAct((prev) => ({
+      patchSunnyBanksLive((prev) => ({
         ...prev,
-        [act]: { ...(prev[act] ?? {}), [index]: stamped },
+        runtimeMap: {
+          ...prev.runtimeMap,
+          [act]: { ...(prev.runtimeMap[act] ?? {}), [index]: stamped },
+        },
       }));
     };
     try {
@@ -1242,13 +1184,16 @@ export function SkidmarksSunnyBanksPanel() {
 
   const handleUndoScript = () => {
     if (!scriptUndo || running) return;
-    setActIds([...scriptUndo.actIds]);
-    setActiveAct(scriptUndo.activeAct);
-    setActScripts(cloneActRecord(scriptUndo.actScripts, scriptUndo.actIds));
-    setCharacterOverridesByAct(cloneActRecord(scriptUndo.characterOverrides, scriptUndo.actIds));
-    setLocationOverridesByAct(cloneActRecord(scriptUndo.locationOverrides, scriptUndo.actIds));
-    setRuntimeMapByAct(cloneActRecord(scriptUndo.runtimeMap, scriptUndo.actIds));
-    setWorkspaceTitle(scriptUndo.workspaceTitle);
+    patchSunnyBanksLive(() => ({
+      actIds: [...scriptUndo.actIds],
+      activeAct: scriptUndo.activeAct,
+      actScripts: cloneActRecord(scriptUndo.actScripts, scriptUndo.actIds),
+      characterOverrides: cloneActRecord(scriptUndo.characterOverrides, scriptUndo.actIds),
+      locationOverrides: cloneActRecord(scriptUndo.locationOverrides, scriptUndo.actIds),
+      runtimeMap: cloneActRecord(scriptUndo.runtimeMap, scriptUndo.actIds),
+      workspaceTitle: scriptUndo.workspaceTitle,
+      defaultLocationId,
+    }));
     setScriptUndo(null);
   };
 
@@ -1258,54 +1203,49 @@ export function SkidmarksSunnyBanksPanel() {
     if (doc.hasActHeaders || decoded !== scriptText) {
       captureScriptUndo();
     }
-    if (doc.episodeTitle) setWorkspaceTitle(doc.episodeTitle);
-    if (!doc.hasActHeaders) {
-      setActScripts((prev) => ({ ...prev, [activeAct]: decoded }));
-      return;
-    }
-    const nextIds = mergeSunnyBanksActIds(actIds, doc.actIds);
-    setActIds(nextIds);
-    setActScripts((prev) => {
-      const next = { ...prev };
+    patchSunnyBanksLive((prev) => {
+      if (!doc.hasActHeaders) {
+        return {
+          ...prev,
+          workspaceTitle: doc.episodeTitle ?? prev.workspaceTitle,
+          actScripts: { ...prev.actScripts, [prev.activeAct]: decoded },
+        };
+      }
+      const nextIds = mergeSunnyBanksActIds(prev.actIds, doc.actIds);
+      const actScriptsNext = { ...prev.actScripts };
+      const characterNext = { ...prev.characterOverrides };
+      const locationNext = { ...prev.locationOverrides };
+      const runtimeNext = { ...prev.runtimeMap };
       for (const id of nextIds) {
-        if (!(id in next)) next[id] = "";
+        if (!(id in actScriptsNext)) actScriptsNext[id] = "";
+        if (!(id in characterNext)) characterNext[id] = {};
+        if (!(id in locationNext)) locationNext[id] = {};
+        if (!(id in runtimeNext)) runtimeNext[id] = {};
       }
       for (const id of doc.actIds) {
-        next[id] = doc.actScripts[id] ?? "";
+        actScriptsNext[id] = doc.actScripts[id] ?? "";
+        characterNext[id] = {};
+        locationNext[id] = {};
       }
-      if (!doc.actIds.includes(activeAct)) next[activeAct] = "";
-      return next;
+      if (!doc.actIds.includes(prev.activeAct)) actScriptsNext[prev.activeAct] = "";
+      return {
+        ...prev,
+        workspaceTitle: doc.episodeTitle ?? prev.workspaceTitle,
+        actIds: nextIds,
+        activeAct: !doc.actIds.includes(prev.activeAct) && doc.actIds[0] ? doc.actIds[0] : prev.activeAct,
+        actScripts: actScriptsNext,
+        characterOverrides: characterNext,
+        locationOverrides: locationNext,
+        runtimeMap: runtimeNext,
+      };
     });
-    setCharacterOverridesByAct((prev) => {
-      const next = { ...prev };
-      for (const id of nextIds) {
-        if (!(id in next)) next[id] = {};
-      }
-      for (const id of doc.actIds) next[id] = {};
-      return next;
-    });
-    setLocationOverridesByAct((prev) => {
-      const next = { ...prev };
-      for (const id of nextIds) {
-        if (!(id in next)) next[id] = {};
-      }
-      for (const id of doc.actIds) next[id] = {};
-      return next;
-    });
-    setRuntimeMapByAct((prev) => {
-      const next = { ...prev };
-      for (const id of nextIds) {
-        if (!(id in next)) next[id] = {};
-      }
-      return next;
-    });
-    if (!doc.actIds.includes(activeAct) && doc.actIds[0]) {
-      setActiveAct(doc.actIds[0]);
-    }
   };
 
   const applyActScript = (nextScript: string) => {
-    setActScripts((prev) => ({ ...prev, [activeAct]: nextScript }));
+    patchSunnyBanksLive((prev) => ({
+      ...prev,
+      actScripts: { ...prev.actScripts, [prev.activeAct]: nextScript },
+    }));
   };
 
   const handleInsertShotAfter = (rowIndex: number) => {
@@ -1314,16 +1254,24 @@ export function SkidmarksSunnyBanksPanel() {
     if (!row) return;
     const holdLine = buildSunnyBanksHoldScriptLine(row.characterName);
     captureScriptUndo();
-    applyActScript(insertSunnyBanksLineAfter(scriptText, row.chunk.sourceLineIndex, holdLine));
     const insertAt = rowIndex + 1;
-    setCharacterOverridesByAct((prev) => ({
-      ...prev,
-      [activeAct]: shiftKeyedIndexRecord(prev[activeAct] ?? {}, insertAt),
-    }));
-    setLocationOverridesByAct((prev) => {
-      const shifted = shiftKeyedIndexRecord(prev[activeAct] ?? {}, insertAt);
-      shifted[insertAt] = row.location.id;
-      return { ...prev, [activeAct]: shifted };
+    patchSunnyBanksLive((prev) => {
+      const act = prev.activeAct;
+      const script = prev.actScripts[act] ?? "";
+      const shiftedLocations = shiftKeyedIndexRecord(prev.locationOverrides[act] ?? {}, insertAt);
+      shiftedLocations[insertAt] = row.location.id;
+      return {
+        ...prev,
+        actScripts: {
+          ...prev.actScripts,
+          [act]: insertSunnyBanksLineAfter(script, row.chunk.sourceLineIndex, holdLine),
+        },
+        characterOverrides: {
+          ...prev.characterOverrides,
+          [act]: shiftKeyedIndexRecord(prev.characterOverrides[act] ?? {}, insertAt),
+        },
+        locationOverrides: { ...prev.locationOverrides, [act]: shiftedLocations },
+      };
     });
     if (!scriptOpen) setScriptOpen(true);
   };
@@ -1334,21 +1282,25 @@ export function SkidmarksSunnyBanksPanel() {
     const name = first?.characterName || FALLBACK_CHARACTER_NAME;
     const holdLine = buildSunnyBanksHoldScriptLine(name);
     captureScriptUndo();
-    applyActScript(
-      first
-        ? insertSunnyBanksLineBefore(scriptText, first.chunk.sourceLineIndex, holdLine)
-        : scriptText.trim()
-          ? `${scriptText.replace(/\n+$/, "")}\n${holdLine}`
-          : holdLine
-    );
-    setCharacterOverridesByAct((prev) => ({
-      ...prev,
-      [activeAct]: shiftKeyedIndexRecord(prev[activeAct] ?? {}, 0),
-    }));
-    setLocationOverridesByAct((prev) => {
-      const shifted = shiftKeyedIndexRecord(prev[activeAct] ?? {}, 0);
-      shifted[0] = first?.location.id ?? defaultLocationId;
-      return { ...prev, [activeAct]: shifted };
+    patchSunnyBanksLive((prev) => {
+      const act = prev.activeAct;
+      const script = prev.actScripts[act] ?? "";
+      const nextScript = first
+        ? insertSunnyBanksLineBefore(script, first.chunk.sourceLineIndex, holdLine)
+        : script.trim()
+          ? `${script.replace(/\n+$/, "")}\n${holdLine}`
+          : holdLine;
+      const shiftedLocations = shiftKeyedIndexRecord(prev.locationOverrides[act] ?? {}, 0);
+      shiftedLocations[0] = first?.location.id ?? prev.defaultLocationId;
+      return {
+        ...prev,
+        actScripts: { ...prev.actScripts, [act]: nextScript },
+        characterOverrides: {
+          ...prev.characterOverrides,
+          [act]: shiftKeyedIndexRecord(prev.characterOverrides[act] ?? {}, 0),
+        },
+        locationOverrides: { ...prev.locationOverrides, [act]: shiftedLocations },
+      };
     });
     if (!scriptOpen) setScriptOpen(true);
   };
@@ -1360,15 +1312,25 @@ export function SkidmarksSunnyBanksPanel() {
     const status = runtimeFor(row.index, row.chunk.raw).status;
     if (status === "done" || status === "rendering") return;
     captureScriptUndo();
-    applyActScript(removeSunnyBanksSourceLine(scriptText, row.chunk.sourceLineIndex));
-    setCharacterOverridesByAct((prev) => ({
-      ...prev,
-      [activeAct]: unshiftKeyedIndexRecord(prev[activeAct] ?? {}, rowIndex),
-    }));
-    setLocationOverridesByAct((prev) => ({
-      ...prev,
-      [activeAct]: unshiftKeyedIndexRecord(prev[activeAct] ?? {}, rowIndex),
-    }));
+    patchSunnyBanksLive((prev) => {
+      const act = prev.activeAct;
+      const script = prev.actScripts[act] ?? "";
+      return {
+        ...prev,
+        actScripts: {
+          ...prev.actScripts,
+          [act]: removeSunnyBanksSourceLine(script, row.chunk.sourceLineIndex),
+        },
+        characterOverrides: {
+          ...prev.characterOverrides,
+          [act]: unshiftKeyedIndexRecord(prev.characterOverrides[act] ?? {}, rowIndex),
+        },
+        locationOverrides: {
+          ...prev.locationOverrides,
+          [act]: unshiftKeyedIndexRecord(prev.locationOverrides[act] ?? {}, rowIndex),
+        },
+      };
+    });
   };
 
   const handleIdleLineChange = (rowIndex: number, dialogue: string) => {
@@ -1388,48 +1350,22 @@ export function SkidmarksSunnyBanksPanel() {
   const handleAddAct = () => {
     if (running || actIds.length >= MAX_SUNNY_BANKS_ACTS) return;
     const id = nextSunnyBanksActId(actIds);
-    setActIds((prev) => [...prev, id]);
-    setActScripts((prev) => ({ ...prev, [id]: "" }));
-    setCharacterOverridesByAct((prev) => ({ ...prev, [id]: {} }));
-    setLocationOverridesByAct((prev) => ({ ...prev, [id]: {} }));
-    setRuntimeMapByAct((prev) => ({ ...prev, [id]: {} }));
-    setActiveAct(id);
+    patchSunnyBanksLive((prev) => ({
+      ...prev,
+      actIds: [...prev.actIds, id],
+      activeAct: id,
+      actScripts: { ...prev.actScripts, [id]: "" },
+      characterOverrides: { ...prev.characterOverrides, [id]: {} },
+      locationOverrides: { ...prev.locationOverrides, [id]: {} },
+      runtimeMap: { ...prev.runtimeMap, [id]: {} },
+    }));
     window.setTimeout(() => {
       actStripRef.current?.scrollTo({ left: actStripRef.current.scrollWidth, behavior: "smooth" });
     }, 0);
   };
 
   const handleSaveWorkspace = () => {
-    workspaceSaveSeqRef.current += 1;
-    const savedAt = Date.now();
-    const actIdsSnapshot = [...actIds];
-    const actScriptsSnapshot = cloneActRecord(actScripts, actIdsSnapshot);
-    const characterOverridesSnapshot = cloneActRecord(characterOverridesByAct, actIdsSnapshot);
-    const locationOverridesSnapshot = cloneActRecord(locationOverridesByAct, actIdsSnapshot);
-    const runtimeMapSnapshot = cloneActRecord(runtimeMapByAct, actIdsSnapshot);
-    const fingerprint = fingerprintWorkspace({
-      defaultLocationId,
-      actIds: actIdsSnapshot,
-      activeAct,
-      actScripts: actScriptsSnapshot,
-      characterOverrides: characterOverridesSnapshot,
-      locationOverrides: locationOverridesSnapshot,
-      runtimeMap: runtimeMapSnapshot,
-    });
-    const snapshot: EpisodeWorkspace = {
-      id: mintWorkspaceId(savedAt, workspaceSaveSeqRef.current, fingerprint),
-      savedAt,
-      fingerprint,
-      label: resolvedWorkspaceTitle(),
-      defaultLocationId,
-      actIds: actIdsSnapshot,
-      activeAct,
-      actScripts: actScriptsSnapshot,
-      characterOverrides: characterOverridesSnapshot,
-      locationOverrides: locationOverridesSnapshot,
-      runtimeMap: runtimeMapSnapshot,
-    };
-    setWorkspaces((prev) => [snapshot, ...prev]);
+    saveSunnyBanksProjectWorkspace();
     setShelfOpen(true);
   };
 
@@ -1452,19 +1388,12 @@ export function SkidmarksSunnyBanksPanel() {
   };
 
   const handleDeleteWorkspace = (id: string) => {
-    setWorkspaces((prev) => prev.filter((workspace) => workspace.id !== id));
+    deleteSunnyBanksWorkspace(id);
   };
 
   const handleOpenWorkspace = (workspace: EpisodeWorkspace) => {
     if (running) return;
-    setWorkspaceTitle(workspace.label);
-    setDefaultLocationId(workspace.defaultLocationId);
-    setActIds(workspace.actIds.length > 0 ? [...workspace.actIds] : [...SUNNY_BANKS_INITIAL_ACTS]);
-    setActiveAct(workspace.activeAct);
-    setActScripts(cloneActRecord(workspace.actScripts, workspace.actIds));
-    setCharacterOverridesByAct(cloneActRecord(workspace.characterOverrides, workspace.actIds));
-    setLocationOverridesByAct(cloneActRecord(workspace.locationOverrides, workspace.actIds));
-    setRuntimeMapByAct(cloneActRecord(workspace.runtimeMap, workspace.actIds));
+    openSunnyBanksWorkspace(workspace.id);
     setProgressText(null);
   };
 
@@ -1536,7 +1465,7 @@ export function SkidmarksSunnyBanksPanel() {
                       type="button"
                       role="tab"
                       aria-selected={selected}
-                      onClick={() => setActiveAct(act)}
+                      onClick={() => patchSunnyBanksLive((prev) => ({ ...prev, activeAct: act }))}
                       disabled={running}
                       className={[
                         "min-h-[40px] shrink-0 rounded-full px-3.5 text-[12px] font-semibold transition-colors disabled:opacity-60",
@@ -1650,12 +1579,19 @@ export function SkidmarksSunnyBanksPanel() {
                                 ) : (
                                   <select
                                     value={row.characterName}
-                                    onChange={(e) =>
-                                      setCharacterOverridesByAct((prev) => ({
+                                    onChange={(e) => {
+                                      const name = e.target.value;
+                                      patchSunnyBanksLive((prev) => ({
                                         ...prev,
-                                        [activeAct]: { ...(prev[activeAct] ?? {}), [row.index]: e.target.value },
-                                      }))
-                                    }
+                                        characterOverrides: {
+                                          ...prev.characterOverrides,
+                                          [prev.activeAct]: {
+                                            ...(prev.characterOverrides[prev.activeAct] ?? {}),
+                                            [row.index]: name,
+                                          },
+                                        },
+                                      }));
+                                    }}
                                     disabled={running}
                                     aria-label={`Character for line ${row.index + 1}`}
                                     className="h-10 min-h-[40px] w-[4.75rem] max-w-[4.75rem] shrink-0 truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
@@ -1675,15 +1611,19 @@ export function SkidmarksSunnyBanksPanel() {
                                 {!isStatic && (
                                   <select
                                     value={row.location.id}
-                                    onChange={(e) =>
-                                      setLocationOverridesByAct((prev) => ({
+                                    onChange={(e) => {
+                                      const locationId = e.target.value as SunnyBanksLocationId;
+                                      patchSunnyBanksLive((prev) => ({
                                         ...prev,
-                                        [activeAct]: {
-                                          ...(prev[activeAct] ?? {}),
-                                          [row.index]: e.target.value as SunnyBanksLocationId,
+                                        locationOverrides: {
+                                          ...prev.locationOverrides,
+                                          [prev.activeAct]: {
+                                            ...(prev.locationOverrides[prev.activeAct] ?? {}),
+                                            [row.index]: locationId,
+                                          },
                                         },
-                                      }))
-                                    }
+                                      }));
+                                    }}
                                     disabled={running}
                                     title={row.location.label}
                                     aria-label={`Location for line ${row.index + 1}`}
@@ -1884,7 +1824,7 @@ export function SkidmarksSunnyBanksPanel() {
             <input
               type="text"
               value={workspaceTitle}
-              onChange={(e) => setWorkspaceTitle(e.target.value)}
+              onChange={(e) => patchSunnyBanksLive((prev) => ({ ...prev, workspaceTitle: e.target.value }))}
               disabled={running}
               placeholder="EP02 — Drop Bears Dilemma"
               className="min-h-[44px] w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 text-sm text-white placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
@@ -1928,10 +1868,10 @@ export function SkidmarksSunnyBanksPanel() {
           <div className="flex flex-col gap-2 border-t border-white/10 px-3 pb-3 pt-2">
             {workspaces.length === 0 ? (
               <p className="text-[10px] leading-snug text-white/40">
-                Each save mints a new card (timestamp + fingerprint). Snapshots stay on
-                this open sheet — scripts, locations, and finished clip URLs. Not a Neon
-                episode table, not localStorage. Zip is script + gold prompts + clip URL
-                paths, not a re-render.
+                Save keeps the whole episode (every act, every clip URL) on the
+                server. Same episode name updates that one card. ✕ drops the
+                named card only — the live copy still survives a refresh. Zip is
+                script + gold prompts + clip files, not a re-render.
               </p>
             ) : (
               <div className="flex gap-2 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
@@ -1950,7 +1890,7 @@ export function SkidmarksSunnyBanksPanel() {
                         {workspace.label}
                       </span>
                       <span className="mt-0.5 text-[10px] text-white/40">
-                        Act {workspace.activeAct}
+                        {describeSunnyBanksWorkspace(workspace)}
                       </span>
                     </button>
                     <button
