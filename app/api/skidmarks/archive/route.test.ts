@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listMock = vi.fn();
 const putMock = vi.fn();
+const delMock = vi.fn();
 vi.mock("@vercel/blob", () => ({
   list: (...args: unknown[]) => listMock(...args),
   put: (...args: unknown[]) => putMock(...args),
+  del: (...args: unknown[]) => delMock(...args),
 }));
 
 async function importRoute() {
@@ -47,6 +49,8 @@ describe("GET /api/skidmarks/archive", () => {
   beforeEach(() => {
     listMock.mockReset();
     putMock.mockReset();
+    delMock.mockReset();
+    delMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -154,12 +158,46 @@ describe("GET /api/skidmarks/archive", () => {
     expect(body).toEqual({ configured: true, songs: [] });
     expect(putMock).not.toHaveBeenCalled();
   });
+
+  it("collapses leftover copies of the same MP3, keeping the row with more renders", async () => {
+    const olderFull = { ...goodSong, archivedAt: 1, renderedPlateCount: 4 };
+    const newerPartial = {
+      ...goodSong,
+      id: "song-1b",
+      archivedAt: 9,
+      renderedPlateCount: 1,
+      snapshotUrl: "https://blob.example/skidmarks/archive/song-1b/snapshot.json",
+    };
+    listMock
+      .mockResolvedValueOnce({ blobs: [{ pathname: INDEX_PATHNAME, url: "https://blob.example/index.json", uploadedAt: new Date() }] })
+      .mockResolvedValueOnce({
+        blobs: [
+          { pathname: INDEX_PATHNAME, url: "https://blob.example/index.json", uploadedAt: new Date() },
+          { pathname: "skidmarks/archive/song-1/snapshot.json", url: olderFull.snapshotUrl, uploadedAt: new Date() },
+          { pathname: "skidmarks/archive/song-1b/snapshot.json", url: newerPartial.snapshotUrl, uploadedAt: new Date() },
+        ],
+      });
+    mockFetchResponses({ "https://blob.example/index.json": [newerPartial, olderFull] });
+
+    const { GET } = await importRoute();
+    const res = await GET();
+    const body = await res.json();
+
+    expect(body.configured).toBe(true);
+    expect(body.songs).toEqual([olderFull]);
+    expect(delMock).toHaveBeenCalledWith(newerPartial.snapshotUrl);
+    expect(putMock).toHaveBeenCalledTimes(1);
+    const [, writtenBody] = putMock.mock.calls[0];
+    expect(JSON.parse(writtenBody as string)).toEqual([olderFull]);
+  });
 });
 
 describe("POST /api/skidmarks/archive", () => {
   beforeEach(() => {
     listMock.mockReset();
     putMock.mockReset();
+    delMock.mockReset();
+    delMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -174,6 +212,32 @@ describe("POST /api/skidmarks/archive", () => {
     const body = await res.json();
     expect(body).toEqual({ ok: true, songs: [goodSong] });
     expect(putMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces an existing row for the same band + filename instead of stacking a copy", async () => {
+    const replacement = {
+      ...goodSong,
+      id: "song-1-new",
+      archivedAt: 50,
+      renderedPlateCount: 20,
+      snapshotUrl: "https://blob.example/skidmarks/archive/song-1-new/snapshot.json",
+    };
+    listMock
+      .mockResolvedValueOnce({ blobs: [{ pathname: INDEX_PATHNAME, url: "https://blob.example/index.json", uploadedAt: new Date() }] })
+      .mockResolvedValueOnce({
+        blobs: [
+          { pathname: INDEX_PATHNAME, url: "https://blob.example/index.json", uploadedAt: new Date() },
+          { pathname: "skidmarks/archive/song-1/snapshot.json", url: goodSong.snapshotUrl, uploadedAt: new Date() },
+        ],
+      });
+    mockFetchResponses({ "https://blob.example/index.json": [goodSong] });
+
+    const { POST } = await importRoute();
+    const res = await POST(postRequest({ action: "add", song: replacement }));
+    const body = await res.json();
+
+    expect(body).toEqual({ ok: true, songs: [replacement] });
+    expect(delMock).toHaveBeenCalledWith(goodSong.snapshotUrl);
   });
 
   it("rejects an unknown action", async () => {

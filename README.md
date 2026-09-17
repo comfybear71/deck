@@ -1824,11 +1824,15 @@ now (see "Explicitly out of scope" below).
     card, once a song's attached) snapshots the live band + mp3
     (segments, plates, shot prompts, motion text — everything needed to
     restore it) to a Vercel Blob JSON file, carries forward the mp3's
-    own `audioUrl` (no second audio upload), and appends a small
-    metadata record to a shared archive index
-    (`lib/skidmarksArchive.ts`, `app/api/skidmarks/archive/route.ts`),
-    then clears the live workspace so it's immediately ready for a
-    new/different song. The finished song then shows up as a row in a
+    own `audioUrl` (no second audio upload), and upserts **one**
+    metadata row per band + MP3 filename into a shared archive index
+    (`lib/skidmarksArchive.ts`, `lib/skidmarksArchiveDedupe.ts`,
+    `app/api/skidmarks/archive/route.ts`) — a later Archive of the same
+    file replaces the older card; leftover stacked copies collapse on
+    the next shelf load, keeping the row with more renders. Manual
+    Archive leaves the live workspace as-is; New / switching band /
+    opening a different song still archive-then-clear. The finished
+    song then shows up as a row in a
     second page-bottom collapsible shelf
     (`components/SkidmarksArchiveShelf.tsx`, also default open): cover/
     title, clip + rendered-plate counts, and two real actions —
