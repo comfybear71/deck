@@ -2193,9 +2193,10 @@ now (see "Explicitly out of scope" below).
     has no separate hero file (already a single figure). Name sits in a
     bottom scrim, and an honest "not ready" label on anyone missing a
     locked ElevenLabs voice id (Hans, today).
-  - A **Script** card — a textarea plus a **Location** native
-    `<select>` of six locked park plates (`SUNNY_BANKS_LOCATIONS`,
-    default Office Storefront) that seeds each parsed row.     A swipeable
+  - A **Script** card — a textarea of six locked park plates used
+    per queue row (`SUNNY_BANKS_LOCATIONS`, default Office Storefront
+    until a `[Location: id]` tag). There is **no** act-level location
+    dropdown above the script accordion. A swipeable
     **Act I / Act II / Act III** row sits at the **top** of that card
     (`touch-pan-x`, `flex-nowrap`, overflow-x). **+ Add Act** at the
     far right appends the next roman in-memory buffer (IV, V, …, cap

@@ -40,7 +40,13 @@ describe("parseSunnyBanksScriptBlock", () => {
   it("empty dialogue after the speaker is a Hold, not a guessed line", () => {
     const chunks = parseSunnyBanksScriptBlock("Ranger Bazza:");
     expect(chunks).toEqual([
-      { raw: "Ranger Bazza:", characterName: "Ranger Bazza", line: "", kind: "hold" },
+      {
+        raw: "Ranger Bazza:",
+        characterName: "Ranger Bazza",
+        line: "",
+        kind: "hold",
+        locationId: "office_storefront",
+      },
     ]);
   });
 
@@ -93,7 +99,16 @@ describe("parseSunnyBanksScriptBlock", () => {
     const chunks = parseSunnyBanksScriptBlock(
       "[Location: moon_base]\nShazza: You right?"
     );
-    expect(chunks[0].locationId).toBeUndefined();
+    expect(chunks[0].locationId).toBe("office_storefront");
+  });
+
+  it("stamps the locked default plate on every row until a [Location:] tag, then carries that id", () => {
+    const chunks = parseSunnyBanksScriptBlock(
+      "Shazza: You right?\nDazza: Yeah nah.\n[Location: site_laundry]\nNan: Cuppa?"
+    );
+    expect(chunks[0].locationId).toBe("office_storefront");
+    expect(chunks[1].locationId).toBe("office_storefront");
+    expect(chunks[2].locationId).toBe("site_laundry");
   });
 
   it("strips [Action: text] from the spoken line and stores it as prompt context", () => {

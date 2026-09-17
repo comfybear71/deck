@@ -411,7 +411,7 @@ export function parseSunnyBanksGodDocument(text: string, fallbackActId: string =
 export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[] {
   const chunks: SunnyBanksScriptChunk[] = [];
   let previousName = "";
-  let currentLocation: SunnyBanksLocationId | undefined;
+  let currentLocation: SunnyBanksLocationId = SUNNY_BANKS_DEFAULT_LOCATION_ID;
   let pendingActions: string[] = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const raw = rawLine.trim();
@@ -440,8 +440,8 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       characterName,
       line,
       kind: line.length > 0 ? "speak" : "hold",
+      locationId: currentLocation,
     };
-    if (currentLocation) chunk.locationId = currentLocation;
     if (action) chunk.action = action;
     chunks.push(chunk);
   }
@@ -1019,19 +1019,6 @@ export function SkidmarksSunnyBanksPanel() {
                 + Add Act
               </button>
             </div>
-            <select
-              value={defaultLocationId}
-              onChange={(e) => setDefaultLocationId(e.target.value as SunnyBanksLocationId)}
-              disabled={running}
-              aria-label="Default location"
-              className="min-h-[40px] w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 text-sm text-white disabled:opacity-60"
-            >
-              {LOCATION_LIST.map((location) => (
-                <option key={location.id} value={location.id} className="bg-zinc-900">
-                  {location.label}
-                </option>
-              ))}
-            </select>
             <button
               type="button"
               onClick={() => setScriptOpen((open) => !open)}
