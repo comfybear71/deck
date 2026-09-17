@@ -2,9 +2,12 @@
 
 import { useMemo, useRef, useState } from "react";
 import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
+import { triggerBlobDownload } from "@/lib/clipRenders";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
+  buildSunnyBanksHoldPrompt,
+  buildSunnyBanksSpeakingPrompt,
   getSunnyBanksCharacterLock,
   getSunnyBanksLocation,
   resolveSunnyBanksStartImage,
@@ -14,7 +17,8 @@ import {
   SUNNY_BANKS_LOCATIONS,
   type SunnyBanksLocationId,
 } from "@/lib/sunnyBanks";
-import { buildSunnyBanksDropBearsSeed } from "@/lib/sunnyBanksDropBears";
+import { buildSunnyBanksDropBearsSeed, DROP_BEARS_TITLE } from "@/lib/sunnyBanksDropBears";
+import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
 
 /**
  * Sunny Banks' own first real screen (2026-09-15) — the thing that
@@ -56,12 +60,25 @@ import { buildSunnyBanksDropBearsSeed } from "@/lib/sunnyBanksDropBears";
  * **Dense queue + Act pills + in-memory workspace shelf (2026-09-17)** —
  * queue rows are one spreadsheet-style line (not stacked cards) so a
  * phone isn't a tall scroll of identical containers. Act I/II/III
- * swap three script buffers in this component — not a Neon act table.
- * The bottom shelf snapshots those buffers + location ids + finished
- * clip URLs as a workspace sheet for this open detail-sheet only.
- * No `localStorage`, no new session schema. Sunny Banks has no song
- * MP3; driving audio is TTS at render time, so a workspace stores the
- * finished LTX URL rather than an MP3 path.
+ * pills sit at the top of the Script card and swap three script
+ * buffers in this component — not a Neon act table. The textarea and
+ * queued rows collapse behind "Show Script Text & Queued Lines"
+ * (default closed) so a 46-line EP02 paste doesn't bury the Clips
+ * strip. The bottom shelf snapshots those buffers + location ids +
+ * finished clip URLs as a named workspace card for this open
+ * detail-sheet only (`mintWorkspaceId` = timestamp + seq + content
+ * fingerprint — never clobbers an earlier card). A red ✕ drops that
+ * snapshot. **Download Episode Bundle** zips `script.txt`, the gold
+ * Speak/Hold prompt array, and finished clip URL paths — not the MP4
+ * bytes. No `localStorage`, no new session schema. Sunny Banks has no
+ * song MP3; driving audio is TTS at render time.
+ *
+ * **iPhone Safari vertical scroll (2026-09-17)** — the script wrapper
+ * uses `touch-pan-y overscroll-y-contain` so a thumb on the textarea
+ * or a queue row pans the page instead of freezing inside a nested
+ * scroller. Queue rows still allow horizontal pan for the selects
+ * (`touch-action: pan-x pan-y`) — `touch-pan-x` alone is what locked
+ * vertical momentum on those rows.
  *
  * **Clips live in one Act-grouped strip (2026-09-17, live QA)** —
  * 40px thumbs in each dialogue row cluttered the queue. Rows are
@@ -332,6 +349,9 @@ export function SkidmarksSunnyBanksPanel() {
   const [workspaces, setWorkspaces] = useState<EpisodeWorkspace[]>([]);
   const [shelfOpen, setShelfOpen] = useState(false);
   const [clipsOpen, setClipsOpen] = useState(true);
+  const [scriptOpen, setScriptOpen] = useState(false);
+  const [workspaceTitle, setWorkspaceTitle] = useState(DROP_BEARS_TITLE);
+  const [bundleError, setBundleError] = useState<string | null>(null);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
   const workspaceSaveSeqRef = useRef(0);
@@ -515,6 +535,47 @@ export function SkidmarksSunnyBanksPanel() {
     }
   };
 
+  const collectEpisodePrompts = () => {
+    const prompts: Array<{
+      act: SunnyBanksActId;
+      index: number;
+      characterName: string;
+      kind: BeatKind;
+      line: string;
+      locationId: string;
+      prompt: string;
+    }> = [];
+    for (const act of SUNNY_BANKS_ACTS) {
+      const chunks = parseSunnyBanksScriptBlock(actScripts[act]);
+      const overrides = characterOverridesByAct[act];
+      const locations = locationOverridesByAct[act];
+      chunks.forEach((chunk, index) => {
+        const characterName = overrides[index] ?? chunk.characterName;
+        const lock = getSunnyBanksCharacterLock(characterName);
+        const locationId = locations[index] ?? defaultLocationId;
+        const kind: BeatKind = chunk.line.length > 0 ? "speak" : "hold";
+        const prompt = lock
+          ? kind === "hold"
+            ? buildSunnyBanksHoldPrompt(lock)
+            : buildSunnyBanksSpeakingPrompt(lock, chunk.line)
+          : "";
+        prompts.push({
+          act,
+          index,
+          characterName,
+          kind,
+          line: chunk.line,
+          locationId,
+          prompt,
+        });
+      });
+    }
+    return prompts;
+  };
+
+  const resolvedWorkspaceTitle = () =>
+    workspaceTitle.trim() || workspaceLabelFromScripts(actScripts, "Sunny Banks episode");
+
   const handleSaveWorkspace = () => {
     workspaceSaveSeqRef.current += 1;
     const savedAt = Date.now();
@@ -534,7 +595,7 @@ export function SkidmarksSunnyBanksPanel() {
       id: mintWorkspaceId(savedAt, workspaceSaveSeqRef.current, fingerprint),
       savedAt,
       fingerprint,
-      label: workspaceLabelFromScripts(actScriptsSnapshot, `Episode ${workspaces.length + 1}`),
+      label: resolvedWorkspaceTitle(),
       defaultLocationId,
       activeAct,
       actScripts: actScriptsSnapshot,
@@ -546,12 +607,30 @@ export function SkidmarksSunnyBanksPanel() {
     setShelfOpen(true);
   };
 
+  const handleDownloadEpisodeBundle = () => {
+    setBundleError(null);
+    try {
+      const { zipBytes, filename } = buildSunnyBanksEpisodeBundle({
+        title: resolvedWorkspaceTitle(),
+        defaultLocationId,
+        actScripts,
+        prompts: collectEpisodePrompts(),
+        clips: renderedClips,
+      });
+      const zipBlob = new Blob([zipBytes.slice().buffer], { type: "application/zip" });
+      triggerBlobDownload(zipBlob, filename);
+    } catch (err) {
+      setBundleError(err instanceof Error ? err.message : "Could not build the episode zip.");
+    }
+  };
+
   const handleDeleteWorkspace = (id: string) => {
     setWorkspaces((prev) => prev.filter((workspace) => workspace.id !== id));
   };
 
   const handleOpenWorkspace = (workspace: EpisodeWorkspace) => {
     if (running) return;
+    setWorkspaceTitle(workspace.label);
     setDefaultLocationId(workspace.defaultLocationId);
     setActiveAct(workspace.activeAct);
     setActScripts(cloneActRecord(workspace.actScripts));
@@ -604,8 +683,7 @@ export function SkidmarksSunnyBanksPanel() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-2.5 rounded-2xl border border-amber-300/25 bg-amber-300/[0.03] p-3">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">Script</p>
+      <div className="flex touch-pan-y flex-col gap-2.5 overscroll-y-contain rounded-2xl border border-amber-300/25 bg-amber-300/[0.03] p-3">
         {PLATE_CAST.length === 0 ? (
           <p className="text-[12px] leading-relaxed text-white/40">
             No character has a reference plate yet.
@@ -654,111 +732,129 @@ export function SkidmarksSunnyBanksPanel() {
                 </option>
               ))}
             </select>
-            <textarea
-              value={scriptText}
-              onChange={(e) =>
-                setActScripts((prev) => ({
-                  ...prev,
-                  [activeAct]: e.target.value,
-                }))
-              }
-              disabled={running}
-              placeholder={"Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"}
-              rows={5}
-              className="min-h-[7.5rem] w-full resize-y rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm leading-relaxed text-white placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
-            />
-            <p className="text-[10px] leading-snug text-white/40">
-              One speaker per line — `Name:` or `Name says:`. Empty after the name is a
-              silent hold. Continuation lines keep the last speaker. Unit 4S stays barefoot;
-              gold look/voice strings are not edited here.
-            </p>
+            <button
+              type="button"
+              onClick={() => setScriptOpen((open) => !open)}
+              aria-expanded={scriptOpen}
+              className="flex min-h-[44px] w-full items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-left"
+            >
+              <span className="text-[12px] font-semibold text-white/80">
+                Show Script Text & Queued Lines
+                <span aria-hidden className="ml-1.5 font-medium text-white/40">
+                  {"\u00b7"} {queue.length}
+                </span>
+              </span>
+              <ChevronIcon open={scriptOpen} />
+            </button>
+            {scriptOpen && (
+              <div className="flex touch-pan-y flex-col gap-2.5 overscroll-y-contain">
+                <textarea
+                  value={scriptText}
+                  onChange={(e) =>
+                    setActScripts((prev) => ({
+                      ...prev,
+                      [activeAct]: e.target.value,
+                    }))
+                  }
+                  disabled={running}
+                  placeholder={"Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"}
+                  rows={5}
+                  className="min-h-[7.5rem] w-full resize-y rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm leading-relaxed text-white placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
+                />
+                <p className="text-[10px] leading-snug text-white/40">
+                  One speaker per line — `Name:` or `Name says:`. Empty after the name is a
+                  silent hold. Continuation lines keep the last speaker. Unit 4S stays barefoot;
+                  gold look/voice strings are not edited here.
+                </p>
 
-            {queue.length > 0 && (
-              <ol className="flex flex-col border-y border-white/10">
-                {queue.map((row) => {
-                  const runtime = runtimeFor(row.index, row.chunk.raw);
-                  const status = row.index === runningIndex ? "rendering" : runtime?.status ?? "idle";
-                  const lineLabel =
-                    row.kind === "hold" ? "Silent hold" : row.line;
-                  return (
-                    <li key={`${activeAct}:${row.index}:${row.chunk.raw}`}>
-                      <div className="flex min-h-[44px] items-center gap-1.5 overflow-x-auto overscroll-x-contain touch-pan-x py-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:none]">
-                        <span className="w-4 shrink-0 text-center text-[10px] font-medium text-white/40">
-                          {row.index + 1}
-                        </span>
-                        <select
-                          value={row.characterName}
-                          onChange={(e) =>
-                            setCharacterOverridesByAct((prev) => ({
-                              ...prev,
-                              [activeAct]: { ...prev[activeAct], [row.index]: e.target.value },
-                            }))
-                          }
-                          disabled={running}
-                          aria-label={`Character for line ${row.index + 1}`}
-                          className="min-h-[40px] min-w-[6.5rem] shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-1.5 text-[12px] text-white disabled:opacity-60"
-                        >
-                          {CAST_LIST.map((c) => (
-                            <option key={c.name} value={c.name} className="bg-zinc-900">
-                              {c.name}
-                              {!c.referenceImage
-                                ? " (no plate)"
-                                : !c.voiceId
-                                  ? " (no voice — hold only)"
-                                  : ""}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="min-w-[7rem] flex-1 truncate text-[12px] leading-snug text-white/90">
-                          {lineLabel}
-                        </p>
-                        <select
-                          value={row.location.id}
-                          onChange={(e) =>
-                            setLocationOverridesByAct((prev) => ({
-                              ...prev,
-                              [activeAct]: {
-                                ...prev[activeAct],
-                                [row.index]: e.target.value as SunnyBanksLocationId,
-                              },
-                            }))
-                          }
-                          disabled={running}
-                          aria-label={`Location for line ${row.index + 1}`}
-                          className="min-h-[40px] min-w-[7rem] shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-1.5 text-[12px] text-white disabled:opacity-60"
-                        >
-                          {LOCATION_LIST.map((location) => (
-                            <option key={location.id} value={location.id} className="bg-zinc-900">
-                              {location.label}
-                            </option>
-                          ))}
-                        </select>
-                        <span
-                          className={[
-                            "shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
-                            statusPillClass(status),
-                          ].join(" ")}
-                        >
-                          {statusPillLabel(status)}
-                        </span>
-                      </div>
-                      {runtime?.status === "failed" && runtime.error && (
-                        <p role="alert" className="pb-1.5 pl-5 text-[11px] leading-snug text-rose-300/90">
-                          {runtime.error}
-                        </p>
-                      )}
-                      {runtime?.status === "done" && runtime.error && (
-                        <p role="status" className="pb-1.5 pl-5 text-[11px] leading-snug text-amber-200/80">
-                          {runtime.error}
-                        </p>
-                      )}
-                    </li>
-                  );
-                })}
-              </ol>
+                {queue.length > 0 && (
+                  <ol className="flex flex-col border-y border-white/10">
+                    {queue.map((row) => {
+                      const runtime = runtimeFor(row.index, row.chunk.raw);
+                      const status = row.index === runningIndex ? "rendering" : runtime?.status ?? "idle";
+                      const lineLabel =
+                        row.kind === "hold" ? "Silent hold" : row.line;
+                      return (
+                        <li key={`${activeAct}:${row.index}:${row.chunk.raw}`}>
+                          <div className="flex min-h-[44px] items-center gap-1.5 overflow-x-auto overscroll-x-contain py-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:none] [touch-action:pan-x_pan-y]">
+                            <span className="w-4 shrink-0 text-center text-[10px] font-medium text-white/40">
+                              {row.index + 1}
+                            </span>
+                            <select
+                              value={row.characterName}
+                              onChange={(e) =>
+                                setCharacterOverridesByAct((prev) => ({
+                                  ...prev,
+                                  [activeAct]: { ...prev[activeAct], [row.index]: e.target.value },
+                                }))
+                              }
+                              disabled={running}
+                              aria-label={`Character for line ${row.index + 1}`}
+                              className="min-h-[40px] min-w-[6.5rem] shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-1.5 text-[12px] text-white disabled:opacity-60"
+                            >
+                              {CAST_LIST.map((c) => (
+                                <option key={c.name} value={c.name} className="bg-zinc-900">
+                                  {c.name}
+                                  {!c.referenceImage
+                                    ? " (no plate)"
+                                    : !c.voiceId
+                                      ? " (no voice — hold only)"
+                                      : ""}
+                                </option>
+                              ))}
+                            </select>
+                            <p className="min-w-[7rem] flex-1 truncate text-[12px] leading-snug text-white/90">
+                              {lineLabel}
+                            </p>
+                            <select
+                              value={row.location.id}
+                              onChange={(e) =>
+                                setLocationOverridesByAct((prev) => ({
+                                  ...prev,
+                                  [activeAct]: {
+                                    ...prev[activeAct],
+                                    [row.index]: e.target.value as SunnyBanksLocationId,
+                                  },
+                                }))
+                              }
+                              disabled={running}
+                              aria-label={`Location for line ${row.index + 1}`}
+                              className="min-h-[40px] min-w-[7rem] shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-1.5 text-[12px] text-white disabled:opacity-60"
+                            >
+                              {LOCATION_LIST.map((location) => (
+                                <option key={location.id} value={location.id} className="bg-zinc-900">
+                                  {location.label}
+                                </option>
+                              ))}
+                            </select>
+                            <span
+                              className={[
+                                "shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
+                                statusPillClass(status),
+                              ].join(" ")}
+                            >
+                              {statusPillLabel(status)}
+                            </span>
+                          </div>
+                          {runtime?.status === "failed" && runtime.error && (
+                            <p role="alert" className="pb-1.5 pl-5 text-[11px] leading-snug text-rose-300/90">
+                              {runtime.error}
+                            </p>
+                          )}
+                          {runtime?.status === "done" && runtime.error && (
+                            <p role="status" className="pb-1.5 pl-5 text-[11px] leading-snug text-amber-200/80">
+                              {runtime.error}
+                            </p>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
+              </div>
             )}
 
-            {queue.length > 0 && !canRenderAll && !running && (
+            {pendingRows.length > 0 && !canRenderAll && !running && (
               <p className="text-[10px] leading-snug text-white/40">
                 Every line needs a plated character. Speak needs a locked voice. Change the
                 dropdown or the script — Hans has no plate yet.
@@ -859,11 +955,47 @@ export function SkidmarksSunnyBanksPanel() {
       </div>
 
       <div className="rounded-xl border border-white/10 bg-zinc-950/95">
+        <div className="flex flex-col gap-2 px-3 pb-3 pt-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium uppercase tracking-wide text-white/40">
+              Episode name
+            </span>
+            <input
+              type="text"
+              value={workspaceTitle}
+              onChange={(e) => setWorkspaceTitle(e.target.value)}
+              disabled={running}
+              placeholder="EP02 — Drop Bears Dilemma"
+              className="min-h-[44px] w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 text-sm text-white placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={handleSaveWorkspace}
+            disabled={running}
+            className="min-h-[44px] rounded-full bg-white px-3 text-[13px] font-semibold text-zinc-950 disabled:opacity-60"
+          >
+            Save Project Workspace
+          </button>
+          <button
+            type="button"
+            onClick={handleDownloadEpisodeBundle}
+            disabled={running}
+            className="min-h-[40px] rounded-full border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80 disabled:opacity-60"
+          >
+            Download Episode Bundle (.zip)
+          </button>
+          {bundleError && (
+            <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
+              {bundleError}
+            </p>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => setShelfOpen((open) => !open)}
           aria-expanded={shelfOpen}
-          className="flex min-h-[40px] w-full items-center justify-between gap-2 px-3 text-[12px] font-semibold text-white/80"
+          className="flex min-h-[40px] w-full items-center justify-between gap-2 border-t border-white/10 px-3 text-[12px] font-semibold text-white/80"
         >
           <span>Episode workspace</span>
           <span className="flex items-center gap-1.5 text-[11px] font-medium text-white/45">
@@ -873,19 +1005,12 @@ export function SkidmarksSunnyBanksPanel() {
         </button>
         {shelfOpen && (
           <div className="flex flex-col gap-2 border-t border-white/10 px-3 pb-3 pt-2">
-            <button
-              type="button"
-              onClick={handleSaveWorkspace}
-              disabled={running}
-              className="min-h-[40px] rounded-full border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80 disabled:opacity-60"
-            >
-              Save current acts
-            </button>
             {workspaces.length === 0 ? (
               <p className="text-[10px] leading-snug text-white/40">
-                Snapshots stay on this open sheet — scripts, locations, and finished
-                clip URLs. Not a Neon episode table, not localStorage. No song MP3
-                in Sunny Banks; TTS is generated at render time.
+                Each save mints a new card (timestamp + fingerprint). Snapshots stay on
+                this open sheet — scripts, locations, and finished clip URLs. Not a Neon
+                episode table, not localStorage. Zip is script + gold prompts + clip URL
+                paths, not a re-render.
               </p>
             ) : (
               <div className="flex gap-2 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
