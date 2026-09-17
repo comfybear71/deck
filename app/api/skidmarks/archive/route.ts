@@ -41,7 +41,12 @@ const ARCHIVE_INDEX_PATHNAME = "skidmarks/archive/index.json";
 const ARCHIVE_PATH_PREFIX = "skidmarks/archive/";
 const SNAPSHOT_PATHNAME_RE = /^skidmarks\/archive\/([^/]+)\/snapshot\.json$/;
 
-function isRecordWithId(value: unknown): value is { id: string } {
+function isRecordWithId(value: unknown): value is {
+  id: string;
+  bandId?: unknown;
+  fileName?: unknown;
+  snapshotUrl?: unknown;
+} {
   return !!value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string";
 }
 

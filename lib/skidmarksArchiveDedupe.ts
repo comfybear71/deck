@@ -42,8 +42,8 @@ function numeric(value: unknown): number {
 
 /** True when `a` should replace `b` as the one kept row for that song. */
 export function isBetterArchivedSong(
-  a: Pick<ArchiveIdentityFields, "id" | "archivedAt" | "clipCount" | "renderedPlateCount">,
-  b: Pick<ArchiveIdentityFields, "id" | "archivedAt" | "clipCount" | "renderedPlateCount">
+  a: { id: string; archivedAt?: unknown; clipCount?: unknown; renderedPlateCount?: unknown },
+  b: { id: string; archivedAt?: unknown; clipCount?: unknown; renderedPlateCount?: unknown }
 ): boolean {
   const aRenders = numeric(a.renderedPlateCount);
   const bRenders = numeric(b.renderedPlateCount);
@@ -57,14 +57,14 @@ export function isBetterArchivedSong(
   return a.id > b.id;
 }
 
-export function collapseArchivedSongsByIdentity<T extends { id: string }>(
-  songs: T[]
-): { kept: T[]; dropped: T[] } {
+export function collapseArchivedSongsByIdentity<
+  T extends { id: string; bandId?: unknown; fileName?: unknown; archivedAt?: unknown; clipCount?: unknown; renderedPlateCount?: unknown },
+>(songs: T[]): { kept: T[]; dropped: T[] } {
   const best = new Map<string, T>();
   for (const song of songs) {
     const key = identityKey(song);
     const current = best.get(key);
-    if (!current || isBetterArchivedSong(song as ArchiveIdentityFields, current as ArchiveIdentityFields)) {
+    if (!current || isBetterArchivedSong(song, current)) {
       best.set(key, song);
     }
   }
