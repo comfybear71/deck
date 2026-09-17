@@ -2195,9 +2195,14 @@ now (see "Explicitly out of scope" below).
     locked ElevenLabs voice id (Hans, today).
   - A **Script** card — a textarea plus a **Location** native
     `<select>` of six locked park plates (`SUNNY_BANKS_LOCATIONS`,
-    default Office Storefront) that seeds each parsed row. A swipeable
-    **Act I / Act II / Act III** row at the top of that card swaps three
-    in-memory script buffers (not a Neon act table). Newlines become a
+    default Office Storefront) that seeds each parsed row.     A swipeable
+    **Act I / Act II / Act III** row sits at the **top** of that card
+    and swaps three in-memory script buffers (not a Neon act table).
+    The textarea and queued rows collapse behind **Show Script Text &
+    Queued Lines** (default closed). The Script card uses
+    `touch-pan-y overscroll-y-contain`; queue rows use
+    `touch-action: pan-x pan-y` so iPhone Safari page scroll isn't
+    trapped. Newlines become a
     dense one-row queue (`parseSunnyBanksScriptBlock` in
     `components/SkidmarksSunnyBanksPanel.tsx`: `Name:` / `Name says:`,
     empty dialogue = Hold, continuation lines keep the last speaker).
@@ -2215,9 +2220,11 @@ now (see "Explicitly out of scope" below).
     `skidmarks.aiglitch.app` — Act I caravan park, Act II BBQ shelter,
     Act III Unit 9 + announcement). In-memory seed only; Render skips
     lines that already have a clip so those 46 are not billed again.
-    A collapsible
-    **Episode workspace** bar sits under that strip, same reading
-    order as music-video rendered-clips then archive. Speak/Hold still POST that location still as `startImageDataUrl`
+    A named **Save Project Workspace** control under that strip mints a
+    unique in-memory card (timestamp + seq + content fingerprint) with
+    a red ✕; **Download Episode Bundle** zips `script.txt`, gold
+    Speak/Hold prompts, and clip URL paths — not MP4 bytes, not a Neon
+    row. Speak/Hold still POST that location still as `startImageDataUrl`
     (the location canvas — Image 1) plus `locationId`/`locationImage`
     alongside `characterName`. The **route** (`lib/sunnyBanksComposite.ts`)
     then overlays the character hero as Image 2 via xAI edits (Studio
@@ -2254,12 +2261,14 @@ now (see "Explicitly out of scope" below).
     needs a `LoadAudio` input; silence is the honest one for "No
     dialogue"), `buildSunnyBanksHoldPrompt` as the motion text. One clip at a
     time; a failed line stops the rest so they are not billed.
-    A collapsible **Episode workspace** bar at the bottom of the panel
-    snapshots the three act scripts, location ids, and finished clip
-    URLs for this open sheet only — not `localStorage`, not a Neon
+    A named **Save Project Workspace** control at the bottom of the
+    panel snapshots the three act scripts, location ids, and finished
+    clip URLs for this open sheet only — not `localStorage`, not a Neon
     episode table. Each save mints a new card (`timestamp` + seq +
     content fingerprint) instead of reusing a colliding `Date.now()`
-    key. A red ✕ on the card deletes that snapshot only. Sunny Banks
+    key. A red ✕ on the card deletes that snapshot only. **Download
+    Episode Bundle** zips script + gold prompts + clip URL paths, not
+    the MP4 files. Sunny Banks
     has no song MP3; TTS is generated at render time.
   - **Still not the episode wizard** — Grok's own earlier scope was
     "render one speak beat, then stop." There is still no Neon
