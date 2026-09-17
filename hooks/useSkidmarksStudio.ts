@@ -394,6 +394,7 @@ export function useSkidmarksStudio() {
     bands: state.bands,
     session: state.session,
     removedSeedBandIds: state.removedSeedBandIds,
+    sunnyBanks: state.sunnyBanks,
     /** The live Neon session round-trip status — see this hook's doc
      * comment and `lib/skidmarks.ts`'s `SkidmarksSessionSyncState`. */
     sessionSync,

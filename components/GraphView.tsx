@@ -171,6 +171,7 @@ export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate
                         bands: skidmarksState.bands,
                         session: skidmarksState.session,
                         removedSeedBandIds: skidmarksState.removedSeedBandIds,
+                        sunnyBanks: skidmarksState.sunnyBanks,
                       }}
                       onOpen={() => setOpenNodeId(node.id)}
                     />

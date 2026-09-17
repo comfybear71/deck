@@ -2779,6 +2779,7 @@ export function removeSkidmarksBand(bandId: string): void {
     : current.removedSeedBandIds;
   const wasActive = current.session.bandId === bandId;
   persist({
+    ...current,
     bands,
     removedSeedBandIds,
     session: wasActive

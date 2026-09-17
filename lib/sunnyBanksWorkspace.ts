@@ -170,7 +170,8 @@ export function upsertSunnyBanksWorkspace(
 }
 
 function normalizeLocationId(value: unknown, fallback: SunnyBanksLocationId): SunnyBanksLocationId {
-  return typeof value === "string" && getSunnyBanksLocation(value) ? value : fallback;
+  if (typeof value !== "string") return fallback;
+  return getSunnyBanksLocation(value)?.id ?? fallback;
 }
 
 function normalizeRowRuntime(value: unknown): SunnyBanksRowRuntime | null {
@@ -223,7 +224,8 @@ function normalizeLocationMap(value: unknown, fallback: SunnyBanksLocationId): R
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
     const index = Number(key);
     if (!Number.isInteger(index) || index < 0) continue;
-    if (typeof raw === "string" && getSunnyBanksLocation(raw)) next[index] = raw;
+    const located = typeof raw === "string" ? getSunnyBanksLocation(raw) : undefined;
+    if (located) next[index] = located.id;
     else if (typeof raw === "string") next[index] = fallback;
   }
   return next;
