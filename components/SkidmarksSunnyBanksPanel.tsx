@@ -1215,12 +1215,6 @@ export function SkidmarksSunnyBanksPanel() {
                                     preload="metadata"
                                     aria-label={`Preview for line ${row.index + 1}`}
                                   />
-                                ) : row.location.image ? (
-                                  <img
-                                    src={row.location.image}
-                                    alt=""
-                                    className="h-10 w-10 object-cover"
-                                  />
                                 ) : null}
                               </div>
                             </div>
