@@ -11,6 +11,7 @@ import {
   parseSunnyBanksGodDocument,
   parseSunnyBanksSceneHeader,
   parseSunnyBanksScriptBlock,
+  preserveRenderedRuntimes,
   decodeSunnyBanksPastedScript,
   resolveSunnyBanksScriptLocationId,
   sunnyBanksQueueChunks,
@@ -195,6 +196,20 @@ describe("parseSunnyBanksScriptBlock", () => {
       action: "leans on the tub",
       appearanceModifier: "cigarette behind ear",
     });
+  });
+
+  it("maps [Character Name: override] onto the next speaker and never mints an Idle ghost row", () => {
+    const chunks = parseSunnyBanksScriptBlock(
+      "[Character Name: override]\nShazza: You right?\n[Character Name:]\nDazza: Yeah nah."
+    );
+    expect(sunnyBanksQueueChunks(chunks)).toHaveLength(2);
+    expect(chunks[0]).toMatchObject({
+      characterName: "Shazza",
+      line: "You right?",
+      appearanceModifier: "override",
+    });
+    expect(chunks[1]).toMatchObject({ characterName: "Dazza", line: "Yeah nah." });
+    expect(chunks.every((chunk) => chunk.kind !== "scene" || chunk.line.length > 0)).toBe(true);
   });
 
   it("maps === THE EPISODE TAG === as a final in-memory scene chunk, not a queue row", () => {
@@ -452,5 +467,79 @@ describe("collectRenderedClips", () => {
         durationSec: undefined,
       },
     ]);
+  });
+
+  it("keeps a Done clip when a location tag prepends and speaker+dialogue still match", () => {
+    const clips = collectRenderedClips({
+      actIds: ["I"],
+      actScripts: {
+        I: "[Location: main_entrance_sign]\nShazza: You right?",
+      },
+      characterOverrides: { I: {} },
+      runtimeMap: {
+        I: {
+          0: {
+            lineKey: "Shazza: You right?",
+            status: "done",
+            videoUrl: "https://blob.example/i0.mp4",
+            characterName: "Shazza",
+            line: "You right?",
+          },
+        },
+      },
+    });
+    expect(clips).toEqual([
+      {
+        act: "I",
+        index: 0,
+        characterName: "Shazza",
+        lineLabel: "You right?",
+        videoUrl: "https://blob.example/i0.mp4",
+        durationSec: undefined,
+      },
+    ]);
+  });
+});
+
+describe("preserveRenderedRuntimes", () => {
+  it("rebinds a Done clip onto a later index when a new line is inserted above", () => {
+    const previous = {
+      0: {
+        lineKey: "Shazza: You right?",
+        status: "done" as const,
+        videoUrl: "https://blob.example/a.mp4",
+        characterName: "Shazza",
+        line: "You right?",
+      },
+    };
+    const chunks = parseSunnyBanksScriptBlock("Dazza: Yeah nah.\nShazza: You right?");
+    const next = preserveRenderedRuntimes(chunks, previous);
+    expect(next[0]).toBeUndefined();
+    expect(next[1]).toMatchObject({
+      status: "done",
+      videoUrl: "https://blob.example/a.mp4",
+      characterName: "Shazza",
+      line: "You right?",
+    });
+  });
+
+  it("keeps Done when only a tag-only look line is added, without creating a ghost Idle row", () => {
+    const previous = {
+      0: {
+        lineKey: "Shazza: You right?",
+        status: "done" as const,
+        videoUrl: "https://blob.example/a.mp4",
+        characterName: "Shazza",
+        line: "You right?",
+      },
+    };
+    const chunks = parseSunnyBanksScriptBlock(
+      "[Character Name: holding the bucket hat brim]\nShazza: You right?"
+    );
+    expect(sunnyBanksQueueChunks(chunks)).toHaveLength(1);
+    const next = preserveRenderedRuntimes(chunks, previous);
+    expect(Object.keys(next)).toEqual(["0"]);
+    expect(next[0]?.status).toBe("done");
+    expect(next[0]?.videoUrl).toBe("https://blob.example/a.mp4");
   });
 });

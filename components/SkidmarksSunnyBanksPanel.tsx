@@ -86,15 +86,25 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * uses `touch-pan-y overscroll-y-contain` so a thumb on the textarea
  * or a queue row pans the page instead of freezing inside a nested
  * scroller. Queue rows do **not** scroll horizontally (2026-09-17
- * overflow fix): line text and the location `<select>` shrink/truncate;
- * the status pill stays `flex-shrink-0` on the right. `touch-action:
- * pan-y` so a thumb still pages the sheet. No in-row 40px thumb
- * (live QA: those cluttered the queue — clips stay in the shelf).
+ * overflow fix): line text and the location `<select>` shrink/truncate
+ * (`truncate max-w-[120px]`); the status pill and a 40px preview box
+ * stay `flex-shrink-0` flush on the right. `touch-action: pan-y` so a
+ * thumb still pages the sheet.
+ *
+ * **Done clips survive a re-parse (2026-09-17, live QA)** —
+ * `preserveRenderedRuntimes` rebinds an in-memory `status === "done"`
+ * row onto the freshly parsed queue when speaker + dialogue still
+ * match, instead of idling it because the index or `lineKey` moved
+ * (a `[Location:]` prepend, a pasted God Script). **↩ Undo** beside
+ * the Act pills restores the previous script buffers so the queue
+ * recompiles to the last clean arrangement. Tag-only
+ * `[Character Name: override]` / `[Location:]` / `[Action:]` lines
+ * never mint their own Idle rows — they only stamp the next speaker.
  *
  * **Clips live in one Act-grouped strip (2026-09-17, live QA)** —
- * 40px thumbs in each dialogue row cluttered the queue. Rows are
- * text-only now. Finished MP4s sit in one `overflow-x-auto` row at
- * the base of the working panel (after the script, before the
+ * the dense row keeps a 40px preview of that line's Done clip, pinned
+ * with the status pill. Finished MP4s also sit in one `overflow-x-auto`
+ * row at the base of the working panel (after the script, before the
  * Episode workspace, same reading order as music-video rendered
  * clips then archive), same card size and `touch-pan-x` as
  * `SkidmarksRenderedClipsShelf` (`w-44` / `h-28`, inline controls),
@@ -219,9 +229,27 @@ type RowRuntime = {
   durationSec?: number;
   error?: string;
   audioMuxed?: boolean;
+  /** Speaker + dialogue at render time — used to keep a Done clip when
+   * the script is re-parsed (tags added, paste, undo) without a matching
+   * index/lineKey. */
+  characterName?: string;
+  line?: string;
 };
 
 type ActKeyed<T> = Record<SunnyBanksActId, T>;
+
+/** One-level undo of the Script card — previous textarea / act
+ * buffers + the runtime map they were compiled against. In-memory
+ * only; never `localStorage`. */
+interface ScriptUndoSnapshot {
+  actIds: SunnyBanksActId[];
+  activeAct: SunnyBanksActId;
+  actScripts: ActKeyed<string>;
+  characterOverrides: ActKeyed<Record<number, string>>;
+  locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
+  runtimeMap: ActKeyed<Record<number, RowRuntime>>;
+  workspaceTitle: string;
+}
 
 interface EpisodeWorkspace {
   id: string;
@@ -531,6 +559,78 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
   return chunks;
 }
 
+/** Speaker + spoken/hold text — stable across tag-only lines and a
+ * re-parse that would otherwise mint a new `raw` / index. */
+export function sunnyBanksDialogueKey(characterName: string, line: string): string {
+  return `${characterName}\n${line}`;
+}
+
+export function sunnyBanksRuntimeMatchesChunk(
+  stored: Pick<RowRuntime, "lineKey" | "characterName" | "line">,
+  chunk: Pick<SunnyBanksScriptChunk, "raw" | "characterName" | "line">
+): boolean {
+  if (stored.lineKey === chunk.raw) return true;
+  if (
+    typeof stored.characterName === "string" &&
+    typeof stored.line === "string" &&
+    sunnyBanksDialogueKey(stored.characterName, stored.line) ===
+      sunnyBanksDialogueKey(chunk.characterName, chunk.line)
+  ) {
+    return true;
+  }
+  const fromKey = matchSpeakerPrefix(stored.lineKey);
+  if (fromKey) {
+    return (
+      sunnyBanksDialogueKey(fromKey.name, fromKey.rest) ===
+      sunnyBanksDialogueKey(chunk.characterName, chunk.line)
+    );
+  }
+  return false;
+}
+
+/**
+ * Re-bind in-memory Done clips onto a freshly parsed queue. A tag-only
+ * `[Location:]` / `[Character:]` / `[Action:]` line must not idle a
+ * row whose speaker + dialogue still match a clip from this tab.
+ * Unmatched previous entries are not deleted — Undo can restore the
+ * script and they reattach.
+ */
+export function preserveRenderedRuntimes(
+  chunks: readonly SunnyBanksScriptChunk[],
+  previous: Record<number, RowRuntime>
+): Record<number, RowRuntime> {
+  const queue = sunnyBanksQueueChunks(chunks);
+  const claimed = new Set<number>();
+  const next: Record<number, RowRuntime> = {};
+  const attach = (oldIndex: number, chunk: SunnyBanksScriptChunk, newIndex: number) => {
+    claimed.add(oldIndex);
+    const stored = previous[oldIndex];
+    next[newIndex] = {
+      ...stored,
+      lineKey: chunk.raw,
+      characterName: chunk.characterName,
+      line: chunk.line,
+    };
+  };
+  queue.forEach((chunk, index) => {
+    if (previous[index] && !claimed.has(index) && sunnyBanksRuntimeMatchesChunk(previous[index], chunk)) {
+      attach(index, chunk, index);
+      return;
+    }
+    const oldIndex = Object.keys(previous)
+      .map((key) => Number(key))
+      .find(
+        (i) =>
+          !claimed.has(i) &&
+          previous[i]?.status === "done" &&
+          previous[i]?.videoUrl &&
+          sunnyBanksRuntimeMatchesChunk(previous[i], chunk)
+      );
+    if (oldIndex !== undefined) attach(oldIndex, chunk, index);
+  });
+  return next;
+}
+
 function statusPillLabel(status: RowStatus): string {
   if (status === "rendering") return "Rendering...";
   if (status === "done") return "Done";
@@ -602,12 +702,14 @@ export function collectRenderedClips(args: {
 }): SunnyBanksRenderedClip[] {
   const clips: SunnyBanksRenderedClip[] = [];
   for (const act of args.actIds) {
-    const chunks = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(args.actScripts[act] ?? ""));
+    const parsed = parseSunnyBanksScriptBlock(args.actScripts[act] ?? "");
+    const chunks = sunnyBanksQueueChunks(parsed);
     const runtimes = args.runtimeMap[act] ?? {};
+    const remapped = preserveRenderedRuntimes(parsed, runtimes);
     const overrides = args.characterOverrides[act] ?? {};
     chunks.forEach((chunk, index) => {
-      const stored = runtimes[index];
-      if (!stored || stored.lineKey !== chunk.raw || stored.status !== "done" || !stored.videoUrl) {
+      const stored = remapped[index];
+      if (!stored || stored.status !== "done" || !stored.videoUrl) {
         return;
       }
       clips.push({
@@ -660,6 +762,7 @@ export function SkidmarksSunnyBanksPanel() {
   const [clipsOpen, setClipsOpen] = useState(true);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [workspaceTitle, setWorkspaceTitle] = useState(DROP_BEARS_TITLE);
+  const [scriptUndo, setScriptUndo] = useState<ScriptUndoSnapshot | null>(null);
   const [bundleError, setBundleError] = useState<string | null>(null);
   const actStripRef = useRef<HTMLDivElement>(null);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
@@ -669,14 +772,15 @@ export function SkidmarksSunnyBanksPanel() {
   const scriptText = actScripts[activeAct] ?? "";
   const characterOverrides = characterOverridesByAct[activeAct] ?? {};
   const locationOverrides = locationOverridesByAct[activeAct] ?? {};
-  const runtimeMap = runtimeMapByAct[activeAct] ?? {};
   const parsed = useMemo(() => parseSunnyBanksScriptBlock(scriptText), [scriptText]);
+  const remappedRuntime = useMemo(
+    () => preserveRenderedRuntimes(parsed, runtimeMapByAct[activeAct] ?? {}),
+    [parsed, runtimeMapByAct, activeAct]
+  );
   const running = runningKind !== null;
 
   const runtimeFor = (index: number, raw: string): RowRuntime => {
-    const stored = runtimeMap[index];
-    if (stored && stored.lineKey === raw) return stored;
-    return { lineKey: raw, status: "idle" };
+    return remappedRuntime[index] ?? { lineKey: raw, status: "idle" };
   };
 
   const queue = sunnyBanksQueueChunks(parsed).map((chunk, index) => {
@@ -790,9 +894,15 @@ export function SkidmarksSunnyBanksPanel() {
     const act = activeAct;
     runningRef.current = true;
     const writeRuntime = (index: number, next: RowRuntime) => {
+      const row = queue[index];
+      const stamped: RowRuntime = {
+        ...next,
+        characterName: next.characterName ?? row?.characterName,
+        line: next.line ?? row?.line ?? "",
+      };
       setRuntimeMapByAct((prev) => ({
         ...prev,
-        [act]: { ...(prev[act] ?? {}), [index]: next },
+        [act]: { ...(prev[act] ?? {}), [index]: stamped },
       }));
     };
     try {
@@ -907,9 +1017,36 @@ export function SkidmarksSunnyBanksPanel() {
   const resolvedWorkspaceTitle = () =>
     workspaceTitle.trim() || workspaceLabelFromScripts(actScripts, "Sunny Banks episode", actIds);
 
+  const captureScriptUndo = () => {
+    setScriptUndo({
+      actIds: [...actIds],
+      activeAct,
+      actScripts: cloneActRecord(actScripts, actIds),
+      characterOverrides: cloneActRecord(characterOverridesByAct, actIds),
+      locationOverrides: cloneActRecord(locationOverridesByAct, actIds),
+      runtimeMap: cloneActRecord(runtimeMapByAct, actIds),
+      workspaceTitle,
+    });
+  };
+
+  const handleUndoScript = () => {
+    if (!scriptUndo || running) return;
+    setActIds([...scriptUndo.actIds]);
+    setActiveAct(scriptUndo.activeAct);
+    setActScripts(cloneActRecord(scriptUndo.actScripts, scriptUndo.actIds));
+    setCharacterOverridesByAct(cloneActRecord(scriptUndo.characterOverrides, scriptUndo.actIds));
+    setLocationOverridesByAct(cloneActRecord(scriptUndo.locationOverrides, scriptUndo.actIds));
+    setRuntimeMapByAct(cloneActRecord(scriptUndo.runtimeMap, scriptUndo.actIds));
+    setWorkspaceTitle(scriptUndo.workspaceTitle);
+    setScriptUndo(null);
+  };
+
   const handleScriptChange = (value: string) => {
     const decoded = decodeSunnyBanksPastedScript(value);
     const doc = parseSunnyBanksGodDocument(decoded, activeAct);
+    if (doc.hasActHeaders || decoded !== scriptText) {
+      captureScriptUndo();
+    }
     if (doc.episodeTitle) setWorkspaceTitle(doc.episodeTitle);
     if (!doc.hasActHeaders) {
       setActScripts((prev) => ({ ...prev, [activeAct]: decoded }));
@@ -1089,44 +1226,55 @@ export function SkidmarksSunnyBanksPanel() {
           </p>
         ) : (
           <>
-            <div
-              ref={actStripRef}
-              role="tablist"
-              aria-label="Act"
-              className="flex flex-row flex-nowrap gap-2 overflow-x-auto overscroll-x-contain whitespace-nowrap touch-pan-x pb-2 [-webkit-overflow-scrolling:touch] [scrollbar-width:none]"
-            >
-              {actIds.map((act) => {
-                const selected = act === activeAct;
-                const lineCount = sunnyBanksQueueChunks(
-                  parseSunnyBanksScriptBlock(actScripts[act] ?? "")
-                ).length;
-                return (
-                  <button
-                    key={act}
-                    type="button"
-                    role="tab"
-                    aria-selected={selected}
-                    onClick={() => setActiveAct(act)}
-                    disabled={running}
-                    className={[
-                      "min-h-[40px] shrink-0 rounded-full px-3.5 text-[12px] font-semibold transition-colors disabled:opacity-60",
-                      selected
-                        ? "bg-amber-300 text-zinc-950"
-                        : "bg-white/[0.04] text-white/70 ring-1 ring-inset ring-white/10",
-                    ].join(" ")}
-                  >
-                    Act {act}
-                    {lineCount > 0 ? ` · ${lineCount}` : ""}
-                  </button>
-                );
-              })}
+            <div className="flex min-w-0 items-start gap-2">
+              <div
+                ref={actStripRef}
+                role="tablist"
+                aria-label="Act"
+                className="flex min-w-0 flex-1 flex-row flex-nowrap gap-2 overflow-x-auto overscroll-x-contain whitespace-nowrap touch-pan-x pb-2 [-webkit-overflow-scrolling:touch] [scrollbar-width:none]"
+              >
+                {actIds.map((act) => {
+                  const selected = act === activeAct;
+                  const lineCount = sunnyBanksQueueChunks(
+                    parseSunnyBanksScriptBlock(actScripts[act] ?? "")
+                  ).length;
+                  return (
+                    <button
+                      key={act}
+                      type="button"
+                      role="tab"
+                      aria-selected={selected}
+                      onClick={() => setActiveAct(act)}
+                      disabled={running}
+                      className={[
+                        "min-h-[40px] shrink-0 rounded-full px-3.5 text-[12px] font-semibold transition-colors disabled:opacity-60",
+                        selected
+                          ? "bg-amber-300 text-zinc-950"
+                          : "bg-white/[0.04] text-white/70 ring-1 ring-inset ring-white/10",
+                      ].join(" ")}
+                    >
+                      Act {act}
+                      {lineCount > 0 ? ` · ${lineCount}` : ""}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={handleAddAct}
+                  disabled={running || actIds.length >= MAX_SUNNY_BANKS_ACTS}
+                  className="min-h-[40px] shrink-0 rounded-full bg-white/[0.04] px-3.5 text-[12px] font-semibold text-white/80 ring-1 ring-inset ring-white/10 disabled:opacity-60"
+                >
+                  + Add Act
+                </button>
+              </div>
               <button
                 type="button"
-                onClick={handleAddAct}
-                disabled={running || actIds.length >= MAX_SUNNY_BANKS_ACTS}
-                className="min-h-[40px] shrink-0 rounded-full bg-white/[0.04] px-3.5 text-[12px] font-semibold text-white/80 ring-1 ring-inset ring-white/10 disabled:opacity-60"
+                onClick={handleUndoScript}
+                disabled={!scriptUndo || running}
+                aria-label="Undo script"
+                className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
               >
-                + Add Act
+                ↩ Undo
               </button>
             </div>
             <button
@@ -1231,16 +1379,16 @@ export function SkidmarksSunnyBanksPanel() {
                                 </option>
                               ))}
                             </select>
-                            <div className="ml-auto flex shrink-0 items-center gap-1">
+                            <div className="ml-auto flex flex-shrink-0 items-center gap-1">
                               <span
                                 className={[
-                                  "shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
+                                  "flex-shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
                                   statusPillClass(status),
                                 ].join(" ")}
                               >
                                 {statusPillLabel(status)}
                               </span>
-                              <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md bg-black/40">
+                              <div className="h-10 w-10 flex-shrink-0 overflow-hidden rounded-md bg-black/40">
                                 {runtime.status === "done" && runtime.videoUrl ? (
                                   <video
                                     src={runtime.videoUrl}
