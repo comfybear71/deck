@@ -44,8 +44,10 @@ Everything in this file is about Skidmarks unless said otherwise.
   `buildSunnyBanksHoldPrompt`). Still not the full episode wizard (no
   Neon episode/beat rows, no last-frame chaining, no
   `lib/scriptSequenceRunner`) — the queue is local component state;
-  the bottom workspace shelf snapshots those buffers for this open
-  sheet only (not `localStorage`, not a new Neon table).
+  finished MP4s sit in one Act-grouped horizontal clip strip (not in
+  each dialogue row); the bottom workspace shelf snapshots those
+  buffers for this open sheet only (not `localStorage`, not a new Neon
+  table), always minting a new card, each with a red ✕.
   Sequential render stops on first failure. **This bullet was stale until 2026-09-17** (it used to
   say Sunnybank was still `enabled: false` with no flow at all — the
   real pilot landed 2026-09-15 without this file or README.md's

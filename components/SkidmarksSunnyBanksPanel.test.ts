@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseSunnyBanksScriptBlock, SUNNY_BANKS_ACTS } from "./SkidmarksSunnyBanksPanel";
+import {
+  collectRenderedClips,
+  fingerprintWorkspace,
+  mintWorkspaceId,
+  parseSunnyBanksScriptBlock,
+  SUNNY_BANKS_ACTS,
+} from "./SkidmarksSunnyBanksPanel";
 import { SUNNY_BANKS_CAST } from "@/lib/sunnyBanks";
 
 describe("parseSunnyBanksScriptBlock", () => {
@@ -55,5 +61,81 @@ describe("parseSunnyBanksScriptBlock", () => {
 describe("SUNNY_BANKS_ACTS", () => {
   it("is three in-panel act buffers, not a persisted episode schema", () => {
     expect(SUNNY_BANKS_ACTS).toEqual(["I", "II", "III"]);
+  });
+});
+
+describe("workspace save ids", () => {
+  const emptyActs = { I: "", II: "", III: "" };
+  const emptyMaps = { I: {}, II: {}, III: {} };
+  const base = {
+    defaultLocationId: "office_storefront",
+    activeAct: "I",
+    actScripts: emptyActs,
+    characterOverrides: emptyMaps,
+    locationOverrides: emptyMaps,
+    runtimeMap: emptyMaps,
+  };
+
+  it("mints a fresh id for every save even when the snapshot fingerprint matches", () => {
+    const fingerprint = fingerprintWorkspace(base);
+    const first = mintWorkspaceId(1_700_000_000_000, 1, fingerprint);
+    const second = mintWorkspaceId(1_700_000_000_000, 2, fingerprint);
+    expect(first).not.toBe(second);
+    expect(first).toContain(fingerprint);
+    expect(second).toContain(fingerprint);
+  });
+
+  it("changes the fingerprint when a clip URL lands, so a later save is a distinct card", () => {
+    const before = fingerprintWorkspace(base);
+    const after = fingerprintWorkspace({
+      ...base,
+      runtimeMap: {
+        I: { 0: { lineKey: "Shazza: You right?", status: "done", videoUrl: "https://blob.example/a.mp4" } },
+        II: {},
+        III: {},
+      },
+    });
+    expect(after).not.toBe(before);
+  });
+});
+
+describe("collectRenderedClips", () => {
+  it("only returns done clips with a video URL, grouped by the act they were rendered on", () => {
+    const clips = collectRenderedClips({
+      actScripts: {
+        I: "Shazza: You right?\nDazza: Yeah nah.",
+        II: "Nan:",
+        III: "",
+      },
+      characterOverrides: { I: {}, II: {}, III: {} },
+      runtimeMap: {
+        I: {
+          0: { lineKey: "Shazza: You right?", status: "done", videoUrl: "https://blob.example/i0.mp4" },
+          1: { lineKey: "Dazza: Yeah nah.", status: "failed", error: "nope" },
+        },
+        II: {
+          0: { lineKey: "Nan:", status: "done", videoUrl: "https://blob.example/ii0.mp4" },
+        },
+        III: {},
+      },
+    });
+    expect(clips).toEqual([
+      {
+        act: "I",
+        index: 0,
+        characterName: "Shazza",
+        lineLabel: "You right?",
+        videoUrl: "https://blob.example/i0.mp4",
+        durationSec: undefined,
+      },
+      {
+        act: "II",
+        index: 0,
+        characterName: "Nan",
+        lineLabel: "Silent hold",
+        videoUrl: "https://blob.example/ii0.mp4",
+        durationSec: undefined,
+      },
+    ]);
   });
 });
