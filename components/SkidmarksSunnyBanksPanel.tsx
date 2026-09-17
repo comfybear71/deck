@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useMemo, useRef, useState } from "react";
 import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
@@ -65,9 +64,10 @@ import {
  *
  * **Clips live in one Act-grouped strip (2026-09-17, live QA)** —
  * 40px thumbs in each dialogue row cluttered the queue. Rows are
- * text-only now. Finished MP4s sit in one `overflow-x-auto` row under
- * the script, sectioned Act I / II / III. Tap still opens the
- * body-portaled player. Workspace save always mints a new card
+ * text-only now. Finished MP4s sit in one `overflow-x-auto` row at
+ * the base of the panel, same card size and `touch-pan-x` as
+ * `SkidmarksRenderedClipsShelf` (`w-44` / `h-28`, inline controls),
+ * sectioned Act I / II / III. Workspace save always mints a new card
  * (`mintWorkspaceId` = timestamp + seq + content fingerprint) instead
  * of reusing `Date.now()` as a key that could collide on a double-tap.
  * Each saved card has a red ✕ that drops that snapshot only.
@@ -287,14 +287,6 @@ export function collectRenderedClips(args: {
   return clips;
 }
 
-function CloseIcon() {
-  return (
-    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
-      <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function ChevronIcon({ open }: { open: boolean }) {
   return (
     <svg
@@ -305,47 +297,6 @@ function ChevronIcon({ open }: { open: boolean }) {
     >
       <path d="M5 7.5l5 5 5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
-  );
-}
-
-function SunnyBanksClipLightbox({
-  videoUrl,
-  label,
-  onClose,
-}: {
-  videoUrl: string;
-  label: string;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  return createPortal(
-    <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
-      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
-        className="relative z-10 flex w-full max-w-sm flex-col gap-3 animate-[sheet-in_0.18s_ease-out]"
-      >
-        <video src={videoUrl} controls autoPlay playsInline className="w-full rounded-2xl" />
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="absolute -right-2 -top-2 flex h-10 w-10 items-center justify-center rounded-full bg-zinc-950 text-white/80 ring-1 ring-white/15"
-        >
-          <CloseIcon />
-        </button>
-      </div>
-    </div>,
-    document.body
   );
 }
 
@@ -369,7 +320,7 @@ export function SkidmarksSunnyBanksPanel() {
   const [progressText, setProgressText] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<EpisodeWorkspace[]>([]);
   const [shelfOpen, setShelfOpen] = useState(false);
-  const [playingClip, setPlayingClip] = useState<{ url: string; label: string } | null>(null);
+  const [clipsOpen, setClipsOpen] = useState(true);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
   const workspaceSaveSeqRef = useRef(0);
@@ -830,50 +781,7 @@ export function SkidmarksSunnyBanksPanel() {
         )}
       </div>
 
-      {clipsByAct.length > 0 && (
-        <div>
-          <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-white/40">Clips</p>
-          <div className="flex gap-3 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
-            {clipsByAct.map((group) => (
-              <div key={group.act} className="flex shrink-0 items-end gap-2">
-                <span className="mb-1 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-white/40">
-                  Act {group.act}
-                </span>
-                {group.clips.map((clip) => (
-                  <button
-                    key={`${clip.act}:${clip.index}:${clip.videoUrl}`}
-                    type="button"
-                    onClick={() =>
-                      setPlayingClip({
-                        url: clip.videoUrl,
-                        label: `Act ${clip.act} · Line ${clip.index + 1} — ${clip.characterName}`,
-                      })
-                    }
-                    aria-label={`Play Act ${clip.act} line ${clip.index + 1}, ${clip.characterName}`}
-                    className="flex w-[7.5rem] shrink-0 flex-col gap-1"
-                  >
-                    <span className="relative h-12 w-[7.5rem] overflow-hidden rounded-lg ring-1 ring-inset ring-white/20">
-                      <video
-                        src={clip.videoUrl}
-                        muted
-                        playsInline
-                        preload="metadata"
-                        className="h-full w-full object-cover"
-                      />
-                    </span>
-                    <span className="truncate text-left text-[10px] leading-tight text-white/60">
-                      {clip.characterName}
-                      {typeof clip.durationSec === "number" ? ` · ${clip.durationSec.toFixed(1)}s` : ""}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="sticky bottom-0 z-20 rounded-xl border border-white/10 bg-zinc-950/95">
+      <div className="rounded-xl border border-white/10 bg-zinc-950/95">
         <button
           type="button"
           onClick={() => setShelfOpen((open) => !open)}
@@ -940,13 +848,66 @@ export function SkidmarksSunnyBanksPanel() {
         )}
       </div>
 
-      {playingClip && (
-        <SunnyBanksClipLightbox
-          videoUrl={playingClip.url}
-          label={playingClip.label}
-          onClose={() => setPlayingClip(null)}
-        />
-      )}
+      <div className="flex flex-col gap-3 border-t border-white/10 pt-4">
+        <button
+          type="button"
+          onClick={() => setClipsOpen((open) => !open)}
+          aria-expanded={clipsOpen}
+          className="flex w-full items-center justify-between gap-2 text-left"
+        >
+          <span className="text-[11px] font-medium uppercase tracking-wide text-white/40">
+            Clips
+            <span aria-hidden className="ml-1.5 text-white/25">
+              {"\u00b7"} {renderedClips.length}
+            </span>
+          </span>
+          <ChevronIcon open={clipsOpen} />
+        </button>
+        {clipsOpen &&
+          (renderedClips.length === 0 ? (
+            <p className="text-[11px] leading-relaxed text-white/35">Nothing rendered yet.</p>
+          ) : (
+            <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+              {clipsByAct.map((group, groupIndex) => (
+                <div key={group.act} className="flex shrink-0 items-stretch gap-2.5">
+                  {groupIndex > 0 ? (
+                    <div aria-hidden className="w-px shrink-0 self-stretch bg-white/10" />
+                  ) : null}
+                  <div className="flex shrink-0 flex-col gap-1.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
+                      Act {group.act}
+                    </span>
+                    <div className="flex gap-2.5">
+                      {group.clips.map((clip) => (
+                        <div
+                          key={`${clip.act}:${clip.index}:${clip.videoUrl}`}
+                          className="flex w-44 shrink-0 touch-pan-x flex-col gap-1.5"
+                        >
+                          <video
+                            src={clip.videoUrl}
+                            controls
+                            playsInline
+                            preload="metadata"
+                            className="h-28 w-44 rounded-xl bg-black object-cover"
+                          />
+                          <p className="truncate text-[11px] font-medium leading-tight text-white/70">
+                            {clip.characterName}
+                            {typeof clip.durationSec === "number"
+                              ? ` \u00b7 ${clip.durationSec.toFixed(1)}s`
+                              : ""}
+                          </p>
+                          <p className="truncate text-[10px] leading-tight text-white/40">
+                            Line {clip.index + 1} · {clip.lineLabel}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+      </div>
     </div>
   );
 }

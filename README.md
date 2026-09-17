@@ -2206,8 +2206,10 @@ now (see "Explicitly out of scope" below).
     prompts), truncated line fragment, location `<select>`, Idle /
     Rendering... / Done pill — no in-row video thumb (live QA: those
     40px blocks cluttered the queue). Finished MP4s live in one
-    horizontal **Clips** strip under the script, sectioned Act I / II /
-    III; tap opens a body-portaled player (iOS Safari stacking). Speak/Hold still POST that location still as `startImageDataUrl`
+    default-open **Clips** shelf at the panel base, same card size and
+    `touch-pan-x` as `SkidmarksRenderedClipsShelf` (`w-44` / `h-28`,
+    inline `<video controls playsInline>`), sectioned Act I / II / III
+    with a divider between acts — not a lightbox. Speak/Hold still POST that location still as `startImageDataUrl`
     (the location canvas — Image 1) plus `locationId`/`locationImage`
     alongside `characterName`. The **route** (`lib/sunnyBanksComposite.ts`)
     then overlays the character hero as Image 2 via xAI edits (Studio
