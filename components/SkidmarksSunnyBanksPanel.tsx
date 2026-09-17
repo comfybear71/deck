@@ -68,9 +68,10 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * a typed Act IV is not dropped. The textarea and
  * queued rows collapse behind "Show Script Text & Queued Lines"
  * (default closed) so a 46-line EP02 paste doesn't bury the Clips
- * strip. `# EPISODE:`, `=== ACT`, `[Location: id]`, and `[Action: text]`
- * in a pasted God Script update the episode name, act buffers, park
- * plate (`startImageDataUrl` at render), and prompt suffix in memory —
+ * strip. `# EPISODE:`, `=== ACT`, `[Location: id]`, `[Action: text]`,
+ * and `[Character Name: look]` in a pasted God Script update the
+ * episode name, act buffers, park plate (`startImageDataUrl` at
+ * render), prompt suffix, and per-row `appearanceModifier` in memory —
  * not a Neon schema, not a layout change. The bottom shelf snapshots those buffers + location ids +
  * finished clip URLs as a named workspace card for this open
  * detail-sheet only (`mintWorkspaceId` = timestamp + seq + content
@@ -84,9 +85,11 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * **iPhone Safari vertical scroll (2026-09-17)** — the script wrapper
  * uses `touch-pan-y overscroll-y-contain` so a thumb on the textarea
  * or a queue row pans the page instead of freezing inside a nested
- * scroller. Queue rows still allow horizontal pan for the selects
- * (`touch-action: pan-x pan-y`) — `touch-pan-x` alone is what locked
- * vertical momentum on those rows.
+ * scroller. Queue rows do **not** scroll horizontally (2026-09-17
+ * overflow fix): line text and the location `<select>` shrink/truncate;
+ * the status pill stays `flex-shrink-0` on the right. `touch-action:
+ * pan-y` so a thumb still pages the sheet. No in-row 40px thumb
+ * (live QA: those cluttered the queue — clips stay in the shelf).
  *
  * **Clips live in one Act-grouped strip (2026-09-17, live QA)** —
  * 40px thumbs in each dialogue row cluttered the queue. Rows are
@@ -175,6 +178,8 @@ export interface SunnyBanksScriptChunk {
   locationId?: SunnyBanksLocationId;
   /** Extra LTX prompt context from `[Action: text]` — not spoken TTS. */
   action?: string;
+  /** Extra look text from `[Character Name: description]` — not gold. */
+  appearanceModifier?: string;
 }
 
 /** Speak/Hold rows only — scene headers stay in the parse array but
@@ -328,9 +333,11 @@ function extractGodScriptTags(raw: string): {
   rest: string;
   locationId?: SunnyBanksLocationId;
   actions: string[];
+  appearanceModifiers: string[];
 } {
   let locationId: SunnyBanksLocationId | undefined;
   const actions: string[] = [];
+  const appearanceModifiers: string[] = [];
   const rest = raw
     .replace(/\[Location:\s*([^\]]*)\]/gi, (_, token: string) => {
       const resolved = resolveSunnyBanksScriptLocationId(token);
@@ -342,9 +349,37 @@ function extractGodScriptTags(raw: string): {
       if (action) actions.push(action);
       return " ";
     })
+    .replace(/\[Character\s+[^:\]]+:\s*([^\]]*)\]/gi, (_, desc: string) => {
+      const appearance = desc.replace(/\s+/g, " ").trim();
+      if (appearance) appearanceModifiers.push(appearance);
+      return " ";
+    })
     .replace(/\s+/g, " ")
     .trim();
-  return { rest, locationId, actions };
+  return { rest, locationId, actions, appearanceModifiers };
+}
+
+/** iPhone paste of a URL-encoded script lands as literal `%20` / `%0A`
+ * (Stuart live QA: the textarea filled with percent signs instead of
+ * spaces and line breaks). Decode that blob before the parser runs.
+ * Leaves a normal typed script alone — including a lone `%` in dialogue. */
+export function decodeSunnyBanksPastedScript(text: string): string {
+  if (!/%(?:20|0[AaDd])/i.test(text)) return text;
+  const encodedNewlines = (text.match(/%0[AaDd]/gi) ?? []).length;
+  const realNewlines = (text.match(/\r|\n/g) ?? []).length;
+  const encodedSpaces = (text.match(/%20/g) ?? []).length;
+  const looksEncoded =
+    (encodedNewlines > 0 && encodedNewlines >= realNewlines) || encodedSpaces >= 3;
+  if (!looksEncoded) return text;
+  try {
+    return decodeURIComponent(text.replace(/\+/g, " "));
+  } catch {
+    return text
+      .replace(/%0D%0A/gi, "\n")
+      .replace(/%0A/gi, "\n")
+      .replace(/%0D/gi, "\n")
+      .replace(/%20/g, " ");
+  }
 }
 
 /** Append `[Action:]` text after a gold prompt. Does not rewrite gold. */
@@ -430,16 +465,20 @@ export function parseSunnyBanksGodDocument(text: string, fallbackActId: string =
  * records, never a guessed id). Empty dialogue after a speaker prefix
  * is a Hold. A line with no prefix continues the previous speaker.
  * Blank lines are skipped. God Script headers (`# EPISODE:`, `=== ACT`,
- * `[Location: id]`, `[Action: text]`) are not queue rows. `=== LABEL ===`
- * scene headers (e.g. `=== THE EPISODE TAG ===`) stay in the parse
- * array as `kind: "scene"` sequence chunks and are not spreadsheet
- * rows. Does not touch gold prompt strings.
+ * `[Location: id]`, `[Action: text]`, `[Character Name: look]`) are not
+ * queue rows. `=== LABEL ===` scene headers (e.g. `=== THE EPISODE TAG
+ * ===`) stay in the parse array as `kind: "scene"` sequence chunks and
+ * are not spreadsheet rows. `[Character Name: description]` strips the
+ * brackets and stores `description` as `appearanceModifier` on the
+ * next Speak/Hold row — gold look strings in `lib/sunnyBanks.ts` stay
+ * verbatim.
  */
 export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[] {
   const chunks: SunnyBanksScriptChunk[] = [];
   let previousName = "";
   let currentLocation: SunnyBanksLocationId = SUNNY_BANKS_DEFAULT_LOCATION_ID;
   let pendingActions: string[] = [];
+  let pendingAppearance: string[] = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const raw = rawLine.trim();
     if (!raw) continue;
@@ -458,6 +497,9 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     const tagged = extractGodScriptTags(raw);
     if (tagged.locationId) currentLocation = tagged.locationId;
     if (tagged.actions.length > 0) pendingActions = [...pendingActions, ...tagged.actions];
+    if (tagged.appearanceModifiers.length > 0) {
+      pendingAppearance = [...pendingAppearance, ...tagged.appearanceModifiers];
+    }
     if (!tagged.rest) continue;
     const matched = matchSpeakerPrefix(tagged.rest);
     let characterName: string;
@@ -473,6 +515,8 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     }
     const action = pendingActions.join(" ").trim();
     pendingActions = [];
+    const appearanceModifier = pendingAppearance.join(" ").trim();
+    pendingAppearance = [];
     const chunk: SunnyBanksScriptChunk = {
       raw: tagged.rest,
       characterName,
@@ -481,6 +525,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       locationId: currentLocation,
     };
     if (action) chunk.action = action;
+    if (appearanceModifier) chunk.appearanceModifier = appearanceModifier;
     chunks.push(chunk);
   }
   return chunks;
@@ -491,6 +536,13 @@ function statusPillLabel(status: RowStatus): string {
   if (status === "done") return "Done";
   if (status === "failed") return "Failed";
   return "Idle";
+}
+
+/** Closed-control fit at 390px — "Main Entrance Sign" → "Main Entrance".
+ * Full label stays on `title` / aria. Not a parser, not gold. */
+function compactQueueLocationLabel(label: string): string {
+  const words = label.trim().split(/\s+/);
+  return words.length <= 2 ? label : `${words[0]} ${words[1]}`;
 }
 
 function statusPillClass(status: RowStatus): string {
@@ -680,11 +732,18 @@ export function SkidmarksSunnyBanksPanel() {
     locationImage: string;
     startImageDataUrl: string;
     action?: string;
+    appearanceModifier?: string;
   }): Promise<
     | { ok: true; videoUrl: string; durationSec: number; audioMuxed?: boolean }
     | { ok: false; message: string }
   > => {
     const action = args.action?.trim() ?? "";
+    const appearanceModifier = args.appearanceModifier?.trim() ?? "";
+    // Route already appends `action` after gold — do not rewrite it.
+    // Fold appearance into that same suffix so LTX sees the look note
+    // without editing gold in lib/sunnyBanks.ts, and still send
+    // `appearanceModifier` next to `characterName` as its own field.
+    const actionPayload = [action, appearanceModifier].filter(Boolean).join(" ");
     const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -693,18 +752,20 @@ export function SkidmarksSunnyBanksPanel() {
           ? {
               kind: "hold",
               characterName: args.characterName,
+              ...(appearanceModifier ? { appearanceModifier } : {}),
               locationId: args.locationId,
               locationImage: args.locationImage,
               startImageDataUrl: args.startImageDataUrl,
-              ...(action ? { action } : {}),
+              ...(actionPayload ? { action: actionPayload } : {}),
             }
           : {
               characterName: args.characterName,
+              ...(appearanceModifier ? { appearanceModifier } : {}),
               line: args.line,
               locationId: args.locationId,
               locationImage: args.locationImage,
               startImageDataUrl: args.startImageDataUrl,
-              ...(action ? { action } : {}),
+              ...(actionPayload ? { action: actionPayload } : {}),
             }
       ),
     });
@@ -765,6 +826,7 @@ export function SkidmarksSunnyBanksPanel() {
             locationImage: row.location.image,
             startImageDataUrl,
             action: row.chunk.action,
+            appearanceModifier: row.chunk.appearanceModifier,
           });
           if (!result.ok) {
             writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: result.message });
@@ -824,7 +886,10 @@ export function SkidmarksSunnyBanksPanel() {
             ? buildSunnyBanksHoldPrompt(lock)
             : buildSunnyBanksSpeakingPrompt(lock, chunk.line)
           : "";
-        const prompt = appendSunnyBanksActionToPrompt(gold, chunk.action);
+        const prompt = appendSunnyBanksActionToPrompt(
+          gold,
+          [chunk.action, chunk.appearanceModifier].filter(Boolean).join(" ")
+        );
         prompts.push({
           act,
           index,
@@ -843,10 +908,11 @@ export function SkidmarksSunnyBanksPanel() {
     workspaceTitle.trim() || workspaceLabelFromScripts(actScripts, "Sunny Banks episode", actIds);
 
   const handleScriptChange = (value: string) => {
-    const doc = parseSunnyBanksGodDocument(value, activeAct);
+    const decoded = decodeSunnyBanksPastedScript(value);
+    const doc = parseSunnyBanksGodDocument(decoded, activeAct);
     if (doc.episodeTitle) setWorkspaceTitle(doc.episodeTitle);
     if (!doc.hasActHeaders) {
-      setActScripts((prev) => ({ ...prev, [activeAct]: value }));
+      setActScripts((prev) => ({ ...prev, [activeAct]: decoded }));
       return;
     }
     const nextIds = mergeSunnyBanksActIds(actIds, doc.actIds);
@@ -1082,6 +1148,17 @@ export function SkidmarksSunnyBanksPanel() {
                 <textarea
                   value={scriptText}
                   onChange={(e) => handleScriptChange(e.target.value)}
+                  onPaste={(e) => {
+                    const raw =
+                      e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
+                    const decoded = decodeSunnyBanksPastedScript(raw);
+                    if (decoded === raw) return;
+                    e.preventDefault();
+                    const el = e.currentTarget;
+                    const start = el.selectionStart ?? el.value.length;
+                    const end = el.selectionEnd ?? el.value.length;
+                    handleScriptChange(`${el.value.slice(0, start)}${decoded}${el.value.slice(end)}`);
+                  }}
                   disabled={running}
                   placeholder={"Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"}
                   rows={5}
@@ -1094,15 +1171,15 @@ export function SkidmarksSunnyBanksPanel() {
                 </p>
 
                 {queue.length > 0 && (
-                  <ol className="flex flex-col border-y border-white/10">
+                  <ol className="flex min-w-0 flex-col border-y border-white/10">
                     {queue.map((row) => {
                       const runtime = runtimeFor(row.index, row.chunk.raw);
                       const status = row.index === runningIndex ? "rendering" : runtime?.status ?? "idle";
                       const lineLabel =
                         row.kind === "hold" ? "Silent hold" : row.line;
                       return (
-                        <li key={`${activeAct}:${row.index}:${row.chunk.raw}`}>
-                          <div className="flex min-h-[44px] items-center gap-1.5 overflow-x-auto overscroll-x-contain py-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:none] [touch-action:pan-x_pan-y]">
+                        <li key={`${activeAct}:${row.index}:${row.chunk.raw}`} className="min-w-0">
+                          <div className="flex min-h-[44px] min-w-0 w-full items-center gap-1 overflow-hidden py-1 [touch-action:pan-y]">
                             <span className="w-4 shrink-0 text-center text-[10px] font-medium text-white/40">
                               {row.index + 1}
                             </span>
@@ -1116,7 +1193,7 @@ export function SkidmarksSunnyBanksPanel() {
                               }
                               disabled={running}
                               aria-label={`Character for line ${row.index + 1}`}
-                              className="min-h-[40px] min-w-[6.5rem] shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-1.5 text-[12px] text-white disabled:opacity-60"
+                              className="h-10 min-h-[40px] w-[4.75rem] max-w-[4.75rem] shrink-0 truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
                             >
                               {CAST_LIST.map((c) => (
                                 <option key={c.name} value={c.name} className="bg-zinc-900">
@@ -1129,7 +1206,7 @@ export function SkidmarksSunnyBanksPanel() {
                                 </option>
                               ))}
                             </select>
-                            <p className="min-w-[7rem] flex-1 truncate text-[12px] leading-snug text-white/90">
+                            <p className="min-w-0 max-w-[120px] flex-1 truncate text-[12px] leading-snug text-white/90">
                               {lineLabel}
                             </p>
                             <select
@@ -1144,23 +1221,38 @@ export function SkidmarksSunnyBanksPanel() {
                                 }))
                               }
                               disabled={running}
+                              title={row.location.label}
                               aria-label={`Location for line ${row.index + 1}`}
-                              className="min-h-[40px] min-w-[7rem] shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-1.5 text-[12px] text-white disabled:opacity-60"
+                              className="h-10 min-h-[40px] min-w-0 max-w-[120px] shrink truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
                             >
                               {LOCATION_LIST.map((location) => (
                                 <option key={location.id} value={location.id} className="bg-zinc-900">
-                                  {location.label}
+                                  {compactQueueLocationLabel(location.label)}
                                 </option>
                               ))}
                             </select>
-                            <span
-                              className={[
-                                "shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
-                                statusPillClass(status),
-                              ].join(" ")}
-                            >
-                              {statusPillLabel(status)}
-                            </span>
+                            <div className="ml-auto flex shrink-0 items-center gap-1">
+                              <span
+                                className={[
+                                  "shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
+                                  statusPillClass(status),
+                                ].join(" ")}
+                              >
+                                {statusPillLabel(status)}
+                              </span>
+                              <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md bg-black/40">
+                                {runtime.status === "done" && runtime.videoUrl ? (
+                                  <video
+                                    src={runtime.videoUrl}
+                                    className="h-10 w-10 object-cover"
+                                    muted
+                                    playsInline
+                                    preload="metadata"
+                                    aria-label={`Preview for line ${row.index + 1}`}
+                                  />
+                                ) : null}
+                              </div>
+                            </div>
                           </div>
                           {runtime?.status === "failed" && runtime.error && (
                             <p role="alert" className="pb-1.5 pl-5 text-[11px] leading-snug text-rose-300/90">
