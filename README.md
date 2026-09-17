@@ -2193,19 +2193,24 @@ now (see "Explicitly out of scope" below).
     has no separate hero file (already a single figure). Name sits in a
     bottom scrim, and an honest "not ready" label on anyone missing a
     locked ElevenLabs voice id (Hans, today).
-  - A **"Try one line"** form — pick any character who has a real
-    reference plate, then a **Location** native `<select>` of six locked
-    park plates (`SUNNY_BANKS_LOCATIONS`, default Office Storefront).
-    Speak/Hold still POST that location still as `startImageDataUrl`
+  - A **Script** card — a spacious textarea plus a **Location** native
+    `<select>` of six locked park plates (`SUNNY_BANKS_LOCATIONS`,
+    default Office Storefront) that seeds each parsed row. Newlines
+    become a vertical queue (`parseSunnyBanksScriptBlock` in
+    `components/SkidmarksSunnyBanksPanel.tsx`: `Name:` / `Name says:`,
+    empty dialogue = Hold, continuation lines keep the last speaker).
+    Each row has a detected character `<select>` (CAST keyed by name,
+    full lock still loaded on the server for gold prompts), the line
+    fragment, its own location `<select>`, and an Idle / Rendering... /
+    Done pill. Speak/Hold still POST that location still as `startImageDataUrl`
     (the location canvas — Image 1) plus `locationId`/`locationImage`
     alongside `characterName`. The **route** (`lib/sunnyBanksComposite.ts`)
     then overlays the character hero as Image 2 via xAI edits (Studio
     `plateCastIntoGen`), and only the composed still goes to LTX node
     `269`. The panel does **not** plate first — that was #120, and it
     would overlay twice once this route compositor is live. Not a
-    sequencer. Not a second Comfy image node. **Speak** needs a locked
-    ElevenLabs voice as well:
-    type a line, tap "Generate speak beat" to render one real clip via
+    second Comfy image node. **Speak** needs a locked ElevenLabs voice as well.
+    Tap **Render N lines** to walk the queue sequentially via
     `POST /api/skidmarks/sunnybank/generate-speak-beat`: ElevenLabs
     text-to-speech (`lib/elevenLabsSpeech.ts`, keyed off the same
     `ELEVENLABS_API_KEY` Scribe transcription already uses — this is
@@ -2216,27 +2221,26 @@ now (see "Explicitly out of scope" below).
     `COMFY_CLOUD_API_KEY`) — same graph, same identity-holding LoRA,
     only the driving audio's source and the prompt text (Sunny Banks'
     own verbatim gold-doc look/style locks, not Skidmarks' 3D-noir
-    vocabulary) are new. **Silent Hold (2026-09-17)** sits next to
-    Speak on the same form: no line required, no ElevenLabs call.
+    vocabulary) are new. **Silent Hold (2026-09-17)** is a script line
+    with no dialogue after the speaker name: no ElevenLabs call.
     Same route with `kind: "hold"`, a 5s silent MP3
     (`lib/silentMp3.ts`, `SUNNY_BANKS_HOLD_DURATION_SEC` — LTX still
     needs a `LoadAudio` input; silence is the honest one for "No
-    dialogue"), `buildSunnyBanksHoldPrompt` as the motion text, still
-    one paid Comfy Cloud LTX clip per tap. The result plays inline
-    once done; no shelf/persistence-listing route yet (see below).
-  - **Deliberately still just this one pilot slice** — Grok's own
-    relayed scope for it: "render one speak beat, then stop." No
-    episode/beat model, no script parser, no per-beat pathname/shelf
-    (renders upload to a plain timestamped Blob path, not the
-    per-`(segmentId, plateId)` invariant the music-video render path
-    enforces), no last-frame chaining between beats, and — same
-    "never wire a whole-song/episode auto-render" cost lock as the
-    music-video flow — **never a batch render across a whole episode**.
-    Each of those already has real, working infrastructure elsewhere in
-    this app (`lib/clipRenderBlob.ts`, `lib/scriptSequenceRunner.ts`,
-    `lib/serverVideoFrame.ts`) that this will reuse once a real episode
-    model exists to hang it off, not something to build speculatively
-    ahead of that.
+    dialogue"), `buildSunnyBanksHoldPrompt` as the motion text. Each
+    finished MP4 plays inline under its own queue row. One clip at a
+    time; a failed line stops the rest so they are not billed.
+  - **Still not the episode wizard** — Grok's own earlier scope was
+    "render one speak beat, then stop." There is still no Neon
+    episode/beat model, no `lib/scriptSequenceRunner`, no per-beat
+    pathname/shelf (renders upload to a plain timestamped Blob path, not
+    the per-`(segmentId, plateId)` invariant the music-video render path
+    enforces), and no last-frame chaining between beats. Sequential
+    script Render is panel-local, explicit, and stops on failure — it is
+    **not** music-video whole-song auto-render. Each of those already has
+    real, working infrastructure elsewhere in this app (`lib/clipRenderBlob.ts`,
+    `lib/scriptSequenceRunner.ts`, `lib/serverVideoFrame.ts`) that this
+    will reuse once a real episode model exists to hang it off, not
+    something to build speculatively ahead of that.
   - **Honesty note**: not live-verified in this sandbox — no
     `ELEVENLABS_API_KEY`/`COMFY_CLOUD_API_KEY` configured here. The
     request/response shapes are correct per each provider's own
