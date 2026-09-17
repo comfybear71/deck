@@ -252,4 +252,91 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(body.persistError).toContain("Blob store not configured");
     expect(body.videoUrl).toMatch(/^data:video\/mp4;base64,/);
   });
+
+  function holdBeatRequest(overrides: Record<string, unknown> = {}): Request {
+    return postRequest({
+      kind: "hold",
+      characterName: "Shazza",
+      startImageDataUrl: TINY_DATA_URL,
+      ...overrides,
+    });
+  }
+
+  it("hold: skips ElevenLabs, uses the gold hold prompt, and still runs the LTX pipeline", async () => {
+    mockUploads("start.png", "hold.mp3");
+    mockSubmit();
+    mockJobPoll();
+    const videoBytes = new Uint8Array([3, 3, 3]);
+    mockDownload(videoBytes);
+    putMock.mockResolvedValueOnce({ url: "https://blob.vercel-storage.com/sunnybanks/hold-beats/1-shazza.mp4" });
+
+    const res = await POST(holdBeatRequest({ line: "" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({
+      videoUrl: "https://blob.vercel-storage.com/sunnybanks/hold-beats/1-shazza.mp4",
+      character: "Shazza",
+      kind: "hold",
+      persisted: true,
+    });
+    expect(body.durationSec).toBeGreaterThan(4.5);
+    expect(body.durationSec).toBeLessThanOrEqual(15);
+
+    const firstUrl = String(fetchMock.mock.calls[0][0]);
+    expect(firstUrl).not.toContain("elevenlabs.io");
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    expect(submitCallIndex).toBeGreaterThanOrEqual(0);
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body).prompt;
+    const promptNode = Object.values(graph as Record<string, { inputs?: Record<string, unknown> }>).find(
+      (node) => typeof node.inputs?.value === "string" && (node.inputs.value as string).includes("No dialogue")
+    );
+    expect(promptNode?.inputs?.value).toContain("No dialogue. Camera holds, no cuts.");
+    expect(promptNode?.inputs?.value).toContain("rubbery adult cartoon");
+    expect(promptNode?.inputs?.value).not.toContain("says:");
+    expect(promptNode?.inputs?.value).not.toContain("face entirely hidden in shadow");
+
+    expect(String(putMock.mock.calls[0][0])).toContain("sunnybanks/hold-beats/");
+    expect(Buffer.compare(putMock.mock.calls[0][1], Buffer.from(videoBytes))).toBe(0);
+  });
+
+  it("hold: does not require a locked voice (Hans has none) and does not require a line", async () => {
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/hans-hold.mp4" });
+
+    const res = await POST(holdBeatRequest({ characterName: "Hans" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.kind).toBe("hold");
+    expect(body.character).toBe("Hans");
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("elevenlabs.io");
+  });
+
+  it("hold: still needs COMFY_CLOUD_API_KEY, even with no ElevenLabs key", async () => {
+    vi.stubEnv("ELEVENLABS_API_KEY", "");
+    vi.stubEnv("COMFY_CLOUD_API_KEY", "");
+    const res = await POST(holdBeatRequest());
+    expect(res.status).toBe(501);
+    const body = await res.json();
+    expect(body.code).toBe("missing_api_key");
+    expect(body.error).toContain("COMFY_CLOUD_API_KEY");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("hold: with ElevenLabs unset but Comfy set, never calls ElevenLabs", async () => {
+    vi.stubEnv("ELEVENLABS_API_KEY", "");
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/hold.mp4" });
+
+    const res = await POST(holdBeatRequest());
+    expect(res.status).toBe(200);
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("elevenlabs.io");
+  });
 });

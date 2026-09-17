@@ -224,6 +224,20 @@ export function buildSunnyBanksSpeakingPrompt(character: SunnyBanksCharacterLock
 }
 
 /**
+ * Fixed Hold length — not a picker. Matches the director-brain default
+ * (~5s) and sits inside LTX's `[2, 15]`s audio/duration window
+ * (`MIN_LTX_AUDIO_INPUT_SEC` / `MAX_LTX_CLIP_DURATION_SEC` on the
+ * speak-beat route). Speak beats still take their duration from the
+ * real ElevenLabs audio; Holds have no speech, so this is the one
+ * number the silent-MP3 + graph duration both use.
+ */
+export const SUNNY_BANKS_HOLD_DURATION_SEC = 5;
+
+function slugifySunnyBanksCharacterName(characterName: string): string {
+  return characterName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "character";
+}
+
+/**
  * Blob pathname for one rendered speak-beat clip — deliberately the
  * simplest thing that works for the pilot (Grok's own "smallest slice
  * that proves..." scope): one timestamped file per render, no per-beat
@@ -236,8 +250,14 @@ export function buildSunnyBanksSpeakingPrompt(character: SunnyBanksCharacterLock
  * collapsed to `-`) since it can contain a space ("Ranger Bazza").
  */
 export function buildSunnyBanksSpeakBeatPathname(characterName: string, timestampMs: number): string {
-  const slug = characterName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "character";
-  return `sunnybanks/speak-beats/${timestampMs}-${slug}.mp4`;
+  return `sunnybanks/speak-beats/${timestampMs}-${slugifySunnyBanksCharacterName(characterName)}.mp4`;
+}
+
+/** Same timestamped-file shape as a speak beat, under its own prefix so
+ * a Hold never collides with a Speak of the same character in the same
+ * millisecond. Same disclosed gap (no per-beat identity / prune). */
+export function buildSunnyBanksHoldBeatPathname(characterName: string, timestampMs: number): string {
+  return `sunnybanks/hold-beats/${timestampMs}-${slugifySunnyBanksCharacterName(characterName)}.mp4`;
 }
 
 /**

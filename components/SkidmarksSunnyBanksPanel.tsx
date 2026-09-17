@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
-import { SUNNY_BANKS_CAST } from "@/lib/sunnyBanks";
+import { SUNNY_BANKS_CAST, SUNNY_BANKS_HOLD_DURATION_SEC } from "@/lib/sunnyBanks";
 
 /**
  * Sunny Banks' own first real screen (2026-09-15) — the thing that
@@ -18,11 +19,19 @@ import { SUNNY_BANKS_CAST } from "@/lib/sunnyBanks";
  * this confirms the render itself looks and sounds right on a real
  * device.
  *
- * **A character only shows as selectable once it has both a real voice
- * id and a real reference plate** — Hans (no voice yet) and any future
- * guest without a plate show in the cast strip so Stuart can see who's
- * missing what, but never as something this screen would try to render
- * with a stand-in.
+ * **A character only shows as Speak-selectable once it has both a real
+ * voice id and a real reference plate** — Hans (no voice yet, no plate)
+ * and any future guest without a plate show in the cast strip so Stuart
+ * can see who's missing what, but never as something this screen would
+ * try to render with a stand-in. A Hold only needs the plate (no TTS),
+ * so a plate-without-voice character could still Hold; today none of
+ * the six regulars are in that state.
+ *
+ * **Silent Hold (2026-09-17)** — a second one-clip tap next to Speak.
+ * Bypasses ElevenLabs. Still a real paid Comfy Cloud LTX render of a
+ * fixed 5s pause (`SUNNY_BANKS_HOLD_DURATION_SEC`) using
+ * `buildSunnyBanksHoldPrompt`. Same route, `kind: "hold"`. Not a
+ * timeline, not a batch, not a new schema.
  */
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
@@ -33,40 +42,57 @@ const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
  * below once he has a voice + plate — this only hides the strip. */
 const SERIES_REGULARS = CAST_LIST.filter((c) => !c.guest);
 
-type GenerateSpeakBeatResult =
-  | { ok: true; videoUrl: string; durationSec: number }
+type BeatKind = "speak" | "hold";
+
+type GenerateBeatResult =
+  | { ok: true; videoUrl: string; durationSec: number; kind: BeatKind }
   | { ok: false; message: string };
 
-interface GenerateSpeakBeatResponseBody {
+interface GenerateBeatResponseBody {
   videoUrl?: unknown;
   durationSec?: unknown;
   error?: unknown;
+  kind?: unknown;
 }
 
+const HOLD_COST_USD = estimateLtxClipRenderCostUsd(SUNNY_BANKS_HOLD_DURATION_SEC);
+
 export function SkidmarksSunnyBanksPanel() {
-  const readyCast = CAST_LIST.filter((c) => c.voiceId && c.referenceImage);
-  const [selectedName, setSelectedName] = useState<string>(readyCast[0]?.name ?? "");
+  const plateCast = CAST_LIST.filter((c) => c.referenceImage);
+  const [selectedName, setSelectedName] = useState<string>(plateCast[0]?.name ?? "");
   const [line, setLine] = useState("");
-  const [running, setRunning] = useState(false);
+  const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
-  const [result, setResult] = useState<GenerateSpeakBeatResult | null>(null);
+  const [result, setResult] = useState<GenerateBeatResult | null>(null);
 
-  const selected = readyCast.find((c) => c.name === selectedName);
+  const selected = plateCast.find((c) => c.name === selectedName);
+  const running = runningKind !== null;
+  const canSpeak = !!(selected?.voiceId && selected.referenceImage && line.trim());
+  const canHold = !!selected?.referenceImage;
 
-  const handleGenerate = async () => {
-    if (!selected?.voiceId || !selected.referenceImage || !line.trim() || running) return;
-    setRunning(true);
+  const handleGenerate = async (kind: BeatKind) => {
+    if (!selected?.referenceImage || running) return;
+    if (kind === "speak" && (!selected.voiceId || !line.trim())) return;
+    setRunningKind(kind);
     setResult(null);
     setProgressText(`Getting ${selected.name}'s reference plate ready…`);
     try {
       const startImageDataUrl = await resolvePlateReferenceDataUrl(selected.referenceImage);
-      setProgressText(`Rendering ${selected.name}'s line — this can take a minute or two…`);
+      setProgressText(
+        kind === "hold"
+          ? `Rendering ${selected.name}'s silent hold (~${SUNNY_BANKS_HOLD_DURATION_SEC}s) — this can take a minute or two…`
+          : `Rendering ${selected.name}'s line — this can take a minute or two…`
+      );
       const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ characterName: selected.name, line, startImageDataUrl }),
+        body: JSON.stringify(
+          kind === "hold"
+            ? { kind: "hold", characterName: selected.name, startImageDataUrl }
+            : { characterName: selected.name, line, startImageDataUrl }
+        ),
       });
-      const body = (await res.json()) as GenerateSpeakBeatResponseBody;
+      const body = (await res.json()) as GenerateBeatResponseBody;
       const videoUrl = typeof body.videoUrl === "string" ? body.videoUrl : "";
       if (!res.ok || !videoUrl) {
         setResult({
@@ -75,11 +101,19 @@ export function SkidmarksSunnyBanksPanel() {
         });
         return;
       }
-      setResult({ ok: true, videoUrl, durationSec: typeof body.durationSec === "number" ? body.durationSec : 0 });
+      setResult({
+        ok: true,
+        videoUrl,
+        durationSec: typeof body.durationSec === "number" ? body.durationSec : 0,
+        kind: body.kind === "hold" ? "hold" : "speak",
+      });
     } catch (err) {
-      setResult({ ok: false, message: err instanceof Error ? err.message : "Could not render this line." });
+      setResult({
+        ok: false,
+        message: err instanceof Error ? err.message : kind === "hold" ? "Could not render this hold." : "Could not render this line.",
+      });
     } finally {
-      setRunning(false);
+      setRunningKind(null);
       setProgressText(null);
     }
   };
@@ -135,9 +169,9 @@ export function SkidmarksSunnyBanksPanel() {
 
       <div className="flex flex-col gap-2.5 rounded-2xl border border-amber-300/25 bg-amber-300/[0.03] p-4">
         <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">Try one line</p>
-        {readyCast.length === 0 ? (
+        {plateCast.length === 0 ? (
           <p className="text-[12px] leading-relaxed text-white/40">
-            No character has both a locked voice and a reference plate yet.
+            No character has a reference plate yet.
           </p>
         ) : (
           <>
@@ -147,9 +181,10 @@ export function SkidmarksSunnyBanksPanel() {
               disabled={running}
               className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white disabled:opacity-60"
             >
-              {readyCast.map((c) => (
+              {plateCast.map((c) => (
                 <option key={c.name} value={c.name} className="bg-zinc-900">
                   {c.name}
+                  {!c.voiceId ? " (no voice — hold only)" : ""}
                 </option>
               ))}
             </select>
@@ -161,14 +196,29 @@ export function SkidmarksSunnyBanksPanel() {
               rows={3}
               className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
             />
-            <button
-              type="button"
-              onClick={handleGenerate}
-              disabled={running || !selected || !line.trim()}
-              className="rounded-full bg-amber-300 px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {running ? "Rendering…" : "Generate speak beat"}
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => void handleGenerate("speak")}
+                disabled={running || !canSpeak}
+                className="rounded-full bg-amber-300 px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {runningKind === "speak" ? "Rendering…" : "Generate speak beat"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleGenerate("hold")}
+                disabled={running || !canHold}
+                className="rounded-full border border-white/15 bg-white/[0.04] px-3.5 py-2 text-sm font-semibold text-white/85 transition-colors hover:bg-white/[0.08] active:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {runningKind === "hold" ? "Rendering…" : "Generate silent hold"}
+              </button>
+            </div>
+            <p className="text-[10px] leading-snug text-white/40">
+              Speak is voice + LTX. Hold skips ElevenLabs — still a real Comfy Cloud LTX
+              render, {SUNNY_BANKS_HOLD_DURATION_SEC}s, ~${HOLD_COST_USD.toFixed(2)} (stand-in
+              rate). One clip at a time.
+            </p>
           </>
         )}
         {progressText && (
@@ -184,7 +234,7 @@ export function SkidmarksSunnyBanksPanel() {
         {result?.ok && (
           <div className="flex flex-col gap-1.5">
             <p role="status" className="text-[11px] leading-snug text-emerald-300/85">
-              Done — {result.durationSec.toFixed(1)}s.
+              Done — {result.kind === "hold" ? "silent hold" : "speak"} · {result.durationSec.toFixed(1)}s.
             </p>
             <video src={result.videoUrl} controls playsInline className="w-full rounded-xl" />
           </div>
