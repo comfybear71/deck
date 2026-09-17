@@ -23,6 +23,7 @@ import {
   submitComfyCloudWorkflow,
   uploadComfyCloudInput,
 } from "@/lib/comfyCloud";
+import { muxClipAudio } from "@/lib/muxClipAudio";
 
 /**
  * POST /api/skidmarks/sunnybank/generate-speak-beat — the first real
@@ -52,6 +53,16 @@ import {
  * `startImageDataUrl` is the location canvas, `characterName` loads
  * the hero overlay, the composed still is what Comfy LoadImage gets.
  * Gold Hold/Speak strings unchanged. The LTX JSON is not edited.
+ *
+ * **Audio mux (2026-09-17)** — PR #123 padded a short TTS MP3 so
+ * LoadAudio (276) met LTX's 2s floor. That padded file *is* the
+ * driving audio. SaveVideo (341) still writes a video-only (or
+ * unused-audio) MP4, so lips moved and the phone played silence.
+ * After download, `muxClipAudio` bakes the same `audioBytes` (padded
+ * Speak TTS, or Hold silence) into the container (`-map 0:v:0
+ * -map 1:a:0`). A mux failure never discards the paid LTX video —
+ * `audioMuxed: false` is the honest flag, same "never throw away a
+ * render Stuart already paid for" rule as a Blob miss.
  *
  * **Real per-beat pathname/shelf, resume-on-failure, last-frame
  * chaining between beats — all deliberately out of scope for this
@@ -318,12 +329,20 @@ async function runLtxAndPersist(args: {
     return NextResponse.json({ error: downloadResult.error, code: downloadResult.code }, { status: downloadResult.status });
   }
 
+  // Bake the same MP3 LoadAudio already used (padded TTS or Hold
+  // silence) into the MP4. LTX SaveVideo does not reliably keep that
+  // track — live QA: lips moved, no sound. A failed mux still returns
+  // the paid picture.
+  const muxed = await muxClipAudio(downloadResult.bytes, args.audioBytes);
+  const videoBytes = muxed.ok ? muxed.bytes : downloadResult.bytes;
+  const audioMuxed = muxed.ok;
+
   const pathname =
     args.kind === "hold"
       ? buildSunnyBanksHoldBeatPathname(args.character.name, Date.now())
       : buildSunnyBanksSpeakBeatPathname(args.character.name, Date.now());
   try {
-    const blob = await put(pathname, Buffer.from(downloadResult.bytes), {
+    const blob = await put(pathname, Buffer.from(videoBytes), {
       access: "public",
       contentType: "video/mp4",
       addRandomSuffix: false,
@@ -334,18 +353,22 @@ async function runLtxAndPersist(args: {
       character: args.character.name,
       kind: args.kind,
       persisted: true,
+      audioMuxed,
+      ...(muxed.ok ? {} : { audioMuxError: muxed.message }),
     });
   } catch (err) {
     // Same "never throw away a render Stuart already paid for" rule as
     // every other backend in this app — a Blob failure still returns
     // the real bytes as a data: URL, honestly flagged as not saved.
     return NextResponse.json({
-      videoUrl: `data:video/mp4;base64,${Buffer.from(downloadResult.bytes).toString("base64")}`,
+      videoUrl: `data:video/mp4;base64,${Buffer.from(videoBytes).toString("base64")}`,
       durationSec: args.durationSec,
       character: args.character.name,
       kind: args.kind,
       persisted: false,
       persistError: err instanceof Error ? err.message : "Vercel Blob upload failed for an unknown reason.",
+      audioMuxed,
+      ...(muxed.ok ? {} : { audioMuxError: muxed.message }),
     });
   }
 }
