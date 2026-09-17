@@ -2206,10 +2206,12 @@ now (see "Explicitly out of scope" below).
     prompts), truncated line fragment, location `<select>`, Idle /
     Rendering... / Done pill — no in-row video thumb (live QA: those
     40px blocks cluttered the queue). Finished MP4s live in one
-    default-open **Clips** shelf at the panel base, same card size and
+    default-open **Clips** shelf after the script (same card size and
     `touch-pan-x` as `SkidmarksRenderedClipsShelf` (`w-44` / `h-28`,
     inline `<video controls playsInline>`), sectioned Act I / II / III
-    with a divider between acts — not a lightbox. Speak/Hold still POST that location still as `startImageDataUrl`
+    with a divider between acts — not a lightbox). A collapsible
+    **Episode workspace** bar sits under that strip, same reading
+    order as music-video rendered-clips then archive. Speak/Hold still POST that location still as `startImageDataUrl`
     (the location canvas — Image 1) plus `locationId`/`locationImage`
     alongside `characterName`. The **route** (`lib/sunnyBanksComposite.ts`)
     then overlays the character hero as Image 2 via xAI edits (Studio

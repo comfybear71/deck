@@ -65,7 +65,9 @@ import {
  * **Clips live in one Act-grouped strip (2026-09-17, live QA)** —
  * 40px thumbs in each dialogue row cluttered the queue. Rows are
  * text-only now. Finished MP4s sit in one `overflow-x-auto` row at
- * the base of the panel, same card size and `touch-pan-x` as
+ * the base of the working panel (after the script, before the
+ * Episode workspace, same reading order as music-video rendered
+ * clips then archive), same card size and `touch-pan-x` as
  * `SkidmarksRenderedClipsShelf` (`w-44` / `h-28`, inline controls),
  * sectioned Act I / II / III. Workspace save always mints a new card
  * (`mintWorkspaceId` = timestamp + seq + content fingerprint) instead
@@ -781,6 +783,67 @@ export function SkidmarksSunnyBanksPanel() {
         )}
       </div>
 
+      <div className="flex flex-col gap-3 border-t border-white/10 pt-4">
+        <button
+          type="button"
+          onClick={() => setClipsOpen((open) => !open)}
+          aria-expanded={clipsOpen}
+          className="flex w-full items-center justify-between gap-2 text-left"
+        >
+          <span className="text-[11px] font-medium uppercase tracking-wide text-white/40">
+            Clips
+            <span aria-hidden className="ml-1.5 text-white/25">
+              {"\u00b7"} {renderedClips.length}
+            </span>
+          </span>
+          <ChevronIcon open={clipsOpen} />
+        </button>
+        {clipsOpen &&
+          (renderedClips.length === 0 ? (
+            <p className="text-[11px] leading-relaxed text-white/35">Nothing rendered yet.</p>
+          ) : (
+            <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+              {clipsByAct.map((group, groupIndex) => (
+                <div key={group.act} className="flex shrink-0 items-stretch gap-2.5">
+                  {groupIndex > 0 ? (
+                    <div aria-hidden className="w-px shrink-0 self-stretch bg-white/10" />
+                  ) : null}
+                  <div className="flex shrink-0 flex-col gap-1.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
+                      Act {group.act}
+                    </span>
+                    <div className="flex gap-2.5">
+                      {group.clips.map((clip) => (
+                        <div
+                          key={`${clip.act}:${clip.index}:${clip.videoUrl}`}
+                          className="flex w-44 shrink-0 touch-pan-x flex-col gap-1.5"
+                        >
+                          <video
+                            src={clip.videoUrl}
+                            controls
+                            playsInline
+                            preload="metadata"
+                            className="h-28 w-44 rounded-xl bg-black object-cover"
+                          />
+                          <p className="truncate text-[11px] font-medium leading-tight text-white/70">
+                            {clip.characterName}
+                            {typeof clip.durationSec === "number"
+                              ? ` \u00b7 ${clip.durationSec.toFixed(1)}s`
+                              : ""}
+                          </p>
+                          <p className="truncate text-[10px] leading-tight text-white/40">
+                            Line {clip.index + 1} · {clip.lineLabel}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+      </div>
+
       <div className="rounded-xl border border-white/10 bg-zinc-950/95">
         <button
           type="button"
@@ -846,67 +909,6 @@ export function SkidmarksSunnyBanksPanel() {
             )}
           </div>
         )}
-      </div>
-
-      <div className="flex flex-col gap-3 border-t border-white/10 pt-4">
-        <button
-          type="button"
-          onClick={() => setClipsOpen((open) => !open)}
-          aria-expanded={clipsOpen}
-          className="flex w-full items-center justify-between gap-2 text-left"
-        >
-          <span className="text-[11px] font-medium uppercase tracking-wide text-white/40">
-            Clips
-            <span aria-hidden className="ml-1.5 text-white/25">
-              {"\u00b7"} {renderedClips.length}
-            </span>
-          </span>
-          <ChevronIcon open={clipsOpen} />
-        </button>
-        {clipsOpen &&
-          (renderedClips.length === 0 ? (
-            <p className="text-[11px] leading-relaxed text-white/35">Nothing rendered yet.</p>
-          ) : (
-            <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
-              {clipsByAct.map((group, groupIndex) => (
-                <div key={group.act} className="flex shrink-0 items-stretch gap-2.5">
-                  {groupIndex > 0 ? (
-                    <div aria-hidden className="w-px shrink-0 self-stretch bg-white/10" />
-                  ) : null}
-                  <div className="flex shrink-0 flex-col gap-1.5">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
-                      Act {group.act}
-                    </span>
-                    <div className="flex gap-2.5">
-                      {group.clips.map((clip) => (
-                        <div
-                          key={`${clip.act}:${clip.index}:${clip.videoUrl}`}
-                          className="flex w-44 shrink-0 touch-pan-x flex-col gap-1.5"
-                        >
-                          <video
-                            src={clip.videoUrl}
-                            controls
-                            playsInline
-                            preload="metadata"
-                            className="h-28 w-44 rounded-xl bg-black object-cover"
-                          />
-                          <p className="truncate text-[11px] font-medium leading-tight text-white/70">
-                            {clip.characterName}
-                            {typeof clip.durationSec === "number"
-                              ? ` \u00b7 ${clip.durationSec.toFixed(1)}s`
-                              : ""}
-                          </p>
-                          <p className="truncate text-[10px] leading-tight text-white/40">
-                            Line {clip.index + 1} · {clip.lineLabel}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ))}
       </div>
     </div>
   );
