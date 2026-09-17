@@ -2193,16 +2193,20 @@ now (see "Explicitly out of scope" below).
     has no separate hero file (already a single figure). Name sits in a
     bottom scrim, and an honest "not ready" label on anyone missing a
     locked ElevenLabs voice id (Hans, today).
-  - A **Script** card — a spacious textarea plus a **Location** native
+  - A **Script** card — a textarea plus a **Location** native
     `<select>` of six locked park plates (`SUNNY_BANKS_LOCATIONS`,
-    default Office Storefront) that seeds each parsed row. Newlines
-    become a vertical queue (`parseSunnyBanksScriptBlock` in
+    default Office Storefront) that seeds each parsed row. A swipeable
+    **Act I / Act II / Act III** row at the top of that card swaps three
+    in-memory script buffers (not a Neon act table). Newlines become a
+    dense one-row queue (`parseSunnyBanksScriptBlock` in
     `components/SkidmarksSunnyBanksPanel.tsx`: `Name:` / `Name says:`,
     empty dialogue = Hold, continuation lines keep the last speaker).
-    Each row has a detected character `<select>` (CAST keyed by name,
-    full lock still loaded on the server for gold prompts), the line
-    fragment, its own location `<select>`, and an Idle / Rendering... /
-    Done pill. Speak/Hold still POST that location still as `startImageDataUrl`
+    Each row is one spreadsheet-style line: character `<select>` (CAST
+    keyed by name, full lock still loaded on the server for gold
+    prompts), truncated line fragment, location `<select>`, Idle /
+    Rendering... / Done pill, and a 40px clip thumb. Tap the thumb to
+    open a body-portaled player (iOS Safari stacking) instead of an
+    inline `<video>` stretching the page. Speak/Hold still POST that location still as `startImageDataUrl`
     (the location canvas — Image 1) plus `locationId`/`locationImage`
     alongside `characterName`. The **route** (`lib/sunnyBanksComposite.ts`)
     then overlays the character hero as Image 2 via xAI edits (Studio
@@ -2226,14 +2230,24 @@ now (see "Explicitly out of scope" below).
     gets a silent MP3 tail (`lib/silentMp3.ts`'s
     `padMp3ToMinimumDurationSec`) so node `276` actually has ≥2s; node
     `340:331` is that padded duration, not a fake number on short
-    bytes. Gold Speak string unchanged. **Silent Hold (2026-09-17)** is a script line
+    bytes. After LTX SaveVideo, `lib/muxClipAudio.ts` muxes that same
+    driving MP3 onto the MP4 (`-map 0:v:0 -map 1:a:0`) — live QA: lips
+    moved and the phone played silence because SaveVideo does not keep
+    the LoadAudio track. A mux miss still returns the paid picture with
+    `audioMuxed: false`. Gold Speak string unchanged; Dazza Speak/Hold
+    prompts append `SUNNY_BANKS_HELD_OBJECT_LOCK` after the gold
+    template so beers/coins/hair dryer cannot morph mid-clip. **Silent Hold (2026-09-17)** is a script line
     with no dialogue after the speaker name: no ElevenLabs call.
     Same route with `kind: "hold"`, a 5s silent MP3
     (`lib/silentMp3.ts`, `SUNNY_BANKS_HOLD_DURATION_SEC` — LTX still
     needs a `LoadAudio` input; silence is the honest one for "No
-    dialogue"), `buildSunnyBanksHoldPrompt` as the motion text. Each
-    finished MP4 plays inline under its own queue row. One clip at a
+    dialogue"), `buildSunnyBanksHoldPrompt` as the motion text. One clip at a
     time; a failed line stops the rest so they are not billed.
+    A collapsible **Episode workspace** bar at the bottom of the panel
+    snapshots the three act scripts, location ids, and finished clip
+    URLs for this open sheet only — not `localStorage`, not a Neon
+    episode table. Sunny Banks has no song MP3; TTS is generated at
+    render time.
   - **Still not the episode wizard** — Grok's own earlier scope was
     "render one speak beat, then stop." There is still no Neon
     episode/beat model, no `lib/scriptSequenceRunner`, no per-beat

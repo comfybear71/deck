@@ -253,7 +253,10 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(ttsUrl).toBe("https://api.elevenlabs.io/v1/text-to-speech/Vuun8WKmo2MZSUXgLPGw");
     expect(JSON.parse(ttsInit.body).text).toBe("We haven't got any shade, Dazza.");
 
-    // The Blob write used the real downloaded video bytes.
+    // Garbage fixture bytes are not a real MP4, so mux fails closed
+    // and the Blob write is still the paid LTX picture.
+    expect(body.audioMuxed).toBe(false);
+    expect(body.audioMuxError).toMatch(/ffmpeg/i);
     expect(Buffer.compare(putMock.mock.calls[0][1], Buffer.from(videoBytes))).toBe(0);
   });
 
@@ -293,6 +296,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
 
     expect(res.status).toBe(200);
     expect(body.persisted).toBe(false);
+    expect(body.audioMuxed).toBe(false);
     expect(body.persistError).toContain("Blob store not configured");
     expect(body.videoUrl).toMatch(/^data:video\/mp4;base64,/);
   });
@@ -343,6 +347,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(promptNode?.inputs?.value).not.toContain("face entirely hidden in shadow");
 
     expect(String(putMock.mock.calls[0][0])).toContain("sunnybanks/hold-beats/");
+    expect(body.audioMuxed).toBe(false);
     expect(Buffer.compare(putMock.mock.calls[0][1], Buffer.from(videoBytes))).toBe(0);
   });
 
