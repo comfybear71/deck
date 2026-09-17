@@ -2212,14 +2212,18 @@ now (see "Explicitly out of scope" below).
     `components/SkidmarksSunnyBanksPanel.tsx`: `Name:` / `Name says:`,
     empty dialogue = Hold, continuation lines keep the last speaker).
     God Script headers in that same paste (`# EPISODE:`, `=== ACT`,
-    `[Location: id]`, `[Action: text]`) set the episode name, split
-    act buffers, carry a locked park plate into `startImageDataUrl` for
-    following rows, and append action text after the gold prompt.
+    `[Location: id]`, `[Action: text]`, `[Character Name: look]`) set
+    the episode name, split act buffers, carry a locked park plate into
+    `startImageDataUrl` for following rows, and append action /
+    appearance text after the gold prompt.
     `=== LABEL ===` scene headers (e.g. `=== THE EPISODE TAG ===`) stay
     in the in-memory parse array as sequence chunks, not queue rows;
     blank and tag-only lines also skip the spreadsheet. Render POST
-    sends `line` / `action` / `locationId` (`action` after gold, never
-    into TTS) — still in-memory, no layout change.
+    sends `line` / `action` / `appearanceModifier` / `locationId`
+    (`action` after gold, never into TTS; gold look strings untouched).
+    Queue rows do not scroll horizontally on a 390px phone: line +
+    location shrink/truncate, status pill `flex-shrink-0` on the right
+    — still in-memory, no layout change.
     Each row is one spreadsheet-style line: character `<select>` (CAST
     keyed by name, full lock still loaded on the server for gold
     prompts), truncated line fragment, location `<select>`, Idle /

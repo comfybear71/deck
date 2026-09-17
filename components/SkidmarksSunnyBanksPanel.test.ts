@@ -134,9 +134,36 @@ describe("parseSunnyBanksScriptBlock", () => {
     expect(gold).not.toContain("leans on the tub");
   });
 
+  it("strips [Character Name: look] onto appearanceModifier and does not rewrite gold", () => {
+    const chunks = parseSunnyBanksScriptBlock(
+      "[Character Unit 4S: holding the bucket hat brim]\nUnit 4S: Yup yup. Naaah.\nRanger Bazza: [Character Ranger Bazza: whistle in his teeth] Move along."
+    );
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toMatchObject({
+      characterName: "Unit 4S",
+      line: "Yup yup. Naaah.",
+      kind: "speak",
+      appearanceModifier: "holding the bucket hat brim",
+    });
+    expect(chunks[1]).toMatchObject({
+      characterName: "Ranger Bazza",
+      line: "Move along.",
+      appearanceModifier: "whistle in his teeth",
+    });
+    const gold = buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST["Unit 4S"], chunks[0].line);
+    const prompt = appendSunnyBanksActionToPrompt(gold, chunks[0].appearanceModifier);
+    expect(prompt.startsWith(gold)).toBe(true);
+    expect(prompt).toContain("holding the bucket hat brim");
+    expect(gold).toContain("bare feet");
+    expect(gold).not.toContain("holding the bucket hat brim");
+    expect(SUNNY_BANKS_CAST["Unit 4S"].look).toBe(
+      "short purple alien, antennae, bulging eyes, teal bucket hat, holding a pair of thongs, bare feet"
+    );
+  });
+
   it("does not turn blank or tag-only lines into queue rows", () => {
     const chunks = parseSunnyBanksScriptBlock(
-      "\n[Location: site_laundry]\n[Action: leans on the tub]\n\n[Location: ]\n[Action:]\nShazza: You right?\n"
+      "\n[Location: site_laundry]\n[Action: leans on the tub]\n[Character Shazza: cigarette behind ear]\n\n[Location: ]\n[Action:]\n[Character Shazza:]\nShazza: You right?\n"
     );
     expect(chunks).toHaveLength(1);
     expect(sunnyBanksQueueChunks(chunks)).toHaveLength(1);
@@ -146,6 +173,7 @@ describe("parseSunnyBanksScriptBlock", () => {
       kind: "speak",
       locationId: "site_laundry",
       action: "leans on the tub",
+      appearanceModifier: "cigarette behind ear",
     });
   });
 
