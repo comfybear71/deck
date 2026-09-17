@@ -2198,10 +2198,13 @@ now (see "Explicitly out of scope" below).
     park plates (`SUNNY_BANKS_LOCATIONS`, default Office Storefront).
     Speak/Hold still POST that location still as `startImageDataUrl`
     (the location canvas — Image 1) plus `locationId`/`locationImage`
-    alongside `characterName`. The **route** then overlays the
-    character hero as Image 2 via xAI edits (Studio
+    alongside `characterName`. The **route** (`lib/sunnyBanksComposite.ts`)
+    then overlays the character hero as Image 2 via xAI edits (Studio
     `plateCastIntoGen`), and only the composed still goes to LTX node
-    `269`. Not a sequencer. Not a second Comfy image node. **Speak** needs a locked ElevenLabs voice as well:
+    `269`. The panel does **not** plate first — that was #120, and it
+    would overlay twice once this route compositor is live. Not a
+    sequencer. Not a second Comfy image node. **Speak** needs a locked
+    ElevenLabs voice as well:
     type a line, tap "Generate speak beat" to render one real clip via
     `POST /api/skidmarks/sunnybank/generate-speak-beat`: ElevenLabs
     text-to-speech (`lib/elevenLabsSpeech.ts`, keyed off the same

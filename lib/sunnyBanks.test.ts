@@ -156,8 +156,20 @@ describe("buildSunnyBanksCompositePlatePrompt", () => {
     expect(prompt).toContain("Place that same person from image 2 into image 1.");
     expect(prompt).toContain("Office Storefront");
     expect(prompt).toContain("Shazza");
+    expect(prompt).toContain("cigarette");
+    expect(prompt).toContain(SUNNY_BANKS_STYLE_LOCK);
     expect(prompt).not.toContain("Use the provided start image as the first frame.");
     expect(prompt).not.toBe(buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Shazza));
+  });
+
+  it("never names the turnaround sheet — compositor uses the hero card, not the bible", () => {
+    const prompt = buildSunnyBanksCompositePlatePrompt(
+      SUNNY_BANKS_CAST.Shazza,
+      SUNNY_BANKS_LOCATIONS.office_storefront
+    );
+    expect(prompt).not.toContain("shazza-reference");
+    expect(prompt).not.toContain("character plate");
+    expect(prompt).not.toContain("turnaround");
   });
 });
 

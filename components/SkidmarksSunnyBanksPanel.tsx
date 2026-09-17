@@ -49,12 +49,16 @@ import {
  * `resolveSunnyBanksStartImage` (the cropped `*-hero.jpg` when one
  * exists). No pose picker, no in-memory canvas cropper.
  *
- * **Location plate as LTX first frame (2026-09-17)** — six locked park
- * stills (`SUNNY_BANKS_LOCATIONS`). A native `<select>` under the
+ * **Location canvas as compositor Image 1 (2026-09-17)** — six locked
+ * park stills (`SUNNY_BANKS_LOCATIONS`). A native `<select>` under the
  * character row (same iPhone-Safari control as the character picker)
- * picks one; Speak and Hold POST that still as `startImageDataUrl`,
- * plus `locationId` / `locationImage` alongside `characterName`. Not a
- * sequencer. Gold Hold/Speak prompt strings unchanged.
+ * picks one; Speak and Hold POST that still as `startImageDataUrl`
+ * (empty location, Image 1) plus `locationId` / `locationImage`
+ * alongside `characterName`. The speak-beat **route** overlays the
+ * hero as Image 2 (Studio `plateCastIntoGen`), then LTX sees only the
+ * composed still. This panel does **not** call generate-still itself —
+ * that was #120 and would plate twice. Not a sequencer. Gold Hold/Speak
+ * prompt strings unchanged.
  */
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);

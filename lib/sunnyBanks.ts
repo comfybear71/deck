@@ -205,14 +205,16 @@ export function getSunnyBanksCharacterLock(name: string): SunnyBanksCharacterLoc
 }
 
 /**
- * The still Hold/Speak actually sends LTX as the first frame, and the
- * still the cast strip shows. Prefers the single-subject `heroImage`
- * so a turnaround sheet never reaches Comfy as the start canvas (live
- * QA: Shazza Hold animated every cell on `shazza-reference.jpg` because
- * `buildSunnyBanksHoldPrompt` honestly says "use the provided start
- * image as the first frame / same person and objects"). Falls back to
- * `referenceImage` when there is no hero file (Unit 4S, Hans). Keyed
- * by the character's own lock, never a synthetic `characterId`.
+ * The still the cast strip shows, and compositor **Image 2** (the
+ * single cast card). Prefers the single-subject `heroImage` so a
+ * turnaround sheet never reaches the compositor or LTX (live QA:
+ * Shazza Hold animated every cell on `shazza-reference.jpg`; original
+ * Skidmarks AGENTS.md: do not hand the sheet to `plateCastIntoGen`).
+ * Falls back to `referenceImage` when there is no hero file (Unit 4S,
+ * Hans). Keyed by the character's own lock, never a synthetic
+ * `characterId`. When a location is selected, LTX's first frame is the
+ * composed plate (`buildSunnyBanksCompositePlatePrompt`), not this
+ * hero still alone.
  */
 export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock): string | undefined {
   return character.heroImage ?? character.referenceImage;
@@ -227,9 +229,9 @@ export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock):
  * `/v1/images/edits` with two references:
  *   Image 1 / `<IMAGE_0>` = locked empty location (the canvas)
  *   Image 2 / `<IMAGE_1>` = single hero/cast card (never the sheet)
- *
- * Gold Hold/Speak strings stay untouched — they already assume the
- * start image has both the person and the place.
+ * `generate-speak-beat` is the caller (Studio's gen-plate + LTX in one
+ * route). Gold Hold/Speak strings stay untouched — they already assume
+ * the start image has both the person and the place.
  */
 export function buildSunnyBanksCompositePlatePrompt(
   character: SunnyBanksCharacterLock,
