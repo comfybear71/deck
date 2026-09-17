@@ -1,5 +1,9 @@
 import { del, list, put } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import {
+  collapseArchivedSongsByIdentity,
+  songsShareArchiveIdentity,
+} from "@/lib/skidmarksArchiveDedupe";
 
 /**
  * GET/POST /api/skidmarks/archive — the small, server-side read/write
@@ -19,6 +23,13 @@ import { NextResponse } from "next/server";
  * — a real risk in a multi-user app, a non-issue for Stuart's own
  * single-session use of this feature.
  *
+ * **One shelf row per song file (2026-09-17)**: Archive used to append
+ * a new id on every save, so the same MP3 stacked (My Best Friend ×3,
+ * Simulation.mp3 empty pair, Give Me Something 27 + 27 + 22). `add`
+ * now replaces any existing row with the same `bandId` + filename, and
+ * every index read collapses leftover copies, keeping the one with more
+ * rendered plates / clips. Opening a song still does not delete it.
+ *
  * **Never claims to be configured when it isn't** — the same honest
  * `{ configured: false }` shape `app/api/skidmarks/clip-renders/
  * route.ts` already uses for an unconfigured Blob store, not a bare
@@ -32,6 +43,27 @@ const SNAPSHOT_PATHNAME_RE = /^skidmarks\/archive\/([^/]+)\/snapshot\.json$/;
 
 function isRecordWithId(value: unknown): value is { id: string } {
   return !!value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string";
+}
+
+function snapshotUrlOf(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const url = (value as { snapshotUrl?: unknown }).snapshotUrl;
+  return typeof url === "string" && url.length > 0 ? url : null;
+}
+
+async function deleteSnapshotUrls(urls: string[]): Promise<void> {
+  const unique = [...new Set(urls)];
+  await Promise.all(
+    unique.map(async (url) => {
+      try {
+        await del(url);
+      } catch {
+        // Best-effort — a leftover snapshot blob is storage waste, not
+        // a failed Archive. Recovery skips it once the index row is gone
+        // and a same-song winner is already listed.
+      }
+    })
+  );
 }
 
 /**
@@ -122,11 +154,18 @@ async function readIndex(): Promise<unknown[]> {
   }
 
   const recovered = await recoverOrphanedSnapshots(indexed);
-  if (recovered.length === 0) return indexed;
+  const merged = recovered.length > 0 ? [...recovered, ...indexed] : indexed;
+  const identifiable = merged.filter(isRecordWithId);
+  const others = merged.filter((s) => !isRecordWithId(s));
+  const { kept, dropped } = collapseArchivedSongsByIdentity(identifiable);
+  if (recovered.length === 0 && dropped.length === 0) return indexed;
 
-  const merged = [...recovered, ...indexed];
-  await writeIndex(merged);
-  return merged;
+  const next = [...kept, ...others];
+  const droppedUrls = dropped.map(snapshotUrlOf).filter((url): url is string => url !== null);
+  const keptUrls = new Set(kept.map(snapshotUrlOf).filter((url): url is string => url !== null));
+  await deleteSnapshotUrls(droppedUrls.filter((url) => !keptUrls.has(url)));
+  await writeIndex(next);
+  return next;
 }
 
 async function writeIndex(songs: unknown[]): Promise<void> {
@@ -170,9 +209,26 @@ export async function POST(request: Request) {
       if (!isRecordWithId(body.song)) {
         return NextResponse.json({ error: "Missing or malformed `song`." }, { status: 400 });
       }
+      const incoming = body.song;
       const current = await readIndex();
-      const withoutExisting = current.filter((s) => !(isRecordWithId(s) && s.id === (body.song as { id: string }).id));
-      const next = [body.song, ...withoutExisting];
+      const superseded = current.filter(
+        (s) =>
+          isRecordWithId(s) &&
+          (s.id === incoming.id || songsShareArchiveIdentity(s, incoming))
+      );
+      const withoutExisting = current.filter(
+        (s) =>
+          !(
+            isRecordWithId(s) &&
+            (s.id === incoming.id || songsShareArchiveIdentity(s, incoming))
+          )
+      );
+      const next = [incoming, ...withoutExisting];
+      const incomingUrl = snapshotUrlOf(incoming);
+      const supersededUrls = superseded
+        .map(snapshotUrlOf)
+        .filter((url): url is string => url !== null && url !== incomingUrl);
+      await deleteSnapshotUrls(supersededUrls);
       await writeIndex(next);
       return NextResponse.json({ ok: true, songs: next });
     }

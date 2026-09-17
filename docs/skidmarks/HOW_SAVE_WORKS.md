@@ -28,10 +28,11 @@ Archive is a **checkpoint**. It uploads a full copy of the song to Finished Song
 
 - If the upload works, you see "Archive copy saved to Finished Songs. It is also still on your desk."
 - If it fails, you see "Archive failed — reason. Nothing was cleared."
-- If nothing has changed since your last checkpoint, it says so instead of listing the song twice.
-- A copy that uploaded but did not make the list is found and put back on the list the next time the shelf opens.
+- If nothing has changed since your last save, it says so instead of uploading again.
+- Saving the same MP3 again **replaces** that song's card. The shelf never lists the same file twice.
+- A copy that uploaded but did not make the list is found and put back on the list the next time the shelf opens. Leftover extra cards of the same file collapse then too — the one with more renders stays.
 
-Archive never deletes. Opening a song from Finished Songs does not remove it from the shelf either.
+Opening a song from Finished Songs does not remove it from the shelf. Delete is the only thing that takes a song off that list.
 
 ## What New and switching band do
 
@@ -45,7 +46,7 @@ Look at the top of the sheet. Green **Saved ✓** means you are done. If it says
 
 Every bin, remove, clear and delete button now asks "Are you sure?" first, with a big Cancel button on top. Nothing is deleted on one tap any more. That covers: a band, a member, the MP3 on the desk, a plate's still, a rendered clip, and a copy on the Finished Songs shelf.
 
-Deleting a copy on the shelf deletes that one checkpoint for good. Other copies of the same song and whatever is on your desk are left alone.
+Deleting a song on the shelf deletes that saved copy for good. Whatever is on your desk is left alone.
 
 ## Locking a new artist
 

@@ -54,7 +54,8 @@ function formatArchivedAt(ms: number): string {
  *
  * Per AGENTS.md's "one live edit workspace on top, never a second
  * doubled MP3/plates UI" lock: this shelf never shows a live-editable
- * copy of anything, only a static row per archived song — the *only*
+ * copy of anything, only a static row per archived song (one card per
+ * band + MP3 filename — a later Archive replaces the older card) — the *only*
  * place plates/prompts/timeline become editable again is the top
  * workspace, after "Open in editor" restores that exact song into it.
  *

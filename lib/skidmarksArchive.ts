@@ -15,7 +15,10 @@
  *    one shared `skidmarks/archive/index.json` file covering every
  *    archived song) — just enough metadata to render the bottom shelf
  *    row (title, cover, clip/plate counts, when) without fetching every
- *    song's full snapshot up front.
+ *    song's full snapshot up front. **One row per band + MP3 filename**
+ *    — a later Archive replaces that song's card instead of stacking
+ *    copies (`lib/skidmarksArchiveDedupe.ts`); leftover extras collapse
+ *    the next time the shelf loads, keeping the row with more renders.
  * 2. A full **snapshot** (`skidmarks/archive/{id}/snapshot.json`,
  *    uploaded client-side-direct via `@vercel/blob/client`'s `upload()`
  *    — see `app/api/skidmarks/blob-upload/route.ts`'s doc comment for
@@ -158,9 +161,8 @@ export async function fetchSkidmarksArchiveIndex(): Promise<FetchArchiveIndexOut
 
 export type ArchiveMutationOutcome = { ok: true } | { ok: false; message: string };
 
-/** Appends (or replaces, by `id`) one archived song's metadata in the
- * shared index — the small POST that actually makes an archived song
- * show up in the bottom shelf, called right after
+/** Replaces any existing shelf row for this band + MP3 filename
+ * (or the same `id`) — one song, one card. Called right after
  * `uploadArchiveSnapshot` succeeds. */
 export async function addSkidmarksArchivedSong(song: SkidmarksArchivedSong): Promise<ArchiveMutationOutcome> {
   try {
@@ -250,8 +252,8 @@ export type ArchiveSessionOutcome = { ok: true; song: SkidmarksArchivedSong } | 
  * The whole "Archive" action, top to bottom: uploads the full band+mp3
  * snapshot, builds this song's metadata record off it (carrying forward
  * `mp3.audioUrl` — see this module's doc comment for why the audio
- * itself is never re-uploaded here), and appends it to the shared
- * index. `renderedPlateCount` is passed in by the caller
+ * itself is never re-uploaded here), and upserts it into the shared
+ * index (one row per band + MP3 filename). `renderedPlateCount` is passed in by the caller
  * (`components/SkidmarksDetailSheet.tsx` already has the live "which
  * plates have a render" map from `hooks/useSkidmarksClipRenders.ts` —
  * no reason to re-derive or re-fetch it here). Never throws; a failure
