@@ -111,7 +111,9 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * **+ on a queue row inserts a silent Hold under that clip** (same
  * speaker, same plate) so a shot can land between two already-Done
  * rows without re-pasting the God Script. Idle rows can type the
- * spoken line in place. Undo restores the previous buffers.
+ * spoken line in place. Undo restores the previous buffers. − on an
+ * Idle/failed row drops that shot (accidental +) without touching Done
+ * clips.
  *
  * **Clips live in one Act-grouped strip (2026-09-17, live QA)** —
  * finished MP4s sit in one `overflow-x-auto` row at the base of the
@@ -713,6 +715,13 @@ export function replaceSunnyBanksSourceLine(
   return lines.join("\n");
 }
 
+export function removeSunnyBanksSourceLine(script: string, sourceLineIndex: number): string {
+  const lines = script.split(/\r?\n/);
+  if (sourceLineIndex < 0 || sourceLineIndex >= lines.length) return script;
+  lines.splice(sourceLineIndex, 1);
+  return lines.join("\n");
+}
+
 /** Keep any leading `[Tag]` prefixes; replace the speaker + dialogue. */
 export function rewriteSunnyBanksSpeakerLine(
   original: string,
@@ -741,6 +750,17 @@ export function shiftKeyedIndexRecord<T>(record: Record<number, T>, insertAt: nu
     const index = Number(key);
     if (!Number.isInteger(index)) continue;
     next[index >= insertAt ? index + 1 : index] = value;
+  }
+  return next;
+}
+
+/** Drop `removeAt` and pull later keys down after an Idle row is removed. */
+export function unshiftKeyedIndexRecord<T>(record: Record<number, T>, removeAt: number): Record<number, T> {
+  const next: Record<number, T> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const index = Number(key);
+    if (!Number.isInteger(index) || index === removeAt) continue;
+    next[index > removeAt ? index - 1 : index] = value;
   }
   return next;
 }
@@ -1333,6 +1353,24 @@ export function SkidmarksSunnyBanksPanel() {
     if (!scriptOpen) setScriptOpen(true);
   };
 
+  const handleRemoveShot = (rowIndex: number) => {
+    if (running) return;
+    const row = queue[rowIndex];
+    if (!row) return;
+    const status = runtimeFor(row.index, row.chunk.raw).status;
+    if (status === "done" || status === "rendering") return;
+    captureScriptUndo();
+    applyActScript(removeSunnyBanksSourceLine(scriptText, row.chunk.sourceLineIndex));
+    setCharacterOverridesByAct((prev) => ({
+      ...prev,
+      [activeAct]: unshiftKeyedIndexRecord(prev[activeAct] ?? {}, rowIndex),
+    }));
+    setLocationOverridesByAct((prev) => ({
+      ...prev,
+      [activeAct]: unshiftKeyedIndexRecord(prev[activeAct] ?? {}, rowIndex),
+    }));
+  };
+
   const handleIdleLineChange = (rowIndex: number, dialogue: string) => {
     const row = queue[rowIndex];
     if (!row || running) return;
@@ -1568,9 +1606,10 @@ export function SkidmarksSunnyBanksPanel() {
                 />
                 <p className="text-[10px] leading-snug text-white/40">
                   One speaker per line — `Name:` or `Name says:`. Empty after the name is a
-                  silent hold. Tap + on a row to insert a shot under it; Done clips stay.
-                  Continuation lines keep the last speaker. Unit 4S stays barefoot; gold
-                  look/voice strings are not edited here.
+                  silent hold. Tap + on a row to insert a shot under it. Tap − on an Idle
+                  row to drop an accidental one. Done clips stay. Continuation lines keep
+                  the last speaker. Unit 4S stays barefoot; gold look/voice strings are not
+                  edited here.
                 </p>
 
                 <div className="flex justify-start">
@@ -1675,7 +1714,7 @@ export function SkidmarksSunnyBanksPanel() {
                                   +
                                 </button>
                               </div>
-                              {isStatic || cutaway ? (
+                              {isStatic ? (
                                 <details className="group min-w-0 pt-0.5">
                                   <summary
                                     title={lineLabel}
@@ -1686,15 +1725,35 @@ export function SkidmarksSunnyBanksPanel() {
                                   </summary>
                                 </details>
                               ) : (
-                                <input
-                                  type="text"
-                                  value={row.line}
-                                  onChange={(e) => handleIdleLineChange(row.index, e.target.value)}
-                                  disabled={running}
-                                  placeholder="Empty is a silent hold"
-                                  aria-label={`Spoken line ${row.index + 1}`}
-                                  className="mt-0.5 min-h-[32px] w-full min-w-0 rounded-md border border-white/10 bg-white/[0.03] px-1.5 text-[12px] leading-snug text-white/80 placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
-                                />
+                                <div className="flex min-w-0 items-center gap-1 pt-0.5">
+                                  {cutaway ? (
+                                    <p
+                                      title={lineLabel}
+                                      className="min-w-0 flex-1 truncate text-[12px] leading-snug text-white/75"
+                                    >
+                                      {lineLabel}
+                                    </p>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={row.line}
+                                      onChange={(e) => handleIdleLineChange(row.index, e.target.value)}
+                                      disabled={running}
+                                      placeholder="Empty is a silent hold"
+                                      aria-label={`Spoken line ${row.index + 1}`}
+                                      className="min-h-[40px] min-w-0 flex-1 rounded-md border border-white/10 bg-white/[0.03] px-1.5 text-[12px] leading-snug text-white/80 placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
+                                    />
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveShot(row.index)}
+                                    disabled={running || status === "rendering"}
+                                    aria-label={`Remove shot ${row.index + 1}`}
+                                    className="flex h-10 min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-lg text-lg font-medium text-white/45 disabled:opacity-40"
+                                  >
+                                    −
+                                  </button>
+                                </div>
                               )}
                             </div>
                           </div>
@@ -1739,7 +1798,7 @@ export function SkidmarksSunnyBanksPanel() {
             </button>
             <p className="text-[10px] leading-snug text-white/40">
               {pendingRows.length === 0
-                ? "Existing Crash Lab clips are already in the strip below. Tap + on a row to insert a shot between them — one clip at a time, never a batch of these 46."
+                ? "Existing Crash Lab clips are already in the strip below. Tap + on a row to insert a shot between them, or − on an Idle row to drop it — one clip at a time, never a batch of these 46."
                 : `One clip at a time — overlay ~$${overlayCostUsd.toFixed(2)}${
                     pendingRows.filter((row) => row.kind === "hold").length > 0
                       ? `, hold video ~$${holdVideoCostUsd.toFixed(2)}`

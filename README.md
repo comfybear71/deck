@@ -2243,7 +2243,8 @@ now (see "Explicitly out of scope" below).
     a silent Hold under that clip — same speaker, same plate — so a new
     shot can land between two already-Done rows without re-pasting the
     God Script; `preserveRenderedRuntimes` keeps the Done clips. A +
-    above the list inserts at the start. Render then reads "Render 1
+    above the list inserts at the start. − on an Idle/failed row drops
+    that accidental shot. Render then reads "Render 1
     line". Re-parsing keeps a Done
     clip when speaker + dialogue still match (`preserveRenderedRuntimes`);
     **↩ Undo** beside the Act pills restores the previous script
