@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendSunnyBanksActionToPrompt,
   collectRenderedClips,
   fingerprintWorkspace,
+  mergeSunnyBanksActIds,
   mintWorkspaceId,
   nextSunnyBanksActId,
+  parseSunnyBanksActHeader,
+  parseSunnyBanksEpisodeHeader,
+  parseSunnyBanksGodDocument,
   parseSunnyBanksScriptBlock,
+  resolveSunnyBanksScriptLocationId,
   SUNNY_BANKS_ACTS,
   toSunnyBanksActId,
 } from "./SkidmarksSunnyBanksPanel";
-import { SUNNY_BANKS_CAST } from "@/lib/sunnyBanks";
+import { SUNNY_BANKS_CAST, SUNNY_BANKS_LOCATIONS, buildSunnyBanksSpeakingPrompt } from "@/lib/sunnyBanks";
 
 describe("parseSunnyBanksScriptBlock", () => {
   it("skips blank lines and splits on newlines", () => {
@@ -34,7 +40,13 @@ describe("parseSunnyBanksScriptBlock", () => {
   it("empty dialogue after the speaker is a Hold, not a guessed line", () => {
     const chunks = parseSunnyBanksScriptBlock("Ranger Bazza:");
     expect(chunks).toEqual([
-      { raw: "Ranger Bazza:", characterName: "Ranger Bazza", line: "", kind: "hold" },
+      {
+        raw: "Ranger Bazza:",
+        characterName: "Ranger Bazza",
+        line: "",
+        kind: "hold",
+        locationId: "office_storefront",
+      },
     ]);
   });
 
@@ -57,6 +69,127 @@ describe("parseSunnyBanksScriptBlock", () => {
     expect(chunks[0].characterName).toBe("Shazza");
     expect(chunks[0].line).toBe("Some Guest: hello");
     expect(SUNNY_BANKS_CAST["Some Guest"]).toBeUndefined();
+  });
+
+  it("skips # EPISODE: / === ACT headers and does not turn them into queue rows", () => {
+    const chunks = parseSunnyBanksScriptBlock(
+      "# EPISODE: Drop Bears Dilemma\n=== ACT I ===\nShazza: You right?\n=== ACT II ===\nDazza: Yeah nah."
+    );
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toMatchObject({ characterName: "Shazza", line: "You right?", kind: "speak" });
+    expect(chunks[1]).toMatchObject({ characterName: "Dazza", line: "Yeah nah.", kind: "speak" });
+  });
+
+  it("carries [Location: id] onto following rows until the next location tag", () => {
+    const chunks = parseSunnyBanksScriptBlock(
+      "[Location: main_entrance_sign]\nRanger Bazza: Well here we go.\nShazza: You right?\n[Location: caravan_interior]\nDazza: Yeah nah."
+    );
+    expect(chunks[0].locationId).toBe("main_entrance_sign");
+    expect(chunks[1].locationId).toBe("main_entrance_sign");
+    expect(chunks[2].locationId).toBe("caravan_interior");
+    expect(SUNNY_BANKS_LOCATIONS[chunks[0].locationId!].image).toBe(
+      "/skidmarks/sunnybanks/main-entrance-sign.jpg"
+    );
+    expect(SUNNY_BANKS_LOCATIONS[chunks[2].locationId!].image).toBe(
+      "/skidmarks/sunnybanks/caravan-interior.jpg"
+    );
+  });
+
+  it("ignores an unknown location id instead of inventing a plate", () => {
+    const chunks = parseSunnyBanksScriptBlock(
+      "[Location: moon_base]\nShazza: You right?"
+    );
+    expect(chunks[0].locationId).toBe("office_storefront");
+  });
+
+  it("stamps the locked default plate on every row until a [Location:] tag, then carries that id", () => {
+    const chunks = parseSunnyBanksScriptBlock(
+      "Shazza: You right?\nDazza: Yeah nah.\n[Location: site_laundry]\nNan: Cuppa?"
+    );
+    expect(chunks[0].locationId).toBe("office_storefront");
+    expect(chunks[1].locationId).toBe("office_storefront");
+    expect(chunks[2].locationId).toBe("site_laundry");
+  });
+
+  it("strips [Action: text] from the spoken line and stores it as prompt context", () => {
+    const chunks = parseSunnyBanksScriptBlock(
+      "[Action: leans on the tub]\nShazza: You right?\nDazza: Yeah nah. [Action: holds the dryer]"
+    );
+    expect(chunks[0]).toMatchObject({
+      characterName: "Shazza",
+      line: "You right?",
+      action: "leans on the tub",
+    });
+    expect(chunks[1]).toMatchObject({
+      characterName: "Dazza",
+      line: "Yeah nah.",
+      action: "holds the dryer",
+    });
+    const gold = buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST.Shazza, chunks[0].line);
+    const prompt = appendSunnyBanksActionToPrompt(gold, chunks[0].action);
+    expect(prompt.startsWith(gold)).toBe(true);
+    expect(prompt).toContain("leans on the tub");
+    expect(gold).not.toContain("leans on the tub");
+  });
+});
+
+describe("God Script headers", () => {
+  it("reads # EPISODE: as the workspace title", () => {
+    expect(parseSunnyBanksEpisodeHeader("# EPISODE: Drop Bears Dilemma")).toEqual({
+      title: "Drop Bears Dilemma",
+    });
+    expect(parseSunnyBanksEpisodeHeader("Shazza: You right?")).toBeNull();
+  });
+
+  it("names an act buffer from === ACT I / === ACT 2", () => {
+    expect(parseSunnyBanksActHeader("=== ACT I ===")).toBe("I");
+    expect(parseSunnyBanksActHeader("=== ACT 2")).toBe("II");
+    expect(parseSunnyBanksActHeader("=== ACT IV ===")).toBe("IV");
+  });
+
+  it("resolves location tokens onto the six locked park plates", () => {
+    expect(resolveSunnyBanksScriptLocationId("main_entrance_sign")).toBe("main_entrance_sign");
+    expect(resolveSunnyBanksScriptLocationId("Main Entrance Sign")).toBe("main_entrance_sign");
+    expect(resolveSunnyBanksScriptLocationId("office_storefront")).toBe("office_storefront");
+    expect(resolveSunnyBanksScriptLocationId("nope")).toBeUndefined();
+  });
+
+  it("splits a pasted God Script into per-act buffers and carries location forward", () => {
+    const doc = parseSunnyBanksGodDocument(
+      [
+        "# EPISODE: Drop Bears Dilemma",
+        "=== ACT I ===",
+        "[Location: main_entrance_sign]",
+        "Ranger Bazza: Well here we go.",
+        "=== ACT II ===",
+        "Dazza: Yeah nah.",
+        "=== ACT III ===",
+        "[Location: caravan_interior]",
+        "Unit 4S: Yup yup. Naaah.",
+      ].join("\n")
+    );
+    expect(doc.episodeTitle).toBe("Drop Bears Dilemma");
+    expect(doc.hasActHeaders).toBe(true);
+    expect(doc.actIds).toEqual(["I", "II", "III"]);
+    expect(doc.actScripts.I).toContain("Ranger Bazza: Well here we go.");
+    expect(doc.actScripts.I).not.toContain("# EPISODE:");
+    expect(doc.actScripts.II).toContain("Dazza: Yeah nah.");
+    expect(doc.actScripts.II).toContain("[Location: main_entrance_sign]");
+    const actTwo = parseSunnyBanksScriptBlock(doc.actScripts.II);
+    expect(actTwo[0].locationId).toBe("main_entrance_sign");
+    const actThree = parseSunnyBanksScriptBlock(doc.actScripts.III);
+    expect(actThree[0]).toMatchObject({
+      characterName: "Unit 4S",
+      line: "Yup yup. Naaah.",
+      locationId: "caravan_interior",
+    });
+    expect(SUNNY_BANKS_CAST["Unit 4S"].look).toContain("bare feet");
+    expect(mergeSunnyBanksActIds(["I", "II", "III"], ["I", "II", "III", "IV"])).toEqual([
+      "I",
+      "II",
+      "III",
+      "IV",
+    ]);
   });
 });
 

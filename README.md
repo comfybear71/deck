@@ -2193,9 +2193,10 @@ now (see "Explicitly out of scope" below).
     has no separate hero file (already a single figure). Name sits in a
     bottom scrim, and an honest "not ready" label on anyone missing a
     locked ElevenLabs voice id (Hans, today).
-  - A **Script** card — a textarea plus a **Location** native
-    `<select>` of six locked park plates (`SUNNY_BANKS_LOCATIONS`,
-    default Office Storefront) that seeds each parsed row.     A swipeable
+  - A **Script** card — a textarea of six locked park plates used
+    per queue row (`SUNNY_BANKS_LOCATIONS`, default Office Storefront
+    until a `[Location: id]` tag). There is **no** act-level location
+    dropdown above the script accordion. A swipeable
     **Act I / Act II / Act III** row sits at the **top** of that card
     (`touch-pan-x`, `flex-nowrap`, overflow-x). **+ Add Act** at the
     far right appends the next roman in-memory buffer (IV, V, …, cap
@@ -2210,6 +2211,11 @@ now (see "Explicitly out of scope" below).
     dense one-row queue (`parseSunnyBanksScriptBlock` in
     `components/SkidmarksSunnyBanksPanel.tsx`: `Name:` / `Name says:`,
     empty dialogue = Hold, continuation lines keep the last speaker).
+    God Script headers in that same paste (`# EPISODE:`, `=== ACT`,
+    `[Location: id]`, `[Action: text]`) set the episode name, split
+    act buffers, carry a locked park plate into `startImageDataUrl` for
+    following rows, and append action text after the gold prompt —
+    still in-memory, no layout change.
     Each row is one spreadsheet-style line: character `<select>` (CAST
     keyed by name, full lock still loaded on the server for gold
     prompts), truncated line fragment, location `<select>`, Idle /
