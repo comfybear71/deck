@@ -15,6 +15,12 @@ import {
   isSunnyBanksGhostTargetLine,
   isSunnyBanksLocationCutaway,
   buildSunnyBanksLocationCutawayPrompt,
+  buildSunnyBanksHoldScriptLine,
+  insertSunnyBanksLineAfter,
+  insertSunnyBanksLineBefore,
+  replaceSunnyBanksSourceLine,
+  rewriteSunnyBanksSpeakerLine,
+  shiftKeyedIndexRecord,
   preserveRenderedRuntimes,
   decodeSunnyBanksPastedScript,
   resolveSunnyBanksScriptLocationId,
@@ -73,6 +79,7 @@ describe("parseSunnyBanksScriptBlock", () => {
         line: "",
         kind: "hold",
         locationId: "office_storefront",
+        sourceLineIndex: 0,
       },
     ]);
   });
@@ -672,5 +679,66 @@ describe("preserveRenderedRuntimes", () => {
     expect(Object.keys(next)).toEqual(["0"]);
     expect(next[0]?.status).toBe("done");
     expect(next[0]?.videoUrl).toBe("https://blob.example/a.mp4");
+  });
+
+  it("inserting a Hold between two Done clips keeps both clips and idles the new row", () => {
+    const script = "Shazza: You right?\nDazza: Yeah nah.";
+    const previous = {
+      0: {
+        lineKey: "Shazza: You right?",
+        status: "done" as const,
+        videoUrl: "https://blob.example/a.mp4",
+        characterName: "Shazza",
+        line: "You right?",
+      },
+      1: {
+        lineKey: "Dazza: Yeah nah.",
+        status: "done" as const,
+        videoUrl: "https://blob.example/b.mp4",
+        characterName: "Dazza",
+        line: "Yeah nah.",
+      },
+    };
+    const first = parseSunnyBanksScriptBlock(script)[0];
+    const nextScript = insertSunnyBanksLineAfter(
+      script,
+      first.sourceLineIndex,
+      buildSunnyBanksHoldScriptLine("Shazza")
+    );
+    expect(nextScript).toBe("Shazza: You right?\nShazza:\nDazza: Yeah nah.");
+    const next = preserveRenderedRuntimes(parseSunnyBanksScriptBlock(nextScript), previous);
+    expect(next[0]?.status).toBe("done");
+    expect(next[0]?.videoUrl).toBe("https://blob.example/a.mp4");
+    expect(next[1]).toBeUndefined();
+    expect(next[2]?.status).toBe("done");
+    expect(next[2]?.videoUrl).toBe("https://blob.example/b.mp4");
+    expect(sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(nextScript))[1]).toMatchObject({
+      characterName: "Shazza",
+      line: "",
+      kind: "hold",
+    });
+  });
+});
+
+describe("insert and rewrite script lines", () => {
+  it("inserts before the first queue line without dropping a leading scene header", () => {
+    const script = "=== THE CON ===\nShazza: You right?";
+    const shazza = parseSunnyBanksScriptBlock(script).find((chunk) => chunk.characterName === "Shazza");
+    expect(shazza?.sourceLineIndex).toBe(1);
+    const next = insertSunnyBanksLineBefore(script, shazza!.sourceLineIndex, "Crowd:");
+    expect(next).toBe("=== THE CON ===\nCrowd:\nShazza: You right?");
+  });
+
+  it("rewrites speaker dialogue and keeps a leading [Location:] tag", () => {
+    expect(rewriteSunnyBanksSpeakerLine("[Location: office_storefront] Shazza: You right?", "Shazza", "Mate.")).toBe(
+      "[Location: office_storefront] Shazza: Mate."
+    );
+    expect(rewriteSunnyBanksSpeakerLine("Shazza: You right?", "Shazza", "")).toBe("Shazza:");
+    const script = "Shazza: You right?\nDazza: Yeah nah.";
+    expect(replaceSunnyBanksSourceLine(script, 0, "Shazza: Mate.")).toBe("Shazza: Mate.\nDazza: Yeah nah.");
+  });
+
+  it("shifts per-row overrides so a mid-list insert does not steal the next line's plate", () => {
+    expect(shiftKeyedIndexRecord({ 0: "a", 1: "b", 2: "c" }, 1)).toEqual({ 0: "a", 2: "b", 3: "c" });
   });
 });

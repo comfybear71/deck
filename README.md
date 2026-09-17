@@ -2238,7 +2238,13 @@ now (see "Explicitly out of scope" below).
     on the right — no location pick, no 40px black preview cube (live
     QA: that cube ate the row and the spoken line vanished). Idle /
     failed rows keep character + location `<select>`s so a line that
-    has not been billed can still be aimed. Re-parsing keeps a Done
+    has not been billed can still be aimed, plus a spoken-line field
+    (empty = Hold). A **+** on each queue row (40px hit target) inserts
+    a silent Hold under that clip — same speaker, same plate — so a new
+    shot can land between two already-Done rows without re-pasting the
+    God Script; `preserveRenderedRuntimes` keeps the Done clips. A +
+    above the list inserts at the start. Render then reads "Render 1
+    line". Re-parsing keeps a Done
     clip when speaker + dialogue still match (`preserveRenderedRuntimes`);
     **↩ Undo** beside the Act pills restores the previous script
     buffers. Tag-only `[Character Name: override]` lines never mint
