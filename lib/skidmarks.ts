@@ -170,6 +170,18 @@ import {
 import { uploadSkidmarksMemberPhoto } from "./memberPhotoBlob";
 import { uploadSkidmarksPlateStill } from "./plateStillBlob";
 import type { ScriptSequencePart } from "./scriptSequence";
+import {
+  buildDefaultSunnyBanksLive,
+  buildSunnyBanksWorkspaceFromLive,
+  cloneSunnyBanksLive,
+  liveFromSunnyBanksWorkspace,
+  normalizeSunnyBanksStudio,
+  sunnyBanksStudioHasUserContent,
+  upsertSunnyBanksWorkspace,
+  type SkidmarksSunnyBanksState,
+  type SunnyBanksLiveState,
+  type SunnyBanksWorkspaceSnapshot,
+} from "./sunnyBanksWorkspace";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -1224,6 +1236,14 @@ export interface SkidmarksState {
    * seed band stays gone after a delete instead of being re-minted from
    * `SEED_BANDS` on the next `normalizeState` pass. */
   removedSeedBandIds: string[];
+  /**
+   * Sunny Banks live episode + named workspace cards. Same Neon session
+   * row as music-video studio state — not a new episode/beat table, not
+   * `localStorage`. Missing on sessions saved before this field existed
+   * (`null`); the panel then opens on the EP02 seed. Scripts + clip
+   * URLs only, never inline still bytes.
+   */
+  sunnyBanks: SkidmarksSunnyBanksState | null;
 }
 
 function isBrowser(): boolean {
@@ -1286,6 +1306,7 @@ function emptyState(): SkidmarksState {
     bands: SEED_BANDS,
     session: { projectKind: null, bandId: null, mp3: null, scriptSequenceDraft: null },
     removedSeedBandIds: [],
+    sunnyBanks: null,
   };
 }
 
@@ -1653,6 +1674,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
       mp3: stillHasBand ? mp3 : null,
       scriptSequenceDraft: stillHasBand ? scriptSequenceDraft : null,
     },
+    sunnyBanks: normalizeSunnyBanksStudio(p.sunnyBanks),
   };
 }
 
@@ -1835,7 +1857,8 @@ export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
   const hasRealBand = state.bands.some((b) => !seedIds.has(b.id));
   const hasMp3 = state.session.mp3 !== null;
   const hasTaggedSegments = hasSkidmarksUserContent(state.session.mp3?.segments ?? []);
-  return hasRealBand || hasMp3 || hasTaggedSegments;
+  const hasSunnyBanks = sunnyBanksStudioHasUserContent(state.sunnyBanks);
+  return hasRealBand || hasMp3 || hasTaggedSegments || hasSunnyBanks;
 }
 
 /**
@@ -2627,6 +2650,77 @@ function persist(next: SkidmarksState) {
   schedulePush();
 }
 
+function resolvedSunnyBanks(state: SkidmarksState): SkidmarksSunnyBanksState {
+  return (
+    state.sunnyBanks ?? {
+      live: buildDefaultSunnyBanksLive(),
+      workspaces: [],
+      saveSeq: 0,
+    }
+  );
+}
+
+/** Current Sunny Banks live episode — EP02 seed until the first persist. */
+export function getSunnyBanksLiveOrDefault(state: SkidmarksState = getSkidmarksSnapshot()): SunnyBanksLiveState {
+  return cloneSunnyBanksLive(resolvedSunnyBanks(state).live);
+}
+
+export function patchSunnyBanksLive(updater: (live: SunnyBanksLiveState) => SunnyBanksLiveState): void {
+  const current = getSkidmarksSnapshot();
+  const studio = resolvedSunnyBanks(current);
+  persist({
+    ...current,
+    sunnyBanks: {
+      ...studio,
+      live: updater(cloneSunnyBanksLive(studio.live)),
+    },
+  });
+}
+
+/** Named save of the whole live episode (every act). Same episode name
+ * replaces that card instead of minting an Act I / Act II pair. */
+export function saveSunnyBanksProjectWorkspace(): SunnyBanksWorkspaceSnapshot {
+  const current = getSkidmarksSnapshot();
+  const studio = resolvedSunnyBanks(current);
+  const saveSeq = studio.saveSeq + 1;
+  const snapshot = buildSunnyBanksWorkspaceFromLive(studio.live, Date.now(), saveSeq);
+  persist({
+    ...current,
+    sunnyBanks: {
+      live: cloneSunnyBanksLive(studio.live),
+      workspaces: upsertSunnyBanksWorkspace(studio.workspaces, snapshot),
+      saveSeq,
+    },
+  });
+  return snapshot;
+}
+
+export function deleteSunnyBanksWorkspace(id: string): void {
+  const current = getSkidmarksSnapshot();
+  if (!current.sunnyBanks) return;
+  persist({
+    ...current,
+    sunnyBanks: {
+      ...current.sunnyBanks,
+      workspaces: current.sunnyBanks.workspaces.filter((workspace) => workspace.id !== id),
+    },
+  });
+}
+
+export function openSunnyBanksWorkspace(id: string): void {
+  const current = getSkidmarksSnapshot();
+  const workspace = current.sunnyBanks?.workspaces.find((row) => row.id === id);
+  if (!workspace) return;
+  persist({
+    ...current,
+    sunnyBanks: {
+      live: liveFromSunnyBanksWorkspace(workspace),
+      workspaces: current.sunnyBanks?.workspaces ?? [],
+      saveSeq: current.sunnyBanks?.saveSeq ?? 0,
+    },
+  });
+}
+
 /** Landing tile tap — only `music-video` actually opens anything further;
  * the other two kinds are inert (see `SKIDMARKS_PROJECT_KINDS`), but we
  * still record the tap so a disabled tile can't silently no-op forever. */
@@ -2685,6 +2779,7 @@ export function removeSkidmarksBand(bandId: string): void {
     : current.removedSeedBandIds;
   const wasActive = current.session.bandId === bandId;
   persist({
+    ...current,
     bands,
     removedSeedBandIds,
     session: wasActive

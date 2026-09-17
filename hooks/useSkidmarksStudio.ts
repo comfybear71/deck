@@ -67,6 +67,7 @@ const EMPTY_STATE: SkidmarksState = {
   bands: [],
   session: { projectKind: null, bandId: null, mp3: null, scriptSequenceDraft: null },
   removedSeedBandIds: [],
+  sunnyBanks: null,
 };
 
 const LOADING_SESSION_SYNC_STATE: SkidmarksSessionSyncState = { status: "loading" };
@@ -393,6 +394,7 @@ export function useSkidmarksStudio() {
     bands: state.bands,
     session: state.session,
     removedSeedBandIds: state.removedSeedBandIds,
+    sunnyBanks: state.sunnyBanks,
     /** The live Neon session round-trip status — see this hook's doc
      * comment and `lib/skidmarks.ts`'s `SkidmarksSessionSyncState`. */
     sessionSync,

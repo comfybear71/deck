@@ -51,12 +51,19 @@ import {
   setSkidmarksSegmentShotPrompt,
   skidmarksChecklistState,
   subscribeSkidmarksSessionSync,
+  patchSunnyBanksLive,
+  saveSunnyBanksProjectWorkspace,
+  deleteSunnyBanksWorkspace,
   type SkidmarksBand,
   type SkidmarksClipPlateSlot,
   type SkidmarksClipSegment,
   type SkidmarksPlateStill,
   type SkidmarksState,
 } from "./skidmarks";
+import {
+  buildDefaultSunnyBanksLive,
+  buildSunnyBanksWorkspaceFromLive,
+} from "./sunnyBanksWorkspace";
 import type { SkidmarksTranscribedWord } from "./transcription";
 
 /**
@@ -492,6 +499,7 @@ describe("sessionHasSubstantiveContent", () => {
       bands: [seedBand],
       session: { projectKind: null, bandId: null, mp3: null, scriptSequenceDraft: null },
       removedSeedBandIds: [],
+      sunnyBanks: null,
       ...overrides,
     };
   }
@@ -530,6 +538,21 @@ describe("sessionHasSubstantiveContent", () => {
     // every seed band present is not a loss the way six tagged plates
     // vanishing is. Keeps the recovery path from firing on noise.
     expect(sessionHasSubstantiveContent(stateWith({ removedSeedBandIds: ["jack-ash"] }))).toBe(false);
+  });
+
+  it("reads true once a Sunny Banks named workspace card exists", () => {
+    const live = buildDefaultSunnyBanksLive();
+    expect(
+      sessionHasSubstantiveContent(
+        stateWith({
+          sunnyBanks: {
+            live,
+            workspaces: [buildSunnyBanksWorkspaceFromLive(live, 1, 1)],
+            saveSeq: 1,
+          },
+        })
+      )
+    ).toBe(true);
   });
 });
 
@@ -1534,6 +1557,7 @@ describe("stripUnsyncableImageBytesForWire", () => {
       bands: [seedBand],
       session: { projectKind: null, bandId: null, mp3: null, scriptSequenceDraft: null },
       removedSeedBandIds: [],
+      sunnyBanks: null,
       ...overrides,
     };
   }
@@ -1937,5 +1961,40 @@ describe("archive fingerprint", () => {
     restoreSkidmarksArchivedSession(band, mp3);
     const restored = getSkidmarksSnapshot();
     expect(isSkidmarksSessionAlreadyArchived(band, restored.session.mp3!)).toBe(true);
+  });
+});
+
+describe("Sunny Banks Neon workspace persist", () => {
+  it("saves every act on one card and keeps the live copy after that card is deleted", () => {
+    patchSunnyBanksLive((live) => ({
+      ...live,
+      activeAct: "III",
+      actScripts: { ...live.actScripts, III: `${live.actScripts.III}\nCrowd:` },
+    }));
+    saveSunnyBanksProjectWorkspace();
+    const saved = getSkidmarksSnapshot().sunnyBanks;
+    expect(saved?.workspaces).toHaveLength(1);
+    expect(saved?.workspaces[0].actIds).toEqual(["I", "II", "III"]);
+    expect(saved?.workspaces[0].actScripts.I.length).toBeGreaterThan(0);
+    expect(saved?.workspaces[0].actScripts.III).toContain("Crowd:");
+    expect(saved?.live.activeAct).toBe("III");
+
+    const id = saved!.workspaces[0].id;
+    deleteSunnyBanksWorkspace(id);
+    const afterDelete = getSkidmarksSnapshot().sunnyBanks;
+    expect(afterDelete?.workspaces).toHaveLength(0);
+    expect(afterDelete?.live.actScripts.III).toContain("Crowd:");
+    expect(afterDelete?.live.activeAct).toBe("III");
+  });
+
+  it("re-saving the same episode name keeps one whole-episode card", () => {
+    patchSunnyBanksLive((live) => ({ ...live, activeAct: "II" }));
+    saveSunnyBanksProjectWorkspace();
+    patchSunnyBanksLive((live) => ({ ...live, activeAct: "I" }));
+    saveSunnyBanksProjectWorkspace();
+    const cards = getSkidmarksSnapshot().sunnyBanks?.workspaces ?? [];
+    expect(cards).toHaveLength(1);
+    expect(cards[0].actIds).toEqual(["I", "II", "III"]);
+    expect(cards[0].actScripts.II.length).toBeGreaterThan(0);
   });
 });
