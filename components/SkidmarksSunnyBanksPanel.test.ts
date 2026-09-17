@@ -19,8 +19,10 @@ import {
   insertSunnyBanksLineAfter,
   insertSunnyBanksLineBefore,
   replaceSunnyBanksSourceLine,
+  removeSunnyBanksSourceLine,
   rewriteSunnyBanksSpeakerLine,
   shiftKeyedIndexRecord,
+  unshiftKeyedIndexRecord,
   preserveRenderedRuntimes,
   decodeSunnyBanksPastedScript,
   resolveSunnyBanksScriptLocationId,
@@ -738,7 +740,38 @@ describe("insert and rewrite script lines", () => {
     expect(replaceSunnyBanksSourceLine(script, 0, "Shazza: Mate.")).toBe("Shazza: Mate.\nDazza: Yeah nah.");
   });
 
+  it("removes an Idle Hold between two Done clips without dropping those clips", () => {
+    const script = "Shazza: You right?\nShazza:\nDazza: Yeah nah.";
+    const previous = {
+      0: {
+        lineKey: "Shazza: You right?",
+        status: "done" as const,
+        videoUrl: "https://blob.example/a.mp4",
+        characterName: "Shazza",
+        line: "You right?",
+      },
+      2: {
+        lineKey: "Dazza: Yeah nah.",
+        status: "done" as const,
+        videoUrl: "https://blob.example/b.mp4",
+        characterName: "Dazza",
+        line: "Yeah nah.",
+      },
+    };
+    const idle = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(script))[1];
+    expect(idle.kind).toBe("hold");
+    const nextScript = removeSunnyBanksSourceLine(script, idle.sourceLineIndex);
+    expect(nextScript).toBe("Shazza: You right?\nDazza: Yeah nah.");
+    const next = preserveRenderedRuntimes(parseSunnyBanksScriptBlock(nextScript), previous);
+    expect(next[0]?.videoUrl).toBe("https://blob.example/a.mp4");
+    expect(next[1]?.videoUrl).toBe("https://blob.example/b.mp4");
+  });
+
   it("shifts per-row overrides so a mid-list insert does not steal the next line's plate", () => {
     expect(shiftKeyedIndexRecord({ 0: "a", 1: "b", 2: "c" }, 1)).toEqual({ 0: "a", 2: "b", 3: "c" });
+  });
+
+  it("pulls later overrides down when an Idle row is removed", () => {
+    expect(unshiftKeyedIndexRecord({ 0: "a", 1: "b", 2: "c" }, 1)).toEqual({ 0: "a", 1: "c" });
   });
 });
