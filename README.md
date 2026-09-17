@@ -2196,8 +2196,14 @@ now (see "Explicitly out of scope" below).
   - A **"Try one line"** form — pick any character who has a real
     reference plate, then a **Location** native `<select>` of six locked
     park plates (`SUNNY_BANKS_LOCATIONS`, default Office Storefront).
-    Speak/Hold send that location still as `startImageDataUrl` (the LTX
-    first frame) plus `locationId`/`locationImage` alongside
+    Speak/Hold do **not** send that empty location still to LTX
+    (live QA: invented sketch woman, not locked Shazza). Same
+    procedure as original Skidmarks Studio `plateCastIntoGen`: a
+    cheap xAI still first (`/api/skidmarks/generate-still`) with
+    Image 1 = the park plate and Image 2 = the hero card
+    (`buildSunnyBanksCompositePlatePrompt`), then that composed
+    still is `startImageDataUrl` for LTX. Gold Hold/Speak strings
+    unchanged. `locationId`/`locationImage` ride alongside
     `characterName`. Not a sequencer. **Speak** needs a locked ElevenLabs voice as well:
     type a line, tap "Generate speak beat" to render one real clip via
     `POST /api/skidmarks/sunnybank/generate-speak-beat`: ElevenLabs
