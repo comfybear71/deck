@@ -515,6 +515,13 @@ function statusPillLabel(status: RowStatus): string {
   return "Idle";
 }
 
+/** Closed-control fit at 390px — "Main Entrance Sign" → "Main Entrance".
+ * Full label stays on `title` / aria. Not a parser, not gold. */
+function compactQueueLocationLabel(label: string): string {
+  const words = label.trim().split(/\s+/);
+  return words.length <= 2 ? label : `${words[0]} ${words[1]}`;
+}
+
 function statusPillClass(status: RowStatus): string {
   if (status === "rendering") return "bg-amber-300/15 text-amber-100";
   if (status === "done") return "bg-emerald-400/15 text-emerald-200";
@@ -1151,7 +1158,7 @@ export function SkidmarksSunnyBanksPanel() {
                               }
                               disabled={running}
                               aria-label={`Character for line ${row.index + 1}`}
-                              className="h-10 min-h-[40px] w-[6.25rem] max-w-[6.25rem] shrink-0 truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
+                              className="h-10 min-h-[40px] w-[4.75rem] max-w-[4.75rem] shrink-0 truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
                             >
                               {CAST_LIST.map((c) => (
                                 <option key={c.name} value={c.name} className="bg-zinc-900">
@@ -1164,7 +1171,7 @@ export function SkidmarksSunnyBanksPanel() {
                                 </option>
                               ))}
                             </select>
-                            <p className="min-w-0 flex-1 truncate text-[12px] leading-snug text-white/90">
+                            <p className="min-w-0 max-w-[120px] flex-1 truncate text-[12px] leading-snug text-white/90">
                               {lineLabel}
                             </p>
                             <select
@@ -1179,16 +1186,17 @@ export function SkidmarksSunnyBanksPanel() {
                                 }))
                               }
                               disabled={running}
+                              title={row.location.label}
                               aria-label={`Location for line ${row.index + 1}`}
-                              className="h-10 min-h-[40px] min-w-0 w-[6.5rem] max-w-[6.5rem] shrink truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
+                              className="h-10 min-h-[40px] min-w-0 max-w-[120px] shrink truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
                             >
                               {LOCATION_LIST.map((location) => (
                                 <option key={location.id} value={location.id} className="bg-zinc-900">
-                                  {location.label}
+                                  {compactQueueLocationLabel(location.label)}
                                 </option>
                               ))}
                             </select>
-                            <div className="ml-auto flex shrink-0 items-center">
+                            <div className="ml-auto flex shrink-0 items-center gap-1">
                               <span
                                 className={[
                                   "shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
@@ -1197,6 +1205,24 @@ export function SkidmarksSunnyBanksPanel() {
                               >
                                 {statusPillLabel(status)}
                               </span>
+                              <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md bg-black/40">
+                                {runtime.status === "done" && runtime.videoUrl ? (
+                                  <video
+                                    src={runtime.videoUrl}
+                                    className="h-10 w-10 object-cover"
+                                    muted
+                                    playsInline
+                                    preload="metadata"
+                                    aria-label={`Preview for line ${row.index + 1}`}
+                                  />
+                                ) : row.location.image ? (
+                                  <img
+                                    src={row.location.image}
+                                    alt=""
+                                    className="h-10 w-10 object-cover"
+                                  />
+                                ) : null}
+                              </div>
                             </div>
                           </div>
                           {runtime?.status === "failed" && runtime.error && (
