@@ -18,6 +18,7 @@ describe("buildSunnyBanksEpisodeBundle", () => {
     const { zipBytes, filename } = buildSunnyBanksEpisodeBundle({
       title: "EP02 — Drop Bears Dilemma",
       defaultLocationId: "main_entrance_sign",
+      actIds: ["I", "II", "III"],
       actScripts: {
         I: "Ranger Bazza: Well here we go.\nUnit 4S: Yup yup. Naaah.",
         II: "Dazza: Yeah nah.",
@@ -69,6 +70,43 @@ describe("buildSunnyBanksEpisodeBundle", () => {
     };
     expect(clips.clips[0].videoUrl).toContain("skidmarks.aiglitch.app");
     expect(zipBytes.byteLength).toBeLessThan(16_000);
+  });
+
+  it("includes a dynamically added Act IV script block in script.txt", () => {
+    const { zipBytes } = buildSunnyBanksEpisodeBundle({
+      title: "Act IV check",
+      defaultLocationId: "office_storefront",
+      actIds: ["I", "II", "III", "IV"],
+      actScripts: {
+        I: "Shazza: You right?",
+        II: "",
+        III: "",
+        IV: "Unit 4S: Yup yup. Naaah.",
+      },
+      prompts: [],
+      clips: [
+        {
+          act: "IV",
+          index: 0,
+          characterName: "Unit 4S",
+          lineLabel: "Yup yup. Naaah.",
+          videoUrl: "https://example.test/iv.mp4",
+        },
+      ],
+    });
+    const dir = mkdtempSync(join(tmpdir(), "sunny-banks-act-iv-zip-"));
+    const zipPath = join(dir, "act-iv.zip");
+    writeFileSync(zipPath, zipBytes);
+    execFileSync("unzip", ["-o", zipPath, "-d", dir], { stdio: "pipe" });
+    const script = readFileSync(join(dir, "script.txt"), "utf8");
+    expect(script).toContain("# Act IV");
+    expect(script).toContain("Unit 4S: Yup yup. Naaah.");
+    const clips = JSON.parse(readFileSync(join(dir, "clips.json"), "utf8")) as {
+      actIds: string[];
+      clips: Array<{ act: string }>;
+    };
+    expect(clips.actIds).toEqual(["I", "II", "III", "IV"]);
+    expect(clips.clips[0].act).toBe("IV");
   });
 
   it("falls back to a generic zip name when the title is blank", () => {

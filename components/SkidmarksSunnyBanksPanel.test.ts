@@ -3,8 +3,10 @@ import {
   collectRenderedClips,
   fingerprintWorkspace,
   mintWorkspaceId,
+  nextSunnyBanksActId,
   parseSunnyBanksScriptBlock,
   SUNNY_BANKS_ACTS,
+  toSunnyBanksActId,
 } from "./SkidmarksSunnyBanksPanel";
 import { SUNNY_BANKS_CAST } from "@/lib/sunnyBanks";
 
@@ -59,8 +61,15 @@ describe("parseSunnyBanksScriptBlock", () => {
 });
 
 describe("SUNNY_BANKS_ACTS", () => {
-  it("is three in-panel act buffers, not a persisted episode schema", () => {
+  it("opens on three in-memory act buffers, not a persisted episode schema", () => {
     expect(SUNNY_BANKS_ACTS).toEqual(["I", "II", "III"]);
+  });
+
+  it("names the next in-memory act IV, then V, without a Neon row", () => {
+    expect(nextSunnyBanksActId(["I", "II", "III"])).toBe("IV");
+    expect(nextSunnyBanksActId(["I", "II", "III", "IV"])).toBe("V");
+    expect(toSunnyBanksActId(4)).toBe("IV");
+    expect(toSunnyBanksActId(20)).toBe("XX");
   });
 });
 
@@ -69,6 +78,7 @@ describe("workspace save ids", () => {
   const emptyMaps = { I: {}, II: {}, III: {} };
   const base = {
     defaultLocationId: "office_storefront",
+    actIds: ["I", "II", "III"],
     activeAct: "I",
     actScripts: emptyActs,
     characterOverrides: emptyMaps,
@@ -89,10 +99,15 @@ describe("workspace save ids", () => {
     const before = fingerprintWorkspace(base);
     const after = fingerprintWorkspace({
       ...base,
+      actIds: ["I", "II", "III", "IV"],
+      actScripts: { ...emptyActs, IV: "Shazza: Extra." },
+      characterOverrides: { ...emptyMaps, IV: {} },
+      locationOverrides: { ...emptyMaps, IV: {} },
       runtimeMap: {
         I: { 0: { lineKey: "Shazza: You right?", status: "done", videoUrl: "https://blob.example/a.mp4" } },
         II: {},
         III: {},
+        IV: {},
       },
     });
     expect(after).not.toBe(before);
@@ -102,6 +117,7 @@ describe("workspace save ids", () => {
 describe("collectRenderedClips", () => {
   it("only returns done clips with a video URL, grouped by the act they were rendered on", () => {
     const clips = collectRenderedClips({
+      actIds: ["I", "II", "III"],
       actScripts: {
         I: "Shazza: You right?\nDazza: Yeah nah.",
         II: "Nan:",
@@ -137,5 +153,41 @@ describe("collectRenderedClips", () => {
         durationSec: undefined,
       },
     ]);
+  });
+
+  it("walks a dynamically added Act IV instead of dropping it", () => {
+    const clips = collectRenderedClips({
+      actIds: ["I", "II", "III", "IV"],
+      actScripts: {
+        I: "",
+        II: "",
+        III: "",
+        IV: "Unit 4S: Yup yup. Naaah.",
+      },
+      characterOverrides: { I: {}, II: {}, III: {}, IV: {} },
+      runtimeMap: {
+        I: {},
+        II: {},
+        III: {},
+        IV: {
+          0: {
+            lineKey: "Unit 4S: Yup yup. Naaah.",
+            status: "done",
+            videoUrl: "https://blob.example/iv0.mp4",
+          },
+        },
+      },
+    });
+    expect(clips).toEqual([
+      {
+        act: "IV",
+        index: 0,
+        characterName: "Unit 4S",
+        lineLabel: "Yup yup. Naaah.",
+        videoUrl: "https://blob.example/iv0.mp4",
+        durationSec: undefined,
+      },
+    ]);
+    expect(SUNNY_BANKS_CAST["Unit 4S"].look).toContain("bare feet");
   });
 });

@@ -39,6 +39,7 @@ describe("Drop Bears EP02 seed", () => {
     expect(crashLabClipUrl(first.clipFile)).toContain(first.clipFile);
 
     const clips = collectRenderedClips({
+      actIds: ["I", "II", "III"],
       actScripts: seed.actScripts,
       runtimeMap: seed.runtimeMap,
       characterOverrides: { I: {}, II: {}, III: {} },
