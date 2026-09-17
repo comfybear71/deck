@@ -2189,21 +2189,27 @@ now (see "Explicitly out of scope" below).
     app, `public/skidmarks/sunnybanks/*-reference.jpg`) with the name
     in a bottom scrim, and an honest "not ready" label on anyone
     missing a locked ElevenLabs voice id (Hans, today).
-  - A **"Try one line"** form — pick any character who has *both* a
-    real voice id and a reference plate, type a line, tap "Generate
-    speak beat" to render one real clip via `POST /api/skidmarks/
-    sunnybank/generate-speak-beat`: ElevenLabs text-to-speech
-    (`lib/elevenLabsSpeech.ts`, keyed off the same `ELEVENLABS_API_KEY`
-    Scribe transcription already uses — this is the first caller going
-    the *other* direction, text **to** speech) synthesizes the line in
-    that character's cloned voice, then feeds it into the exact same
-    Comfy Cloud LTX 2.3 IA2V graph Skidmarks' own music-video Vocal
-    render already calls (`lib/comfyCloud.ts`, `COMFY_CLOUD_API_KEY`) —
-    same graph, same identity-holding LoRA, only the driving audio's
-    source and the prompt text (Sunny Banks' own verbatim gold-doc
-    look/style locks, not Skidmarks' 3D-noir vocabulary) are new. The
-    result plays inline once done; no shelf/persistence-listing route
-    yet (see below).
+  - A **"Try one line"** form — pick any character who has a real
+    reference plate. **Speak** needs a locked ElevenLabs voice as well:
+    type a line, tap "Generate speak beat" to render one real clip via
+    `POST /api/skidmarks/sunnybank/generate-speak-beat`: ElevenLabs
+    text-to-speech (`lib/elevenLabsSpeech.ts`, keyed off the same
+    `ELEVENLABS_API_KEY` Scribe transcription already uses — this is
+    the first caller going the *other* direction, text **to** speech)
+    synthesizes the line in that character's cloned voice, then feeds
+    it into the exact same Comfy Cloud LTX 2.3 IA2V graph Skidmarks'
+    own music-video Vocal render already calls (`lib/comfyCloud.ts`,
+    `COMFY_CLOUD_API_KEY`) — same graph, same identity-holding LoRA,
+    only the driving audio's source and the prompt text (Sunny Banks'
+    own verbatim gold-doc look/style locks, not Skidmarks' 3D-noir
+    vocabulary) are new. **Silent Hold (2026-09-17)** sits next to
+    Speak on the same form: no line required, no ElevenLabs call.
+    Same route with `kind: "hold"`, a 5s silent MP3
+    (`lib/silentMp3.ts`, `SUNNY_BANKS_HOLD_DURATION_SEC` — LTX still
+    needs a `LoadAudio` input; silence is the honest one for "No
+    dialogue"), `buildSunnyBanksHoldPrompt` as the motion text, still
+    one paid Comfy Cloud LTX clip per tap. The result plays inline
+    once done; no shelf/persistence-listing route yet (see below).
   - **Deliberately still just this one pilot slice** — Grok's own
     relayed scope for it: "render one speak beat, then stop." No
     episode/beat model, no script parser, no per-beat pathname/shelf

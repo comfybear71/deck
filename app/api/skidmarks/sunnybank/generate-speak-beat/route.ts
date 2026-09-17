@@ -3,10 +3,15 @@ import { put } from "@vercel/blob";
 import { decodeDataUrl } from "@/lib/dataUrl";
 import { synthesizeSunnyBanksLine } from "@/lib/elevenLabsSpeech";
 import { estimateMp3DurationSec } from "@/lib/mp3Slice";
+import { encodeSilentMp3 } from "@/lib/silentMp3";
 import {
+  buildSunnyBanksHoldBeatPathname,
+  buildSunnyBanksHoldPrompt,
   buildSunnyBanksSpeakBeatPathname,
   buildSunnyBanksSpeakingPrompt,
   getSunnyBanksCharacterLock,
+  SUNNY_BANKS_HOLD_DURATION_SEC,
+  type SunnyBanksCharacterLock,
 } from "@/lib/sunnyBanks";
 import {
   buildLtx23Ia2vWorkflow,
@@ -19,39 +24,31 @@ import {
 } from "@/lib/comfyCloud";
 
 /**
- * POST /api/skidmarks/sunnybank/generate-speak-beat — the very first
- * real slice of Sunny Banks (2026-09-15), scoped exactly to Grok's own
- * relayed pilot instructions: "Render **one speak beat** with gold
- * prompt + start image. Stop. Do not auto-render a full 40-beat episode
- * until Stuie says go." No episode/beat model, no script parser, no
- * cast strip UI yet — just proving the one thing genuinely new here
- * (ElevenLabs text-to-speech feeding a real Comfy Cloud LTX render)
- * actually works end to end, the same "prove the riskiest new
- * integration in isolation before building the wizard around it" order
- * this whole feature area has followed since Skidmarks' own Vocal path.
+ * POST /api/skidmarks/sunnybank/generate-speak-beat — the first real
+ * slice of Sunny Banks (2026-09-15), plus a Hold sibling (2026-09-17).
+ * Original scope: "Render **one speak beat** with gold prompt + start
+ * image. Stop. Do not auto-render a full 40-beat episode until Stuie
+ * says go." Hold is the same one-clip-at-a-time pilot, not an episode
+ * model: `kind: "hold"` skips ElevenLabs entirely, feeds a silent MP3
+ * of `SUNNY_BANKS_HOLD_DURATION_SEC` (5s) into the same Comfy Cloud
+ * LTX 2.3 IA2V graph, and uses `buildSunnyBanksHoldPrompt` instead of
+ * the speaking-plate gold. No ShotBlock schema, no batch.
  *
  * **Reuses the exact same Comfy Cloud LTX 2.3 IA2V pipeline Skidmarks'
  * music-video Vocal render already calls** (`lib/comfyCloud.ts`,
- * `workflow/LTX_2.3_IA2V_Cloud.json`) — confirmed, not assumed, by
- * reading `buildLtx23Ia2vWorkflow` before writing this route: it takes
- * an already-uploaded image filename, an already-uploaded audio
- * filename, a prompt, and a duration — it has no idea (and doesn't
- * care) whether that audio came from a sliced song vocal or a freshly
- * synthesized ElevenLabs line. Same graph, same "talkvid-3k" ID LoRA
- * that holds a face through motion, same poll/download/persist shape —
- * only the *source* of the driving audio and the *prompt text* (Sunny
- * Banks' own gold, `lib/sunnyBanks.ts`, not Skidmarks' 3D-noir prompt)
- * are new.
+ * `workflow/LTX_2.3_IA2V_Cloud.json`) — it takes an already-uploaded
+ * image filename, an already-uploaded audio filename, a prompt, and a
+ * duration. A Hold still has to send audio: LTX's `LoadAudio` node
+ * (`276`) is required. Silence is the honest input for a no-dialogue
+ * beat; inventing a dummy spoken line just to satisfy the graph would
+ * be a silent ElevenLabs bill on every Hold.
  *
  * **Real per-beat pathname/shelf, resume-on-failure, last-frame
  * chaining between beats — all deliberately out of scope for this
  * route.** Every one of those is real, working infrastructure this app
  * already has (`lib/clipRenderBlob.ts`, `lib/scriptSequenceRunner.ts`,
  * `lib/serverVideoFrame.ts`) and Sunny Banks will reuse once there's a
- * real episode/beat model to hang it off — building that model before
- * proving the render itself works would be exactly the "storyboard/
- * IMAGE MOTION desk" scope creep Grok's own spec explicitly warned
- * against rebuilding.
+ * real episode/beat model to hang it off.
  */
 
 export const runtime = "nodejs";
@@ -75,10 +72,20 @@ const MAX_LTX_CLIP_DURATION_SEC = 15;
 
 const SPEAK_BEAT_POLL_DEADLINE_MS = 240_000;
 
+type BeatKind = "speak" | "hold";
+
 interface GenerateSpeakBeatRequestBody {
   characterName?: unknown;
   line?: unknown;
   startImageDataUrl?: unknown;
+  /** `"hold"` = silent pause, no TTS. Anything else (including omitted)
+   * is a Speak beat — the original contract, so existing callers don't
+   * have to learn a new field. */
+  kind?: unknown;
+}
+
+function parseBeatKind(value: unknown): BeatKind {
+  return value === "hold" ? "hold" : "speak";
 }
 
 export async function POST(request: Request) {
@@ -89,13 +96,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body.", code: "invalid_request" }, { status: 400 });
   }
 
+  const kind = parseBeatKind(body.kind);
   const characterName = typeof body.characterName === "string" ? body.characterName.trim() : "";
   const line = typeof body.line === "string" ? body.line.trim() : "";
   const startImageDataUrl = typeof body.startImageDataUrl === "string" ? body.startImageDataUrl : "";
 
-  if (!characterName || !line || !startImageDataUrl) {
+  if (!characterName || !startImageDataUrl || (kind === "speak" && !line)) {
     return NextResponse.json(
-      { error: "characterName, line, and startImageDataUrl are all required.", code: "invalid_request" },
+      {
+        error:
+          kind === "hold"
+            ? "characterName and startImageDataUrl are required for a Hold."
+            : "characterName, line, and startImageDataUrl are all required.",
+        code: "invalid_request",
+      },
       { status: 400 }
     );
   }
@@ -107,7 +121,8 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  if (!character.voiceId) {
+  const voiceId = character.voiceId;
+  if (kind === "speak" && !voiceId) {
     return NextResponse.json(
       { error: `${character.name} doesn't have a locked ElevenLabs voice yet.`, code: "missing_voice" },
       { status: 400 }
@@ -127,29 +142,81 @@ export async function POST(request: Request) {
     );
   }
 
-  const speechOutcome = await synthesizeSunnyBanksLine(character.voiceId, line);
-  if (!speechOutcome.ok) {
-    return NextResponse.json(
-      { error: speechOutcome.message, code: speechOutcome.unconfigured ? "missing_api_key" : "upstream_error" },
-      { status: speechOutcome.unconfigured ? 501 : 502 }
-    );
+  let audioBytes: Uint8Array;
+  let audioContentType: string;
+  let durationSec: number;
+  let prompt: string;
+
+  if (kind === "hold") {
+    audioBytes = encodeSilentMp3(SUNNY_BANKS_HOLD_DURATION_SEC);
+    audioContentType = "audio/mpeg";
+    const silentDurationSec = estimateMp3DurationSec(audioBytes);
+    if (silentDurationSec < MIN_LTX_AUDIO_INPUT_SEC) {
+      return NextResponse.json(
+        {
+          error: `Hold audio only encoded to ${silentDurationSec.toFixed(1)}s — Comfy Cloud's LTX node needs at least ${MIN_LTX_AUDIO_INPUT_SEC}s of driving audio.`,
+          code: "invalid_request",
+        },
+        { status: 422 }
+      );
+    }
+    durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, silentDurationSec);
+    prompt = buildSunnyBanksHoldPrompt(character);
+  } else {
+    if (!voiceId) {
+      return NextResponse.json(
+        { error: `${character.name} doesn't have a locked ElevenLabs voice yet.`, code: "missing_voice" },
+        { status: 400 }
+      );
+    }
+    const speechOutcome = await synthesizeSunnyBanksLine(voiceId, line);
+    if (!speechOutcome.ok) {
+      return NextResponse.json(
+        { error: speechOutcome.message, code: speechOutcome.unconfigured ? "missing_api_key" : "upstream_error" },
+        { status: speechOutcome.unconfigured ? 501 : 502 }
+      );
+    }
+    audioBytes = speechOutcome.bytes;
+    audioContentType = speechOutcome.contentType;
+    const rawDurationSec = estimateMp3DurationSec(speechOutcome.bytes);
+    if (rawDurationSec < MIN_LTX_AUDIO_INPUT_SEC) {
+      return NextResponse.json(
+        {
+          error:
+            `${character.name}'s line only synthesized to ${rawDurationSec.toFixed(1)}s — Comfy Cloud's LTX ` +
+            `node needs at least ${MIN_LTX_AUDIO_INPUT_SEC}s of driving audio. Try a longer line.`,
+          code: "invalid_request",
+        },
+        { status: 422 }
+      );
+    }
+    durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, rawDurationSec);
+    prompt = buildSunnyBanksSpeakingPrompt(character, line);
   }
 
-  const rawDurationSec = estimateMp3DurationSec(speechOutcome.bytes);
-  if (rawDurationSec < MIN_LTX_AUDIO_INPUT_SEC) {
-    return NextResponse.json(
-      {
-        error:
-          `${character.name}'s line only synthesized to ${rawDurationSec.toFixed(1)}s — Comfy Cloud's LTX ` +
-          `node needs at least ${MIN_LTX_AUDIO_INPUT_SEC}s of driving audio. Try a longer line.`,
-        code: "invalid_request",
-      },
-      { status: 422 }
-    );
-  }
-  const durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, rawDurationSec);
+  return runLtxAndPersist({
+    character,
+    kind,
+    prompt,
+    durationSec,
+    audioBytes,
+    audioContentType,
+    startImageDataUrl,
+    creds,
+  });
+}
 
-  const decodedImage = decodeDataUrl(startImageDataUrl);
+async function runLtxAndPersist(args: {
+  character: SunnyBanksCharacterLock;
+  kind: BeatKind;
+  prompt: string;
+  durationSec: number;
+  audioBytes: Uint8Array;
+  audioContentType: string;
+  startImageDataUrl: string;
+  creds: NonNullable<ReturnType<typeof resolveComfyCloudCredentials>>;
+}) {
+  const decodedImage = decodeDataUrl(args.startImageDataUrl);
   if (!decodedImage) {
     return NextResponse.json(
       { error: "Could not decode startImageDataUrl.", code: "invalid_request" },
@@ -165,36 +232,35 @@ export async function POST(request: Request) {
     framedImage.bytes,
     framedImage.letterboxed ? `sunnybanks-start-${Date.now()}.jpg` : `sunnybanks-start-${Date.now()}.png`,
     framedImage.mimeType,
-    creds
+    args.creds
   );
   if (!imageUpload.ok) {
     return NextResponse.json({ error: imageUpload.error, code: imageUpload.code }, { status: imageUpload.status });
   }
 
   const audioUpload = await uploadComfyCloudInput(
-    speechOutcome.bytes,
-    `sunnybanks-line-${Date.now()}.mp3`,
-    speechOutcome.contentType,
-    creds
+    args.audioBytes,
+    args.kind === "hold" ? `sunnybanks-hold-${Date.now()}.mp3` : `sunnybanks-line-${Date.now()}.mp3`,
+    args.audioContentType,
+    args.creds
   );
   if (!audioUpload.ok) {
     return NextResponse.json({ error: audioUpload.error, code: audioUpload.code }, { status: audioUpload.status });
   }
 
-  const prompt = buildSunnyBanksSpeakingPrompt(character, line);
   const workflow = buildLtx23Ia2vWorkflow({
     imageFilename: imageUpload.name,
     audioFilename: audioUpload.name,
-    prompt,
-    durationSec,
+    prompt: args.prompt,
+    durationSec: args.durationSec,
   });
 
-  const submitResult = await submitComfyCloudWorkflow(workflow, creds);
+  const submitResult = await submitComfyCloudWorkflow(workflow, args.creds);
   if (!submitResult.ok) {
     return NextResponse.json({ error: submitResult.error, code: submitResult.code }, { status: submitResult.status });
   }
 
-  const completionResult = await pollComfyCloudJob(submitResult.promptId, creds, SPEAK_BEAT_POLL_DEADLINE_MS);
+  const completionResult = await pollComfyCloudJob(submitResult.promptId, args.creds, SPEAK_BEAT_POLL_DEADLINE_MS);
   if (!completionResult.ok) {
     return NextResponse.json(
       { error: completionResult.error, code: completionResult.code },
@@ -202,12 +268,15 @@ export async function POST(request: Request) {
     );
   }
 
-  const downloadResult = await downloadComfyCloudOutput(completionResult.videoFile, creds);
+  const downloadResult = await downloadComfyCloudOutput(completionResult.videoFile, args.creds);
   if (!downloadResult.ok) {
     return NextResponse.json({ error: downloadResult.error, code: downloadResult.code }, { status: downloadResult.status });
   }
 
-  const pathname = buildSunnyBanksSpeakBeatPathname(character.name, Date.now());
+  const pathname =
+    args.kind === "hold"
+      ? buildSunnyBanksHoldBeatPathname(args.character.name, Date.now())
+      : buildSunnyBanksSpeakBeatPathname(args.character.name, Date.now());
   try {
     const blob = await put(pathname, Buffer.from(downloadResult.bytes), {
       access: "public",
@@ -216,8 +285,9 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({
       videoUrl: blob.url,
-      durationSec,
-      character: character.name,
+      durationSec: args.durationSec,
+      character: args.character.name,
+      kind: args.kind,
       persisted: true,
     });
   } catch (err) {
@@ -226,8 +296,9 @@ export async function POST(request: Request) {
     // the real bytes as a data: URL, honestly flagged as not saved.
     return NextResponse.json({
       videoUrl: `data:video/mp4;base64,${Buffer.from(downloadResult.bytes).toString("base64")}`,
-      durationSec,
-      character: character.name,
+      durationSec: args.durationSec,
+      character: args.character.name,
+      kind: args.kind,
       persisted: false,
       persistError: err instanceof Error ? err.message : "Vercel Blob upload failed for an unknown reason.",
     });

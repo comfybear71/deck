@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSunnyBanksHoldBeatPathname,
   buildSunnyBanksHoldPrompt,
+  buildSunnyBanksSpeakBeatPathname,
   buildSunnyBanksSpeakingPrompt,
   buildUnit4sLine,
   getSunnyBanksCharacterLock,
@@ -81,6 +83,16 @@ describe("buildSunnyBanksHoldPrompt", () => {
     expect(prompt).toContain("No dialogue. Camera holds, no cuts.");
     expect(prompt).toContain(SUNNY_BANKS_STYLE_LOCK);
     expect(prompt).not.toContain(" says:");
+  });
+});
+
+describe("buildSunnyBanksHoldBeatPathname", () => {
+  it("nests under hold-beats, never speak-beats, and slugifies a spaced name", () => {
+    const hold = buildSunnyBanksHoldBeatPathname("Ranger Bazza", 123);
+    const speak = buildSunnyBanksSpeakBeatPathname("Ranger Bazza", 123);
+    expect(hold).toBe("sunnybanks/hold-beats/123-ranger-bazza.mp4");
+    expect(speak).toBe("sunnybanks/speak-beats/123-ranger-bazza.mp4");
+    expect(hold).not.toBe(speak);
   });
 });
 
