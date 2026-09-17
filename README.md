@@ -2204,9 +2204,14 @@ now (see "Explicitly out of scope" below).
     Each row is one spreadsheet-style line: character `<select>` (CAST
     keyed by name, full lock still loaded on the server for gold
     prompts), truncated line fragment, location `<select>`, Idle /
-    Rendering... / Done pill, and a 40px clip thumb. Tap the thumb to
-    open a body-portaled player (iOS Safari stacking) instead of an
-    inline `<video>` stretching the page. Speak/Hold still POST that location still as `startImageDataUrl`
+    Rendering... / Done pill — no in-row video thumb (live QA: those
+    40px blocks cluttered the queue). Finished MP4s live in one
+    default-open **Clips** shelf after the script (same card size and
+    `touch-pan-x` as `SkidmarksRenderedClipsShelf` (`w-44` / `h-28`,
+    inline `<video controls playsInline>`), sectioned Act I / II / III
+    with a divider between acts — not a lightbox). A collapsible
+    **Episode workspace** bar sits under that strip, same reading
+    order as music-video rendered-clips then archive. Speak/Hold still POST that location still as `startImageDataUrl`
     (the location canvas — Image 1) plus `locationId`/`locationImage`
     alongside `characterName`. The **route** (`lib/sunnyBanksComposite.ts`)
     then overlays the character hero as Image 2 via xAI edits (Studio
@@ -2246,8 +2251,10 @@ now (see "Explicitly out of scope" below).
     A collapsible **Episode workspace** bar at the bottom of the panel
     snapshots the three act scripts, location ids, and finished clip
     URLs for this open sheet only — not `localStorage`, not a Neon
-    episode table. Sunny Banks has no song MP3; TTS is generated at
-    render time.
+    episode table. Each save mints a new card (`timestamp` + seq +
+    content fingerprint) instead of reusing a colliding `Date.now()`
+    key. A red ✕ on the card deletes that snapshot only. Sunny Banks
+    has no song MP3; TTS is generated at render time.
   - **Still not the episode wizard** — Grok's own earlier scope was
     "render one speak beat, then stop." There is still no Neon
     episode/beat model, no `lib/scriptSequenceRunner`, no per-beat

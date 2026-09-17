@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useMemo, useRef, useState } from "react";
 import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
@@ -61,8 +60,19 @@ import {
  * clip URLs as a workspace sheet for this open detail-sheet only.
  * No `localStorage`, no new session schema. Sunny Banks has no song
  * MP3; driving audio is TTS at render time, so a workspace stores the
- * finished LTX URL rather than an MP3 path. Finished clips are a 40px
- * thumb; tap opens a body-portaled player (iOS Safari stacking).
+ * finished LTX URL rather than an MP3 path.
+ *
+ * **Clips live in one Act-grouped strip (2026-09-17, live QA)** —
+ * 40px thumbs in each dialogue row cluttered the queue. Rows are
+ * text-only now. Finished MP4s sit in one `overflow-x-auto` row at
+ * the base of the working panel (after the script, before the
+ * Episode workspace, same reading order as music-video rendered
+ * clips then archive), same card size and `touch-pan-x` as
+ * `SkidmarksRenderedClipsShelf` (`w-44` / `h-28`, inline controls),
+ * sectioned Act I / II / III. Workspace save always mints a new card
+ * (`mintWorkspaceId` = timestamp + seq + content fingerprint) instead
+ * of reusing `Date.now()` as a key that could collide on a double-tap.
+ * Each saved card has a red ✕ that drops that snapshot only.
  */
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
@@ -114,6 +124,7 @@ type ActKeyed<T> = Record<SunnyBanksActId, T>;
 interface EpisodeWorkspace {
   id: string;
   savedAt: number;
+  fingerprint: string;
   label: string;
   defaultLocationId: SunnyBanksLocationId;
   activeAct: SunnyBanksActId;
@@ -121,6 +132,15 @@ interface EpisodeWorkspace {
   characterOverrides: ActKeyed<Record<number, string>>;
   locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
   runtimeMap: ActKeyed<Record<number, RowRuntime>>;
+}
+
+export interface SunnyBanksRenderedClip {
+  act: SunnyBanksActId;
+  index: number;
+  characterName: string;
+  lineLabel: string;
+  videoUrl: string;
+  durationSec?: number;
 }
 
 const HOLD_COST_USD = estimateLtxClipRenderCostUsd(SUNNY_BANKS_HOLD_DURATION_SEC);
@@ -215,12 +235,58 @@ function workspaceLabelFromScripts(actScripts: ActKeyed<string>, fallback: strin
   return fallback;
 }
 
-function CloseIcon() {
-  return (
-    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
-      <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
+/** djb2 of the snapshot payload — same scripts + same clip URLs hash
+ * the same; a new render URL or a typed edit does not. Used as part of
+ * the workspace id, never as a uniqueness gate that would skip a save. */
+export function fingerprintWorkspace(snapshot: {
+  defaultLocationId: string;
+  activeAct: string;
+  actScripts: ActKeyed<string>;
+  characterOverrides: ActKeyed<Record<number, string>>;
+  locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
+  runtimeMap: ActKeyed<Record<number, RowRuntime>>;
+}): string {
+  const payload = JSON.stringify(snapshot);
+  let hash = 5381;
+  for (let i = 0; i < payload.length; i += 1) {
+    hash = (hash * 33) ^ payload.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/** Always a new card. Timestamp + monotonic seq so two saves in the
+ * same millisecond cannot share a React key; fingerprint records what
+ * was saved without replacing an earlier card. */
+export function mintWorkspaceId(savedAt: number, seq: number, fingerprint: string): string {
+  return `ws-${savedAt}-${seq}-${fingerprint}`;
+}
+
+export function collectRenderedClips(args: {
+  actScripts: ActKeyed<string>;
+  runtimeMap: ActKeyed<Record<number, RowRuntime>>;
+  characterOverrides: ActKeyed<Record<number, string>>;
+}): SunnyBanksRenderedClip[] {
+  const clips: SunnyBanksRenderedClip[] = [];
+  for (const act of SUNNY_BANKS_ACTS) {
+    const chunks = parseSunnyBanksScriptBlock(args.actScripts[act]);
+    const runtimes = args.runtimeMap[act];
+    const overrides = args.characterOverrides[act];
+    chunks.forEach((chunk, index) => {
+      const stored = runtimes[index];
+      if (!stored || stored.lineKey !== chunk.raw || stored.status !== "done" || !stored.videoUrl) {
+        return;
+      }
+      clips.push({
+        act,
+        index,
+        characterName: overrides[index] ?? chunk.characterName,
+        lineLabel: chunk.line.length > 0 ? chunk.line : "Silent hold",
+        videoUrl: stored.videoUrl,
+        durationSec: stored.durationSec,
+      });
+    });
+  }
+  return clips;
 }
 
 function ChevronIcon({ open }: { open: boolean }) {
@@ -233,47 +299,6 @@ function ChevronIcon({ open }: { open: boolean }) {
     >
       <path d="M5 7.5l5 5 5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
-  );
-}
-
-function SunnyBanksClipLightbox({
-  videoUrl,
-  label,
-  onClose,
-}: {
-  videoUrl: string;
-  label: string;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  return createPortal(
-    <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
-      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
-        className="relative z-10 flex w-full max-w-sm flex-col gap-3 animate-[sheet-in_0.18s_ease-out]"
-      >
-        <video src={videoUrl} controls autoPlay playsInline className="w-full rounded-2xl" />
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="absolute -right-2 -top-2 flex h-10 w-10 items-center justify-center rounded-full bg-zinc-950 text-white/80 ring-1 ring-white/15"
-        >
-          <CloseIcon />
-        </button>
-      </div>
-    </div>,
-    document.body
   );
 }
 
@@ -297,9 +322,10 @@ export function SkidmarksSunnyBanksPanel() {
   const [progressText, setProgressText] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<EpisodeWorkspace[]>([]);
   const [shelfOpen, setShelfOpen] = useState(false);
-  const [playingClip, setPlayingClip] = useState<{ url: string; label: string } | null>(null);
+  const [clipsOpen, setClipsOpen] = useState(true);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
+  const workspaceSaveSeqRef = useRef(0);
 
   const scriptText = actScripts[activeAct];
   const characterOverrides = characterOverridesByAct[activeAct];
@@ -323,6 +349,16 @@ export function SkidmarksSunnyBanksPanel() {
     const kind: BeatKind = line.length > 0 ? "speak" : "hold";
     return { chunk, index, characterName, character, location, line, kind };
   });
+
+  const renderedClips = collectRenderedClips({
+    actScripts,
+    runtimeMap: runtimeMapByAct,
+    characterOverrides: characterOverridesByAct,
+  });
+  const clipsByAct = SUNNY_BANKS_ACTS.map((act) => ({
+    act,
+    clips: renderedClips.filter((clip) => clip.act === act),
+  })).filter((group) => group.clips.length > 0);
 
   const overlayCostUsd = queue.length * ESTIMATED_STILL_COST_USD;
   const holdVideoCostUsd = queue.filter((row) => row.kind === "hold").length * HOLD_COST_USD;
@@ -468,20 +504,38 @@ export function SkidmarksSunnyBanksPanel() {
   };
 
   const handleSaveWorkspace = () => {
-    const id = `${Date.now()}`;
-    const snapshot: EpisodeWorkspace = {
-      id,
-      savedAt: Date.now(),
-      label: workspaceLabelFromScripts(actScripts, `Episode ${workspaces.length + 1}`),
+    workspaceSaveSeqRef.current += 1;
+    const savedAt = Date.now();
+    const actScriptsSnapshot = cloneActRecord(actScripts);
+    const characterOverridesSnapshot = cloneActRecord(characterOverridesByAct);
+    const locationOverridesSnapshot = cloneActRecord(locationOverridesByAct);
+    const runtimeMapSnapshot = cloneActRecord(runtimeMapByAct);
+    const fingerprint = fingerprintWorkspace({
       defaultLocationId,
       activeAct,
-      actScripts: cloneActRecord(actScripts),
-      characterOverrides: cloneActRecord(characterOverridesByAct),
-      locationOverrides: cloneActRecord(locationOverridesByAct),
-      runtimeMap: cloneActRecord(runtimeMapByAct),
+      actScripts: actScriptsSnapshot,
+      characterOverrides: characterOverridesSnapshot,
+      locationOverrides: locationOverridesSnapshot,
+      runtimeMap: runtimeMapSnapshot,
+    });
+    const snapshot: EpisodeWorkspace = {
+      id: mintWorkspaceId(savedAt, workspaceSaveSeqRef.current, fingerprint),
+      savedAt,
+      fingerprint,
+      label: workspaceLabelFromScripts(actScriptsSnapshot, `Episode ${workspaces.length + 1}`),
+      defaultLocationId,
+      activeAct,
+      actScripts: actScriptsSnapshot,
+      characterOverrides: characterOverridesSnapshot,
+      locationOverrides: locationOverridesSnapshot,
+      runtimeMap: runtimeMapSnapshot,
     };
     setWorkspaces((prev) => [snapshot, ...prev]);
     setShelfOpen(true);
+  };
+
+  const handleDeleteWorkspace = (id: string) => {
+    setWorkspaces((prev) => prev.filter((workspace) => workspace.id !== id));
   };
 
   const handleOpenWorkspace = (workspace: EpisodeWorkspace) => {
@@ -675,29 +729,6 @@ export function SkidmarksSunnyBanksPanel() {
                         >
                           {statusPillLabel(status)}
                         </span>
-                        {runtime?.status === "done" && runtime.videoUrl ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setPlayingClip({
-                                url: runtime.videoUrl as string,
-                                label: `Line ${row.index + 1} — ${row.characterName}`,
-                              })
-                            }
-                            aria-label={`Play line ${row.index + 1}`}
-                            className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md ring-1 ring-inset ring-white/25"
-                          >
-                            <video
-                              src={runtime.videoUrl}
-                              muted
-                              playsInline
-                              preload="metadata"
-                              className="h-full w-full object-cover"
-                            />
-                          </button>
-                        ) : (
-                          <span className="h-10 w-10 shrink-0 rounded-md border border-dashed border-white/15" />
-                        )}
                       </div>
                       {runtime?.status === "failed" && runtime.error && (
                         <p role="alert" className="pb-1.5 pl-5 text-[11px] leading-snug text-rose-300/90">
@@ -752,7 +783,68 @@ export function SkidmarksSunnyBanksPanel() {
         )}
       </div>
 
-      <div className="sticky bottom-0 z-20 rounded-xl border border-white/10 bg-zinc-950/95">
+      <div className="flex flex-col gap-3 border-t border-white/10 pt-4">
+        <button
+          type="button"
+          onClick={() => setClipsOpen((open) => !open)}
+          aria-expanded={clipsOpen}
+          className="flex w-full items-center justify-between gap-2 text-left"
+        >
+          <span className="text-[11px] font-medium uppercase tracking-wide text-white/40">
+            Clips
+            <span aria-hidden className="ml-1.5 text-white/25">
+              {"\u00b7"} {renderedClips.length}
+            </span>
+          </span>
+          <ChevronIcon open={clipsOpen} />
+        </button>
+        {clipsOpen &&
+          (renderedClips.length === 0 ? (
+            <p className="text-[11px] leading-relaxed text-white/35">Nothing rendered yet.</p>
+          ) : (
+            <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+              {clipsByAct.map((group, groupIndex) => (
+                <div key={group.act} className="flex shrink-0 items-stretch gap-2.5">
+                  {groupIndex > 0 ? (
+                    <div aria-hidden className="w-px shrink-0 self-stretch bg-white/10" />
+                  ) : null}
+                  <div className="flex shrink-0 flex-col gap-1.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
+                      Act {group.act}
+                    </span>
+                    <div className="flex gap-2.5">
+                      {group.clips.map((clip) => (
+                        <div
+                          key={`${clip.act}:${clip.index}:${clip.videoUrl}`}
+                          className="flex w-44 shrink-0 touch-pan-x flex-col gap-1.5"
+                        >
+                          <video
+                            src={clip.videoUrl}
+                            controls
+                            playsInline
+                            preload="metadata"
+                            className="h-28 w-44 rounded-xl bg-black object-cover"
+                          />
+                          <p className="truncate text-[11px] font-medium leading-tight text-white/70">
+                            {clip.characterName}
+                            {typeof clip.durationSec === "number"
+                              ? ` \u00b7 ${clip.durationSec.toFixed(1)}s`
+                              : ""}
+                          </p>
+                          <p className="truncate text-[10px] leading-tight text-white/40">
+                            Line {clip.index + 1} · {clip.lineLabel}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+      </div>
+
+      <div className="rounded-xl border border-white/10 bg-zinc-950/95">
         <button
           type="button"
           onClick={() => setShelfOpen((open) => !open)}
@@ -784,34 +876,40 @@ export function SkidmarksSunnyBanksPanel() {
             ) : (
               <div className="flex gap-2 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
                 {workspaces.map((workspace) => (
-                  <button
+                  <div
                     key={workspace.id}
-                    type="button"
-                    onClick={() => handleOpenWorkspace(workspace)}
-                    disabled={running}
-                    className="flex h-16 min-w-[9.5rem] shrink-0 flex-col justify-center rounded-xl border border-white/10 bg-white/[0.04] px-2.5 text-left disabled:opacity-60"
+                    className="relative h-16 min-w-[9.5rem] shrink-0 rounded-xl border border-white/10 bg-white/[0.04]"
                   >
-                    <span className="line-clamp-2 text-[11px] font-semibold text-white/85">
-                      {workspace.label}
-                    </span>
-                    <span className="mt-0.5 text-[10px] text-white/40">
-                      Act {workspace.activeAct}
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenWorkspace(workspace)}
+                      disabled={running}
+                      className="flex h-full w-full flex-col justify-center py-1.5 pl-2.5 pr-10 text-left disabled:opacity-60"
+                    >
+                      <span className="line-clamp-2 text-[11px] font-semibold text-white/85">
+                        {workspace.label}
+                      </span>
+                      <span className="mt-0.5 text-[10px] text-white/40">
+                        Act {workspace.activeAct}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteWorkspace(workspace.id)}
+                      aria-label={`Delete ${workspace.label}`}
+                      className="absolute right-0 top-0 flex h-10 w-10 items-center justify-center text-rose-400"
+                    >
+                      <span aria-hidden className="text-[16px] font-semibold leading-none">
+                        ✕
+                      </span>
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
           </div>
         )}
       </div>
-
-      {playingClip && (
-        <SunnyBanksClipLightbox
-          videoUrl={playingClip.url}
-          label={playingClip.label}
-          onClose={() => setPlayingClip(null)}
-        />
-      )}
     </div>
   );
 }
