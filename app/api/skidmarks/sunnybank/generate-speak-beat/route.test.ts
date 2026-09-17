@@ -282,6 +282,45 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(promptNode?.inputs?.value).not.toContain("[SPEECH]");
   });
 
+  it("appends [Action:] after gold and still sends only the spoken line to TTS", async () => {
+    mockElevenLabs(encodeTestMp3(4));
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/action.mp4" });
+
+    await POST(
+      speakBeatRequest({
+        line: "Yup yup. Naaah.",
+        characterName: "Unit 4S",
+        locationId: "caravan_interior",
+        action: "leans on the bunk",
+      })
+    );
+
+    const [ttsUrl, ttsInit] = fetchMock.mock.calls[0];
+    expect(String(ttsUrl)).toContain("elevenlabs.io");
+    expect(JSON.parse(ttsInit.body as string).text).toBe("Yup yup. Naaah.");
+    expect(JSON.parse(ttsInit.body as string).text).not.toContain("leans on the bunk");
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    expect(submitCallIndex).toBeGreaterThanOrEqual(0);
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string).prompt as Record<
+      string,
+      { inputs?: Record<string, unknown> }
+    >;
+    const prompt = graph["340:319"]?.inputs?.value;
+    expect(typeof prompt).toBe("string");
+    expect(prompt).toContain('Unit 4S says: "Yup yup. Naaah.".');
+    expect(prompt).toContain("bare feet");
+    expect(prompt).toContain("leans on the bunk");
+    expect(prompt).not.toMatch(/shoe|boot|sneaker/i);
+    expect(String(prompt).startsWith("Use the provided start image")).toBe(true);
+    expect(prompt).toContain("Unit 4S, short purple alien");
+  });
+
   it("still returns the render, honestly flagged as unsaved, when the Blob upload fails", async () => {
     mockElevenLabs(encodeTestMp3(4));
     mockXaiComposite();
