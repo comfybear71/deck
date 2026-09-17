@@ -82,10 +82,11 @@ interface GenerateSpeakBeatRequestBody {
    * is a Speak beat — the original contract, so existing callers don't
    * have to learn a new field. */
   kind?: unknown;
-  /** Optional park-plate id from `SUNNY_BANKS_LOCATIONS`. The LTX first
-   * frame is still `startImageDataUrl` (the panel resolves that still
-   * client-side). Accepted so the path rides alongside `characterName`;
-   * not required, never a second image node. */
+  /** Optional park-plate id from `SUNNY_BANKS_LOCATIONS`. Accepted so
+   * the path rides alongside `characterName`. The LTX first frame is
+   * still `startImageDataUrl` — the panel must send the **composed**
+   * still (location Image 1 + hero Image 2 via generate-still), never
+   * the empty park plate. Not required, never a second image node. */
   locationId?: unknown;
   locationImage?: unknown;
 }

@@ -205,27 +205,73 @@ export function getSunnyBanksCharacterLock(name: string): SunnyBanksCharacterLoc
 }
 
 /**
- * The still Hold/Speak actually sends LTX as the first frame, and the
- * still the cast strip shows. Prefers the single-subject `heroImage`
- * so a turnaround sheet never reaches Comfy as the start canvas (live
- * QA: Shazza Hold animated every cell on `shazza-reference.jpg` because
- * `buildSunnyBanksHoldPrompt` honestly says "use the provided start
- * image as the first frame / same person and objects"). Falls back to
- * `referenceImage` when there is no hero file (Unit 4S, Hans). Keyed
- * by the character's own lock, never a synthetic `characterId`.
+ * The still the cast strip shows, and compositor **Image 2** (the
+ * single cast card). Prefers the single-subject `heroImage` so a
+ * turnaround sheet never reaches the compositor or LTX (live QA:
+ * Shazza Hold animated every cell on `shazza-reference.jpg`; original
+ * Skidmarks AGENTS.md: do not hand the sheet to `plateCastIntoGen`).
+ * Falls back to `referenceImage` when there is no hero file (Unit 4S,
+ * Hans). Keyed by the character's own lock, never a synthetic
+ * `characterId`. When a location is selected, LTX's first frame is the
+ * composed plate (`buildSunnyBanksCompositePlatePrompt`), not this
+ * hero still alone.
  */
 export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock): string | undefined {
   return character.heroImage ?? character.referenceImage;
 }
 
 /**
+ * Shot-plate compositor prompt — ported from the original Skidmarks
+ * Studio's `plateCastIntoGen` / `buildPlatePrompt` (`comfybear71/
+ * skidmarks`, `src/lib/plateCast.ts`) for the n=1, first-pass case.
+ * That repo already plates Sunny Banks: Image 1 is the empty location,
+ * Image 2 is the single cast card (never the turnaround sheet), xAI
+ * draws the person into the place, and **then** LTX animates that
+ * composed still. Deck's #119 Hold skipped this step and sent the
+ * empty park plate to LTX with Shazza only in the gold motion text —
+ * live QA: invented sketch woman, not locked Shazza, not Office
+ * Storefront.
+ *
+ * Reference order the caller must send to `/api/skidmarks/generate-still`:
+ * `[location still, hero still]` so `<IMAGE_0>` is the place and
+ * `<IMAGE_1>` is the person (xAI's documented `images` array tags).
+ * Gold Hold/Speak strings stay untouched — they already assume the
+ * start image has both the person and the place.
+ */
+export function buildSunnyBanksCompositePlatePrompt(
+  character: SunnyBanksCharacterLock,
+  location: SunnyBanksLocationLock
+): string {
+  const heldProp = /\b(cigarette|pie|teacup|cricket bat|thongs|beer|camera|whistle)\b/i.test(
+    character.look
+  );
+  const propLine = heldProp
+    ? "Only the held object named in the look lock. Do not invent extra objects."
+    : "Keep any held prop already visible in <IMAGE_1>. Do not invent a phone or extra objects.";
+
+  return [
+    SUNNY_BANKS_STYLE_LOCK,
+    "<IMAGE_0> is the LOCKED background — keep that exact place, lighting and materials. Do not move the camera. Do not replace the location with a photo street. Remove any people or crowds already in image 1 — empty place only.",
+    "<IMAGE_1> is the person — same face identity, hair, age and body from image 2. Do not turn them into a different person.",
+    "Place that same person from image 2 into image 1.",
+    "Keep the EXACT body pose, clothes, and body from image 2. Same face from image 2. Do not stand them up. Do not change their clothes. Do not invent a second person. No passer-by. No extra body in the distance.",
+    "One person only. Only that person in frame, no one else appears. Empty of extra people and animals.",
+    "MEDIUM SHOT framing: figure large in frame, dead centre horizontally. Keep the locked place from image 1 behind them. One person only.",
+    `Staging / tweak: ${character.name}, ${character.look}, at ${location.label}.`,
+    propLine,
+    "No captions, no watermarks, no name tags. Keep any signage that is already part of the locked place in image 1.",
+  ].join("\n\n");
+}
+
+/**
  * Locked park plates — Stuart's own full-frame location stills
- * (2026-09-17), not generated here. Empty of cast on purpose: the
- * sitcom first frame is the place, the character lock rides in the
- * gold Speak/Hold prompt + `characterName`. Keyed by a stable id the
- * Locations `<select>` stores (`selectedLocationId`), never a synthetic
- * `characterId`. Not a pose picker and not a sequencer — one native
- * dropdown, one clip at a time.
+ * (2026-09-17), not generated here. Empty of cast on purpose: they are
+ * compositor **Image 1** (the locked place). The character's hero still
+ * is Image 2. xAI composites those two, and that composed still — not
+ * this empty plate — is what Speak/Hold send LTX as the first frame.
+ * Keyed by a stable id the Locations `<select>` stores
+ * (`selectedLocationId`), never a synthetic `characterId`. Not a pose
+ * picker and not a sequencer — one native dropdown, one clip at a time.
  *
  * These files are already 1280×720, so `letterboxImageForLtxIa2v` is a
  * no-op on them (source aspect already 16:9).
