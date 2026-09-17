@@ -219,6 +219,71 @@ export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock):
 }
 
 /**
+ * Locked park plates — Stuart's own full-frame location stills
+ * (2026-09-17), not generated here. Empty of cast on purpose: the
+ * sitcom first frame is the place, the character lock rides in the
+ * gold Speak/Hold prompt + `characterName`. Keyed by a stable id the
+ * Locations `<select>` stores (`selectedLocationId`), never a synthetic
+ * `characterId`. Not a pose picker and not a sequencer — one native
+ * dropdown, one clip at a time.
+ *
+ * These files are already 1280×720, so `letterboxImageForLtxIa2v` is a
+ * no-op on them (source aspect already 16:9).
+ */
+export type SunnyBanksLocationId =
+  | "water_tank_dam"
+  | "main_entrance_sign"
+  | "site_laundry"
+  | "office_storefront"
+  | "tin_shed_mower"
+  | "caravan_interior";
+
+export interface SunnyBanksLocationLock {
+  id: SunnyBanksLocationId;
+  label: string;
+  image: string;
+}
+
+export const SUNNY_BANKS_DEFAULT_LOCATION_ID: SunnyBanksLocationId = "office_storefront";
+
+export const SUNNY_BANKS_LOCATIONS: Record<SunnyBanksLocationId, SunnyBanksLocationLock> = {
+  water_tank_dam: {
+    id: "water_tank_dam",
+    label: "Water Tank Dam",
+    image: "/skidmarks/sunnybanks/water-tank-dam.jpg",
+  },
+  main_entrance_sign: {
+    id: "main_entrance_sign",
+    label: "Main Entrance Sign",
+    image: "/skidmarks/sunnybanks/main-entrance-sign.jpg",
+  },
+  site_laundry: {
+    id: "site_laundry",
+    label: "Site Laundry Machines",
+    image: "/skidmarks/sunnybanks/site-laundry.jpg",
+  },
+  office_storefront: {
+    id: "office_storefront",
+    label: "Office Storefront",
+    image: "/skidmarks/sunnybanks/office-storefront.jpg",
+  },
+  tin_shed_mower: {
+    id: "tin_shed_mower",
+    label: "Tin Shed & Mower",
+    image: "/skidmarks/sunnybanks/tin-shed-mower.jpg",
+  },
+  caravan_interior: {
+    id: "caravan_interior",
+    label: "Fibro Caravan Interior",
+    image: "/skidmarks/sunnybanks/caravan-interior.jpg",
+  },
+};
+
+export function getSunnyBanksLocation(id: string): SunnyBanksLocationLock | undefined {
+  return SUNNY_BANKS_LOCATIONS[id as SunnyBanksLocationId];
+}
+
+/**
  * The aliens' own "language" (Stuart's exact description, 2026-09-15):
  * not English, not a fixed line — "yup yup" and "nah" repeated and
  * stretched out, however long or short the scene calls for, decided per

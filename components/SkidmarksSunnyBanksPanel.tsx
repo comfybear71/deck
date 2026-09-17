@@ -4,9 +4,13 @@ import { useState } from "react";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
+  getSunnyBanksLocation,
   resolveSunnyBanksStartImage,
   SUNNY_BANKS_CAST,
+  SUNNY_BANKS_DEFAULT_LOCATION_ID,
   SUNNY_BANKS_HOLD_DURATION_SEC,
+  SUNNY_BANKS_LOCATIONS,
+  type SunnyBanksLocationId,
 } from "@/lib/sunnyBanks";
 
 /**
@@ -41,12 +45,16 @@ import {
  * (2026-09-17)** — live QA: Silent Hold on Shazza animated every pose
  * on `shazza-reference.jpg` because that file is a character plate
  * (4 bodies + 4 heads) and the gold Hold prompt tells LTX to keep the
- * start image's people/objects. Speak and Hold both resolve
+ * start image's people/objects. Cast thumbnails still resolve
  * `resolveSunnyBanksStartImage` (the cropped `*-hero.jpg` when one
- * exists) as `startImageDataUrl`. No pose picker, no in-memory canvas
- * cropper — the crop is a committed still, same shape as Jack Ash's
- * reference jpg. Cast thumbnails use the same src so the strip matches
- * the clip.
+ * exists). No pose picker, no in-memory canvas cropper.
+ *
+ * **Location plate as LTX first frame (2026-09-17)** — six locked park
+ * stills (`SUNNY_BANKS_LOCATIONS`). A native `<select>` under the
+ * character row (same iPhone-Safari control as the character picker)
+ * picks one; Speak and Hold POST that still as `startImageDataUrl`,
+ * plus `locationId` / `locationImage` alongside `characterName`. Not a
+ * sequencer. Gold Hold/Speak prompt strings unchanged.
  */
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
@@ -71,32 +79,37 @@ interface GenerateBeatResponseBody {
 }
 
 const HOLD_COST_USD = estimateLtxClipRenderCostUsd(SUNNY_BANKS_HOLD_DURATION_SEC);
+const LOCATION_LIST = Object.values(SUNNY_BANKS_LOCATIONS);
 
 export function SkidmarksSunnyBanksPanel() {
   const plateCast = CAST_LIST.filter((c) => c.referenceImage);
   const [selectedName, setSelectedName] = useState<string>(plateCast[0]?.name ?? "");
+  const [selectedLocationId, setSelectedLocationId] = useState<SunnyBanksLocationId>(
+    SUNNY_BANKS_DEFAULT_LOCATION_ID
+  );
   const [line, setLine] = useState("");
   const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
   const [result, setResult] = useState<GenerateBeatResult | null>(null);
 
   const selected = plateCast.find((c) => c.name === selectedName);
+  const selectedLocation =
+    getSunnyBanksLocation(selectedLocationId) ?? SUNNY_BANKS_LOCATIONS[SUNNY_BANKS_DEFAULT_LOCATION_ID];
   const running = runningKind !== null;
-  const selectedStartImage = selected ? resolveSunnyBanksStartImage(selected) : undefined;
-  const canSpeak = !!(selected?.voiceId && selectedStartImage && line.trim());
-  const canHold = !!selectedStartImage;
+  const canSpeak = !!(selected?.voiceId && selectedLocation.image && line.trim());
+  const canHold = !!(selected && selectedLocation.image);
 
   const handleGenerate = async (kind: BeatKind) => {
-    if (!selected || !selectedStartImage || running) return;
+    if (!selected || !selectedLocation.image || running) return;
     if (kind === "speak" && (!selected.voiceId || !line.trim())) return;
     setRunningKind(kind);
     setResult(null);
-    setProgressText(`Getting ${selected.name}'s start still ready…`);
+    setProgressText(`Getting ${selectedLocation.label} ready…`);
     try {
-      const startImageDataUrl = await resolvePlateReferenceDataUrl(selectedStartImage);
+      const startImageDataUrl = await resolvePlateReferenceDataUrl(selectedLocation.image);
       setProgressText(
         kind === "hold"
-          ? `Rendering ${selected.name}'s silent hold (~${SUNNY_BANKS_HOLD_DURATION_SEC}s) — this can take a minute or two…`
+          ? `Rendering ${selected.name} at ${selectedLocation.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s) — this can take a minute or two…`
           : `Rendering ${selected.name}'s line — this can take a minute or two…`
       );
       const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
@@ -104,8 +117,20 @@ export function SkidmarksSunnyBanksPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
           kind === "hold"
-            ? { kind: "hold", characterName: selected.name, startImageDataUrl }
-            : { characterName: selected.name, line, startImageDataUrl }
+            ? {
+                kind: "hold",
+                characterName: selected.name,
+                locationId: selectedLocation.id,
+                locationImage: selectedLocation.image,
+                startImageDataUrl,
+              }
+            : {
+                characterName: selected.name,
+                line,
+                locationId: selectedLocation.id,
+                locationImage: selectedLocation.image,
+                startImageDataUrl,
+              }
         ),
       });
       const body = (await res.json()) as GenerateBeatResponseBody;
@@ -196,12 +221,26 @@ export function SkidmarksSunnyBanksPanel() {
               value={selectedName}
               onChange={(e) => setSelectedName(e.target.value)}
               disabled={running}
+              aria-label="Character"
               className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white disabled:opacity-60"
             >
               {plateCast.map((c) => (
                 <option key={c.name} value={c.name} className="bg-zinc-900">
                   {c.name}
                   {!c.voiceId ? " (no voice — hold only)" : ""}
+                </option>
+              ))}
+            </select>
+            <select
+              value={selectedLocationId}
+              onChange={(e) => setSelectedLocationId(e.target.value as SunnyBanksLocationId)}
+              disabled={running}
+              aria-label="Location"
+              className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white disabled:opacity-60"
+            >
+              {LOCATION_LIST.map((location) => (
+                <option key={location.id} value={location.id} className="bg-zinc-900">
+                  {location.label}
                 </option>
               ))}
             </select>
