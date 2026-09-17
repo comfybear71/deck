@@ -122,6 +122,7 @@ const SERIES_REGULARS = CAST_LIST.filter((c) => !c.guest);
 const SPEAKER_NAMES = Object.keys(SUNNY_BANKS_CAST).sort((a, b) => b.length - a.length);
 
 type BeatKind = "speak" | "hold";
+export type SunnyBanksChunkKind = BeatKind | "scene";
 
 type RowStatus = "idle" | "rendering" | "done" | "failed";
 
@@ -169,11 +170,25 @@ export interface SunnyBanksScriptChunk {
   raw: string;
   characterName: string;
   line: string;
-  kind: BeatKind;
+  kind: SunnyBanksChunkKind;
   /** Locked park plate for this row and later rows, from `[Location: id]`. */
   locationId?: SunnyBanksLocationId;
   /** Extra LTX prompt context from `[Action: text]` — not spoken TTS. */
   action?: string;
+}
+
+/** Speak/Hold rows only — scene headers stay in the parse array but
+ * never become spreadsheet queue rows. */
+export function isSunnyBanksQueueChunk(
+  chunk: SunnyBanksScriptChunk
+): chunk is SunnyBanksScriptChunk & { kind: BeatKind } {
+  return chunk.kind === "speak" || chunk.kind === "hold";
+}
+
+export function sunnyBanksQueueChunks(chunks: readonly SunnyBanksScriptChunk[]): Array<
+  SunnyBanksScriptChunk & { kind: BeatKind }
+> {
+  return chunks.filter(isSunnyBanksQueueChunk);
 }
 
 export interface SunnyBanksGodDocument {
@@ -281,6 +296,16 @@ export function parseSunnyBanksActHeader(raw: string): SunnyBanksActId | null {
     return toSunnyBanksActId(indexFromOne);
   }
   return token.toUpperCase();
+}
+
+/** `=== THE EPISODE TAG ===` (or any `=== LABEL ===` that is not an
+ * Act header). Stored as a sequence chunk; not a queue row. */
+export function parseSunnyBanksSceneHeader(raw: string): string | null {
+  if (parseSunnyBanksActHeader(raw)) return null;
+  const match = raw.match(/^===\s*(.+?)\s*===\s*$/);
+  if (!match) return null;
+  const label = match[1].replace(/\s+/g, " ").trim();
+  return label.length > 0 ? label : null;
 }
 
 /** Map `[Location: id]` onto one of the six locked park plates. */
@@ -405,8 +430,10 @@ export function parseSunnyBanksGodDocument(text: string, fallbackActId: string =
  * records, never a guessed id). Empty dialogue after a speaker prefix
  * is a Hold. A line with no prefix continues the previous speaker.
  * Blank lines are skipped. God Script headers (`# EPISODE:`, `=== ACT`,
- * `[Location: id]`, `[Action: text]`) are not queue rows. Does not
- * touch gold prompt strings.
+ * `[Location: id]`, `[Action: text]`) are not queue rows. `=== LABEL ===`
+ * scene headers (e.g. `=== THE EPISODE TAG ===`) stay in the parse
+ * array as `kind: "scene"` sequence chunks and are not spreadsheet
+ * rows. Does not touch gold prompt strings.
  */
 export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[] {
   const chunks: SunnyBanksScriptChunk[] = [];
@@ -417,6 +444,17 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     const raw = rawLine.trim();
     if (!raw) continue;
     if (parseSunnyBanksEpisodeHeader(raw) || parseSunnyBanksActHeader(raw)) continue;
+    const sceneLabel = parseSunnyBanksSceneHeader(raw);
+    if (sceneLabel) {
+      chunks.push({
+        raw,
+        characterName: "",
+        line: sceneLabel,
+        kind: "scene",
+        locationId: currentLocation,
+      });
+      continue;
+    }
     const tagged = extractGodScriptTags(raw);
     if (tagged.locationId) currentLocation = tagged.locationId;
     if (tagged.actions.length > 0) pendingActions = [...pendingActions, ...tagged.actions];
@@ -512,7 +550,7 @@ export function collectRenderedClips(args: {
 }): SunnyBanksRenderedClip[] {
   const clips: SunnyBanksRenderedClip[] = [];
   for (const act of args.actIds) {
-    const chunks = parseSunnyBanksScriptBlock(args.actScripts[act] ?? "");
+    const chunks = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(args.actScripts[act] ?? ""));
     const runtimes = args.runtimeMap[act] ?? {};
     const overrides = args.characterOverrides[act] ?? {};
     chunks.forEach((chunk, index) => {
@@ -589,14 +627,13 @@ export function SkidmarksSunnyBanksPanel() {
     return { lineKey: raw, status: "idle" };
   };
 
-  const queue = parsed.map((chunk, index) => {
+  const queue = sunnyBanksQueueChunks(parsed).map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
     const locationId = locationOverrides[index] ?? chunk.locationId ?? defaultLocationId;
     const character = getSunnyBanksCharacterLock(characterName);
     const location = getSunnyBanksLocation(locationId) ?? SUNNY_BANKS_LOCATIONS[SUNNY_BANKS_DEFAULT_LOCATION_ID];
     const line = chunk.line;
-    const kind: BeatKind = line.length > 0 ? "speak" : "hold";
-    return { chunk, index, characterName, character, location, line, kind };
+    return { chunk, index, characterName, character, location, line, kind: chunk.kind };
   });
 
   const renderedClips = collectRenderedClips({
@@ -642,10 +679,12 @@ export function SkidmarksSunnyBanksPanel() {
     locationId: string;
     locationImage: string;
     startImageDataUrl: string;
+    action?: string;
   }): Promise<
     | { ok: true; videoUrl: string; durationSec: number; audioMuxed?: boolean }
     | { ok: false; message: string }
   > => {
+    const action = args.action?.trim() ?? "";
     const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -657,6 +696,7 @@ export function SkidmarksSunnyBanksPanel() {
               locationId: args.locationId,
               locationImage: args.locationImage,
               startImageDataUrl: args.startImageDataUrl,
+              ...(action ? { action } : {}),
             }
           : {
               characterName: args.characterName,
@@ -664,6 +704,7 @@ export function SkidmarksSunnyBanksPanel() {
               locationId: args.locationId,
               locationImage: args.locationImage,
               startImageDataUrl: args.startImageDataUrl,
+              ...(action ? { action } : {}),
             }
       ),
     });
@@ -723,6 +764,7 @@ export function SkidmarksSunnyBanksPanel() {
             locationId: row.location.id,
             locationImage: row.location.image,
             startImageDataUrl,
+            action: row.chunk.action,
           });
           if (!result.ok) {
             writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: result.message });
@@ -769,14 +811,14 @@ export function SkidmarksSunnyBanksPanel() {
       prompt: string;
     }> = [];
     for (const act of actIds) {
-      const chunks = parseSunnyBanksScriptBlock(actScripts[act] ?? "");
+      const chunks = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(actScripts[act] ?? ""));
       const overrides = characterOverridesByAct[act] ?? {};
       const locations = locationOverridesByAct[act] ?? {};
       chunks.forEach((chunk, index) => {
         const characterName = overrides[index] ?? chunk.characterName;
         const lock = getSunnyBanksCharacterLock(characterName);
         const locationId = locations[index] ?? chunk.locationId ?? defaultLocationId;
-        const kind: BeatKind = chunk.line.length > 0 ? "speak" : "hold";
+        const kind = chunk.kind;
         const gold = lock
           ? kind === "hold"
             ? buildSunnyBanksHoldPrompt(lock)
@@ -989,7 +1031,9 @@ export function SkidmarksSunnyBanksPanel() {
             >
               {actIds.map((act) => {
                 const selected = act === activeAct;
-                const lineCount = parseSunnyBanksScriptBlock(actScripts[act] ?? "").length;
+                const lineCount = sunnyBanksQueueChunks(
+                  parseSunnyBanksScriptBlock(actScripts[act] ?? "")
+                ).length;
                 return (
                   <button
                     key={act}

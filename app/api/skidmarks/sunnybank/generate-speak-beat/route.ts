@@ -110,6 +110,9 @@ interface GenerateSpeakBeatRequestBody {
    * `characterName` is Image 2. LTX still has one LoadImage. */
   locationId?: unknown;
   locationImage?: unknown;
+  /** Extra LTX prompt context from `[Action: text]`. Appended after
+   * gold Hold/Speak strings. Never sent to ElevenLabs. */
+  action?: unknown;
 }
 
 function parseBeatKind(value: unknown): BeatKind {
@@ -129,6 +132,7 @@ export async function POST(request: Request) {
   const line = typeof body.line === "string" ? body.line.trim() : "";
   const startImageDataUrl = typeof body.startImageDataUrl === "string" ? body.startImageDataUrl : "";
   const locationId = typeof body.locationId === "string" ? body.locationId.trim() : "";
+  const action = typeof body.action === "string" ? body.action.replace(/\s+/g, " ").trim() : "";
 
   if (!characterName || !startImageDataUrl || (kind === "speak" && !line)) {
     return NextResponse.json(
@@ -239,6 +243,12 @@ export async function POST(request: Request) {
     }
     durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, paddedDurationSec);
     prompt = buildSunnyBanksSpeakingPrompt(character, line);
+  }
+
+  // `[Action:]` is extra LTX context after gold, never a rewrite of
+  // the locked Hold/Speak strings and never part of the TTS `line`.
+  if (action) {
+    prompt = `${prompt} ${action}`;
   }
 
   const plated = await compositeSunnyBanksCharacterOntoLocation({

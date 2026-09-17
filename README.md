@@ -2214,8 +2214,12 @@ now (see "Explicitly out of scope" below).
     God Script headers in that same paste (`# EPISODE:`, `=== ACT`,
     `[Location: id]`, `[Action: text]`) set the episode name, split
     act buffers, carry a locked park plate into `startImageDataUrl` for
-    following rows, and append action text after the gold prompt —
-    still in-memory, no layout change.
+    following rows, and append action text after the gold prompt.
+    `=== LABEL ===` scene headers (e.g. `=== THE EPISODE TAG ===`) stay
+    in the in-memory parse array as sequence chunks, not queue rows;
+    blank and tag-only lines also skip the spreadsheet. Render POST
+    sends `line` / `action` / `locationId` (`action` after gold, never
+    into TTS) — still in-memory, no layout change.
     Each row is one spreadsheet-style line: character `<select>` (CAST
     keyed by name, full lock still loaded on the server for gold
     prompts), truncated line fragment, location `<select>`, Idle /

@@ -9,8 +9,10 @@ import {
   parseSunnyBanksActHeader,
   parseSunnyBanksEpisodeHeader,
   parseSunnyBanksGodDocument,
+  parseSunnyBanksSceneHeader,
   parseSunnyBanksScriptBlock,
   resolveSunnyBanksScriptLocationId,
+  sunnyBanksQueueChunks,
   SUNNY_BANKS_ACTS,
   toSunnyBanksActId,
 } from "./SkidmarksSunnyBanksPanel";
@@ -131,6 +133,53 @@ describe("parseSunnyBanksScriptBlock", () => {
     expect(prompt).toContain("leans on the tub");
     expect(gold).not.toContain("leans on the tub");
   });
+
+  it("does not turn blank or tag-only lines into queue rows", () => {
+    const chunks = parseSunnyBanksScriptBlock(
+      "\n[Location: site_laundry]\n[Action: leans on the tub]\n\n[Location: ]\n[Action:]\nShazza: You right?\n"
+    );
+    expect(chunks).toHaveLength(1);
+    expect(sunnyBanksQueueChunks(chunks)).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({
+      characterName: "Shazza",
+      line: "You right?",
+      kind: "speak",
+      locationId: "site_laundry",
+      action: "leans on the tub",
+    });
+  });
+
+  it("maps === THE EPISODE TAG === as a final in-memory scene chunk, not a queue row", () => {
+    expect(parseSunnyBanksSceneHeader("=== THE EPISODE TAG ===")).toBe("THE EPISODE TAG");
+    expect(parseSunnyBanksSceneHeader("=== ACT III ===")).toBeNull();
+    const chunks = parseSunnyBanksScriptBlock(
+      [
+        "[Location: caravan_interior]",
+        "Unit 4S: Yup yup. Naaah.",
+        "",
+        "=== THE EPISODE TAG ===",
+      ].join("\n")
+    );
+    expect(chunks.at(-1)).toMatchObject({
+      kind: "scene",
+      characterName: "",
+      line: "THE EPISODE TAG",
+      locationId: "caravan_interior",
+    });
+    const queue = sunnyBanksQueueChunks(chunks);
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toMatchObject({
+      characterName: "Unit 4S",
+      line: "Yup yup. Naaah.",
+      kind: "speak",
+      locationId: "caravan_interior",
+    });
+    expect(SUNNY_BANKS_CAST[queue[0].characterName].look).toBe(
+      "short purple alien, antennae, bulging eyes, teal bucket hat, holding a pair of thongs, bare feet"
+    );
+    expect(SUNNY_BANKS_CAST[queue[0].characterName].look).toContain("bare feet");
+    expect(SUNNY_BANKS_CAST[queue[0].characterName].look).not.toMatch(/shoe|boot|sneaker/i);
+  });
 });
 
 describe("God Script headers", () => {
@@ -166,6 +215,7 @@ describe("God Script headers", () => {
         "=== ACT III ===",
         "[Location: caravan_interior]",
         "Unit 4S: Yup yup. Naaah.",
+        "=== THE EPISODE TAG ===",
       ].join("\n")
     );
     expect(doc.episodeTitle).toBe("Drop Bears Dilemma");
@@ -184,6 +234,9 @@ describe("God Script headers", () => {
       locationId: "caravan_interior",
     });
     expect(SUNNY_BANKS_CAST["Unit 4S"].look).toContain("bare feet");
+    expect(doc.actScripts.III).toContain("=== THE EPISODE TAG ===");
+    expect(actThree.at(-1)).toMatchObject({ kind: "scene", line: "THE EPISODE TAG" });
+    expect(sunnyBanksQueueChunks(actThree)).toHaveLength(1);
     expect(mergeSunnyBanksActIds(["I", "II", "III"], ["I", "II", "III", "IV"])).toEqual([
       "I",
       "II",
@@ -322,5 +375,34 @@ describe("collectRenderedClips", () => {
       },
     ]);
     expect(SUNNY_BANKS_CAST["Unit 4S"].look).toContain("bare feet");
+  });
+
+  it("ignores a trailing scene header so queue indices stay aligned with rendered clips", () => {
+    const clips = collectRenderedClips({
+      actIds: ["III"],
+      actScripts: {
+        III: "Unit 4S: Yup yup. Naaah.\n=== THE EPISODE TAG ===",
+      },
+      characterOverrides: { III: {} },
+      runtimeMap: {
+        III: {
+          0: {
+            lineKey: "Unit 4S: Yup yup. Naaah.",
+            status: "done",
+            videoUrl: "https://blob.example/iii0.mp4",
+          },
+        },
+      },
+    });
+    expect(clips).toEqual([
+      {
+        act: "III",
+        index: 0,
+        characterName: "Unit 4S",
+        lineLabel: "Yup yup. Naaah.",
+        videoUrl: "https://blob.example/iii0.mp4",
+        durationSec: undefined,
+      },
+    ]);
   });
 });

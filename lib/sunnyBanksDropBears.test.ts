@@ -6,7 +6,7 @@ import {
   crashLabClipUrl,
   DROP_BEARS_JOB_ID,
 } from "./sunnyBanksDropBears";
-import { collectRenderedClips, parseSunnyBanksScriptBlock } from "@/components/SkidmarksSunnyBanksPanel";
+import { collectRenderedClips, parseSunnyBanksScriptBlock, sunnyBanksQueueChunks } from "@/components/SkidmarksSunnyBanksPanel";
 
 describe("Drop Bears EP02 seed", () => {
   it("is the Crash Lab job Stuart pointed at, not a new Neon episode", () => {
@@ -27,9 +27,9 @@ describe("Drop Bears EP02 seed", () => {
 
   it("splits Caravan park / BBQ / Unit 9+tag into Act I / II / III", () => {
     const seed = buildSunnyBanksDropBearsSeed();
-    expect(parseSunnyBanksScriptBlock(seed.actScripts.I)).toHaveLength(13);
-    expect(parseSunnyBanksScriptBlock(seed.actScripts.II)).toHaveLength(23);
-    expect(parseSunnyBanksScriptBlock(seed.actScripts.III)).toHaveLength(10);
+    expect(sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(seed.actScripts.I))).toHaveLength(13);
+    expect(sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(seed.actScripts.II))).toHaveLength(23);
+    expect(sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(seed.actScripts.III))).toHaveLength(10);
   });
 
   it("points every done line at the existing Crash Lab mp4, not a paid re-render", () => {
@@ -54,7 +54,7 @@ describe("Drop Bears EP02 seed", () => {
   it("keeps parser lineKeys in lockstep so the Clips strip actually shows", () => {
     const seed = buildSunnyBanksDropBearsSeed();
     for (const act of ["I", "II", "III"] as const) {
-      const chunks = parseSunnyBanksScriptBlock(seed.actScripts[act]);
+      const chunks = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(seed.actScripts[act]));
       chunks.forEach((chunk, index) => {
         expect(seed.runtimeMap[act][index]?.lineKey).toBe(chunk.raw);
         expect(seed.runtimeMap[act][index]?.status).toBe("done");
