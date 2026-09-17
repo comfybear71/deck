@@ -354,19 +354,42 @@ export function buildUnit4sLine(intensitySec: number): string {
 }
 
 /**
+ * Extra sentence appended *after* the gold Speak/Hold template for
+ * Dazza only. His look lock lists alternate held objects ("beers,
+ * coins, or pink hair dryer" / later "beer can") — live QA: LTX
+ * treated that "or" as permission to morph or drop the prop mid-clip.
+ * Gold look/voice/style strings stay verbatim (Jack-Ash hallmark
+ * pattern: append, never rewrite the proven template). Shazza's
+ * field-for-field gold `toBe(...)` test must keep matching exactly.
+ */
+export const SUNNY_BANKS_HELD_OBJECT_LOCK =
+  "Held objects stay locked and static for the full duration — whatever is in the character's hands in the start image must not morph, swap, or disappear.";
+
+function accessoryLockSuffix(character: SunnyBanksCharacterLock): string {
+  if (character.name !== "Dazza") return "";
+  return (
+    ` ${SUNNY_BANKS_HELD_OBJECT_LOCK} Dazza's beers, coins, pink hair dryer, or beer can remain exactly as ` +
+    `shown in the start image, without morphing or disappearing over the clip.`
+  );
+}
+
+/**
  * Builds the mandatory speaking-plate motion prompt — verbatim shape
  * from the gold doc, `[NAME]`/`[look lock]`/`[the line]` substituted in.
  * No `[SPEECH]`, no `[VISUAL]` (the source doc calls out both by name as
  * things this show's prompts must never carry — that's Skidmarks' own
  * unrelated 3D-noir vocabulary). `line` is sent through as-is, quotes
  * and all, matching the worked example's own `NAME says: "..."` shape.
+ * Dazza gets `accessoryLockSuffix` after the gold string so held
+ * objects cannot morph mid-clip; every other character is unchanged.
  */
 export function buildSunnyBanksSpeakingPrompt(character: SunnyBanksCharacterLock, line: string): string {
   return (
     `Use the provided start image as the first frame. ${character.name}, ${character.look} is prominent, mouth ` +
     `and head move naturally while speaking, subtle gesture. Props and background stay exactly as the start ` +
     `image, nothing new enters frame. ${character.name} says: "${line.trim()}". Camera holds. Same person and ` +
-    `objects as the start image. ${SUNNY_BANKS_STYLE_LOCK}`
+    `objects as the start image. ${SUNNY_BANKS_STYLE_LOCK}` +
+    accessoryLockSuffix(character)
   );
 }
 
@@ -429,6 +452,7 @@ export function buildSunnyBanksHoldPrompt(character: SunnyBanksCharacterLock): s
     `Use the provided start image as the first frame. ${character.name}, ${character.look} holds their pose, ` +
     `subtle idle motion, weight shift, breathing, heat haze, flies. Props and background stay exactly as the ` +
     `start image, nothing new enters frame. No dialogue. Camera holds, no cuts. Same person and objects as the ` +
-    `start image. ${SUNNY_BANKS_STYLE_LOCK}`
+    `start image. ${SUNNY_BANKS_STYLE_LOCK}` +
+    accessoryLockSuffix(character)
   );
 }

@@ -14,6 +14,7 @@ import {
   SUNNY_BANKS_CAST,
   SUNNY_BANKS_DEFAULT_LOCATION_ID,
   SUNNY_BANKS_LOCATIONS,
+  SUNNY_BANKS_HELD_OBJECT_LOCK,
   SUNNY_BANKS_STYLE_LOCK,
 } from "./sunnyBanks";
 
@@ -91,6 +92,20 @@ describe("buildSunnyBanksSpeakingPrompt", () => {
   it("trims the line before quoting it", () => {
     const prompt = buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST.Nan, "  put the kettle on  ");
     expect(prompt).toContain('Nan says: "put the kettle on".');
+  });
+
+  it("appends a held-object lock for Dazza after the gold template, without rewriting his look string", () => {
+    const prompt = buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST.Dazza, "Yeah nah.");
+    expect(prompt).toContain(SUNNY_BANKS_CAST.Dazza.look);
+    expect(prompt).toContain('Dazza says: "Yeah nah.".');
+    expect(prompt).toContain(SUNNY_BANKS_HELD_OBJECT_LOCK);
+    expect(prompt).toContain("without morphing or disappearing");
+    expect(prompt.startsWith("Use the provided start image as the first frame. Dazza,")).toBe(true);
+  });
+
+  it("does not append the Dazza held-object lock onto Shazza's gold string", () => {
+    const prompt = buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST.Shazza, "You right?");
+    expect(prompt).not.toContain(SUNNY_BANKS_HELD_OBJECT_LOCK);
   });
 });
 
@@ -187,6 +202,13 @@ describe("buildSunnyBanksHoldPrompt", () => {
     expect(prompt).toContain("Same person and objects as the start image.");
     expect(prompt).toContain("No dialogue. Camera holds, no cuts.");
     expect(prompt).not.toContain("character plate");
+    expect(prompt).not.toContain(SUNNY_BANKS_HELD_OBJECT_LOCK);
+  });
+
+  it("locks Dazza's held objects on a Hold too — the 5s idle is where a beer/dryer morphs", () => {
+    const prompt = buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Dazza);
+    expect(prompt).toContain(SUNNY_BANKS_HELD_OBJECT_LOCK);
+    expect(prompt).toContain("No dialogue. Camera holds, no cuts.");
   });
 });
 

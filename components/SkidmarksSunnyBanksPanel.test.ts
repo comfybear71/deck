@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSunnyBanksScriptBlock } from "./SkidmarksSunnyBanksPanel";
+import { parseSunnyBanksScriptBlock, SUNNY_BANKS_ACTS } from "./SkidmarksSunnyBanksPanel";
 import { SUNNY_BANKS_CAST } from "@/lib/sunnyBanks";
 
 describe("parseSunnyBanksScriptBlock", () => {
@@ -49,5 +49,11 @@ describe("parseSunnyBanksScriptBlock", () => {
     expect(chunks[0].characterName).toBe("Shazza");
     expect(chunks[0].line).toBe("Some Guest: hello");
     expect(SUNNY_BANKS_CAST["Some Guest"]).toBeUndefined();
+  });
+});
+
+describe("SUNNY_BANKS_ACTS", () => {
+  it("is three in-panel act buffers, not a persisted episode schema", () => {
+    expect(SUNNY_BANKS_ACTS).toEqual(["I", "II", "III"]);
   });
 });
