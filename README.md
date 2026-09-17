@@ -2189,13 +2189,16 @@ now (see "Explicitly out of scope" below).
     *-hero.jpg` — one cropped cell from the turnaround sheet; live-QA
     2026-09-17: sending the full sheet as LTX's first frame animated a
     grid of Shazzas). The sheet (`*-reference.jpg`) stays the character
-    bible; Hold/Speak and the strip both use
-    `resolveSunnyBanksStartImage`. Unit 4S has no separate hero file
-    (already a single figure). Name sits in a bottom scrim, and an honest
-    "not ready" label on anyone missing a locked ElevenLabs voice id
-    (Hans, today).
+    bible; the cast strip uses `resolveSunnyBanksStartImage`. Unit 4S
+    has no separate hero file (already a single figure). Name sits in a
+    bottom scrim, and an honest "not ready" label on anyone missing a
+    locked ElevenLabs voice id (Hans, today).
   - A **"Try one line"** form — pick any character who has a real
-    reference plate. **Speak** needs a locked ElevenLabs voice as well:
+    reference plate, then a **Location** native `<select>` of six locked
+    park plates (`SUNNY_BANKS_LOCATIONS`, default Office Storefront).
+    Speak/Hold send that location still as `startImageDataUrl` (the LTX
+    first frame) plus `locationId`/`locationImage` alongside
+    `characterName`. Not a sequencer. **Speak** needs a locked ElevenLabs voice as well:
     type a line, tap "Generate speak beat" to render one real clip via
     `POST /api/skidmarks/sunnybank/generate-speak-beat`: ElevenLabs
     text-to-speech (`lib/elevenLabsSpeech.ts`, keyed off the same

@@ -8,8 +8,11 @@ import {
   buildSunnyBanksSpeakingPrompt,
   buildUnit4sLine,
   getSunnyBanksCharacterLock,
+  getSunnyBanksLocation,
   resolveSunnyBanksStartImage,
   SUNNY_BANKS_CAST,
+  SUNNY_BANKS_DEFAULT_LOCATION_ID,
+  SUNNY_BANKS_LOCATIONS,
   SUNNY_BANKS_STYLE_LOCK,
 } from "./sunnyBanks";
 
@@ -112,6 +115,31 @@ describe("Sunny Banks hero still files", () => {
     for (const character of Object.values(SUNNY_BANKS_CAST)) {
       if (!character.heroImage) continue;
       expect(existsSync(resolve(process.cwd(), `public${character.heroImage}`))).toBe(true);
+    }
+  });
+});
+
+describe("SUNNY_BANKS_LOCATIONS", () => {
+  it("defaults to office storefront and looks up by id, never guessing", () => {
+    expect(SUNNY_BANKS_DEFAULT_LOCATION_ID).toBe("office_storefront");
+    expect(getSunnyBanksLocation("office_storefront")?.image).toBe(
+      "/skidmarks/sunnybanks/office-storefront.jpg"
+    );
+    expect(getSunnyBanksLocation("not-a-place")).toBeUndefined();
+  });
+
+  it("six locked park plates, each a real file under public/", () => {
+    const ids = [
+      "water_tank_dam",
+      "main_entrance_sign",
+      "site_laundry",
+      "office_storefront",
+      "tin_shed_mower",
+      "caravan_interior",
+    ] as const;
+    expect(Object.keys(SUNNY_BANKS_LOCATIONS)).toEqual(ids);
+    for (const id of ids) {
+      expect(existsSync(resolve(process.cwd(), `public${SUNNY_BANKS_LOCATIONS[id].image}`))).toBe(true);
     }
   });
 });

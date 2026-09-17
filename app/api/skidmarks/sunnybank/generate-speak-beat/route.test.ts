@@ -308,7 +308,13 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     mockDownload(new Uint8Array([1]));
     putMock.mockResolvedValueOnce({ url: "https://blob.example/hans-hold.mp4" });
 
-    const res = await POST(holdBeatRequest({ characterName: "Hans" }));
+    const res = await POST(
+      holdBeatRequest({
+        characterName: "Hans",
+        locationId: "office_storefront",
+        locationImage: "/skidmarks/sunnybanks/office-storefront.jpg",
+      })
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.kind).toBe("hold");
