@@ -13,6 +13,8 @@ import {
   parseSunnyBanksScriptBlock,
   parseSunnyBanksTitledActHeader,
   isSunnyBanksGhostTargetLine,
+  isSunnyBanksLocationCutaway,
+  buildSunnyBanksLocationCutawayPrompt,
   preserveRenderedRuntimes,
   decodeSunnyBanksPastedScript,
   resolveSunnyBanksScriptLocationId,
@@ -252,7 +254,7 @@ describe("parseSunnyBanksScriptBlock", () => {
     expect(SUNNY_BANKS_CAST[queue[0].characterName].look).not.toMatch(/shoe|boot|sneaker/i);
   });
 
-  it("parses the Act III God Script: titled scenes, bandage look, empty Crowd: skipped", () => {
+  it("parses the Act III God Script: titled scenes, bandage look, Crowd: as location Hold", () => {
     expect(isSunnyBanksGhostTargetLine("Crowd:")).toBe(true);
     expect(isSunnyBanksGhostTargetLine("Ranger Bazza:")).toBe(false);
     const script = [
@@ -281,28 +283,34 @@ describe("parseSunnyBanksScriptBlock", () => {
     ].join("\n");
     const chunks = parseSunnyBanksScriptBlock(script);
     const queue = sunnyBanksQueueChunks(chunks);
-    expect(queue).toHaveLength(5);
+    expect(queue).toHaveLength(6);
     expect(queue.map((chunk) => chunk.characterName)).toEqual([
       "Shazza",
       "Dazza",
       "Shazza",
       "Shazza",
+      "Crowd",
       "Shazza",
     ]);
+    expect(queue[4]).toMatchObject({
+      characterName: "Crowd",
+      line: "",
+      kind: "hold",
+      locationId: "office_storefront",
+    });
     expect(queue[1].appearanceModifier).toContain("bandages");
     expect(queue[1].appearanceModifier).toContain("gauze");
     expect(queue[1].locationId).toBe("main_entrance_sign");
     expect(queue[3].action).toBe("Shazza cupping hands to mouth, yelling");
     expect(queue[3].locationId).toBe("office_storefront");
-    expect(queue[4].line).toContain("drop bear kit");
+    expect(queue[5].line).toContain("drop bear kit");
+    expect(queue[5].action).toBeUndefined();
     expect(chunks.filter((chunk) => chunk.kind === "scene").map((chunk) => chunk.line)).toEqual([
       "ACT III — THE CON",
       "ACT III — CROWD CUTAWAY",
       "ACT III — THE APOLOGY",
     ]);
-    expect(queue.some((chunk) => /crowd/i.test(chunk.line) || chunk.characterName === "Crowd")).toBe(
-      false
-    );
+    expect(queue.some((chunk) => /crowd/i.test(chunk.line))).toBe(false);
     const gold = SUNNY_BANKS_CAST.Dazza.look;
     expect(gold).not.toContain("bandages");
     expect(queue[1].appearanceModifier).not.toBe(gold);
@@ -311,7 +319,60 @@ describe("parseSunnyBanksScriptBlock", () => {
     expect(doc.hasActHeaders).toBe(true);
     expect(doc.actIds).toEqual(["III"]);
     expect(doc.actScripts.III).toContain("=== ACT III — CROWD CUTAWAY ===");
-    expect(sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(doc.actScripts.III))).toHaveLength(5);
+    expect(sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(doc.actScripts.III))).toHaveLength(6);
+  });
+
+  it("live QA: Act III drone Crowd: is an Idle Hold so Render is not Clips already loaded", () => {
+    const script = [
+      "Shazza: Help me with the sign it’s been 100 days now since the last drop bear",
+      "Shazza: attack. Where’s Baza? I’ve got a plan.",
+      "Dazza: These drop bear attacks are getting worse every year geez shazza is there anything we",
+      "Dazza: We can do about it?",
+      "Dazza: I would hate to see this happen to anyone else.",
+      "Shazza: That’s perfect, Bazza, now we just have to put our little plan into action",
+      "Shazza: Hey listen everybody, [yells] I need everyone’s attention! We’ve just had another drop bear dilemma.",
+      "Shazza: One of the staff members was attacked by a drop bear this morning.",
+      "Shazza: We will need everybody to purchase their drop bear kit or some drop bear repellent",
+      "Shazza: to keep you safe.",
+      "",
+      "=== ACT III — CROWD CUTAWAY ===",
+      "[Location: caravan_park_grounds]",
+      "[Action: Fast dynamic drone shot, powering around, sweeping wide angle view seeing the crowd of park residents looking confused]",
+      "Crowd:",
+    ].join("\n");
+    const chunks = parseSunnyBanksScriptBlock(script);
+    const queue = sunnyBanksQueueChunks(chunks);
+    expect(queue).toHaveLength(11);
+    expect(queue.filter((chunk) => chunk.kind === "speak")).toHaveLength(10);
+    const cutaway = queue[10];
+    expect(cutaway).toMatchObject({
+      characterName: "Crowd",
+      line: "",
+      kind: "hold",
+    });
+    expect(cutaway.action).toMatch(/Fast dynamic drone shot/i);
+    expect(cutaway.action).toMatch(/crowd of park residents/i);
+    expect(resolveSunnyBanksScriptLocationId("caravan_park_grounds")).toBeUndefined();
+    expect(cutaway.locationId).toBe("office_storefront");
+    expect(isSunnyBanksLocationCutaway(cutaway)).toBe(true);
+    expect(buildSunnyBanksLocationCutawayPrompt(cutaway.action)).toContain("Fast dynamic drone shot");
+    expect(buildSunnyBanksLocationCutawayPrompt(cutaway.action)).not.toContain("Shazza,");
+    expect("Crowd" in SUNNY_BANKS_CAST).toBe(false);
+
+    const previous: Record<number, { lineKey: string; status: "done"; videoUrl: string; characterName: string; line: string }> =
+      {};
+    queue.slice(0, 10).forEach((chunk, index) => {
+      previous[index] = {
+        lineKey: chunk.raw,
+        status: "done",
+        videoUrl: `https://example.test/clip-${index}.mp4`,
+        characterName: chunk.characterName,
+        line: chunk.line,
+      };
+    });
+    const remapped = preserveRenderedRuntimes(chunks, previous);
+    expect(Object.keys(remapped)).toHaveLength(10);
+    expect(remapped[10]).toBeUndefined();
   });
 });
 

@@ -105,6 +105,9 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * recompiles to the last clean arrangement. Tag-only
  * `[Character Name: override]` / `[Location:]` / `[Action:]` lines
  * never mint their own Idle rows — they only stamp the next speaker.
+ * Empty `Crowd:` is a location Hold cutaway (park plate + `[Action:]`,
+ * no CAST overlay), so it can sit Idle while seed Speaks stay Done and
+ * Render reads "Render 1 line" instead of "Clips already loaded".
  *
  * **Clips live in one Act-grouped strip (2026-09-17, live QA)** —
  * finished MP4s sit in one `overflow-x-auto` row at the base of the
@@ -395,14 +398,34 @@ function parseCharacterLookTag(inner: string): string {
   return trimmed;
 }
 
-/** `Crowd:` (or any `Name:` that is not a CAST key) is a cutaway
- *  marker, not a Hold and not a continuation line. */
-export function isSunnyBanksGhostTargetLine(rest: string): boolean {
+/** `Crowd:` (or any empty `Name:` that is not a CAST key) is a
+ *  location Hold cutaway — not a CAST speaker and not a continuation. */
+export function parseSunnyBanksGhostTargetName(rest: string): string | null {
   const match = rest.trim().match(/^(.+?)\s*:\s*$/);
-  if (!match) return false;
+  if (!match) return null;
   const name = match[1].replace(/\s+/g, " ").trim();
-  if (!name) return true;
-  return !SPEAKER_NAMES.some((speaker) => speaker.toLowerCase() === name.toLowerCase());
+  if (!name) return "Crowd";
+  if (SPEAKER_NAMES.some((speaker) => speaker.toLowerCase() === name.toLowerCase())) return null;
+  return name;
+}
+
+export function isSunnyBanksGhostTargetLine(rest: string): boolean {
+  return parseSunnyBanksGhostTargetName(rest) !== null;
+}
+
+/** Hold of a locked park plate with no CAST overlay. Gold Hold/Speak
+ *  strings stay unused — they assume one plated person. */
+export function isSunnyBanksLocationCutaway(
+  chunk: Pick<SunnyBanksScriptChunk, "kind" | "characterName">
+): boolean {
+  return chunk.kind === "hold" && !getSunnyBanksCharacterLock(chunk.characterName);
+}
+
+/** Motion text for a Crowd/location Hold. Not gold — `lib/sunnyBanks.ts`
+ *  Hold/Speak templates are character-locked and stay verbatim. */
+export function buildSunnyBanksLocationCutawayPrompt(action: string | undefined): string {
+  const motion = action?.replace(/\s+/g, " ").trim() || "Subtle ambient motion. Camera holds, no cuts.";
+  return `Use the provided start image as the first frame. ${motion} No dialogue.`;
 }
 
 function extractGodScriptTags(raw: string): {
@@ -556,8 +579,11 @@ export function parseSunnyBanksGodDocument(text: string, fallbackActId: string =
  * `[Character Dazza wrapped in bandages]` (no colon) and
  * `[Character Name: description]` both strip into `appearanceModifier`
  * on the next Speak/Hold row — gold look strings in `lib/sunnyBanks.ts`
- * stay verbatim. Empty `Crowd:` (any non-CAST `Name:`) is skipped so
- * it never mints an Idle ghost row.
+ * stay verbatim. Empty `Crowd:` (any non-CAST `Name:`) is a location
+ * Hold cutaway — not a Speak continuation of the previous CAST
+ * speaker, and not skipped. Skipping it left `[Action:]` with nowhere
+ * to land, so a drone/crowd beat never became Idle and Render stayed
+ * on "Clips already loaded" while the 10 Act III seed lines stayed Done.
  */
 export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[] {
   const chunks: SunnyBanksScriptChunk[] = [];
@@ -587,7 +613,24 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       pendingAppearance = [...pendingAppearance, ...tagged.appearanceModifiers];
     }
     if (!tagged.rest) continue;
-    if (isSunnyBanksGhostTargetLine(tagged.rest)) continue;
+    const ghostName = parseSunnyBanksGhostTargetName(tagged.rest);
+    if (ghostName) {
+      const action = pendingActions.join(" ").trim();
+      pendingActions = [];
+      const appearanceModifier = pendingAppearance.join(" ").trim();
+      pendingAppearance = [];
+      const chunk: SunnyBanksScriptChunk = {
+        raw: tagged.rest,
+        characterName: ghostName,
+        line: "",
+        kind: "hold",
+        locationId: currentLocation,
+      };
+      if (action) chunk.action = action;
+      if (appearanceModifier) chunk.appearanceModifier = appearanceModifier;
+      chunks.push(chunk);
+      continue;
+    }
     const matched = matchSpeakerPrefix(tagged.rest);
     let characterName: string;
     let line: string;
@@ -775,7 +818,7 @@ export function collectRenderedClips(args: {
         act,
         index,
         characterName: overrides[index] ?? chunk.characterName,
-        lineLabel: chunk.line.length > 0 ? chunk.line : "Silent hold",
+          lineLabel: chunk.line.length > 0 ? chunk.line : chunk.action?.trim() || "Silent hold",
         videoUrl: stored.videoUrl,
         durationSec: stored.durationSec,
       });
@@ -874,7 +917,9 @@ export function SkidmarksSunnyBanksPanel() {
     pendingRows.length > 0 &&
     !running &&
     pendingRows.every((row) => {
-      if (!row.character || !row.location.image) return false;
+      if (!row.location.image) return false;
+      if (isSunnyBanksLocationCutaway(row.chunk)) return true;
+      if (!row.character) return false;
       if (row.kind === "speak") return !!row.character.voiceId && row.line.length > 0;
       return !!resolveSunnyBanksStartImage(row.character);
     });
@@ -969,7 +1014,8 @@ export function SkidmarksSunnyBanksPanel() {
         const row = queue[i];
         if (runtimeFor(row.index, row.chunk.raw).status === "done") continue;
         const lock = getSunnyBanksCharacterLock(row.characterName);
-        if (!lock || !row.location.image) {
+        const cutaway = isSunnyBanksLocationCutaway(row.chunk);
+        if ((!lock && !cutaway) || !row.location.image) {
           writeRuntime(i, {
             lineKey: row.chunk.raw,
             status: "failed",
@@ -981,15 +1027,17 @@ export function SkidmarksSunnyBanksPanel() {
         setRunningIndex(i);
         writeRuntime(i, { lineKey: row.chunk.raw, status: "rendering" });
         setProgressText(
-          row.kind === "hold"
-            ? `Line ${i + 1} of ${queue.length} — holding ${lock.name} at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
-            : `Line ${i + 1} of ${queue.length} — rendering ${lock.name}'s line…`
+          cutaway
+            ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+            : row.kind === "hold"
+              ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+              : `Line ${i + 1} of ${queue.length} — rendering ${lock!.name}'s line…`
         );
         try {
           const startImageDataUrl = await resolveLocationDataUrl(row.location.image);
           const result = await postBeat({
             kind: row.kind,
-            characterName: lock.name,
+            characterName: lock?.name ?? row.characterName,
             line: row.line,
             locationId: row.location.id,
             locationImage: row.location.image,
@@ -1050,15 +1098,15 @@ export function SkidmarksSunnyBanksPanel() {
         const lock = getSunnyBanksCharacterLock(characterName);
         const locationId = locations[index] ?? chunk.locationId ?? defaultLocationId;
         const kind = chunk.kind;
+        const extra = [chunk.action, chunk.appearanceModifier].filter(Boolean).join(" ");
         const gold = lock
           ? kind === "hold"
             ? buildSunnyBanksHoldPrompt(lock)
             : buildSunnyBanksSpeakingPrompt(lock, chunk.line)
-          : "";
-        const prompt = appendSunnyBanksActionToPrompt(
-          gold,
-          [chunk.action, chunk.appearanceModifier].filter(Boolean).join(" ")
-        );
+          : kind === "hold"
+            ? buildSunnyBanksLocationCutawayPrompt(chunk.action)
+            : "";
+        const prompt = lock ? appendSunnyBanksActionToPrompt(gold, extra) : gold;
         prompts.push({
           act,
           index,
@@ -1383,8 +1431,11 @@ export function SkidmarksSunnyBanksPanel() {
                       const runtime = runtimeFor(row.index, row.chunk.raw);
                       const status = row.index === runningIndex ? "rendering" : runtime?.status ?? "idle";
                       const isStatic = status === "done";
+                      const cutaway = isSunnyBanksLocationCutaway(row.chunk);
                       const lineLabel =
-                        row.kind === "hold" ? "Silent hold" : row.line;
+                        row.kind === "hold"
+                          ? row.chunk.action?.trim() || "Silent hold"
+                          : row.line;
                       return (
                         <li key={`${activeAct}:${row.index}:${row.chunk.raw}`} className="min-w-0">
                           <div className="flex min-w-0 w-full items-start gap-1 overflow-x-hidden py-1.5 [touch-action:pan-y]">
@@ -1393,7 +1444,7 @@ export function SkidmarksSunnyBanksPanel() {
                             </span>
                             <div className="min-w-0 flex-1">
                               <div className="flex min-h-[32px] min-w-0 items-center gap-1">
-                                {isStatic ? (
+                                {isStatic || cutaway ? (
                                   <span className="min-w-0 truncate text-[12px] font-semibold text-white/90">
                                     {row.characterName}
                                   </span>

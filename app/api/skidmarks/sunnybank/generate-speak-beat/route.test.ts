@@ -470,6 +470,56 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(xaiBody.prompt).not.toContain("shazza-reference");
   });
 
+  it("hold: Crowd cutaway skips overlay and gold Hold, uses [Action:] on the location still", async () => {
+    mockUploads("start.png", "hold.mp3");
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([4, 4, 4]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/crowd-hold.mp4" });
+
+    const res = await POST(
+      holdBeatRequest({
+        characterName: "Crowd",
+        locationId: "office_storefront",
+        action:
+          "Fast dynamic drone shot, powering around, sweeping wide angle view seeing the crowd of park residents looking confused",
+      })
+    );
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.kind).toBe("hold");
+    expect(body.character).toBe("Crowd");
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("elevenlabs.io");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/v1/images/edits"))).toBe(false);
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    expect(submitCallIndex).toBeGreaterThanOrEqual(0);
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body).prompt as Record<
+      string,
+      { inputs?: Record<string, unknown> }
+    >;
+    const prompt = graph["340:319"]?.inputs?.value;
+    expect(prompt).toContain("Fast dynamic drone shot");
+    expect(prompt).toContain("No dialogue.");
+    expect(prompt).not.toContain("Shazza,");
+    expect(prompt).not.toContain("holds their pose");
+    expect(String(putMock.mock.calls[0][0])).toContain("sunnybanks/hold-beats/");
+    expect(String(putMock.mock.calls[0][0])).toContain("crowd");
+  });
+
+  it("hold: Crowd cutaway does not need XAI_API_KEY because there is no hero overlay", async () => {
+    vi.stubEnv("XAI_API_KEY", "");
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/crowd-no-xai.mp4" });
+
+    const res = await POST(holdBeatRequest({ characterName: "Crowd", action: "drone shot of the park" }));
+    expect(res.status).toBe(200);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/v1/images/edits"))).toBe(false);
+  });
+
   it("hold: missing XAI_API_KEY does not fire LTX for a character that needs overlay", async () => {
     vi.stubEnv("XAI_API_KEY", "");
     const res = await POST(holdBeatRequest());
