@@ -2222,13 +2222,17 @@ now (see "Explicitly out of scope" below).
     sends `line` / `action` / `appearanceModifier` / `locationId`
     (`action` after gold, never into TTS; gold look strings untouched).
     Queue rows do not scroll horizontally on a 390px phone: line +
-    location shrink/truncate, status pill `flex-shrink-0` on the right
-    — still in-memory, no layout change.
+    location shrink/truncate (`truncate max-w-[120px]`), status pill
+    and a 40px preview `flex-shrink-0` flush on the right — still
+    in-memory. Re-parsing keeps a Done clip when speaker + dialogue
+    still match (`preserveRenderedRuntimes`); **↩ Undo** beside the
+    Act pills restores the previous script buffers. Tag-only
+    `[Character Name: override]` lines never mint ghost Idle rows.
     Each row is one spreadsheet-style line: character `<select>` (CAST
     keyed by name, full lock still loaded on the server for gold
     prompts), truncated line fragment, location `<select>`, Idle /
-    Rendering... / Done pill — no in-row video thumb (live QA: those
-    40px blocks cluttered the queue). Finished MP4s live in one
+    Rendering... / Done pill, and a 40px preview of that line's Done
+    clip. Finished MP4s live in one
     default-open **Clips** shelf after the script (same card size and
     `touch-pan-x` as `SkidmarksRenderedClipsShelf` (`w-44` / `h-28`,
     inline `<video controls playsInline>`), sectioned Act I / II / III
