@@ -2185,10 +2185,15 @@ now (see "Explicitly out of scope" below).
     horizontally-scrollable row** (2026-09-17, same shape as the
     "Choose a band" cover-tile strip above — not the round, wrapping
     chip row this shipped with initially), each showing that
-    character's real reference plate (a static asset shipped with the
-    app, `public/skidmarks/sunnybanks/*-reference.jpg`) with the name
-    in a bottom scrim, and an honest "not ready" label on anyone
-    missing a locked ElevenLabs voice id (Hans, today).
+    character's real **hero still** (`public/skidmarks/sunnybanks/
+    *-hero.jpg` — one cropped cell from the turnaround sheet; live-QA
+    2026-09-17: sending the full sheet as LTX's first frame animated a
+    grid of Shazzas). The sheet (`*-reference.jpg`) stays the character
+    bible; Hold/Speak and the strip both use
+    `resolveSunnyBanksStartImage`. Unit 4S has no separate hero file
+    (already a single figure). Name sits in a bottom scrim, and an honest
+    "not ready" label on anyone missing a locked ElevenLabs voice id
+    (Hans, today).
   - A **"Try one line"** form — pick any character who has a real
     reference plate. **Speak** needs a locked ElevenLabs voice as well:
     type a line, tap "Generate speak beat" to render one real clip via

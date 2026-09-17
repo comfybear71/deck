@@ -3,7 +3,11 @@
 import { useState } from "react";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
-import { SUNNY_BANKS_CAST, SUNNY_BANKS_HOLD_DURATION_SEC } from "@/lib/sunnyBanks";
+import {
+  resolveSunnyBanksStartImage,
+  SUNNY_BANKS_CAST,
+  SUNNY_BANKS_HOLD_DURATION_SEC,
+} from "@/lib/sunnyBanks";
 
 /**
  * Sunny Banks' own first real screen (2026-09-15) — the thing that
@@ -32,6 +36,17 @@ import { SUNNY_BANKS_CAST, SUNNY_BANKS_HOLD_DURATION_SEC } from "@/lib/sunnyBank
  * fixed 5s pause (`SUNNY_BANKS_HOLD_DURATION_SEC`) using
  * `buildSunnyBanksHoldPrompt`. Same route, `kind: "hold"`. Not a
  * timeline, not a batch, not a new schema.
+ *
+ * **Start still is the hero cell, not the turnaround sheet
+ * (2026-09-17)** — live QA: Silent Hold on Shazza animated every pose
+ * on `shazza-reference.jpg` because that file is a character plate
+ * (4 bodies + 4 heads) and the gold Hold prompt tells LTX to keep the
+ * start image's people/objects. Speak and Hold both resolve
+ * `resolveSunnyBanksStartImage` (the cropped `*-hero.jpg` when one
+ * exists) as `startImageDataUrl`. No pose picker, no in-memory canvas
+ * cropper — the crop is a committed still, same shape as Jack Ash's
+ * reference jpg. Cast thumbnails use the same src so the strip matches
+ * the clip.
  */
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
@@ -67,17 +82,18 @@ export function SkidmarksSunnyBanksPanel() {
 
   const selected = plateCast.find((c) => c.name === selectedName);
   const running = runningKind !== null;
-  const canSpeak = !!(selected?.voiceId && selected.referenceImage && line.trim());
-  const canHold = !!selected?.referenceImage;
+  const selectedStartImage = selected ? resolveSunnyBanksStartImage(selected) : undefined;
+  const canSpeak = !!(selected?.voiceId && selectedStartImage && line.trim());
+  const canHold = !!selectedStartImage;
 
   const handleGenerate = async (kind: BeatKind) => {
-    if (!selected?.referenceImage || running) return;
+    if (!selected || !selectedStartImage || running) return;
     if (kind === "speak" && (!selected.voiceId || !line.trim())) return;
     setRunningKind(kind);
     setResult(null);
-    setProgressText(`Getting ${selected.name}'s reference plate ready…`);
+    setProgressText(`Getting ${selected.name}'s start still ready…`);
     try {
-      const startImageDataUrl = await resolvePlateReferenceDataUrl(selected.referenceImage);
+      const startImageDataUrl = await resolvePlateReferenceDataUrl(selectedStartImage);
       setProgressText(
         kind === "hold"
           ? `Rendering ${selected.name}'s silent hold (~${SUNNY_BANKS_HOLD_DURATION_SEC}s) — this can take a minute or two…`
@@ -135,7 +151,8 @@ export function SkidmarksSunnyBanksPanel() {
             gesture of their own, just a static portrait + name. */}
         <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 pl-0.5 pr-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
           {SERIES_REGULARS.map((c) => {
-            const ready = !!(c.voiceId && c.referenceImage);
+            const startImage = resolveSunnyBanksStartImage(c);
+            const ready = !!(c.voiceId && startImage);
             return (
               <div
                 key={c.name}
@@ -146,9 +163,9 @@ export function SkidmarksSunnyBanksPanel() {
                     : "bg-white/[0.02] ring-1 ring-inset ring-white/10",
                 ].join(" ")}
               >
-                {c.referenceImage ? (
+                {startImage ? (
                   // eslint-disable-next-line @next/next/no-img-element -- a fixed small static asset, not worth next/image here
-                  <img src={c.referenceImage} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                  <img src={startImage} alt="" className="absolute inset-0 h-full w-full object-cover" />
                 ) : (
                   <span className="flex h-full w-full items-center justify-center border border-dashed border-white/15 text-[10px] text-white/25">
                     ?
