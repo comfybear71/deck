@@ -11,6 +11,8 @@ import {
   parseSunnyBanksGodDocument,
   parseSunnyBanksSceneHeader,
   parseSunnyBanksScriptBlock,
+  parseSunnyBanksTitledActHeader,
+  isSunnyBanksGhostTargetLine,
   preserveRenderedRuntimes,
   decodeSunnyBanksPastedScript,
   resolveSunnyBanksScriptLocationId,
@@ -215,6 +217,12 @@ describe("parseSunnyBanksScriptBlock", () => {
   it("maps === THE EPISODE TAG === as a final in-memory scene chunk, not a queue row", () => {
     expect(parseSunnyBanksSceneHeader("=== THE EPISODE TAG ===")).toBe("THE EPISODE TAG");
     expect(parseSunnyBanksSceneHeader("=== ACT III ===")).toBeNull();
+    expect(parseSunnyBanksActHeader("=== ACT III — CROWD CUTAWAY ===")).toBeNull();
+    expect(parseSunnyBanksTitledActHeader("=== ACT III — CROWD CUTAWAY ===")).toEqual({
+      actId: "III",
+      label: "ACT III — CROWD CUTAWAY",
+    });
+    expect(parseSunnyBanksSceneHeader("=== ACT III — CROWD CUTAWAY ===")).toBe("ACT III — CROWD CUTAWAY");
     const chunks = parseSunnyBanksScriptBlock(
       [
         "[Location: caravan_interior]",
@@ -242,6 +250,68 @@ describe("parseSunnyBanksScriptBlock", () => {
     );
     expect(SUNNY_BANKS_CAST[queue[0].characterName].look).toContain("bare feet");
     expect(SUNNY_BANKS_CAST[queue[0].characterName].look).not.toMatch(/shoe|boot|sneaker/i);
+  });
+
+  it("parses the Act III God Script: titled scenes, bandage look, empty Crowd: skipped", () => {
+    expect(isSunnyBanksGhostTargetLine("Crowd:")).toBe(true);
+    expect(isSunnyBanksGhostTargetLine("Ranger Bazza:")).toBe(false);
+    const script = [
+      "=== ACT III — THE CON ===",
+      "[Location: main_entrance_sign]",
+      "Shazza: Help me with the sign it’s been 100 days now since the last drop bear attack. Where’s Baza? I’ve got a plan.",
+      "",
+      "[Location: main_entrance_sign]",
+      "[Character Dazza lying flat on his back on the ground completely wrapped head to toe in white hospital gauze and thick medical bandages look of extreme pain]",
+      "Dazza: These drop bear attacks are getting worse every year geez shazza is there anything we can do about it? I would hate to see this happen to anyone else.",
+      "",
+      "[Location: office_storefront]",
+      "Shazza: That’s perfect, Bazza, now we just have to put our little plan into action",
+      "",
+      "[Location: office_storefront]",
+      "[Action: Shazza cupping hands to mouth, yelling]",
+      "Shazza: Hey listen everybody, I need everyone’s attention! We’ve just had another drop bear dilemma.",
+      "",
+      "=== ACT III — CROWD CUTAWAY ===",
+      "[Location: office_storefront]",
+      "Crowd:",
+      "",
+      "=== ACT III — THE APOLOGY ===",
+      "[Location: office_storefront]",
+      "Shazza: One of the staff members was attacked by a drop bear this morning. We will need everybody to purchase their drop bear kit or some drop bear repellent to keep you safe.",
+    ].join("\n");
+    const chunks = parseSunnyBanksScriptBlock(script);
+    const queue = sunnyBanksQueueChunks(chunks);
+    expect(queue).toHaveLength(5);
+    expect(queue.map((chunk) => chunk.characterName)).toEqual([
+      "Shazza",
+      "Dazza",
+      "Shazza",
+      "Shazza",
+      "Shazza",
+    ]);
+    expect(queue[1].appearanceModifier).toContain("bandages");
+    expect(queue[1].appearanceModifier).toContain("gauze");
+    expect(queue[1].locationId).toBe("main_entrance_sign");
+    expect(queue[3].action).toBe("Shazza cupping hands to mouth, yelling");
+    expect(queue[3].locationId).toBe("office_storefront");
+    expect(queue[4].line).toContain("drop bear kit");
+    expect(chunks.filter((chunk) => chunk.kind === "scene").map((chunk) => chunk.line)).toEqual([
+      "ACT III — THE CON",
+      "ACT III — CROWD CUTAWAY",
+      "ACT III — THE APOLOGY",
+    ]);
+    expect(queue.some((chunk) => /crowd/i.test(chunk.line) || chunk.characterName === "Crowd")).toBe(
+      false
+    );
+    const gold = SUNNY_BANKS_CAST.Dazza.look;
+    expect(gold).not.toContain("bandages");
+    expect(queue[1].appearanceModifier).not.toBe(gold);
+
+    const doc = parseSunnyBanksGodDocument(script);
+    expect(doc.hasActHeaders).toBe(true);
+    expect(doc.actIds).toEqual(["III"]);
+    expect(doc.actScripts.III).toContain("=== ACT III — CROWD CUTAWAY ===");
+    expect(sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(doc.actScripts.III))).toHaveLength(5);
   });
 });
 

@@ -322,17 +322,38 @@ export function parseSunnyBanksEpisodeHeader(raw: string): { title: string } | n
   return { title: (match[1] ?? "").trim() };
 }
 
-/** A line that contains `=== ACT I` / `=== ACT 2` names that act buffer. */
+/** A bare `=== ACT I ===` / `=== ACT 2` names that act buffer.
+ *  A titled beat (`=== ACT III — CROWD CUTAWAY ===`) is a scene, not
+ *  a new act — see `parseSunnyBanksTitledActHeader`. */
 export function parseSunnyBanksActHeader(raw: string): SunnyBanksActId | null {
-  const match = raw.match(/===\s*ACT\s+([IVXLCDM]+|\d+)/i);
+  const match = raw.trim().match(/^===\s*ACT\s+([IVXLCDM]+|\d+)\s*(?:===)?\s*$/i);
   if (!match) return null;
-  const token = match[1];
+  return actTokenToId(match[1]);
+}
+
+function actTokenToId(token: string): SunnyBanksActId | null {
   if (/^\d+$/.test(token)) {
     const indexFromOne = Number(token);
     if (indexFromOne < 1 || indexFromOne > MAX_SUNNY_BANKS_ACTS) return null;
     return toSunnyBanksActId(indexFromOne);
   }
   return token.toUpperCase();
+}
+
+/** `=== ACT III — CROWD CUTAWAY ===` / `=== ACT III — THE CON ===`.
+ *  Switches the God-document buffer to that act and stays a scene
+ *  chunk — not a queue row, not a second Act III pill. */
+export function parseSunnyBanksTitledActHeader(
+  raw: string
+): { actId: SunnyBanksActId; label: string } | null {
+  if (parseSunnyBanksActHeader(raw)) return null;
+  const scene = parseSunnyBanksSceneHeader(raw);
+  if (!scene) return null;
+  const match = scene.match(/^ACT\s+([IVXLCDM]+|\d+)\b/i);
+  if (!match) return null;
+  const actId = actTokenToId(match[1]);
+  if (!actId) return null;
+  return { actId, label: scene };
 }
 
 /** `=== THE EPISODE TAG ===` (or any `=== LABEL ===` that is not an
@@ -361,6 +382,29 @@ export function resolveSunnyBanksScriptLocationId(token: string): SunnyBanksLoca
   return undefined;
 }
 
+function parseCharacterLookTag(inner: string): string {
+  const trimmed = inner.replace(/\s+/g, " ").trim();
+  if (!trimmed) return "";
+  const colon = trimmed.match(/^([^:]+):\s*(.*)$/);
+  if (colon) return (colon[2] ?? "").replace(/\s+/g, " ").trim();
+  for (const name of SPEAKER_NAMES) {
+    const re = new RegExp(`^${escapeRegExp(name)}\\s+(.*)$`, "i");
+    const match = trimmed.match(re);
+    if (match) return (match[1] ?? "").replace(/\s+/g, " ").trim();
+  }
+  return trimmed;
+}
+
+/** `Crowd:` (or any `Name:` that is not a CAST key) is a cutaway
+ *  marker, not a Hold and not a continuation line. */
+export function isSunnyBanksGhostTargetLine(rest: string): boolean {
+  const match = rest.trim().match(/^(.+?)\s*:\s*$/);
+  if (!match) return false;
+  const name = match[1].replace(/\s+/g, " ").trim();
+  if (!name) return true;
+  return !SPEAKER_NAMES.some((speaker) => speaker.toLowerCase() === name.toLowerCase());
+}
+
 function extractGodScriptTags(raw: string): {
   rest: string;
   locationId?: SunnyBanksLocationId;
@@ -381,8 +425,8 @@ function extractGodScriptTags(raw: string): {
       if (action) actions.push(action);
       return " ";
     })
-    .replace(/\[Character\s+[^:\]]+:\s*([^\]]*)\]/gi, (_, desc: string) => {
-      const appearance = desc.replace(/\s+/g, " ").trim();
+    .replace(/\[Character\s+([^\]]*)\]/gi, (_, inner: string) => {
+      const appearance = parseCharacterLookTag(inner);
       if (appearance) appearanceModifiers.push(appearance);
       return " ";
     })
@@ -464,6 +508,14 @@ export function parseSunnyBanksGodDocument(text: string, fallbackActId: string =
       touch(currentAct);
       continue;
     }
+    const titled = parseSunnyBanksTitledActHeader(raw);
+    if (titled) {
+      hasActHeaders = true;
+      currentAct = titled.actId;
+      touch(currentAct);
+      linesByAct[currentAct].push(rawLine.replace(/[ \t]+$/g, ""));
+      continue;
+    }
     touch(currentAct);
     linesByAct[currentAct].push(rawLine.replace(/[ \t]+$/g, ""));
   }
@@ -499,11 +551,13 @@ export function parseSunnyBanksGodDocument(text: string, fallbackActId: string =
  * Blank lines are skipped. God Script headers (`# EPISODE:`, `=== ACT`,
  * `[Location: id]`, `[Action: text]`, `[Character Name: look]`) are not
  * queue rows. `=== LABEL ===` scene headers (e.g. `=== THE EPISODE TAG
- * ===`) stay in the parse array as `kind: "scene"` sequence chunks and
- * are not spreadsheet rows. `[Character Name: description]` strips the
- * brackets and stores `description` as `appearanceModifier` on the
- * next Speak/Hold row — gold look strings in `lib/sunnyBanks.ts` stay
- * verbatim.
+ * ===`, `=== ACT III — CROWD CUTAWAY ===`) stay in the parse array as
+ * `kind: "scene"` sequence chunks and are not spreadsheet rows.
+ * `[Character Dazza wrapped in bandages]` (no colon) and
+ * `[Character Name: description]` both strip into `appearanceModifier`
+ * on the next Speak/Hold row — gold look strings in `lib/sunnyBanks.ts`
+ * stay verbatim. Empty `Crowd:` (any non-CAST `Name:`) is skipped so
+ * it never mints an Idle ghost row.
  */
 export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[] {
   const chunks: SunnyBanksScriptChunk[] = [];
@@ -533,6 +587,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       pendingAppearance = [...pendingAppearance, ...tagged.appearanceModifiers];
     }
     if (!tagged.rest) continue;
+    if (isSunnyBanksGhostTargetLine(tagged.rest)) continue;
     const matched = matchSpeakerPrefix(tagged.rest);
     let characterName: string;
     let line: string;
