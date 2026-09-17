@@ -2196,15 +2196,15 @@ now (see "Explicitly out of scope" below).
   - A **"Try one line"** form — pick any character who has a real
     reference plate, then a **Location** native `<select>` of six locked
     park plates (`SUNNY_BANKS_LOCATIONS`, default Office Storefront).
-    Speak/Hold do **not** send that empty location still to LTX
-    (live QA: invented sketch woman, not locked Shazza). Same
-    procedure as original Skidmarks Studio `plateCastIntoGen`: a
-    cheap xAI still first (`/api/skidmarks/generate-still`) with
-    Image 1 = the park plate and Image 2 = the hero card
-    (`buildSunnyBanksCompositePlatePrompt`), then that composed
-    still is `startImageDataUrl` for LTX. Gold Hold/Speak strings
-    unchanged. `locationId`/`locationImage` ride alongside
-    `characterName`. Not a sequencer. **Speak** needs a locked ElevenLabs voice as well:
+    Speak/Hold still POST that location still as `startImageDataUrl`
+    (the location canvas — Image 1) plus `locationId`/`locationImage`
+    alongside `characterName`. The **route** (`lib/sunnyBanksComposite.ts`)
+    then overlays the character hero as Image 2 via xAI edits (Studio
+    `plateCastIntoGen`), and only the composed still goes to LTX node
+    `269`. The panel does **not** plate first — that was #120, and it
+    would overlay twice once this route compositor is live. Not a
+    sequencer. Not a second Comfy image node. **Speak** needs a locked
+    ElevenLabs voice as well:
     type a line, tap "Generate speak beat" to render one real clip via
     `POST /api/skidmarks/sunnybank/generate-speak-beat`: ElevenLabs
     text-to-speech (`lib/elevenLabsSpeech.ts`, keyed off the same

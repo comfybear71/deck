@@ -1,12 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
-import { generatePlateStill, resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
-import { downscaleDataUrlImage } from "@/lib/skidmarks";
+import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
-  buildSunnyBanksCompositePlatePrompt,
   getSunnyBanksLocation,
   resolveSunnyBanksStartImage,
   SUNNY_BANKS_CAST,
@@ -52,15 +49,16 @@ import {
  * `resolveSunnyBanksStartImage` (the cropped `*-hero.jpg` when one
  * exists). No pose picker, no in-memory canvas cropper.
  *
- * **Location + hero composite, then LTX (2026-09-17)** — six locked
+ * **Location canvas as compositor Image 1 (2026-09-17)** — six locked
  * park stills (`SUNNY_BANKS_LOCATIONS`). A native `<select>` under the
- * character row picks one. Speak/Hold do **not** send that empty plate
- * to LTX (live QA: invented sketch woman). Same procedure as the
- * original Skidmarks Studio compositor (`plateCastIntoGen`): xAI still
- * with Image 1 = location, Image 2 = hero card, then that composed
- * still is `startImageDataUrl` for LTX. Gold Hold/Speak strings
- * unchanged. Not a sequencer, not a canvas cropper, not a second LTX
- * image node.
+ * character row (same iPhone-Safari control as the character picker)
+ * picks one; Speak and Hold POST that still as `startImageDataUrl`
+ * (empty location, Image 1) plus `locationId` / `locationImage`
+ * alongside `characterName`. The speak-beat **route** overlays the
+ * hero as Image 2 (Studio `plateCastIntoGen`), then LTX sees only the
+ * composed still. This panel does **not** call generate-still itself —
+ * that was #120 and would plate twice. Not a sequencer. Gold Hold/Speak
+ * prompt strings unchanged.
  */
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
@@ -96,54 +94,26 @@ export function SkidmarksSunnyBanksPanel() {
   const [line, setLine] = useState("");
   const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
-  const [platePreview, setPlatePreview] = useState<string | null>(null);
   const [result, setResult] = useState<GenerateBeatResult | null>(null);
 
   const selected = plateCast.find((c) => c.name === selectedName);
   const selectedLocation =
     getSunnyBanksLocation(selectedLocationId) ?? SUNNY_BANKS_LOCATIONS[SUNNY_BANKS_DEFAULT_LOCATION_ID];
   const running = runningKind !== null;
-  const canSpeak = !!(
-    selected?.voiceId &&
-    selectedLocation.image &&
-    resolveSunnyBanksStartImage(selected) &&
-    line.trim()
-  );
-  const canHold = !!(selected && selectedLocation.image && resolveSunnyBanksStartImage(selected));
+  const canSpeak = !!(selected?.voiceId && selectedLocation.image && line.trim());
+  const canHold = !!(selected && selectedLocation.image);
 
   const handleGenerate = async (kind: BeatKind) => {
     if (!selected || !selectedLocation.image || running) return;
     if (kind === "speak" && (!selected.voiceId || !line.trim())) return;
     setRunningKind(kind);
     setResult(null);
-    setPlatePreview(null);
     setProgressText(`Getting ${selectedLocation.label} ready…`);
     try {
-      const heroPath = resolveSunnyBanksStartImage(selected);
-      if (!heroPath) {
-        setResult({ ok: false, message: `${selected.name} has no hero still to plate.` });
-        return;
-      }
-      setProgressText(`Plating ${selected.name} at ${selectedLocation.label}…`);
-      const [locationDataUrl, heroDataUrl] = await Promise.all([
-        resolvePlateReferenceDataUrl(selectedLocation.image),
-        resolvePlateReferenceDataUrl(heroPath),
-      ]);
-      const platePrompt = buildSunnyBanksCompositePlatePrompt(selected, selectedLocation);
-      const plated = await generatePlateStill({
-        prompt: platePrompt,
-        shotPrompt: `${selected.name} at ${selectedLocation.label}`,
-        referenceImageDataUrls: [locationDataUrl, heroDataUrl],
-      });
-      if (!plated.ok) {
-        setResult({ ok: false, message: plated.message });
-        return;
-      }
-      const startImageDataUrl = await downscaleDataUrlImage(plated.dataUrl);
-      setPlatePreview(startImageDataUrl);
+      const startImageDataUrl = await resolvePlateReferenceDataUrl(selectedLocation.image);
       setProgressText(
         kind === "hold"
-          ? `Holding that plate (~${SUNNY_BANKS_HOLD_DURATION_SEC}s) — this can take a minute or two…`
+          ? `Rendering ${selected.name} at ${selectedLocation.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s) — this can take a minute or two…`
           : `Rendering ${selected.name}'s line — this can take a minute or two…`
       );
       const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
@@ -305,10 +275,9 @@ export function SkidmarksSunnyBanksPanel() {
               </button>
             </div>
             <p className="text-[10px] leading-snug text-white/40">
-              First a cheap plate still (~${ESTIMATED_STILL_COST_USD.toFixed(2)}, xAI) of this
-              character in the place, then Speak is voice + LTX. Hold skips ElevenLabs — still
-              a real Comfy Cloud LTX render, {SUNNY_BANKS_HOLD_DURATION_SEC}s, ~$
-              {HOLD_COST_USD.toFixed(2)} (stand-in rate). One clip at a time.
+              Speak is voice + LTX. Hold skips ElevenLabs — still a real Comfy Cloud LTX
+              render, {SUNNY_BANKS_HOLD_DURATION_SEC}s, ~${HOLD_COST_USD.toFixed(2)} (stand-in
+              rate). One clip at a time.
             </p>
           </>
         )}
@@ -316,14 +285,6 @@ export function SkidmarksSunnyBanksPanel() {
           <p role="status" className="text-[11px] leading-snug text-amber-200/80">
             {progressText}
           </p>
-        )}
-        {platePreview && !result?.ok && (
-          // eslint-disable-next-line @next/next/no-img-element -- a one-off generated still, not a static asset
-          <img
-            src={platePreview}
-            alt=""
-            className="w-full rounded-xl"
-          />
         )}
         {result && !result.ok && (
           <p role="alert" className="text-[11px] leading-snug text-rose-300/90">

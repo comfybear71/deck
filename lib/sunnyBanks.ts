@@ -221,22 +221,17 @@ export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock):
 }
 
 /**
- * Shot-plate compositor prompt — ported from the original Skidmarks
- * Studio's `plateCastIntoGen` / `buildPlatePrompt` (`comfybear71/
- * skidmarks`, `src/lib/plateCast.ts`) for the n=1, first-pass case.
- * That repo already plates Sunny Banks: Image 1 is the empty location,
- * Image 2 is the single cast card (never the turnaround sheet), xAI
- * draws the person into the place, and **then** LTX animates that
- * composed still. Deck's #119 Hold skipped this step and sent the
- * empty park plate to LTX with Shazza only in the gold motion text —
- * live QA: invented sketch woman, not locked Shazza, not Office
- * Storefront.
- *
- * Reference order the caller must send to `/api/skidmarks/generate-still`:
- * `[location still, hero still]` so `<IMAGE_0>` is the place and
- * `<IMAGE_1>` is the person (xAI's documented `images` array tags).
- * Gold Hold/Speak strings stay untouched — they already assume the
- * start image has both the person and the place.
+ * Shot-plate compositor prompt — copied from original Skidmarks Studio
+ * `plateCastIntoGen` / `buildPlatePrompt` (`comfybear71/skidmarks`,
+ * `src/lib/plateCast.ts`) for the n=1, first-pass case. That repo does
+ * NOT overlay a second image in the LTX graph. LTX node `269` is a
+ * single LoadImage of the **already composed** plate. Overlay is xAI
+ * `/v1/images/edits` with two references:
+ *   Image 1 / `<IMAGE_0>` = locked empty location (the canvas)
+ *   Image 2 / `<IMAGE_1>` = single hero/cast card (never the sheet)
+ * `generate-speak-beat` is the caller (Studio's gen-plate + LTX in one
+ * route). Gold Hold/Speak strings stay untouched — they already assume
+ * the start image has both the person and the place.
  */
 export function buildSunnyBanksCompositePlatePrompt(
   character: SunnyBanksCharacterLock,
@@ -266,12 +261,12 @@ export function buildSunnyBanksCompositePlatePrompt(
 /**
  * Locked park plates — Stuart's own full-frame location stills
  * (2026-09-17), not generated here. Empty of cast on purpose: they are
- * compositor **Image 1** (the locked place). The character's hero still
- * is Image 2. xAI composites those two, and that composed still — not
- * this empty plate — is what Speak/Hold send LTX as the first frame.
- * Keyed by a stable id the Locations `<select>` stores
- * (`selectedLocationId`), never a synthetic `characterId`. Not a pose
- * picker and not a sequencer — one native dropdown, one clip at a time.
+ * compositor **Image 1** (the location canvas). `generate-speak-beat`
+ * overlays the character hero as Image 2, then sends the composed
+ * still to LTX node `269`. Keyed by a stable id the Locations
+ * `<select>` stores (`selectedLocationId`), never a synthetic
+ * `characterId`. Not a pose picker and not a sequencer — one native
+ * dropdown, one clip at a time.
  *
  * These files are already 1280×720, so `letterboxImageForLtxIa2v` is a
  * no-op on them (source aspect already 16:9).

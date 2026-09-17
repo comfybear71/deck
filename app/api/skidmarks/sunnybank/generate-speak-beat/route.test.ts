@@ -70,6 +70,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     vi.stubEnv("ELEVENLABS_API_KEY", "test-elevenlabs-key");
     vi.stubEnv("ELEVEN_LABS_API_KEY", "");
     vi.stubEnv("COMFY_CLOUD_API_KEY", "test-comfy-key");
+    vi.stubEnv("XAI_API_KEY", "test-xai-key");
     vi.stubEnv("COMFY_URL", "");
     putMock.mockReset();
   });
@@ -152,6 +153,15 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(body.error).toContain("Shazza");
   });
 
+  function mockXaiComposite(dataUrl = TINY_DATA_URL) {
+    const b64 = dataUrl.split(",")[1] ?? "";
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [{ b64_json: b64, mime_type: "image/png" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+  }
   function mockElevenLabs(mp3Bytes: Uint8Array) {
     fetchMock.mockResolvedValueOnce(
       new Response(new Blob([new Uint8Array(mp3Bytes)]), { status: 200, headers: { "Content-Type": "audio/mpeg" } })
@@ -187,6 +197,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
   it("runs the full real pipeline end to end and persists the result to Vercel Blob", async () => {
     const lineAudio = encodeTestMp3(4);
     mockElevenLabs(lineAudio);
+    mockXaiComposite();
     mockUploads();
     mockSubmit();
     mockJobPoll();
@@ -217,6 +228,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
 
   it("real reported gold check: the submitted prompt matches Sunny Banks' own speaking-plate shape, not Skidmarks'", async () => {
     mockElevenLabs(encodeTestMp3(4));
+    mockXaiComposite();
     mockUploads();
     mockSubmit();
     mockJobPoll();
@@ -238,6 +250,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
 
   it("still returns the render, honestly flagged as unsaved, when the Blob upload fails", async () => {
     mockElevenLabs(encodeTestMp3(4));
+    mockXaiComposite();
     mockUploads();
     mockSubmit();
     mockJobPoll();
@@ -263,6 +276,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
   }
 
   it("hold: skips ElevenLabs, uses the gold hold prompt, and still runs the LTX pipeline", async () => {
+    mockXaiComposite();
     mockUploads("start.png", "hold.mp3");
     mockSubmit();
     mockJobPoll();
@@ -335,6 +349,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
 
   it("hold: with ElevenLabs unset but Comfy set, never calls ElevenLabs", async () => {
     vi.stubEnv("ELEVENLABS_API_KEY", "");
+    mockXaiComposite();
     mockUploads();
     mockSubmit();
     mockJobPoll();
@@ -344,5 +359,49 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     const res = await POST(holdBeatRequest());
     expect(res.status).toBe(200);
     expect(String(fetchMock.mock.calls[0][0])).not.toContain("elevenlabs.io");
+  });
+
+  it("hold: xAI edits map startImageDataUrl to Image 1 (location) and Shazza hero to Image 2, then LTX gets the composed still", async () => {
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/plated-hold.mp4" });
+
+    const res = await POST(
+      holdBeatRequest({
+        locationId: "office_storefront",
+        locationImage: "/skidmarks/sunnybanks/office-storefront.jpg",
+      })
+    );
+    expect(res.status).toBe(200);
+
+    const xaiCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/v1/images/edits"));
+    expect(xaiCall).toBeTruthy();
+    const xaiBody = JSON.parse(xaiCall![1].body as string) as {
+      prompt: string;
+      images: { url: string; type: string }[];
+    };
+    expect(xaiBody.images).toHaveLength(2);
+    expect(xaiBody.images[0].url).toBe(TINY_DATA_URL);
+    expect(xaiBody.images[0].type).toBe("image_url");
+    expect(xaiBody.images[1].url).toMatch(/^data:image\/jpeg;base64,/);
+    expect(xaiBody.images[1].url).not.toBe(TINY_DATA_URL);
+    expect(xaiBody.prompt).toContain("<IMAGE_0> is the LOCKED background");
+    expect(xaiBody.prompt).toContain("<IMAGE_1> is the person");
+    expect(xaiBody.prompt).toContain("Office Storefront");
+    expect(xaiBody.prompt).toContain("Shazza");
+    expect(xaiBody.prompt).not.toContain("shazza-reference");
+  });
+
+  it("hold: missing XAI_API_KEY does not fire LTX for a character that needs overlay", async () => {
+    vi.stubEnv("XAI_API_KEY", "");
+    const res = await POST(holdBeatRequest());
+    expect(res.status).toBe(501);
+    const body = await res.json();
+    expect(body.code).toBe("missing_api_key");
+    expect(body.error).toContain("XAI_API_KEY");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

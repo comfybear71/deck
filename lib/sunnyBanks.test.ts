@@ -146,7 +146,7 @@ describe("SUNNY_BANKS_LOCATIONS", () => {
 });
 
 describe("buildSunnyBanksCompositePlatePrompt", () => {
-  it("follows the original plateCast order: location is Image 1, hero is Image 2", () => {
+  it("follows Studio plateCast order: location is Image 1, hero is Image 2", () => {
     const prompt = buildSunnyBanksCompositePlatePrompt(
       SUNNY_BANKS_CAST.Shazza,
       SUNNY_BANKS_LOCATIONS.office_storefront
