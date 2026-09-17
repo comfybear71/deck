@@ -85,11 +85,16 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * **iPhone Safari vertical scroll (2026-09-17)** — the script wrapper
  * uses `touch-pan-y overscroll-y-contain` so a thumb on the textarea
  * or a queue row pans the page instead of freezing inside a nested
- * scroller. Queue rows do **not** scroll horizontally (2026-09-17
- * overflow fix): line text and the location `<select>` shrink/truncate
- * (`truncate max-w-[120px]`); the status pill and a 40px preview box
- * stay `flex-shrink-0` flush on the right. `touch-action: pan-y` so a
- * thumb still pages the sheet.
+ * scroller. Queue rows do **not** scroll horizontally. `touch-action:
+ * pan-y` so a thumb still pages the sheet.
+ *
+ * **Done rows are static (2026-09-17, live QA)** — once a line is
+ * `status === "done"`, character and location `<select>`s go away
+ * (the clip is already billed; swapping Shazza or the park plate
+ * would lie). Spoken text sits under the name in a native
+ * `<details>` disclosure. The empty 40px black preview cube is gone
+ * — finished MP4s live in the Clips shelf, not in the spreadsheet.
+ * Idle/failed rows still have the character + location picks.
  *
  * **Done clips survive a re-parse (2026-09-17, live QA)** —
  * `preserveRenderedRuntimes` rebinds an in-memory `status === "done"`
@@ -102,15 +107,14 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * never mint their own Idle rows — they only stamp the next speaker.
  *
  * **Clips live in one Act-grouped strip (2026-09-17, live QA)** —
- * the dense row keeps a 40px preview of that line's Done clip, pinned
- * with the status pill. Finished MP4s also sit in one `overflow-x-auto`
- * row at the base of the working panel (after the script, before the
- * Episode workspace, same reading order as music-video rendered
- * clips then archive), same card size and `touch-pan-x` as
- * `SkidmarksRenderedClipsShelf` (`w-44` / `h-28`, inline controls),
- * sectioned Act I / II / III. Workspace save always mints a new card
- * (`mintWorkspaceId` = timestamp + seq + content fingerprint) instead
- * of reusing `Date.now()` as a key that could collide on a double-tap.
+ * finished MP4s sit in one `overflow-x-auto` row at the base of the
+ * working panel (after the script, before the Episode workspace,
+ * same reading order as music-video rendered clips then archive),
+ * same card size and `touch-pan-x` as `SkidmarksRenderedClipsShelf`
+ * (`w-44` / `h-28`, inline controls), sectioned Act I / II / III.
+ * Workspace save always mints a new card (`mintWorkspaceId` =
+ * timestamp + seq + content fingerprint) instead of reusing
+ * `Date.now()` as a key that could collide on a double-tap.
  * Each saved card has a red ✕ that drops that snapshot only.
  *
  * **EP02 Drop Bears seed (2026-09-17)** — the panel opens on Crash Lab
@@ -1323,83 +1327,88 @@ export function SkidmarksSunnyBanksPanel() {
                     {queue.map((row) => {
                       const runtime = runtimeFor(row.index, row.chunk.raw);
                       const status = row.index === runningIndex ? "rendering" : runtime?.status ?? "idle";
+                      const isStatic = status === "done";
                       const lineLabel =
                         row.kind === "hold" ? "Silent hold" : row.line;
                       return (
                         <li key={`${activeAct}:${row.index}:${row.chunk.raw}`} className="min-w-0">
-                          <div className="flex min-h-[44px] min-w-0 w-full items-center gap-1 overflow-hidden py-1 [touch-action:pan-y]">
-                            <span className="w-4 shrink-0 text-center text-[10px] font-medium text-white/40">
+                          <div className="flex min-w-0 w-full items-start gap-1 overflow-x-hidden py-1.5 [touch-action:pan-y]">
+                            <span className="w-4 shrink-0 pt-1 text-center text-[10px] font-medium text-white/40">
                               {row.index + 1}
                             </span>
-                            <select
-                              value={row.characterName}
-                              onChange={(e) =>
-                                setCharacterOverridesByAct((prev) => ({
-                                  ...prev,
-                                  [activeAct]: { ...(prev[activeAct] ?? {}), [row.index]: e.target.value },
-                                }))
-                              }
-                              disabled={running}
-                              aria-label={`Character for line ${row.index + 1}`}
-                              className="h-10 min-h-[40px] w-[4.75rem] max-w-[4.75rem] shrink-0 truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
-                            >
-                              {CAST_LIST.map((c) => (
-                                <option key={c.name} value={c.name} className="bg-zinc-900">
-                                  {c.name}
-                                  {!c.referenceImage
-                                    ? " (no plate)"
-                                    : !c.voiceId
-                                      ? " (no voice — hold only)"
-                                      : ""}
-                                </option>
-                              ))}
-                            </select>
-                            <p className="min-w-0 max-w-[120px] flex-1 truncate text-[12px] leading-snug text-white/90">
-                              {lineLabel}
-                            </p>
-                            <select
-                              value={row.location.id}
-                              onChange={(e) =>
-                                setLocationOverridesByAct((prev) => ({
-                                  ...prev,
-                                  [activeAct]: {
-                                    ...(prev[activeAct] ?? {}),
-                                    [row.index]: e.target.value as SunnyBanksLocationId,
-                                  },
-                                }))
-                              }
-                              disabled={running}
-                              title={row.location.label}
-                              aria-label={`Location for line ${row.index + 1}`}
-                              className="h-10 min-h-[40px] min-w-0 max-w-[120px] shrink truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
-                            >
-                              {LOCATION_LIST.map((location) => (
-                                <option key={location.id} value={location.id} className="bg-zinc-900">
-                                  {compactQueueLocationLabel(location.label)}
-                                </option>
-                              ))}
-                            </select>
-                            <div className="ml-auto flex flex-shrink-0 items-center gap-1">
-                              <span
-                                className={[
-                                  "flex-shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
-                                  statusPillClass(status),
-                                ].join(" ")}
-                              >
-                                {statusPillLabel(status)}
-                              </span>
-                              <div className="h-10 w-10 flex-shrink-0 overflow-hidden rounded-md bg-black/40">
-                                {runtime.status === "done" && runtime.videoUrl ? (
-                                  <video
-                                    src={runtime.videoUrl}
-                                    className="h-10 w-10 object-cover"
-                                    muted
-                                    playsInline
-                                    preload="metadata"
-                                    aria-label={`Preview for line ${row.index + 1}`}
-                                  />
-                                ) : null}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex min-h-[32px] min-w-0 items-center gap-1">
+                                {isStatic ? (
+                                  <span className="min-w-0 truncate text-[12px] font-semibold text-white/90">
+                                    {row.characterName}
+                                  </span>
+                                ) : (
+                                  <select
+                                    value={row.characterName}
+                                    onChange={(e) =>
+                                      setCharacterOverridesByAct((prev) => ({
+                                        ...prev,
+                                        [activeAct]: { ...(prev[activeAct] ?? {}), [row.index]: e.target.value },
+                                      }))
+                                    }
+                                    disabled={running}
+                                    aria-label={`Character for line ${row.index + 1}`}
+                                    className="h-10 min-h-[40px] w-[4.75rem] max-w-[4.75rem] shrink-0 truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
+                                  >
+                                    {CAST_LIST.map((c) => (
+                                      <option key={c.name} value={c.name} className="bg-zinc-900">
+                                        {c.name}
+                                        {!c.referenceImage
+                                          ? " (no plate)"
+                                          : !c.voiceId
+                                            ? " (no voice — hold only)"
+                                            : ""}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                                {!isStatic && (
+                                  <select
+                                    value={row.location.id}
+                                    onChange={(e) =>
+                                      setLocationOverridesByAct((prev) => ({
+                                        ...prev,
+                                        [activeAct]: {
+                                          ...(prev[activeAct] ?? {}),
+                                          [row.index]: e.target.value as SunnyBanksLocationId,
+                                        },
+                                      }))
+                                    }
+                                    disabled={running}
+                                    title={row.location.label}
+                                    aria-label={`Location for line ${row.index + 1}`}
+                                    className="h-10 min-h-[40px] min-w-0 max-w-[120px] shrink truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
+                                  >
+                                    {LOCATION_LIST.map((location) => (
+                                      <option key={location.id} value={location.id} className="bg-zinc-900">
+                                        {compactQueueLocationLabel(location.label)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                                <span
+                                  className={[
+                                    "ml-auto flex-shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
+                                    statusPillClass(status),
+                                  ].join(" ")}
+                                >
+                                  {statusPillLabel(status)}
+                                </span>
                               </div>
+                              <details className="group min-w-0 pt-0.5">
+                                <summary
+                                  title={lineLabel}
+                                  aria-label={`Spoken line ${row.index + 1}`}
+                                  className="cursor-pointer list-none truncate text-[12px] leading-snug text-white/75 [-webkit-tap-highlight-color:transparent] group-open:whitespace-normal group-open:overflow-visible [&::-webkit-details-marker]:hidden"
+                                >
+                                  {lineLabel}
+                                </summary>
+                              </details>
                             </div>
                           </div>
                           {runtime?.status === "failed" && runtime.error && (
