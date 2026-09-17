@@ -3,7 +3,7 @@ import { put } from "@vercel/blob";
 import { decodeDataUrl } from "@/lib/dataUrl";
 import { synthesizeSunnyBanksLine } from "@/lib/elevenLabsSpeech";
 import { estimateMp3DurationSec } from "@/lib/mp3Slice";
-import { encodeSilentMp3 } from "@/lib/silentMp3";
+import { encodeSilentMp3, padMp3ToMinimumDurationSec } from "@/lib/silentMp3";
 import {
   buildSunnyBanksHoldBeatPathname,
   buildSunnyBanksHoldPrompt,
@@ -67,9 +67,10 @@ export const maxDuration = 300;
 /** Same generic LTX-node audio-input floor `app/api/skidmarks/
  * generate-clip/route.ts`'s Vocal path already enforces (`MIN_LTX_AUDIO_INPUT_SEC`)
  * — a property of the LTX graph's own audio requirements, not anything
- * specific to a sliced song. A single short line ("G'day") can
- * plausibly synthesize to less than this; reported honestly rather than
- * sent to Comfy Cloud to fail there instead. */
+ * specific to a sliced song. A single short line ("You right?") can
+ * plausibly synthesize under this; Speak pads a silent MP3 tail
+ * (`padMp3ToMinimumDurationSec`) so LoadAudio still gets ≥2s instead of
+ * rejecting a real line. Holds already encode 5s of silence. */
 const MIN_LTX_AUDIO_INPUT_SEC = 2;
 /** Same product ceiling every other LTX render in this app clamps
  * into (`MAX_LTX_CLIP_DURATION_SEC`, `lib/clipGeneration.ts`) — a real
@@ -193,21 +194,39 @@ export async function POST(request: Request) {
         { status: speechOutcome.unconfigured ? 501 : 502 }
       );
     }
-    audioBytes = speechOutcome.bytes;
     audioContentType = speechOutcome.contentType;
     const rawDurationSec = estimateMp3DurationSec(speechOutcome.bytes);
-    if (rawDurationSec < MIN_LTX_AUDIO_INPUT_SEC) {
+    if (rawDurationSec <= 0) {
+      return NextResponse.json(
+        {
+          error: `Could not parse ${character.name}'s synthesized line as audio — ElevenLabs returned an empty or unreadable MP3.`,
+          code: "upstream_error",
+        },
+        { status: 502 }
+      );
+    }
+    // Live QA (2026-09-17): "You right?" synthesized to 0.8s and this
+    // route 422'd. Pad a silent tail so LTX LoadAudio (276) sees ≥2s.
+    // Node 340:331 gets that same padded duration — not a fake duration
+    // on short bytes, which would still crash LoadAudio. Gold Speak
+    // string unchanged; the extra time is silence after the line.
+    audioBytes =
+      rawDurationSec < MIN_LTX_AUDIO_INPUT_SEC
+        ? padMp3ToMinimumDurationSec(speechOutcome.bytes, MIN_LTX_AUDIO_INPUT_SEC)
+        : speechOutcome.bytes;
+    const paddedDurationSec = estimateMp3DurationSec(audioBytes);
+    if (paddedDurationSec < MIN_LTX_AUDIO_INPUT_SEC) {
       return NextResponse.json(
         {
           error:
-            `${character.name}'s line only synthesized to ${rawDurationSec.toFixed(1)}s — Comfy Cloud's LTX ` +
-            `node needs at least ${MIN_LTX_AUDIO_INPUT_SEC}s of driving audio. Try a longer line.`,
+            `${character.name}'s line only synthesized to ${rawDurationSec.toFixed(1)}s and silent padding ` +
+            `could not bring it to LTX's ${MIN_LTX_AUDIO_INPUT_SEC}s audio floor.`,
           code: "invalid_request",
         },
         { status: 422 }
       );
     }
-    durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, rawDurationSec);
+    durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, paddedDurationSec);
     prompt = buildSunnyBanksSpeakingPrompt(character, line);
   }
 

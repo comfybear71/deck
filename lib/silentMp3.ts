@@ -24,6 +24,43 @@ const SILENT_MP3_SAMPLE_RATE = 22050;
 const SILENT_MP3_BITRATE_KBPS = 64;
 const ENCODE_CHUNK_SAMPLES = 1152;
 
+/**
+ * Append a silent MP3 tail so LTX's LoadAudio node (`276`) sees at
+ * least `minDurationSec` of driving audio. Live QA (2026-09-17):
+ * Shazza's "You right?" synthesized to 0.8s and the speak-beat route
+ * rejected it with "Try a longer line" — a real sitcom line, not a
+ * bad request. Padding silence on the tail keeps the spoken bytes
+ * intact (no second ElevenLabs bill, no invented pause text) and
+ * sends a file that actually meets the 2s floor.
+ *
+ * Frame-concat, same as `lib/mp3Slice.ts` — each MPEG frame carries
+ * its own header, so a 22.05 kHz silent tail can follow a 44.1 kHz
+ * ElevenLabs body. Returns `bytes` unchanged when already long enough.
+ * Does not invent frames for an empty/unparseable source (duration 0);
+ * the caller must treat that as a real TTS failure.
+ */
+export function padMp3ToMinimumDurationSec(bytes: Uint8Array, minDurationSec: number): Uint8Array {
+  const sourceDurationSec = estimateMp3DurationSec(bytes);
+  if (sourceDurationSec <= 0 || sourceDurationSec >= minDurationSec) return bytes;
+
+  // Extra slack so lamejs frame rounding cannot land a hair under the
+  // floor the way an exact `min - source` request could.
+  const PAD_ROUNDING_SLACK_SEC = 0.2;
+  let out = bytes;
+  let durationSec = sourceDurationSec;
+  for (let attempt = 0; attempt < 2 && durationSec < minDurationSec; attempt += 1) {
+    const padSec =
+      attempt === 0 ? minDurationSec - durationSec + PAD_ROUNDING_SLACK_SEC : 0.5;
+    const pad = encodeSilentMp3(padSec);
+    const next = new Uint8Array(out.length + pad.length);
+    next.set(out, 0);
+    next.set(pad, out.length);
+    out = next;
+    durationSec = estimateMp3DurationSec(out);
+  }
+  return out;
+}
+
 export function encodeSilentMp3(durationSec: number): Uint8Array {
   const clamped = Math.max(0, durationSec);
   const encoder = new Mp3Encoder(1, SILENT_MP3_SAMPLE_RATE, SILENT_MP3_BITRATE_KBPS);

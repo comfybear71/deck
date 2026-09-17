@@ -2221,7 +2221,12 @@ now (see "Explicitly out of scope" below).
     `COMFY_CLOUD_API_KEY`) — same graph, same identity-holding LoRA,
     only the driving audio's source and the prompt text (Sunny Banks'
     own verbatim gold-doc look/style locks, not Skidmarks' 3D-noir
-    vocabulary) are new. **Silent Hold (2026-09-17)** is a script line
+    vocabulary) are new. A Speak line that synthesizes under LTX's 2s
+    LoadAudio floor (live QA, 2026-09-17: Shazza "You right?" → 0.8s)
+    gets a silent MP3 tail (`lib/silentMp3.ts`'s
+    `padMp3ToMinimumDurationSec`) so node `276` actually has ≥2s; node
+    `340:331` is that padded duration, not a fake number on short
+    bytes. Gold Speak string unchanged. **Silent Hold (2026-09-17)** is a script line
     with no dialogue after the speaker name: no ElevenLabs call.
     Same route with `kind: "hold"`, a 5s silent MP3
     (`lib/silentMp3.ts`, `SUNNY_BANKS_HOLD_DURATION_SEC` — LTX still

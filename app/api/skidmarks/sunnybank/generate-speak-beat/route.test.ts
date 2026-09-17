@@ -138,19 +138,50 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(body.error).toContain("Invalid API key");
   });
 
-  it("rejects a line that synthesizes too short for LTX's own audio-input floor", async () => {
-    // A fraction-of-a-second "clip" — well under the 2s floor.
+  it("live QA (2026-09-17): pads a 0.8s line with silence instead of 422 Try a longer line", async () => {
+    mockElevenLabs(encodeTestMp3(0.8));
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/short-line.mp4" });
+
+    const res = await POST(speakBeatRequest({ line: "You right?" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.error).toBeUndefined();
+    expect(body.durationSec).toBeGreaterThanOrEqual(2);
+    expect(body.durationSec).toBeLessThanOrEqual(15);
+
+    const [ttsUrl, ttsInit] = fetchMock.mock.calls[0];
+    expect(String(ttsUrl)).toContain("elevenlabs.io");
+    expect(JSON.parse(ttsInit.body).text).toBe("You right?");
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    expect(submitCallIndex).toBeGreaterThanOrEqual(0);
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body).prompt as Record<
+      string,
+      { inputs?: Record<string, unknown> }
+    >;
+    expect(graph["340:331"]?.inputs?.value).toBeGreaterThanOrEqual(2);
+    expect(graph["340:319"]?.inputs?.value).toContain('Shazza says: "You right?".');
+  });
+
+  it("reports a genuine unreadable TTS payload as upstream_error, not a pad", async () => {
     fetchMock.mockResolvedValueOnce(
-      new Response(new Blob([new Uint8Array(encodeTestMp3(0.3))]), {
+      new Response(new Blob([new Uint8Array([0, 1, 2, 3])]), {
         status: 200,
         headers: { "Content-Type": "audio/mpeg" },
       })
     );
-    const res = await POST(speakBeatRequest());
-    expect(res.status).toBe(422);
+    const res = await POST(speakBeatRequest({ line: "You right?" }));
+    expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body.code).toBe("invalid_request");
-    expect(body.error).toContain("Shazza");
+    expect(body.code).toBe("upstream_error");
+    expect(body.error).toContain("unreadable");
+    expect(fetchMock.mock.calls.length).toBe(1);
   });
 
   function mockXaiComposite(dataUrl = TINY_DATA_URL) {
