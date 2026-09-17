@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
+  getSunnyBanksCharacterLock,
   getSunnyBanksLocation,
   resolveSunnyBanksStartImage,
   SUNNY_BANKS_CAST,
@@ -16,49 +18,39 @@ import {
 /**
  * Sunny Banks' own first real screen (2026-09-15) — the thing that
  * actually sits behind the landing tile once it's enabled. Deliberately
- * not the full episode wizard Grok's spec describes (episode list,
- * script paste, beat list, progress + clip shelf, download zip) — this
- * is the same "prove the riskiest new piece in isolation before
- * building the wizard around it" order the backend route itself
- * followed: a direct, honest way to test one character's locked voice
- * + look actually rendering a real line, using the exact same
- * `/api/skidmarks/sunnybank/generate-speak-beat` route already proven
- * in PR #95. The script/episode automation is the next real slice, once
- * this confirms the render itself looks and sounds right on a real
- * device.
+ * not the full episode wizard (no Neon episode/beat rows, no last-frame
+ * chaining, no `lib/scriptSequenceRunner`). Cast strip + a Script card
+ * that stays local React state.
  *
  * **A character only shows as Speak-selectable once it has both a real
  * voice id and a real reference plate** — Hans (no voice yet, no plate)
  * and any future guest without a plate show in the cast strip so Stuart
  * can see who's missing what, but never as something this screen would
- * try to render with a stand-in. A Hold only needs the plate (no TTS),
- * so a plate-without-voice character could still Hold; today none of
- * the six regulars are in that state.
- *
- * **Silent Hold (2026-09-17)** — a second one-clip tap next to Speak.
- * Bypasses ElevenLabs. Still a real paid Comfy Cloud LTX render of a
- * fixed 5s pause (`SUNNY_BANKS_HOLD_DURATION_SEC`) using
- * `buildSunnyBanksHoldPrompt`. Same route, `kind: "hold"`. Not a
- * timeline, not a batch, not a new schema.
+ * try to render with a stand-in. A Hold only needs the plate (no TTS).
  *
  * **Start still is the hero cell, not the turnaround sheet
  * (2026-09-17)** — live QA: Silent Hold on Shazza animated every pose
- * on `shazza-reference.jpg` because that file is a character plate
- * (4 bodies + 4 heads) and the gold Hold prompt tells LTX to keep the
- * start image's people/objects. Cast thumbnails still resolve
- * `resolveSunnyBanksStartImage` (the cropped `*-hero.jpg` when one
- * exists). No pose picker, no in-memory canvas cropper.
+ * on `shazza-reference.jpg`. Cast thumbnails still resolve
+ * `resolveSunnyBanksStartImage`. No pose picker, no in-memory canvas
+ * cropper.
  *
- * **Location canvas as compositor Image 1 (2026-09-17)** — six locked
- * park stills (`SUNNY_BANKS_LOCATIONS`). A native `<select>` under the
- * character row (same iPhone-Safari control as the character picker)
- * picks one; Speak and Hold POST that still as `startImageDataUrl`
- * (empty location, Image 1) plus `locationId` / `locationImage`
- * alongside `characterName`. The speak-beat **route** overlays the
- * hero as Image 2 (Studio `plateCastIntoGen`), then LTX sees only the
- * composed still. This panel does **not** call generate-still itself —
- * that was #120 and would plate twice. Not a sequencer. Gold Hold/Speak
- * prompt strings unchanged.
+ * **Location canvas as compositor Image 1 (2026-09-17)** — Speak/Hold
+ * POST that still as `startImageDataUrl` (empty location, Image 1)
+ * plus `locationId` / `locationImage` alongside `characterName`. The
+ * speak-beat **route** overlays the hero as Image 2, then LTX sees
+ * only the composed still. This panel does **not** call generate-still
+ * itself. Gold Hold/Speak prompt strings are never built here — the
+ * route loads the full `SUNNY_BANKS_CAST` record by name and passes
+ * that object into `buildSunnyBanksSpeakingPrompt` /
+ * `buildSunnyBanksHoldPrompt`.
+ *
+ * **Script block → sequential queue (2026-09-17)** — the old single
+ * "Try one line" textarea is a spacious script block. Newlines become
+ * queue rows (parser lives in this file, not a persisted schema).
+ * One primary Render control walks the queue with the existing
+ * `runningKind` lock: one POST at a time, stop on first failure.
+ * Explicit product ask for this panel; not music-video whole-song
+ * auto-render, not parallel fan-out.
  */
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
@@ -69,11 +61,20 @@ const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
  * below once he has a voice + plate — this only hides the strip. */
 const SERIES_REGULARS = CAST_LIST.filter((c) => !c.guest);
 
+/** Longest name first so "Ranger Bazza" / "Unit 4S" win over a
+ * shorter prefix. Keys of `SUNNY_BANKS_CAST`, not a parallel array. */
+const SPEAKER_NAMES = Object.keys(SUNNY_BANKS_CAST).sort((a, b) => b.length - a.length);
+
 type BeatKind = "speak" | "hold";
 
-type GenerateBeatResult =
-  | { ok: true; videoUrl: string; durationSec: number; kind: BeatKind }
-  | { ok: false; message: string };
+type RowStatus = "idle" | "rendering" | "done" | "failed";
+
+export interface SunnyBanksScriptChunk {
+  raw: string;
+  characterName: string;
+  line: string;
+  kind: BeatKind;
+}
 
 interface GenerateBeatResponseBody {
   videoUrl?: unknown;
@@ -82,84 +83,269 @@ interface GenerateBeatResponseBody {
   kind?: unknown;
 }
 
+type RowRuntime = {
+  lineKey: string;
+  status: RowStatus;
+  videoUrl?: string;
+  durationSec?: number;
+  error?: string;
+};
+
 const HOLD_COST_USD = estimateLtxClipRenderCostUsd(SUNNY_BANKS_HOLD_DURATION_SEC);
 const LOCATION_LIST = Object.values(SUNNY_BANKS_LOCATIONS);
+const PLATE_CAST = CAST_LIST.filter((c) => c.referenceImage);
+const FALLBACK_CHARACTER_NAME = PLATE_CAST[0]?.name ?? "";
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function matchSpeakerPrefix(raw: string): { name: string; rest: string } | null {
+  for (const name of SPEAKER_NAMES) {
+    const re = new RegExp(`^${escapeRegExp(name)}\\s*(?:says\\s*)?:\\s*(.*)$`, "i");
+    const match = raw.match(re);
+    if (match) {
+      return { name, rest: (match[1] ?? "").trim() };
+    }
+  }
+  return null;
+}
+
+/**
+ * Split a pasted script on newlines into Speak/Hold chunks.
+ * Looks up speakers against `SUNNY_BANKS_CAST` keys (name-keyed
+ * records, never a guessed id). Empty dialogue after a speaker prefix
+ * is a Hold. A line with no prefix continues the previous speaker.
+ * Blank lines are skipped. Does not touch gold prompt strings.
+ */
+export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[] {
+  const chunks: SunnyBanksScriptChunk[] = [];
+  let previousName = "";
+  for (const rawLine of text.split(/\r?\n/)) {
+    const raw = rawLine.trim();
+    if (!raw) continue;
+    const matched = matchSpeakerPrefix(raw);
+    let characterName: string;
+    let line: string;
+    if (matched) {
+      characterName = matched.name;
+      line = matched.rest;
+      previousName = matched.name;
+    } else {
+      characterName = previousName || FALLBACK_CHARACTER_NAME;
+      line = raw;
+      if (characterName) previousName = characterName;
+    }
+    chunks.push({
+      raw,
+      characterName,
+      line,
+      kind: line.length > 0 ? "speak" : "hold",
+    });
+  }
+  return chunks;
+}
+
+function statusPillLabel(status: RowStatus): string {
+  if (status === "rendering") return "Rendering...";
+  if (status === "done") return "Done";
+  if (status === "failed") return "Failed";
+  return "Idle";
+}
+
+function statusPillClass(status: RowStatus): string {
+  if (status === "rendering") return "bg-amber-300/15 text-amber-100";
+  if (status === "done") return "bg-emerald-400/15 text-emerald-200";
+  if (status === "failed") return "bg-rose-400/15 text-rose-200";
+  return "bg-white/10 text-white/55";
+}
 
 export function SkidmarksSunnyBanksPanel() {
-  const plateCast = CAST_LIST.filter((c) => c.referenceImage);
-  const [selectedName, setSelectedName] = useState<string>(plateCast[0]?.name ?? "");
-  const [selectedLocationId, setSelectedLocationId] = useState<SunnyBanksLocationId>(
+  const [defaultLocationId, setDefaultLocationId] = useState<SunnyBanksLocationId>(
     SUNNY_BANKS_DEFAULT_LOCATION_ID
   );
-  const [line, setLine] = useState("");
+  const [scriptText, setScriptText] = useState("");
+  const [characterOverrides, setCharacterOverrides] = useState<Record<number, string>>({});
+  const [locationOverrides, setLocationOverrides] = useState<Record<number, SunnyBanksLocationId>>(
+    {}
+  );
+  const [runtimes, setRuntimes] = useState<RowRuntime[]>([]);
   const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
+  const [runningIndex, setRunningIndex] = useState<number | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
-  const [result, setResult] = useState<GenerateBeatResult | null>(null);
+  const locationDataUrlCacheRef = useRef<Record<string, string>>({});
+  const runningRef = useRef(false);
 
-  const selected = plateCast.find((c) => c.name === selectedName);
-  const selectedLocation =
-    getSunnyBanksLocation(selectedLocationId) ?? SUNNY_BANKS_LOCATIONS[SUNNY_BANKS_DEFAULT_LOCATION_ID];
+  const parsed = useMemo(() => parseSunnyBanksScriptBlock(scriptText), [scriptText]);
   const running = runningKind !== null;
-  const canSpeak = !!(selected?.voiceId && selectedLocation.image && line.trim());
-  const canHold = !!(selected && selectedLocation.image);
 
-  const handleGenerate = async (kind: BeatKind) => {
-    if (!selected || !selectedLocation.image || running) return;
-    if (kind === "speak" && (!selected.voiceId || !line.trim())) return;
-    setRunningKind(kind);
-    setResult(null);
-    setProgressText(`Getting ${selectedLocation.label} ready…`);
-    try {
-      const startImageDataUrl = await resolvePlateReferenceDataUrl(selectedLocation.image);
-      setProgressText(
-        kind === "hold"
-          ? `Rendering ${selected.name} at ${selectedLocation.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s) — this can take a minute or two…`
-          : `Rendering ${selected.name}'s line — this can take a minute or two…`
-      );
-      const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          kind === "hold"
-            ? {
-                kind: "hold",
-                characterName: selected.name,
-                locationId: selectedLocation.id,
-                locationImage: selectedLocation.image,
-                startImageDataUrl,
-              }
-            : {
-                characterName: selected.name,
-                line,
-                locationId: selectedLocation.id,
-                locationImage: selectedLocation.image,
-                startImageDataUrl,
-              }
-        ),
-      });
-      const body = (await res.json()) as GenerateBeatResponseBody;
-      const videoUrl = typeof body.videoUrl === "string" ? body.videoUrl : "";
-      if (!res.ok || !videoUrl) {
-        setResult({
-          ok: false,
-          message: typeof body.error === "string" ? body.error : `Render failed (HTTP ${res.status}).`,
-        });
-        return;
-      }
-      setResult({
-        ok: true,
-        videoUrl,
-        durationSec: typeof body.durationSec === "number" ? body.durationSec : 0,
-        kind: body.kind === "hold" ? "hold" : "speak",
-      });
-    } catch (err) {
-      setResult({
+  useEffect(() => {
+    setRuntimes((prev) =>
+      parsed.map((chunk, index) => {
+        const existing = prev[index];
+        if (existing && existing.lineKey === chunk.raw) return existing;
+        return { lineKey: chunk.raw, status: "idle" };
+      })
+    );
+  }, [parsed]);
+
+  const queue = parsed.map((chunk, index) => {
+    const characterName = characterOverrides[index] ?? chunk.characterName;
+    const locationId = locationOverrides[index] ?? defaultLocationId;
+    const character = getSunnyBanksCharacterLock(characterName);
+    const location = getSunnyBanksLocation(locationId) ?? SUNNY_BANKS_LOCATIONS[SUNNY_BANKS_DEFAULT_LOCATION_ID];
+    const line = chunk.line;
+    const kind: BeatKind = line.length > 0 ? "speak" : "hold";
+    return { chunk, index, characterName, character, location, line, kind };
+  });
+
+  const overlayCostUsd = queue.length * ESTIMATED_STILL_COST_USD;
+  const holdVideoCostUsd =
+    queue.filter((row) => row.kind === "hold").length * HOLD_COST_USD;
+  const speakCount = queue.filter((row) => row.kind === "speak").length;
+
+  const canRenderAll =
+    queue.length > 0 &&
+    !running &&
+    queue.every((row) => {
+      if (!row.character || !row.location.image) return false;
+      if (row.kind === "speak") return !!row.character.voiceId && row.line.length > 0;
+      return !!resolveSunnyBanksStartImage(row.character);
+    });
+
+  const resolveLocationDataUrl = async (image: string): Promise<string> => {
+    const cached = locationDataUrlCacheRef.current[image];
+    if (cached) return cached;
+    const dataUrl = await resolvePlateReferenceDataUrl(image);
+    locationDataUrlCacheRef.current[image] = dataUrl;
+    return dataUrl;
+  };
+
+  const postBeat = async (args: {
+    kind: BeatKind;
+    characterName: string;
+    line: string;
+    locationId: string;
+    locationImage: string;
+    startImageDataUrl: string;
+  }): Promise<{ ok: true; videoUrl: string; durationSec: number } | { ok: false; message: string }> => {
+    const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        args.kind === "hold"
+          ? {
+              kind: "hold",
+              characterName: args.characterName,
+              locationId: args.locationId,
+              locationImage: args.locationImage,
+              startImageDataUrl: args.startImageDataUrl,
+            }
+          : {
+              characterName: args.characterName,
+              line: args.line,
+              locationId: args.locationId,
+              locationImage: args.locationImage,
+              startImageDataUrl: args.startImageDataUrl,
+            }
+      ),
+    });
+    const body = (await res.json()) as GenerateBeatResponseBody;
+    const videoUrl = typeof body.videoUrl === "string" ? body.videoUrl : "";
+    if (!res.ok || !videoUrl) {
+      return {
         ok: false,
-        message: err instanceof Error ? err.message : kind === "hold" ? "Could not render this hold." : "Could not render this line.",
-      });
+        message: typeof body.error === "string" ? body.error : `Render failed (HTTP ${res.status}).`,
+      };
+    }
+    return {
+      ok: true,
+      videoUrl,
+      durationSec: typeof body.durationSec === "number" ? body.durationSec : 0,
+    };
+  };
+
+  const handleRenderAll = async () => {
+    if (!canRenderAll || runningRef.current) return;
+    runningRef.current = true;
+    try {
+      for (let i = 0; i < queue.length; i += 1) {
+        const row = queue[i];
+        const lock = getSunnyBanksCharacterLock(row.characterName);
+        if (!lock || !row.location.image) {
+          setRuntimes((prev) => {
+            const next = [...prev];
+            next[i] = {
+              lineKey: row.chunk.raw,
+              status: "failed",
+              error: "Character or location is missing.",
+            };
+            return next;
+          });
+          break;
+        }
+        setRunningKind(row.kind);
+        setRunningIndex(i);
+        setRuntimes((prev) => {
+          const next = [...prev];
+          next[i] = { lineKey: row.chunk.raw, status: "rendering" };
+          return next;
+        });
+        setProgressText(
+          row.kind === "hold"
+            ? `Line ${i + 1} of ${queue.length} — holding ${lock.name} at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+            : `Line ${i + 1} of ${queue.length} — rendering ${lock.name}'s line…`
+        );
+        try {
+          const startImageDataUrl = await resolveLocationDataUrl(row.location.image);
+          const result = await postBeat({
+            kind: row.kind,
+            characterName: lock.name,
+            line: row.line,
+            locationId: row.location.id,
+            locationImage: row.location.image,
+            startImageDataUrl,
+          });
+          if (!result.ok) {
+            setRuntimes((prev) => {
+              const next = [...prev];
+              next[i] = { lineKey: row.chunk.raw, status: "failed", error: result.message };
+              return next;
+            });
+            setProgressText(`Stopped at line ${i + 1} — later lines were not billed.`);
+            break;
+          }
+          setRuntimes((prev) => {
+            const next = [...prev];
+            next[i] = {
+              lineKey: row.chunk.raw,
+              status: "done",
+              videoUrl: result.videoUrl,
+              durationSec: result.durationSec,
+            };
+            return next;
+          });
+        } catch (err) {
+          setRuntimes((prev) => {
+            const next = [...prev];
+            next[i] = {
+              lineKey: row.chunk.raw,
+              status: "failed",
+              error: err instanceof Error ? err.message : "Could not render this line.",
+            };
+            return next;
+          });
+          setProgressText(`Stopped at line ${i + 1} — later lines were not billed.`);
+          break;
+        }
+      }
     } finally {
+      runningRef.current = false;
       setRunningKind(null);
-      setProgressText(null);
+      setRunningIndex(null);
+      setProgressText((current) =>
+        current?.startsWith("Stopped") ? current : null
+      );
     }
   };
 
@@ -168,16 +354,9 @@ export function SkidmarksSunnyBanksPanel() {
       <div>
         <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-white/40">Cast</p>
         {/* Square thumbnails, horizontal scroll — same shape as the
-            "Choose a band" cover strip (`SkidmarksBandPicker`), swapped
-            in 2026-09-17 for the old wrapping row of round chips
-            (Stuart's own ask, a cast that outgrows one row shouldn't
-            wrap to a second). `overscroll-x-contain` +
-            `-webkit-overflow-scrolling:touch` match the plate strip's
-            own iOS Safari momentum-scroll fix
-            (`SkidmarksClipStub.tsx`) since this strip sits inside the
-            same vertically-scrolling sheet; no `touch-pan-x` needed on
-            the tiles themselves since they carry no press-and-hold/drag
-            gesture of their own, just a static portrait + name. */}
+            "Choose a band" cover strip (`SkidmarksBandPicker`).
+            `overscroll-x-contain` + `-webkit-overflow-scrolling:touch`
+            match the plate strip's iOS Safari momentum-scroll fix. */}
         <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 pl-0.5 pr-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
           {SERIES_REGULARS.map((c) => {
             const startImage = resolveSunnyBanksStartImage(c);
@@ -213,33 +392,19 @@ export function SkidmarksSunnyBanksPanel() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-2.5 rounded-2xl border border-amber-300/25 bg-amber-300/[0.03] p-4">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">Try one line</p>
-        {plateCast.length === 0 ? (
+      <div className="flex flex-col gap-3 rounded-2xl border border-amber-300/25 bg-amber-300/[0.03] p-4">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">Script</p>
+        {PLATE_CAST.length === 0 ? (
           <p className="text-[12px] leading-relaxed text-white/40">
             No character has a reference plate yet.
           </p>
         ) : (
           <>
             <select
-              value={selectedName}
-              onChange={(e) => setSelectedName(e.target.value)}
+              value={defaultLocationId}
+              onChange={(e) => setDefaultLocationId(e.target.value as SunnyBanksLocationId)}
               disabled={running}
-              aria-label="Character"
-              className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white disabled:opacity-60"
-            >
-              {plateCast.map((c) => (
-                <option key={c.name} value={c.name} className="bg-zinc-900">
-                  {c.name}
-                  {!c.voiceId ? " (no voice — hold only)" : ""}
-                </option>
-              ))}
-            </select>
-            <select
-              value={selectedLocationId}
-              onChange={(e) => setSelectedLocationId(e.target.value as SunnyBanksLocationId)}
-              disabled={running}
-              aria-label="Location"
+              aria-label="Default location"
               className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white disabled:opacity-60"
             >
               {LOCATION_LIST.map((location) => (
@@ -249,35 +414,130 @@ export function SkidmarksSunnyBanksPanel() {
               ))}
             </select>
             <textarea
-              value={line}
-              onChange={(e) => setLine(e.target.value)}
+              value={scriptText}
+              onChange={(e) => setScriptText(e.target.value)}
               disabled={running}
-              placeholder="What does this character say?"
-              rows={3}
-              className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
+              placeholder={"Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"}
+              rows={8}
+              className="min-h-[11rem] w-full resize-y rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm leading-relaxed text-white placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
             />
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => void handleGenerate("speak")}
-                disabled={running || !canSpeak}
-                className="rounded-full bg-amber-300 px-3.5 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {runningKind === "speak" ? "Rendering…" : "Generate speak beat"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleGenerate("hold")}
-                disabled={running || !canHold}
-                className="rounded-full border border-white/15 bg-white/[0.04] px-3.5 py-2 text-sm font-semibold text-white/85 transition-colors hover:bg-white/[0.08] active:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {runningKind === "hold" ? "Rendering…" : "Generate silent hold"}
-              </button>
-            </div>
             <p className="text-[10px] leading-snug text-white/40">
-              Speak is voice + LTX. Hold skips ElevenLabs — still a real Comfy Cloud LTX
-              render, {SUNNY_BANKS_HOLD_DURATION_SEC}s, ~${HOLD_COST_USD.toFixed(2)} (stand-in
-              rate). One clip at a time.
+              One speaker per line — `Name:` or `Name says:`. Empty after the name is a
+              silent hold. Continuation lines keep the last speaker. Unit 4S stays barefoot;
+              gold look/voice strings are not edited here.
+            </p>
+
+            {queue.length > 0 && (
+              <ol className="flex flex-col gap-2.5">
+                {queue.map((row) => {
+                  const runtime = runtimes[row.index];
+                  const status = row.index === runningIndex ? "rendering" : runtime?.status ?? "idle";
+                  return (
+                    <li
+                      key={`${row.index}:${row.chunk.raw}`}
+                      className="flex flex-col gap-2 rounded-xl border border-white/10 bg-black/20 p-3"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-medium uppercase tracking-wide text-white/40">
+                          Line {row.index + 1}
+                          {row.kind === "hold" ? " · hold" : ""}
+                        </span>
+                        <span
+                          className={["rounded-full px-2 py-0.5 text-[10px] font-semibold", statusPillClass(status)].join(
+                            " "
+                          )}
+                        >
+                          {statusPillLabel(status)}
+                        </span>
+                      </div>
+                      <select
+                        value={row.characterName}
+                        onChange={(e) =>
+                          setCharacterOverrides((prev) => ({ ...prev, [row.index]: e.target.value }))
+                        }
+                        disabled={running}
+                        aria-label={`Character for line ${row.index + 1}`}
+                        className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white disabled:opacity-60"
+                      >
+                        {CAST_LIST.map((c) => (
+                          <option key={c.name} value={c.name} className="bg-zinc-900">
+                            {c.name}
+                            {!c.referenceImage
+                              ? " (no plate)"
+                              : !c.voiceId
+                                ? " (no voice — hold only)"
+                                : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm leading-relaxed text-white/90">
+                        {row.kind === "hold" ? "Silent hold — no dialogue." : row.line}
+                      </p>
+                      <select
+                        value={row.location.id}
+                        onChange={(e) =>
+                          setLocationOverrides((prev) => ({
+                            ...prev,
+                            [row.index]: e.target.value as SunnyBanksLocationId,
+                          }))
+                        }
+                        disabled={running}
+                        aria-label={`Location for line ${row.index + 1}`}
+                        className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white disabled:opacity-60"
+                      >
+                        {LOCATION_LIST.map((location) => (
+                          <option key={location.id} value={location.id} className="bg-zinc-900">
+                            {location.label}
+                          </option>
+                        ))}
+                      </select>
+                      {runtime?.status === "failed" && runtime.error && (
+                        <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
+                          {runtime.error}
+                        </p>
+                      )}
+                      {runtime?.status === "done" && runtime.videoUrl && (
+                        <div className="flex flex-col gap-1.5">
+                          <p role="status" className="text-[11px] leading-snug text-emerald-300/85">
+                            Done — {row.kind === "hold" ? "silent hold" : "speak"}
+                            {typeof runtime.durationSec === "number" ? ` · ${runtime.durationSec.toFixed(1)}s` : ""}.
+                          </p>
+                          <video src={runtime.videoUrl} controls playsInline className="w-full rounded-xl" />
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+
+            {queue.length > 0 && !canRenderAll && !running && (
+              <p className="text-[10px] leading-snug text-white/40">
+                Every line needs a plated character. Speak needs a locked voice. Change the
+                dropdown or the script — Hans has no plate yet.
+              </p>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void handleRenderAll()}
+              disabled={!canRenderAll}
+              className="min-h-[44px] w-full rounded-full bg-amber-300 px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {running
+                ? `Rendering line ${(runningIndex ?? 0) + 1} of ${queue.length}…`
+                : queue.length === 0
+                  ? "Render lines"
+                  : `Render ${queue.length} line${queue.length === 1 ? "" : "s"}`}
+            </button>
+            <p className="text-[10px] leading-snug text-white/40">
+              One clip at a time — overlay ~${overlayCostUsd.toFixed(2)}
+              {queue.filter((row) => row.kind === "hold").length > 0
+                ? `, hold video ~$${holdVideoCostUsd.toFixed(2)}`
+                : ""}
+              {speakCount > 0 ? `, speak video ~$0.13/s after TTS` : ""}
+              . Stops if a line fails so later lines are not billed. Route still loads the
+              full character lock by name for the gold prompts.
             </p>
           </>
         )}
@@ -285,19 +545,6 @@ export function SkidmarksSunnyBanksPanel() {
           <p role="status" className="text-[11px] leading-snug text-amber-200/80">
             {progressText}
           </p>
-        )}
-        {result && !result.ok && (
-          <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
-            {result.message}
-          </p>
-        )}
-        {result?.ok && (
-          <div className="flex flex-col gap-1.5">
-            <p role="status" className="text-[11px] leading-snug text-emerald-300/85">
-              Done — {result.kind === "hold" ? "silent hold" : "speak"} · {result.durationSec.toFixed(1)}s.
-            </p>
-            <video src={result.videoUrl} controls playsInline className="w-full rounded-xl" />
-          </div>
         )}
       </div>
     </div>
