@@ -641,11 +641,14 @@ now (see "Explicitly out of scope" below).
   scrollable sheet:
   1. **Landing** — `SkidmarksLandingTiles`: a "Start a project" row of
      three compact tiles, **Music video · Skidmarks · Sunnybank**
-     (`SKIDMARKS_PROJECT_KINDS` in `lib/skidmarks.ts`). Only **Music
-     video** is wired (`enabled: true`); the other two render for visual
-     completeness per the locked mockup but are inert (disabled, dimmed,
-     `title="Coming soon"`) — this build doesn't implement either of
-     those flows.
+     (`SKIDMARKS_PROJECT_KINDS` in `lib/skidmarks.ts`). **Music video**
+     and **Sunnybank** are both wired (`enabled: true`); **Skidmarks**
+     (the third tile, its own `skidmarks.aiglitch.app` Crash Lab) still
+     renders for visual completeness per the locked mockup but is inert
+     (disabled, dimmed, `title="Coming soon"`) — this build doesn't
+     implement that flow. Tapping Sunnybank appends
+     `SkidmarksSunnyBanksPanel` (see "Sunny Banks panel (pilot)" below)
+     instead of the Music-video wizard's band picker.
   2. **Choose a band** — tapping Music video appends `SkidmarksBandPicker`:
      a horizontal scroll of square **album-cover** tiles (never member
      faces, per the locked mockup's product rule) — "New" (+) first, then
@@ -2170,10 +2173,71 @@ now (see "Explicitly out of scope" below).
   off the same `useSkidmarksStudio` store `GraphView` reads (one hook
   call, passed down as a prop, not a second independent subscription
   duplicating state).
-- **Explicitly out of scope for this build**: voice and in-app stitch;
-  any real Comfy MCP, Seedance, or LTX call, at all, ever (the only real
-  ElevenLabs call this build makes is Scribe speech-to-text — see step 6
-  above; ElevenLabs voice/generation features are still unwired); any
+- **Sunny Banks panel (pilot, 2026-09-15)** — tapping the **Sunnybank**
+  landing tile renders `SkidmarksSunnyBanksPanel` instead of the
+  Music-video wizard's band picker; a sibling project kind, not a
+  variant of Music video (no song/MP3 anywhere in it — an Australian
+  outback adult-cartoon sitcom, 5–10 minute episodes). Two pieces:
+  - A **Cast** strip of the six locked series regulars (`lib/
+    sunnyBanks.ts`'s `SUNNY_BANKS_CAST` — Shazza, Dazza, Nan, Nuggets,
+    Ranger Bazza, Unit 4S; Hans is a one-episode guest and never shows
+    in this always-on strip). **Square thumbnails in one
+    horizontally-scrollable row** (2026-09-17, same shape as the
+    "Choose a band" cover-tile strip above — not the round, wrapping
+    chip row this shipped with initially), each showing that
+    character's real reference plate (a static asset shipped with the
+    app, `public/skidmarks/sunnybanks/*-reference.jpg`) with the name
+    in a bottom scrim, and an honest "not ready" label on anyone
+    missing a locked ElevenLabs voice id (Hans, today).
+  - A **"Try one line"** form — pick any character who has *both* a
+    real voice id and a reference plate, type a line, tap "Generate
+    speak beat" to render one real clip via `POST /api/skidmarks/
+    sunnybank/generate-speak-beat`: ElevenLabs text-to-speech
+    (`lib/elevenLabsSpeech.ts`, keyed off the same `ELEVENLABS_API_KEY`
+    Scribe transcription already uses — this is the first caller going
+    the *other* direction, text **to** speech) synthesizes the line in
+    that character's cloned voice, then feeds it into the exact same
+    Comfy Cloud LTX 2.3 IA2V graph Skidmarks' own music-video Vocal
+    render already calls (`lib/comfyCloud.ts`, `COMFY_CLOUD_API_KEY`) —
+    same graph, same identity-holding LoRA, only the driving audio's
+    source and the prompt text (Sunny Banks' own verbatim gold-doc
+    look/style locks, not Skidmarks' 3D-noir vocabulary) are new. The
+    result plays inline once done; no shelf/persistence-listing route
+    yet (see below).
+  - **Deliberately still just this one pilot slice** — Grok's own
+    relayed scope for it: "render one speak beat, then stop." No
+    episode/beat model, no script parser, no per-beat pathname/shelf
+    (renders upload to a plain timestamped Blob path, not the
+    per-`(segmentId, plateId)` invariant the music-video render path
+    enforces), no last-frame chaining between beats, and — same
+    "never wire a whole-song/episode auto-render" cost lock as the
+    music-video flow — **never a batch render across a whole episode**.
+    Each of those already has real, working infrastructure elsewhere in
+    this app (`lib/clipRenderBlob.ts`, `lib/scriptSequenceRunner.ts`,
+    `lib/serverVideoFrame.ts`) that this will reuse once a real episode
+    model exists to hang it off, not something to build speculatively
+    ahead of that.
+  - **Honesty note**: not live-verified in this sandbox — no
+    `ELEVENLABS_API_KEY`/`COMFY_CLOUD_API_KEY` configured here. The
+    request/response shapes are correct per each provider's own
+    documented API and this app's own already-proven Comfy Cloud LTX
+    caller; only a real render on Stuart's own deploy proves the
+    speak-beat pipeline end to end.
+- **Explicitly out of scope for this build**: voice and in-app stitch
+  (still true for Skidmarks' own music-video flow — the Sunny Banks
+  pilot above is the one narrow exception, and only for one speak beat
+  at a time, never a stitched episode); Comfy MCP and Seedance
+  specifically, at all, ever (no key, no endpoint, no request shape
+  anywhere in this repo). **Real Comfy Cloud LTX and real ElevenLabs
+  text-to-speech are no longer on this list** — both now real (Comfy
+  Cloud LTX 2.3 IA2V: Skidmarks' own music-video Vocal render and the
+  Sunny Banks speak-beat pilot above, `COMFY_CLOUD_API_KEY`; ElevenLabs
+  TTS: the Sunny Banks pilot above, same `ELEVENLABS_API_KEY` Scribe
+  transcription already uses) — this bullet went stale after both
+  shipped and is corrected here rather than left asserting the old
+  claim; ElevenLabs voice *cloning management* (creating/editing a
+  voice itself, as opposed to calling an already-cloned voice id) is
+  still unwired. Also out of scope: any
   *automatic*/whole-song clip video render (the old "Generate Clips"
   stub button that used to sit at the bottom of the clip timeline is
   gone entirely as of 2026-09-14 — see step 9's note above — but the
@@ -2194,8 +2258,11 @@ now (see "Explicitly out of scope" below).
   existing-file-only); real plate photos or real camera coverage capture
   (plates/angles are seed tags, not renders); and replacing
   `skidmarks.aiglitch.app`'s own Crash Lab. Also out of scope: the
-  "Skidmarks" and "Sunnybank" landing tiles (rendered, inert), and
-  editing a band's name or a member's name/role after creation. Real
+  "Skidmarks" landing tile (rendered, inert — its own separate Crash Lab
+  flow). **Sunnybank is no longer inert** — see "Sunny Banks panel
+  (pilot)" above; it left this out-of-scope list 2026-09-15. Also
+  still out of scope: editing a band's name or a member's name/role
+  after creation. Real
   word-level **speech-to-text is now wired** (see step 6 above) — it's
   no longer on this out-of-scope list, though it's honestly inert
   without `ELEVENLABS_API_KEY` (or `ELEVEN_LABS_API_KEY`) configured,
