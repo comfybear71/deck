@@ -2220,7 +2220,14 @@ now (see "Explicitly out of scope" below).
     `=== ACT III — CROWD CUTAWAY ===`) stay
     in the in-memory parse array as sequence chunks, not queue rows;
     blank and tag-only lines also skip the spreadsheet. Empty `Crowd:`
-    (any non-CAST `Name:`) is not a queue row. `[Character Dazza wrapped
+    (any non-CAST `Name:`) is a **location Hold cutaway** — Idle row,
+    park plate + `[Action:]` motion, no CAST overlay and no gold Hold
+    (those strings assume one plated person). Live QA: pasting Act III
+    on top of the 10 Done seed Speaks left Render on "Clips already
+    loaded" because Crowd was skipped and `[Action:]` had nowhere to
+    land. `caravan_park_grounds` is not one of the six locked plates, so
+    that tag is ignored and the cutaway keeps the last resolved plate
+    (dropdown still picks one). `[Character Dazza wrapped
     in bandages]` (no colon) stamps `appearanceModifier` on the next
     speaker. Render POST
     sends `line` / `action` / `appearanceModifier` / `locationId`

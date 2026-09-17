@@ -11,7 +11,6 @@ import {
   buildSunnyBanksSpeakingPrompt,
   getSunnyBanksCharacterLock,
   SUNNY_BANKS_HOLD_DURATION_SEC,
-  type SunnyBanksCharacterLock,
 } from "@/lib/sunnyBanks";
 import { compositeSunnyBanksCharacterOntoLocation } from "@/lib/sunnyBanksComposite";
 import {
@@ -53,6 +52,13 @@ import { muxClipAudio } from "@/lib/muxClipAudio";
  * `startImageDataUrl` is the location canvas, `characterName` loads
  * the hero overlay, the composed still is what Comfy LoadImage gets.
  * Gold Hold/Speak strings unchanged. The LTX JSON is not edited.
+ *
+ * **Location cutaway Hold (2026-09-17)** — empty `Crowd:` (any non-CAST
+ * `Name:`) is a Hold of the locked park plate with no hero overlay.
+ * Gold Hold assumes one plated person, so this path skips compositor /
+ * `buildSunnyBanksHoldPrompt` and uses the `[Action:]` motion text on
+ * the location still. Not a new CAST record. Speak still rejects an
+ * unknown name.
  *
  * **Audio mux (2026-09-17)** — PR #123 padded a short TTS MP3 so
  * LoadAudio (276) met LTX's 2s floor. That padded file *is* the
@@ -134,12 +140,12 @@ export async function POST(request: Request) {
   const locationId = typeof body.locationId === "string" ? body.locationId.trim() : "";
   const action = typeof body.action === "string" ? body.action.replace(/\s+/g, " ").trim() : "";
 
-  if (!characterName || !startImageDataUrl || (kind === "speak" && !line)) {
+  if (!startImageDataUrl || (kind === "speak" && (!characterName || !line))) {
     return NextResponse.json(
       {
         error:
           kind === "hold"
-            ? "characterName and startImageDataUrl are required for a Hold."
+            ? "startImageDataUrl is required for a Hold."
             : "characterName, line, and startImageDataUrl are all required.",
         code: "invalid_request",
       },
@@ -147,17 +153,19 @@ export async function POST(request: Request) {
     );
   }
 
-  const character = getSunnyBanksCharacterLock(characterName);
-  if (!character) {
+  const character = characterName ? getSunnyBanksCharacterLock(characterName) : undefined;
+  const isLocationCutaway = kind === "hold" && !character;
+  const cutawayLabel = characterName || "Crowd";
+  if (kind === "speak" && !character) {
     return NextResponse.json(
       { error: `"${characterName}" isn't a locked Sunny Banks character.`, code: "unknown_character" },
       { status: 400 }
     );
   }
-  const voiceId = character.voiceId;
+  const voiceId = character?.voiceId;
   if (kind === "speak" && !voiceId) {
     return NextResponse.json(
-      { error: `${character.name} doesn't have a locked ElevenLabs voice yet.`, code: "missing_voice" },
+      { error: `${character!.name} doesn't have a locked ElevenLabs voice yet.`, code: "missing_voice" },
       { status: 400 }
     );
   }
@@ -194,11 +202,13 @@ export async function POST(request: Request) {
       );
     }
     durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, silentDurationSec);
-    prompt = buildSunnyBanksHoldPrompt(character);
+    prompt = isLocationCutaway
+      ? buildLocationCutawayPrompt(action)
+      : buildSunnyBanksHoldPrompt(character!);
   } else {
     if (!voiceId) {
       return NextResponse.json(
-        { error: `${character.name} doesn't have a locked ElevenLabs voice yet.`, code: "missing_voice" },
+        { error: `${character!.name} doesn't have a locked ElevenLabs voice yet.`, code: "missing_voice" },
         { status: 400 }
       );
     }
@@ -214,7 +224,7 @@ export async function POST(request: Request) {
     if (rawDurationSec <= 0) {
       return NextResponse.json(
         {
-          error: `Could not parse ${character.name}'s synthesized line as audio — ElevenLabs returned an empty or unreadable MP3.`,
+          error: `Could not parse ${character!.name}'s synthesized line as audio — ElevenLabs returned an empty or unreadable MP3.`,
           code: "upstream_error",
         },
         { status: 502 }
@@ -234,7 +244,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            `${character.name}'s line only synthesized to ${rawDurationSec.toFixed(1)}s and silent padding ` +
+            `${character!.name}'s line only synthesized to ${rawDurationSec.toFixed(1)}s and silent padding ` +
             `could not bring it to LTX's ${MIN_LTX_AUDIO_INPUT_SEC}s audio floor.`,
           code: "invalid_request",
         },
@@ -242,38 +252,48 @@ export async function POST(request: Request) {
       );
     }
     durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, paddedDurationSec);
-    prompt = buildSunnyBanksSpeakingPrompt(character, line);
+    prompt = buildSunnyBanksSpeakingPrompt(character!, line);
   }
 
   // `[Action:]` is extra LTX context after gold, never a rewrite of
   // the locked Hold/Speak strings and never part of the TTS `line`.
-  if (action) {
+  // Location cutaways already baked action into the motion prompt.
+  if (action && !isLocationCutaway) {
     prompt = `${prompt} ${action}`;
   }
 
-  const plated = await compositeSunnyBanksCharacterOntoLocation({
-    locationDataUrl: startImageDataUrl,
-    character,
-    locationId,
-  });
-  if (!plated.ok) {
-    return NextResponse.json({ error: plated.error, code: plated.code }, { status: plated.status });
+  let plateDataUrl = startImageDataUrl;
+  if (!isLocationCutaway) {
+    const plated = await compositeSunnyBanksCharacterOntoLocation({
+      locationDataUrl: startImageDataUrl,
+      character: character!,
+      locationId,
+    });
+    if (!plated.ok) {
+      return NextResponse.json({ error: plated.error, code: plated.code }, { status: plated.status });
+    }
+    plateDataUrl = plated.dataUrl;
   }
 
   return runLtxAndPersist({
-    character,
+    characterName: character?.name ?? cutawayLabel,
     kind,
     prompt,
     durationSec,
     audioBytes,
     audioContentType,
-    startImageDataUrl: plated.dataUrl,
+    startImageDataUrl: plateDataUrl,
     creds,
   });
 }
 
+function buildLocationCutawayPrompt(action: string): string {
+  const motion = action.replace(/\s+/g, " ").trim() || "Subtle ambient motion. Camera holds, no cuts.";
+  return `Use the provided start image as the first frame. ${motion} No dialogue.`;
+}
+
 async function runLtxAndPersist(args: {
-  character: SunnyBanksCharacterLock;
+  characterName: string;
   kind: BeatKind;
   prompt: string;
   durationSec: number;
@@ -349,8 +369,8 @@ async function runLtxAndPersist(args: {
 
   const pathname =
     args.kind === "hold"
-      ? buildSunnyBanksHoldBeatPathname(args.character.name, Date.now())
-      : buildSunnyBanksSpeakBeatPathname(args.character.name, Date.now());
+      ? buildSunnyBanksHoldBeatPathname(args.characterName, Date.now())
+      : buildSunnyBanksSpeakBeatPathname(args.characterName, Date.now());
   try {
     const blob = await put(pathname, Buffer.from(videoBytes), {
       access: "public",
@@ -360,7 +380,7 @@ async function runLtxAndPersist(args: {
     return NextResponse.json({
       videoUrl: blob.url,
       durationSec: args.durationSec,
-      character: args.character.name,
+      character: args.characterName,
       kind: args.kind,
       persisted: true,
       audioMuxed,
@@ -373,7 +393,7 @@ async function runLtxAndPersist(args: {
     return NextResponse.json({
       videoUrl: `data:video/mp4;base64,${Buffer.from(videoBytes).toString("base64")}`,
       durationSec: args.durationSec,
-      character: args.character.name,
+      character: args.characterName,
       kind: args.kind,
       persisted: false,
       persistError: err instanceof Error ? err.message : "Vercel Blob upload failed for an unknown reason.",
