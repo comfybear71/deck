@@ -108,6 +108,10 @@ import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
  * Empty `Crowd:` is a location Hold cutaway (park plate + `[Action:]`,
  * no CAST overlay), so it can sit Idle while seed Speaks stay Done and
  * Render reads "Render 1 line" instead of "Clips already loaded".
+ * **+ on a queue row inserts a silent Hold under that clip** (same
+ * speaker, same plate) so a shot can land between two already-Done
+ * rows without re-pasting the God Script. Idle rows can type the
+ * spoken line in place. Undo restores the previous buffers.
  *
  * **Clips live in one Act-grouped strip (2026-09-17, live QA)** —
  * finished MP4s sit in one `overflow-x-auto` row at the base of the
@@ -191,6 +195,8 @@ export interface SunnyBanksScriptChunk {
   characterName: string;
   line: string;
   kind: SunnyBanksChunkKind;
+  /** 0-based index in the act script's split lines — insert/rewrite land here. */
+  sourceLineIndex: number;
   /** Locked park plate for this row and later rows, from `[Location: id]`. */
   locationId?: SunnyBanksLocationId;
   /** Extra LTX prompt context from `[Action: text]` — not spoken TTS. */
@@ -584,6 +590,8 @@ export function parseSunnyBanksGodDocument(text: string, fallbackActId: string =
  * speaker, and not skipped. Skipping it left `[Action:]` with nowhere
  * to land, so a drone/crowd beat never became Idle and Render stayed
  * on "Clips already loaded" while the 10 Act III seed lines stayed Done.
+ * Each queue chunk keeps `sourceLineIndex` so a row's + can insert a
+ * Hold in between Done clips without re-pasting the whole God Script.
  */
 export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[] {
   const chunks: SunnyBanksScriptChunk[] = [];
@@ -591,7 +599,9 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
   let currentLocation: SunnyBanksLocationId = SUNNY_BANKS_DEFAULT_LOCATION_ID;
   let pendingActions: string[] = [];
   let pendingAppearance: string[] = [];
-  for (const rawLine of text.split(/\r?\n/)) {
+  const rawLines = text.split(/\r?\n/);
+  for (let sourceLineIndex = 0; sourceLineIndex < rawLines.length; sourceLineIndex += 1) {
+    const rawLine = rawLines[sourceLineIndex];
     const raw = rawLine.trim();
     if (!raw) continue;
     if (parseSunnyBanksEpisodeHeader(raw) || parseSunnyBanksActHeader(raw)) continue;
@@ -602,6 +612,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
         characterName: "",
         line: sceneLabel,
         kind: "scene",
+        sourceLineIndex,
         locationId: currentLocation,
       });
       continue;
@@ -624,6 +635,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
         characterName: ghostName,
         line: "",
         kind: "hold",
+        sourceLineIndex,
         locationId: currentLocation,
       };
       if (action) chunk.action = action;
@@ -652,6 +664,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       characterName,
       line,
       kind: line.length > 0 ? "speak" : "hold",
+      sourceLineIndex,
       locationId: currentLocation,
     };
     if (action) chunk.action = action;
@@ -659,6 +672,77 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     chunks.push(chunk);
   }
   return chunks;
+}
+
+/** Empty `Name:` Hold — the inserted shot between two existing clips. */
+export function buildSunnyBanksHoldScriptLine(characterName: string): string {
+  const name = characterName.trim() || FALLBACK_CHARACTER_NAME;
+  return `${name}:`;
+}
+
+export function insertSunnyBanksLineAfter(
+  script: string,
+  afterSourceLineIndex: number,
+  line: string
+): string {
+  const lines = script.split(/\r?\n/);
+  const at = Math.min(Math.max(afterSourceLineIndex + 1, 0), lines.length);
+  lines.splice(at, 0, line);
+  return lines.join("\n");
+}
+
+export function insertSunnyBanksLineBefore(
+  script: string,
+  beforeSourceLineIndex: number,
+  line: string
+): string {
+  const lines = script.split(/\r?\n/);
+  const at = Math.min(Math.max(beforeSourceLineIndex, 0), lines.length);
+  lines.splice(at, 0, line);
+  return lines.join("\n");
+}
+
+export function replaceSunnyBanksSourceLine(
+  script: string,
+  sourceLineIndex: number,
+  nextLine: string
+): string {
+  const lines = script.split(/\r?\n/);
+  if (sourceLineIndex < 0 || sourceLineIndex >= lines.length) return script;
+  lines[sourceLineIndex] = nextLine;
+  return lines.join("\n");
+}
+
+/** Keep any leading `[Tag]` prefixes; replace the speaker + dialogue. */
+export function rewriteSunnyBanksSpeakerLine(
+  original: string,
+  characterName: string,
+  dialogue: string
+): string {
+  const name = characterName.trim() || FALLBACK_CHARACTER_NAME;
+  let rest = original.trimEnd();
+  const tags: string[] = [];
+  const tagRe = /^(\[[^\]]+\]\s*)/;
+  while (tagRe.test(rest)) {
+    const match = rest.match(tagRe);
+    if (!match) break;
+    tags.push(match[1]);
+    rest = rest.slice(match[1].length);
+  }
+  const spoken = dialogue.replace(/\s+/g, " ").trim();
+  const speaker = spoken.length > 0 ? `${name}: ${spoken}` : `${name}:`;
+  return `${tags.join("")}${speaker}`;
+}
+
+/** Shift per-row override maps when a queue row is inserted at `insertAt`. */
+export function shiftKeyedIndexRecord<T>(record: Record<number, T>, insertAt: number): Record<number, T> {
+  const next: Record<number, T> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const index = Number(key);
+    if (!Number.isInteger(index)) continue;
+    next[index >= insertAt ? index + 1 : index] = value;
+  }
+  return next;
 }
 
 /** Speaker + spoken/hold text — stable across tag-only lines and a
@@ -1200,6 +1284,69 @@ export function SkidmarksSunnyBanksPanel() {
     }
   };
 
+  const applyActScript = (nextScript: string) => {
+    setActScripts((prev) => ({ ...prev, [activeAct]: nextScript }));
+  };
+
+  const handleInsertShotAfter = (rowIndex: number) => {
+    if (running) return;
+    const row = queue[rowIndex];
+    if (!row) return;
+    const holdLine = buildSunnyBanksHoldScriptLine(row.characterName);
+    captureScriptUndo();
+    applyActScript(insertSunnyBanksLineAfter(scriptText, row.chunk.sourceLineIndex, holdLine));
+    const insertAt = rowIndex + 1;
+    setCharacterOverridesByAct((prev) => ({
+      ...prev,
+      [activeAct]: shiftKeyedIndexRecord(prev[activeAct] ?? {}, insertAt),
+    }));
+    setLocationOverridesByAct((prev) => {
+      const shifted = shiftKeyedIndexRecord(prev[activeAct] ?? {}, insertAt);
+      shifted[insertAt] = row.location.id;
+      return { ...prev, [activeAct]: shifted };
+    });
+    if (!scriptOpen) setScriptOpen(true);
+  };
+
+  const handleInsertShotBeforeFirst = () => {
+    if (running) return;
+    const first = queue[0];
+    const name = first?.characterName || FALLBACK_CHARACTER_NAME;
+    const holdLine = buildSunnyBanksHoldScriptLine(name);
+    captureScriptUndo();
+    applyActScript(
+      first
+        ? insertSunnyBanksLineBefore(scriptText, first.chunk.sourceLineIndex, holdLine)
+        : scriptText.trim()
+          ? `${scriptText.replace(/\n+$/, "")}\n${holdLine}`
+          : holdLine
+    );
+    setCharacterOverridesByAct((prev) => ({
+      ...prev,
+      [activeAct]: shiftKeyedIndexRecord(prev[activeAct] ?? {}, 0),
+    }));
+    setLocationOverridesByAct((prev) => {
+      const shifted = shiftKeyedIndexRecord(prev[activeAct] ?? {}, 0);
+      shifted[0] = first?.location.id ?? defaultLocationId;
+      return { ...prev, [activeAct]: shifted };
+    });
+    if (!scriptOpen) setScriptOpen(true);
+  };
+
+  const handleIdleLineChange = (rowIndex: number, dialogue: string) => {
+    const row = queue[rowIndex];
+    if (!row || running) return;
+    const lines = scriptText.split(/\r?\n/);
+    const original = lines[row.chunk.sourceLineIndex] ?? `${row.characterName}:`;
+    applyActScript(
+      replaceSunnyBanksSourceLine(
+        scriptText,
+        row.chunk.sourceLineIndex,
+        rewriteSunnyBanksSpeakerLine(original, row.characterName, dialogue)
+      )
+    );
+  };
+
   const handleAddAct = () => {
     if (running || actIds.length >= MAX_SUNNY_BANKS_ACTS) return;
     const id = nextSunnyBanksActId(actIds);
@@ -1421,9 +1568,22 @@ export function SkidmarksSunnyBanksPanel() {
                 />
                 <p className="text-[10px] leading-snug text-white/40">
                   One speaker per line — `Name:` or `Name says:`. Empty after the name is a
-                  silent hold. Continuation lines keep the last speaker. Unit 4S stays barefoot;
-                  gold look/voice strings are not edited here.
+                  silent hold. Tap + on a row to insert a shot under it; Done clips stay.
+                  Continuation lines keep the last speaker. Unit 4S stays barefoot; gold
+                  look/voice strings are not edited here.
                 </p>
+
+                <div className="flex justify-start">
+                  <button
+                    type="button"
+                    onClick={handleInsertShotBeforeFirst}
+                    disabled={running}
+                    aria-label="Insert shot at the start"
+                    className="flex h-10 min-h-[40px] min-w-[40px] items-center justify-center rounded-lg text-lg font-medium text-white/45 disabled:opacity-40"
+                  >
+                    +
+                  </button>
+                </div>
 
                 {queue.length > 0 && (
                   <ol className="flex min-w-0 flex-col border-y border-white/10">
@@ -1437,7 +1597,7 @@ export function SkidmarksSunnyBanksPanel() {
                           ? row.chunk.action?.trim() || "Silent hold"
                           : row.line;
                       return (
-                        <li key={`${activeAct}:${row.index}:${row.chunk.raw}`} className="min-w-0">
+                        <li key={`${activeAct}:${row.index}:${row.chunk.sourceLineIndex}`} className="min-w-0">
                           <div className="flex min-w-0 w-full items-start gap-1 overflow-x-hidden py-1.5 [touch-action:pan-y]">
                             <span className="w-4 shrink-0 pt-1 text-center text-[10px] font-medium text-white/40">
                               {row.index + 1}
@@ -1505,16 +1665,37 @@ export function SkidmarksSunnyBanksPanel() {
                                 >
                                   {statusPillLabel(status)}
                                 </span>
-                              </div>
-                              <details className="group min-w-0 pt-0.5">
-                                <summary
-                                  title={lineLabel}
-                                  aria-label={`Spoken line ${row.index + 1}`}
-                                  className="cursor-pointer list-none truncate text-[12px] leading-snug text-white/75 [-webkit-tap-highlight-color:transparent] group-open:whitespace-normal group-open:overflow-visible [&::-webkit-details-marker]:hidden"
+                                <button
+                                  type="button"
+                                  onClick={() => handleInsertShotAfter(row.index)}
+                                  disabled={running}
+                                  aria-label={`Insert shot after line ${row.index + 1}`}
+                                  className="flex h-10 min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-lg text-lg font-medium text-white/45 disabled:opacity-40"
                                 >
-                                  {lineLabel}
-                                </summary>
-                              </details>
+                                  +
+                                </button>
+                              </div>
+                              {isStatic || cutaway ? (
+                                <details className="group min-w-0 pt-0.5">
+                                  <summary
+                                    title={lineLabel}
+                                    aria-label={`Spoken line ${row.index + 1}`}
+                                    className="cursor-pointer list-none truncate text-[12px] leading-snug text-white/75 [-webkit-tap-highlight-color:transparent] group-open:whitespace-normal group-open:overflow-visible [&::-webkit-details-marker]:hidden"
+                                  >
+                                    {lineLabel}
+                                  </summary>
+                                </details>
+                              ) : (
+                                <input
+                                  type="text"
+                                  value={row.line}
+                                  onChange={(e) => handleIdleLineChange(row.index, e.target.value)}
+                                  disabled={running}
+                                  placeholder="Empty is a silent hold"
+                                  aria-label={`Spoken line ${row.index + 1}`}
+                                  className="mt-0.5 min-h-[32px] w-full min-w-0 rounded-md border border-white/10 bg-white/[0.03] px-1.5 text-[12px] leading-snug text-white/80 placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
+                                />
+                              )}
                             </div>
                           </div>
                           {runtime?.status === "failed" && runtime.error && (
@@ -1558,7 +1739,7 @@ export function SkidmarksSunnyBanksPanel() {
             </button>
             <p className="text-[10px] leading-snug text-white/40">
               {pendingRows.length === 0
-                ? "Existing Crash Lab clips are already in the strip below. Edit a line to render a new one — one clip at a time, never a batch of these 46."
+                ? "Existing Crash Lab clips are already in the strip below. Tap + on a row to insert a shot between them — one clip at a time, never a batch of these 46."
                 : `One clip at a time — overlay ~$${overlayCostUsd.toFixed(2)}${
                     pendingRows.filter((row) => row.kind === "hold").length > 0
                       ? `, hold video ~$${holdVideoCostUsd.toFixed(2)}`
