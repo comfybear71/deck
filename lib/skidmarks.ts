@@ -176,6 +176,7 @@ import {
   cloneSunnyBanksLive,
   liveFromSunnyBanksWorkspace,
   normalizeSunnyBanksStudio,
+  buildEmptySunnyBanksLive,
   sunnyBanksStudioHasUserContent,
   upsertSunnyBanksWorkspace,
   type SkidmarksSunnyBanksState,
@@ -2937,6 +2938,28 @@ export function deleteSunnyBanksWorkspace(id: string): void {
     sunnyBanks: {
       ...current.sunnyBanks,
       workspaces: current.sunnyBanks.workspaces.filter((workspace) => workspace.id !== id),
+    },
+  });
+}
+
+/**
+ * **New Episode** — replace the live working copy with a blank one
+ * (2026-09-18). Saved cards are untouched by design: Stuart's own
+ * wording was "I want to create new and then it clears everything, all
+ * the old stuff on the workspace should be saved."
+ *
+ * Only the live copy is cleared, so anything that was saved is still on
+ * the shelf and still on the server. Anything *not* saved is gone —
+ * which is why the panel asks first and says so.
+ */
+export function startNewSunnyBanksEpisode(): void {
+  const current = getSkidmarksSnapshot();
+  const studio = resolvedSunnyBanks(current);
+  persist({
+    ...current,
+    sunnyBanks: {
+      ...studio,
+      live: buildEmptySunnyBanksLive(),
     },
   });
 }

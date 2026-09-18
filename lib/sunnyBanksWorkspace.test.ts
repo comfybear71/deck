@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDefaultSunnyBanksLive,
+  buildEmptySunnyBanksLive,
+  isSunnyBanksLiveSaved,
   buildSunnyBanksWorkspaceFromLive,
   describeSunnyBanksWorkspace,
   fingerprintWorkspace,
@@ -79,3 +81,70 @@ describe("Sunny Banks workspace snapshots", () => {
 function countLabel(workspaces: Array<{ label: string }>): number {
   return new Set(workspaces.map((workspace) => workspace.label.trim().toLowerCase())).size;
 }
+
+describe("buildEmptySunnyBanksLive (2026-09-18)", () => {
+  it("is genuinely blank — not the Crash Lab EP02 demo seed", () => {
+    const empty = buildEmptySunnyBanksLive();
+    const seeded = buildDefaultSunnyBanksLive();
+
+    expect(empty.workspaceTitle).toBe("");
+    for (const act of empty.actIds) {
+      expect(empty.actScripts[act]).toBe("");
+      expect(empty.runtimeMap[act]).toEqual({});
+      expect(empty.characterOverrides[act]).toEqual({});
+      expect(empty.locationOverrides[act]).toEqual({});
+    }
+    // The default builder is the demo episode, which is the opposite of
+    // what "New Episode" means.
+    expect(seeded.actScripts[seeded.actIds[0]]).not.toBe("");
+    expect(fingerprintWorkspace(empty)).not.toBe(fingerprintWorkspace(seeded));
+  });
+
+  it("keeps the three starting acts, with the first one active", () => {
+    const empty = buildEmptySunnyBanksLive();
+    expect(empty.actIds).toEqual(["I", "II", "III"]);
+    expect(empty.activeAct).toBe("I");
+  });
+
+  it("counts as real user content, so a refresh can't reseed EP02 over it", () => {
+    // If a blank episode read as "nothing here", the seed would come
+    // back on the next load and quietly undo New Episode.
+    expect(
+      sunnyBanksStudioHasUserContent({ live: buildEmptySunnyBanksLive(), workspaces: [], saveSeq: 0 })
+    ).toBe(true);
+  });
+});
+
+describe("isSunnyBanksLiveSaved (2026-09-18)", () => {
+  const live = buildDefaultSunnyBanksLive();
+
+  const saved = buildSunnyBanksWorkspaceFromLive(live, 1, 1);
+
+  it("is true when a saved card already holds exactly what is on screen", () => {
+    expect(isSunnyBanksLiveSaved(live, [saved])).toBe(true);
+  });
+
+  it("is false when nothing has been saved at all", () => {
+    expect(isSunnyBanksLiveSaved(live, [])).toBe(false);
+  });
+
+  it("is false once the live copy has moved on from every saved card", () => {
+    const edited = { ...live, actScripts: { ...live.actScripts, I: "Shazza: brand new line." } };
+    expect(isSunnyBanksLiveSaved(edited, [saved])).toBe(false);
+  });
+
+  it("counts a rename as unsaved — the saved card really does still carry the old name", () => {
+    // The stored fingerprint covers the title too. Erring toward "not
+    // saved yet" costs one extra tap on Save; the opposite costs work.
+    expect(isSunnyBanksLiveSaved({ ...live, workspaceTitle: "Totally different name" }, [saved])).toBe(false);
+  });
+
+  it("matches against any saved card, not just the most recent", () => {
+    const other = buildSunnyBanksWorkspaceFromLive(
+      { ...live, actScripts: { ...live.actScripts, I: "Dazza: something else." } },
+      2,
+      2
+    );
+    expect(isSunnyBanksLiveSaved(live, [other, saved])).toBe(true);
+  });
+});

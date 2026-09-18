@@ -2438,6 +2438,21 @@ now (see "Explicitly out of scope" below).
     (best-effort; CORS or a dead stream omits that file) and keeps
     script/prompts/URL records under `data/`. Sunny Banks
     has no song MP3; TTS is generated at render time.
+    **New Episode (2026-09-18)** — live QA: "how do I create a new
+    episode? I want to create new and then it clears everything, all the
+    old stuff on the workspace should be saved." There was **no such
+    control at all** — the panel could save, download, open and delete
+    an episode but never begin one. `+ New Episode` replaces the live
+    working copy with a genuinely blank one
+    (`buildEmptySunnyBanksLive`, deliberately **not**
+    `buildDefaultSunnyBanksLive`, which is the Crash Lab EP02 demo
+    seed). Saved cards are untouched. Two taps, because it discards the
+    live copy: the first arms it and says whether what is on screen is
+    saved yet (`isSunnyBanksLiveSaved`). A rename counts as unsaved —
+    the saved card really does still carry the old name, and erring that
+    way costs one extra tap on Save rather than costing the work. A
+    blank episode still counts as real user content, so a refresh cannot
+    reseed EP02 over the top of it.
     **Clip proxy (2026-09-18)** — live QA: the zip shipped **18 of 64
     clips**. The 18 were this app's own renders on Vercel Blob; the 46
     that failed were the Crash Lab EP02 seed clips on

@@ -10,7 +10,11 @@
  * shelf so a refresh (or closing the sheet) does not reseeds EP02 and
  * drop Act III / extra Holds. ✕ drops that named card only.
  */
-import { getSunnyBanksLocation, type SunnyBanksLocationId } from "./sunnyBanks";
+import {
+  getSunnyBanksLocation,
+  SUNNY_BANKS_DEFAULT_LOCATION_ID,
+  type SunnyBanksLocationId,
+} from "./sunnyBanks";
 import { buildSunnyBanksDropBearsSeed, DROP_BEARS_TITLE } from "./sunnyBanksDropBears";
 
 export const SUNNY_BANKS_INITIAL_ACTS = ["I", "II", "III"] as const;
@@ -110,6 +114,60 @@ export function buildDefaultSunnyBanksLive(): SunnyBanksLiveState {
     locationOverrides: cloneActRecord(seed.locationOverrides, actIds),
     runtimeMap: cloneActRecord(seed.runtimeMap as SunnyBanksLiveState["runtimeMap"], actIds),
   };
+}
+
+/**
+ * A genuinely blank episode — what **New Episode** starts from
+ * (2026-09-18). Live QA: "how do I create a new episode? I want to
+ * create new and then it clears everything, all the old stuff on the
+ * workspace should be saved." There was no such control at all; the
+ * panel could save, download, open and delete an episode, but never
+ * begin one.
+ *
+ * Deliberately **not** `buildDefaultSunnyBanksLive()` — that is the
+ * Crash Lab EP02 demo seed, which is the opposite of blank. Same three
+ * starting acts, nothing in them.
+ *
+ * The empty title is intentional: `resolvedWorkspaceTitle()` falls back
+ * to a name derived from the script, so a new episode gets a sensible
+ * name once it has lines, and Stuart can type over it any time.
+ */
+export function buildEmptySunnyBanksLive(): SunnyBanksLiveState {
+  const actIds = [...SUNNY_BANKS_INITIAL_ACTS];
+  const blank = <T,>(value: () => T): SunnyBanksActKeyed<T> =>
+    Object.fromEntries(actIds.map((act) => [act, value()])) as SunnyBanksActKeyed<T>;
+  return {
+    workspaceTitle: "",
+    defaultLocationId: SUNNY_BANKS_DEFAULT_LOCATION_ID,
+    actIds,
+    activeAct: actIds[0],
+    actScripts: blank(() => ""),
+    characterOverrides: blank(() => ({})),
+    locationOverrides: blank(() => ({})),
+    runtimeMap: blank(() => ({})),
+  };
+}
+
+/**
+ * Is the live working copy already captured by one of the saved cards?
+ *
+ * Compares against the fingerprint each snapshot stored, which
+ * `buildSunnyBanksWorkspaceFromLive` computes over the whole live
+ * state — scripts, overrides, clip URLs **and the episode title**. So a
+ * rename alone reads as unsaved, which is the honest answer: the saved
+ * card really does still carry the old name.
+ *
+ * Used to warn before **New Episode** throws the live copy away. False
+ * means there is work on screen that no saved card holds, and this errs
+ * toward saying so — a spurious "not saved yet" costs one extra tap on
+ * Save, while a wrong "already saved" costs the work.
+ */
+export function isSunnyBanksLiveSaved(
+  live: SunnyBanksLiveState,
+  workspaces: readonly SunnyBanksWorkspaceSnapshot[]
+): boolean {
+  const liveFingerprint = fingerprintWorkspace(live);
+  return workspaces.some((workspace) => workspace.fingerprint === liveFingerprint);
 }
 
 /** djb2 of the snapshot payload — same scripts + same clip URLs hash
