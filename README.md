@@ -2336,7 +2336,28 @@ now (see "Explicitly out of scope" below).
     rendered black-on-black and only the bracket tags were visible.
     `SUNNY_BANKS_HIGHLIGHT_CLASSES` now carries a `plain: "text-white"`
     entry and the overlay colors every segment from that one table; a
-    unit test asserts no entry is transparent. **Silent Hold (2026-09-17)** is a script line
+    unit test asserts no entry is transparent. **God Script Cheat Sheet
+    (2026-09-18, Stuart's ask: "so we can always refer back to it when
+    we're writing the next lot of scripts")** — a default-closed 44px
+    row under the script section (`SunnyBanksGodScriptCheatSheet`,
+    content from `lib/sunnyBanksGodScriptGuide.ts`) covering the three
+    real tags, the silent-hold shape (`Name:` with nothing after it),
+    the "a `[Character ...]` / `[Action: ...]` tag is used up by the
+    next row" rule, the speaking cast and the location ids — plus a
+    **Copy these rules as an AI prompt** button
+    (`buildSunnyBanksGodScriptPrompt`), since the scripts are drafted in
+    an LLM chat and the rules would otherwise be retyped every session.
+    Cast and location lists are derived from `SUNNY_BANKS_CAST` /
+    `SUNNY_BANKS_LOCATIONS` rather than retyped, and
+    `lib/sunnyBanksGodScriptGuide.test.ts` runs the guide's own worked
+    example through the real `parseSunnyBanksScriptBlock`, so a parser
+    change fails a test instead of leaving the cheat sheet teaching a
+    shape that costs paid renders. Prompted by live QA: a drafted Act IV
+    used `[Outfit: ...]` and `[silence]`, neither of which is a real tag
+    — both would have been spoken aloud by ElevenLabs in a billed clip —
+    and arrived as one unbroken line, which the parser reads as a single
+    clip of the whole block. Documentation only: not a validator and not
+    a linter. **Silent Hold (2026-09-17)** is a script line
     with no dialogue after the speaker name: no ElevenLabs call.
     Same route with `kind: "hold"`, a 5s silent MP3
     (`lib/silentMp3.ts`, `SUNNY_BANKS_HOLD_DURATION_SEC` — LTX still

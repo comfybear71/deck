@@ -19,6 +19,13 @@ import {
 } from "@/lib/sunnyBanks";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
 import {
+  buildSunnyBanksGodScriptPrompt,
+  listSunnyBanksLocationIds,
+  listSunnyBanksSpeakingCast,
+  SUNNY_BANKS_GOD_SCRIPT_EXAMPLE,
+  SUNNY_BANKS_GOD_SCRIPT_RULES,
+} from "@/lib/sunnyBanksGodScriptGuide";
+import {
   deleteSunnyBanksWorkspace,
   getSkidmarksSnapshot,
   getSunnyBanksLiveOrDefault,
@@ -1068,6 +1075,126 @@ export function collectRenderedClips(args: {
   return clips;
 }
 
+/**
+ * On-page God Script cheat sheet (2026-09-18, Stuart's ask: "add this as
+ * a cheat sheet somewhere on the page so we can always refer back to it
+ * when we're writing the next lot of scripts").
+ *
+ * Default closed and collapsed behind its own 44px row, same pattern as
+ * "Show Script Text & Queued Lines" — a reference panel that pushed the
+ * Clips shelf off a 390px screen would be worse than no reference at
+ * all. Cast and location lists come from `SUNNY_BANKS_CAST` /
+ * `SUNNY_BANKS_LOCATIONS` via `lib/sunnyBanksGodScriptGuide.ts`, so a
+ * new location can never leave this panel quietly lying.
+ *
+ * The Copy button hands over the same rules as one prompt for whatever
+ * LLM is drafting the scripts — that is where these scripts actually
+ * come from, so the cheat sheet being human-readable only would mean
+ * re-typing the rules into a chat window every session. Clipboard
+ * failure is reported, never swallowed: a silent no-op on a copy button
+ * is indistinguishable from a copy that worked.
+ */
+function SunnyBanksGodScriptCheatSheet() {
+  const [open, setOpen] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
+  const handleCopyPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(buildSunnyBanksGodScriptPrompt());
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02]">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        className="flex min-h-[44px] w-full items-center justify-between gap-2 px-3 text-left"
+      >
+        <span className="text-[12px] font-semibold text-white/80">God Script Cheat Sheet</span>
+        <ChevronIcon open={open} />
+      </button>
+      {open && (
+        <div className="flex touch-pan-y flex-col gap-3 overscroll-y-contain px-3 pb-3">
+          <p className="text-[11px] leading-snug text-amber-200/80">
+            Every queue row is a paid render. A line the parser doesn&apos;t recognise isn&apos;t
+            skipped — it gets spoken out loud in a real clip.
+          </p>
+
+          <div className="flex flex-col gap-2.5">
+            {SUNNY_BANKS_GOD_SCRIPT_RULES.map((rule) => (
+              <div key={rule.title} className="flex flex-col gap-1">
+                <p className="text-[11px] font-semibold text-white/75">{rule.title}</p>
+                {rule.body.map((paragraph) => (
+                  <p key={paragraph} className="text-[11px] leading-snug text-white/50">
+                    {paragraph}
+                  </p>
+                ))}
+                {rule.example && (
+                  <pre className="overflow-x-auto whitespace-pre rounded-lg bg-black/40 px-2 py-1.5 text-[10px] leading-relaxed text-white/60">
+                    {rule.example}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <p className="text-[11px] font-semibold text-white/75">Who can speak</p>
+            <p className="text-[11px] leading-snug text-white/50">
+              {listSunnyBanksSpeakingCast().join(", ")} — exact spelling and capitals. Any other
+              name with an empty line is a location shot with nobody in it.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <p className="text-[11px] font-semibold text-white/75">Location ids</p>
+            <div className="flex flex-col gap-0.5">
+              {listSunnyBanksLocationIds().map(({ id, label }) => (
+                <p key={id} className="text-[11px] leading-snug text-white/50">
+                  <span className="text-yellow-300/90">{id}</span> — {label}
+                </p>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <p className="text-[11px] font-semibold text-white/75">A correct script</p>
+            <pre className="overflow-x-auto whitespace-pre rounded-lg bg-black/40 px-2 py-1.5 text-[10px] leading-relaxed text-white/60">
+              {SUNNY_BANKS_GOD_SCRIPT_EXAMPLE}
+            </pre>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <button
+              type="button"
+              onClick={handleCopyPrompt}
+              className="min-h-[40px] rounded-full border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80"
+            >
+              Copy these rules as an AI prompt
+            </button>
+            {copyState === "copied" && (
+              <p role="status" className="text-[10px] leading-snug text-emerald-300/90">
+                Copied — paste it into your script-writing chat.
+              </p>
+            )}
+            {copyState === "failed" && (
+              <p role="alert" className="text-[10px] leading-snug text-rose-300/90">
+                This browser blocked the clipboard. Long-press the example above to select
+                instead.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChevronIcon({ open }: { open: boolean }) {
   return (
     <svg
@@ -1949,6 +2076,8 @@ export function SkidmarksSunnyBanksPanel() {
                 )}
               </div>
             )}
+
+            <SunnyBanksGodScriptCheatSheet />
 
             {pendingRows.length > 0 && !canRenderAll && !running && (
               <p className="text-[10px] leading-snug text-white/40">
