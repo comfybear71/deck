@@ -32,11 +32,13 @@ import {
   openSunnyBanksWorkspace,
   patchSunnyBanksLive,
   saveSunnyBanksProjectWorkspace,
+  startNewSunnyBanksEpisode,
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
 import {
   cloneActRecord,
   describeSunnyBanksWorkspace,
+  isSunnyBanksLiveSaved,
   fingerprintWorkspace,
   mintWorkspaceId,
   SUNNY_BANKS_INITIAL_ACTS,
@@ -1362,6 +1364,7 @@ export function SkidmarksSunnyBanksPanel() {
    * past the right edge — `handleAddAct` scrolls it into view rather
    * than leaving Stuart to discover it by swiping. */
   const actStripRef = useRef<HTMLDivElement>(null);
+  const [confirmingNewEpisode, setConfirmingNewEpisode] = useState(false);
   const [bundleError, setBundleError] = useState<string | null>(null);
   /** What the save/download buttons are doing right now, in plain words.
    * Live QA (2026-09-18): both buttons did their job silently, which is
@@ -1412,6 +1415,10 @@ export function SkidmarksSunnyBanksPanel() {
    * `status === "done"` rows — a failed row stays visible, because that
    * is unfinished work, not history. */
   const [doneRowsOpen, setDoneRowsOpen] = useState(false);
+
+  /** Whether what's on screen is already captured by a saved card —
+   * so New Episode can say whether it's about to discard real work. */
+  const liveIsSaved = isSunnyBanksLiveSaved(live, workspaces);
 
   const pendingRows = queue.filter((row) => runtimeFor(row.index, row.chunk.raw).status !== "done");
   /** Finished history vs. rows still worth looking at. A row that is
@@ -1862,6 +1869,23 @@ export function SkidmarksSunnyBanksPanel() {
     window.setTimeout(() => {
       actStripRef.current?.scrollTo({ left: actStripRef.current.scrollWidth, behavior: "smooth" });
     }, 0);
+  };
+
+  /** **New Episode** (2026-09-18). Two taps, because it throws the live
+   * working copy away: the first tap arms it and says exactly what will
+   * happen, including whether there is unsaved work on screen right
+   * now. Saved cards are never touched. */
+  const handleNewEpisode = () => {
+    if (running) return;
+    if (!confirmingNewEpisode) {
+      setConfirmingNewEpisode(true);
+      return;
+    }
+    startNewSunnyBanksEpisode();
+    setConfirmingNewEpisode(false);
+    setScriptUndo(null);
+    setBundleError(null);
+    setBundleNotice("New episode started — your saved episodes are untouched.");
   };
 
   const handleSaveWorkspace = () => {
@@ -2465,6 +2489,28 @@ export function SkidmarksSunnyBanksPanel() {
 
       <div className="rounded-xl border border-white/10 bg-zinc-950/95">
         <div className="flex flex-col gap-2 px-3 pb-3 pt-2">
+          <button
+            type="button"
+            onClick={handleNewEpisode}
+            disabled={running || bundleBusy}
+            className={[
+              "min-h-[44px] rounded-md px-3 text-[13px] font-semibold disabled:opacity-60",
+              confirmingNewEpisode
+                ? "bg-rose-400 text-zinc-950"
+                : "border border-white/15 bg-white/[0.04] text-white/80",
+            ].join(" ")}
+          >
+            {confirmingNewEpisode ? "Tap again to start a new episode" : "+ New Episode"}
+          </button>
+          {confirmingNewEpisode && (
+            <p role="alert" className="text-[11px] leading-snug text-amber-200/90">
+              This clears the script and clips on screen and starts blank. Your{" "}
+              {workspaces.length === 1 ? "saved episode is" : `${workspaces.length} saved episodes are`} kept.
+              {liveIsSaved
+                ? " What's on screen is already saved."
+                : " What's on screen is NOT saved yet — tap Save Episode first if you want to keep it."}
+            </p>
+          )}
           <label className="flex flex-col gap-1">
             <span className="text-[11px] font-medium uppercase tracking-wide text-white/40">
               Episode name
