@@ -232,17 +232,40 @@ export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock):
  * `generate-speak-beat` is the caller (Studio's gen-plate + LTX in one
  * route). Gold Hold/Speak strings stay untouched — they already assume
  * the start image has both the person and the place.
+ *
+ * `appearanceOverride` (2026-09-18) is the per-shot appearance text a
+ * `[Character Name: description]` script tag produces — e.g. "Dazza
+ * holding two bottles". It used to reach the LTX *motion* prompt only,
+ * which meant the starting frame LTX animates still showed the base
+ * `look` and LTX had to invent the bottles over the clip: live-reported
+ * as the held object morphing, duplicating or vanishing mid-clip.
+ * Feeding it here puts the change in the plate itself, so LTX's job
+ * becomes holding it steady. Additive only — one extra line after the
+ * existing staging line, same "append, never rewrite gold" pattern as
+ * Dazza's `accessoryLockSuffix`. `character.look` is never rewritten,
+ * and with no override every line is byte-identical to before.
  */
 export function buildSunnyBanksCompositePlatePrompt(
   character: SunnyBanksCharacterLock,
-  location: SunnyBanksLocationLock
+  location: SunnyBanksLocationLock,
+  appearanceOverride?: string
 ): string {
+  const override = typeof appearanceOverride === "string" ? appearanceOverride.replace(/\s+/g, " ").trim() : "";
   const heldProp = /\b(cigarette|pie|teacup|cricket bat|thongs|beer|camera|whistle)\b/i.test(
     character.look
   );
-  const propLine = heldProp
-    ? "Only the held object named in the look lock. Do not invent extra objects."
-    : "Keep any held prop already visible in <IMAGE_1>. Do not invent a phone or extra objects.";
+  // With a per-shot override in play, the "do not invent extra objects"
+  // half of this line would flatly contradict the override line below
+  // (that is the whole bug: LTX was left to invent the two bottles over
+  // the clip because the plate never got them). Widen it to allow
+  // exactly what the override names, and nothing else.
+  const propLine = override
+    ? heldProp
+      ? "Only the held object named in the look lock plus exactly what the shot override names. Do not invent any other extra objects."
+      : "Keep any held prop already visible in <IMAGE_1> and add exactly what the shot override names. Do not invent a phone or any other extra objects."
+    : heldProp
+      ? "Only the held object named in the look lock. Do not invent extra objects."
+      : "Keep any held prop already visible in <IMAGE_1>. Do not invent a phone or extra objects.";
 
   return [
     SUNNY_BANKS_STYLE_LOCK,
@@ -253,6 +276,11 @@ export function buildSunnyBanksCompositePlatePrompt(
     "One person only. Only that person in frame, no one else appears. Empty of extra people and animals.",
     "MEDIUM SHOT framing: figure large in frame, dead centre horizontally. Keep the locked place from image 1 behind them. One person only.",
     `Staging / tweak: ${character.name}, ${character.look}, at ${location.label}.`,
+    ...(override
+      ? [
+          `Staging / tweak: ${character.name}, ${character.look}, at ${location.label}. Override for this shot only: ${override}.`,
+        ]
+      : []),
     propLine,
     "No captions, no watermarks, no name tags. Keep any signage that is already part of the locked place in image 1.",
   ].join("\n\n");
@@ -402,6 +430,35 @@ export function buildSunnyBanksSpeakingPrompt(character: SunnyBanksCharacterLock
  * number the silent-MP3 + graph duration both use.
  */
 export const SUNNY_BANKS_HOLD_DURATION_SEC = 5;
+
+/**
+ * Automatic settle lead-in (2026-09-18) — how long a Speak beat holds
+ * the freshly staged pose before the dialogue starts, when that beat
+ * carries a per-shot appearance change (`appearanceModifier`, from a
+ * `[Character Name: description]` script tag).
+ *
+ * Stuart's ask, verbatim: when a beat involves an action or an
+ * appearance change from the character's default plate, give it "a
+ * second or two" to settle into that new state, **built into the same
+ * beat** — "I don't need to see it". So this is not a manual Hold row
+ * and not a new control: the speak-beat route prepends this much
+ * silence to the ElevenLabs MP3 (`prependSilenceToMp3`) and appends
+ * `SUNNY_BANKS_SETTLE_LEAD_IN_LINE` after the gold Speak string.
+ *
+ * Deliberately Speak-only. He described going "from character plate to
+ * action plate", which is the Speak-with-appearance-change case; a Hold
+ * is already a held pose with nothing to settle into mid-clip. Not a
+ * new render and not a new API call — it rides the same one Comfy
+ * render, inside the existing `MAX_LTX_CLIP_DURATION_SEC` (15s) clamp.
+ */
+export const SUNNY_BANKS_SETTLE_LEAD_SEC = 1.5;
+
+/** Appended after the gold Speak string (never inserted into it) on a
+ * beat that got a settle lead-in, so LTX knows the opening silence is
+ * a deliberate held pose rather than a missed cue. */
+export const SUNNY_BANKS_SETTLE_LEAD_IN_LINE =
+  `For the first ~${SUNNY_BANKS_SETTLE_LEAD_SEC} seconds, holds the newly-staged pose without speaking, then ` +
+  "begins speaking naturally in sync with the audio.";
 
 function slugifySunnyBanksCharacterName(characterName: string): string {
   return characterName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "character";

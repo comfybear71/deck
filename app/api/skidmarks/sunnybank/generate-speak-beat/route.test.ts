@@ -6,6 +6,12 @@ vi.mock("@vercel/blob", () => ({
   put: (...args: unknown[]) => putMock(...args),
 }));
 
+import { estimateMp3DurationSec } from "@/lib/mp3Slice";
+import {
+  buildSunnyBanksSpeakingPrompt,
+  SUNNY_BANKS_CAST,
+  SUNNY_BANKS_SETTLE_LEAD_IN_LINE,
+} from "@/lib/sunnyBanks";
 import { POST } from "./route";
 
 /** Same real-encoder fixture helper as `lib/mp3Slice.test.ts` and
@@ -319,6 +325,145 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(prompt).not.toMatch(/shoe|boot|sneaker/i);
     expect(String(prompt).startsWith("Use the provided start image")).toBe(true);
     expect(prompt).toContain("Unit 4S, short purple alien");
+  });
+
+  it("real reported bug (2026-09-18): appearanceModifier reaches the xAI plate prompt, not just the LTX motion prompt", async () => {
+    mockElevenLabs(encodeTestMp3(4));
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/appearance.mp4" });
+
+    const res = await POST(
+      speakBeatRequest({
+        characterName: "Dazza",
+        line: "Grab us a coldie.",
+        locationId: "tin_shed_mower",
+        appearanceModifier: "  holding   two bottles ",
+        action: "steps out of the shed holding two bottles",
+      })
+    );
+    expect(res.status).toBe(200);
+
+    // The starting frame LTX animates already shows the bottles, so it
+    // no longer has to invent them mid-clip.
+    const xaiCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/v1/images/edits"));
+    expect(xaiCall).toBeTruthy();
+    const xaiPrompt = JSON.parse(xaiCall![1].body as string).prompt as string;
+    expect(xaiPrompt).toContain("Override for this shot only: holding two bottles.");
+    expect(xaiPrompt).not.toContain("Do not invent extra objects.");
+    expect(xaiPrompt).toContain("exactly what the shot override names");
+
+    // …and it still rides the LTX motion prompt via `action`, which is
+    // deliberately not removed.
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string).prompt as Record<
+      string,
+      { inputs?: Record<string, unknown> }
+    >;
+    const prompt = String(graph["340:319"]?.inputs?.value);
+    expect(prompt).toContain("steps out of the shed holding two bottles");
+    expect(prompt.startsWith("Use the provided start image")).toBe(true);
+
+    // Never part of the spoken line.
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).text).toBe("Grab us a coldie.");
+  });
+
+  it("settle lead-in: an appearance change buys ~1.5s of silence before the line and says so after gold", async () => {
+    const lineAudio = encodeTestMp3(4);
+    mockElevenLabs(lineAudio);
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/settle.mp4" });
+
+    const res = await POST(
+      speakBeatRequest({
+        characterName: "Dazza",
+        line: "Grab us a coldie.",
+        appearanceModifier: "holding two bottles",
+      })
+    );
+    const body = await res.json();
+    expect(res.status).toBe(200);
+
+    // The clip is the line plus the settle, not a second render.
+    const lineDurationSec = estimateMp3DurationSec(lineAudio);
+    expect(body.durationSec).toBeGreaterThan(lineDurationSec + 1.2);
+    expect(body.durationSec).toBeLessThanOrEqual(15);
+
+    // The MP3 actually uploaded to LoadAudio is the line plus the
+    // silent head — not the raw ElevenLabs bytes.
+    const uploadCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/api/upload/image"));
+    expect(uploadCalls).toHaveLength(2);
+    const uploadedAudio = (uploadCalls[1][1].body as FormData).get("image") as Blob;
+    expect(uploadedAudio.size).toBeGreaterThan(lineAudio.byteLength);
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string).prompt as Record<
+      string,
+      { inputs?: Record<string, unknown> }
+    >;
+    const prompt = String(graph["340:319"]?.inputs?.value);
+    expect(prompt).toContain(SUNNY_BANKS_SETTLE_LEAD_IN_LINE);
+    // Appended after gold, never spliced into it.
+    expect(prompt).toContain(buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST.Dazza, "Grab us a coldie."));
+    expect(prompt.startsWith("Use the provided start image")).toBe(true);
+  });
+
+  it("no appearance change: no settle lead-in, no override line — the existing Speak path is untouched", async () => {
+    const lineAudio = encodeTestMp3(4);
+    mockElevenLabs(lineAudio);
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/plain.mp4" });
+
+    const res = await POST(speakBeatRequest({ characterName: "Dazza", line: "Grab us a coldie." }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.durationSec).toBeCloseTo(estimateMp3DurationSec(lineAudio), 1);
+
+    const xaiPrompt = JSON.parse(
+      fetchMock.mock.calls.find(([url]) => String(url).includes("/v1/images/edits"))![1].body as string
+    ).prompt as string;
+    expect(xaiPrompt).not.toContain("Override for this shot only");
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string).prompt as Record<
+      string,
+      { inputs?: Record<string, unknown> }
+    >;
+    const prompt = String(graph["340:319"]?.inputs?.value);
+    expect(prompt).not.toContain(SUNNY_BANKS_SETTLE_LEAD_IN_LINE);
+    expect(prompt).toBe(buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST.Dazza, "Grab us a coldie."));
+  });
+
+  it("ignores a non-string / whitespace-only appearanceModifier rather than staging a blank override", async () => {
+    const lineAudio = encodeTestMp3(4);
+    mockElevenLabs(lineAudio);
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/blank-modifier.mp4" });
+
+    const res = await POST(speakBeatRequest({ appearanceModifier: { nope: true } }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.durationSec).toBeCloseTo(estimateMp3DurationSec(lineAudio), 1);
+
+    const xaiPrompt = JSON.parse(
+      fetchMock.mock.calls.find(([url]) => String(url).includes("/v1/images/edits"))![1].body as string
+    ).prompt as string;
+    expect(xaiPrompt).not.toContain("Override for this shot only");
   });
 
   it("still returns the render, honestly flagged as unsaved, when the Blob upload fails", async () => {

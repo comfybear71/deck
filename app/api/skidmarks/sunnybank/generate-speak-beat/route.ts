@@ -3,7 +3,7 @@ import { put } from "@vercel/blob";
 import { decodeDataUrl } from "@/lib/dataUrl";
 import { synthesizeSunnyBanksLine } from "@/lib/elevenLabsSpeech";
 import { estimateMp3DurationSec } from "@/lib/mp3Slice";
-import { encodeSilentMp3, padMp3ToMinimumDurationSec } from "@/lib/silentMp3";
+import { encodeSilentMp3, padMp3ToMinimumDurationSec, prependSilenceToMp3 } from "@/lib/silentMp3";
 import {
   buildSunnyBanksHoldBeatPathname,
   buildSunnyBanksHoldPrompt,
@@ -11,6 +11,8 @@ import {
   buildSunnyBanksSpeakingPrompt,
   getSunnyBanksCharacterLock,
   SUNNY_BANKS_HOLD_DURATION_SEC,
+  SUNNY_BANKS_SETTLE_LEAD_IN_LINE,
+  SUNNY_BANKS_SETTLE_LEAD_SEC,
 } from "@/lib/sunnyBanks";
 import { compositeSunnyBanksCharacterOntoLocation } from "@/lib/sunnyBanksComposite";
 import {
@@ -70,6 +72,26 @@ import { muxClipAudio } from "@/lib/muxClipAudio";
  * `audioMuxed: false` is the honest flag, same "never throw away a
  * render Stuart already paid for" rule as a Blob miss.
  *
+ * **Appearance change → the plate, plus an automatic settle (2026-09-18)**
+ * — `appearanceModifier` (a `[Character Name: description]` script tag,
+ * e.g. "Dazza holding two bottles") used to reach the LTX *motion*
+ * prompt only, folded in with `action`. The starting frame was still
+ * built from the character's base `look`, so LTX had to invent the new
+ * object over the clip: reported live as the held object morphing,
+ * duplicating or vanishing. It now also goes to the compositor
+ * (`compositeSunnyBanksCharacterOntoLocation`'s `appearanceOverride`),
+ * so the xAI still already shows it and LTX only has to hold it. It
+ * still rides the motion prompt too — that has not been removed.
+ * A Speak beat carrying one also gets `SUNNY_BANKS_SETTLE_LEAD_SEC`
+ * (1.5s) of silence prepended to the TTS MP3 (`prependSilenceToMp3`)
+ * plus `SUNNY_BANKS_SETTLE_LEAD_IN_LINE` after gold, so the character
+ * settles into the new staging before speaking. Implicit — no new
+ * field to tick, no manual Hold row, no extra render or API call: the
+ * same one xAI composite + one ElevenLabs TTS + one Comfy render, with
+ * the clip's own duration 1.5s longer inside the existing 15s clamp.
+ * Hold is deliberately out of scope for the settle (a Hold is already
+ * a held pose).
+ *
  * **Real per-beat pathname/shelf, resume-on-failure, last-frame
  * chaining between beats — all deliberately out of scope for this
  * route.** Every one of those is real, working infrastructure this app
@@ -119,6 +141,15 @@ interface GenerateSpeakBeatRequestBody {
   /** Extra LTX prompt context from `[Action: text]`. Appended after
    * gold Hold/Speak strings. Never sent to ElevenLabs. */
   action?: unknown;
+  /** Per-shot appearance change from a `[Character Name: description]`
+   * script tag ("holding two bottles", "wrapped in bandages") — the
+   * character's default `look` for this beat only. Deliberately its own
+   * field rather than more `action`: `action` is motion-only context
+   * that goes to the LTX prompt, while this also has to reach the
+   * **compositor** so the starting frame already shows the change.
+   * The panel sends it in both (its own field here, and folded into
+   * `action` for the motion prompt). Never sent to ElevenLabs. */
+  appearanceModifier?: unknown;
 }
 
 function parseBeatKind(value: unknown): BeatKind {
@@ -139,6 +170,8 @@ export async function POST(request: Request) {
   const startImageDataUrl = typeof body.startImageDataUrl === "string" ? body.startImageDataUrl : "";
   const locationId = typeof body.locationId === "string" ? body.locationId.trim() : "";
   const action = typeof body.action === "string" ? body.action.replace(/\s+/g, " ").trim() : "";
+  const appearanceModifier =
+    typeof body.appearanceModifier === "string" ? body.appearanceModifier.replace(/\s+/g, " ").trim() : "";
 
   if (!startImageDataUrl || (kind === "speak" && (!characterName || !line))) {
     return NextResponse.json(
@@ -230,15 +263,25 @@ export async function POST(request: Request) {
         { status: 502 }
       );
     }
+    // Automatic settle lead-in: a beat that restages the character
+    // (`appearanceModifier`) opens on ~1.5s of silence so they land in
+    // the new pose before talking, built into this same clip rather
+    // than a separate Hold row. Prepend first, then the 2s-floor check
+    // below still runs on the combined file (1.5s of lead almost always
+    // clears that floor on its own, but the check stays honest).
+    const settleLeadSec = appearanceModifier ? SUNNY_BANKS_SETTLE_LEAD_SEC : 0;
+    const settledBytes =
+      settleLeadSec > 0 ? prependSilenceToMp3(speechOutcome.bytes, settleLeadSec) : speechOutcome.bytes;
+    const settledDurationSec = estimateMp3DurationSec(settledBytes);
     // Live QA (2026-09-17): "You right?" synthesized to 0.8s and this
     // route 422'd. Pad a silent tail so LTX LoadAudio (276) sees ≥2s.
     // Node 340:331 gets that same padded duration — not a fake duration
     // on short bytes, which would still crash LoadAudio. Gold Speak
     // string unchanged; the extra time is silence after the line.
     audioBytes =
-      rawDurationSec < MIN_LTX_AUDIO_INPUT_SEC
-        ? padMp3ToMinimumDurationSec(speechOutcome.bytes, MIN_LTX_AUDIO_INPUT_SEC)
-        : speechOutcome.bytes;
+      settledDurationSec < MIN_LTX_AUDIO_INPUT_SEC
+        ? padMp3ToMinimumDurationSec(settledBytes, MIN_LTX_AUDIO_INPUT_SEC)
+        : settledBytes;
     const paddedDurationSec = estimateMp3DurationSec(audioBytes);
     if (paddedDurationSec < MIN_LTX_AUDIO_INPUT_SEC) {
       return NextResponse.json(
@@ -252,7 +295,12 @@ export async function POST(request: Request) {
       );
     }
     durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, paddedDurationSec);
-    prompt = buildSunnyBanksSpeakingPrompt(character!, line);
+    // Appended after the gold Speak string, never inserted into it —
+    // same rule as `action` and Dazza's held-object lock.
+    prompt =
+      settleLeadSec > 0
+        ? `${buildSunnyBanksSpeakingPrompt(character!, line)} ${SUNNY_BANKS_SETTLE_LEAD_IN_LINE}`
+        : buildSunnyBanksSpeakingPrompt(character!, line);
   }
 
   // `[Action:]` is extra LTX context after gold, never a rewrite of
@@ -268,6 +316,7 @@ export async function POST(request: Request) {
       locationDataUrl: startImageDataUrl,
       character: character!,
       locationId,
+      appearanceOverride: appearanceModifier,
     });
     if (!plated.ok) {
       return NextResponse.json({ error: plated.error, code: plated.code }, { status: plated.status });

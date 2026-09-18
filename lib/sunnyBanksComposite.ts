@@ -100,11 +100,19 @@ function resolveLocationLock(locationId: string): SunnyBanksLocationLock {
  *
  * A character with no plate (Hans today) is a skip, not a guess —
  * callers keep the location canvas as-is.
+ *
+ * `appearanceOverride` (2026-09-18) is the per-shot appearance text
+ * from a `[Character Name: description]` script tag, threaded straight
+ * into `buildSunnyBanksCompositePlatePrompt` so the starting frame LTX
+ * animates already shows the change ("Dazza holding two bottles")
+ * instead of leaving LTX to invent it mid-clip. Still one xAI edits
+ * call — this changes that call's prompt, it does not add a second one.
  */
 export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   locationDataUrl: string;
   character: SunnyBanksCharacterLock;
   locationId?: string;
+  appearanceOverride?: string;
 }): Promise<SunnyBanksCompositeOutcome | { ok: true; dataUrl: string; skipped: true }> {
   const heroPath = resolveSunnyBanksStartImage(opts.character);
   if (!heroPath) {
@@ -134,7 +142,7 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   }
 
   const location = resolveLocationLock(opts.locationId ?? "");
-  const prompt = buildSunnyBanksCompositePlatePrompt(opts.character, location);
+  const prompt = buildSunnyBanksCompositePlatePrompt(opts.character, location, opts.appearanceOverride);
 
   // Same two-image edits payload Studio's generateFaceImage sends
   // (`images: [{ url, type: "image_url" }, …]` — location then person).
