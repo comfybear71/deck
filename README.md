@@ -2250,7 +2250,16 @@ now (see "Explicitly out of scope" below).
     override names — additive, same "append, never rewrite gold"
     pattern as Dazza's `SUNNY_BANKS_HELD_OBJECT_LOCK`; `character.look`
     is never rewritten and a beat with no override produces a
-    byte-identical plate prompt. It still rides the motion prompt too
+    byte-identical plate prompt. **Script textarea text was invisible
+    (2026-09-18)** — `SunnyBanksScriptHighlightOverlay` is the only
+    thing that draws the God Script textarea at all (the real
+    `<textarea>` is `text-transparent` so the colored tags can show
+    through it), and it shipped with a `text-white/0` base with only tag
+    spans colored. On a real iPhone every ordinary dialogue line
+    rendered black-on-black and only the bracket tags were visible.
+    `SUNNY_BANKS_HIGHLIGHT_CLASSES` now carries a `plain: "text-white"`
+    entry and the overlay colors every segment from that one table; a
+    unit test asserts no entry is transparent. It still rides the motion prompt too
     (the panel sends it in both its own field and folded into
     `action`). **No settle pause — the clip opens already in the new
     state.** A first cut of this shipped ~1.5s of prepended silence so

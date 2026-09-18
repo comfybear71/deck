@@ -30,6 +30,7 @@ import {
   SUNNY_BANKS_ACTS,
   toSunnyBanksActId,
   buildSunnyBanksHighlightSegments,
+  SUNNY_BANKS_HIGHLIGHT_CLASSES,
   formatSunnyBanksGodScript,
 } from "./SkidmarksSunnyBanksPanel";
 import { SUNNY_BANKS_CAST, SUNNY_BANKS_LOCATIONS, buildSunnyBanksSpeakingPrompt } from "@/lib/sunnyBanks";
@@ -859,5 +860,37 @@ describe("formatSunnyBanksGodScript (one-tap spacing/format button)", () => {
     const raw = "[Action: leans in][Location: site_laundry]Shazza says: careful with that";
     const formatted = formatSunnyBanksGodScript(raw);
     expect(formatted).toBe("[Action: leans in]\n[Location: site_laundry]\nShazza says: careful with that");
+  });
+});
+
+describe("SUNNY_BANKS_HIGHLIGHT_CLASSES", () => {
+  it("live QA (2026-09-18): plain script text is opaque, not invisible on the black card", () => {
+    // The real <textarea> is `text-transparent` so the colored tags can
+    // show through it, which makes this overlay the only thing drawing
+    // the script at all. It shipped with a `text-white/0` base and every
+    // non-tag line rendered as black-on-black.
+    expect(SUNNY_BANKS_HIGHLIGHT_CLASSES.plain).toBe("text-white");
+  });
+
+  it("every segment kind — plain and tag alike — has a real, non-transparent color", () => {
+    const kinds = ["plain", "location", "character", "action"] as const;
+    for (const kind of kinds) {
+      const className = SUNNY_BANKS_HIGHLIGHT_CLASSES[kind];
+      expect(className).toMatch(/^text-/);
+      // `text-white/0`, `text-cyan-300/0` etc. are the exact shape of
+      // the bug: a color that renders nothing.
+      expect(className).not.toMatch(/\/0$/);
+    }
+  });
+
+  it("every segment a real God Script produces can be colored — no segment kind falls through uncolored", () => {
+    const segments = buildSunnyBanksHighlightSegments(
+      "[Location: tin_shed_mower]\nDazza: Yeah nah.\n[Character Dazza: holding a rusty tin]\n[Action: steps out]\n"
+    );
+    expect(segments.length).toBeGreaterThan(1);
+    expect(segments.some((segment) => segment.kind === "plain")).toBe(true);
+    for (const segment of segments) {
+      expect(SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]).toBeTruthy();
+    }
   });
 });
