@@ -2303,7 +2303,27 @@ now (see "Explicitly out of scope" below).
     the LoadAudio track. A mux miss still returns the paid picture with
     `audioMuxed: false`. Gold Speak string unchanged; Dazza Speak/Hold
     prompts append `SUNNY_BANKS_HELD_OBJECT_LOCK` after the gold
-    template so beers/coins/hair dryer cannot morph mid-clip. **Silent Hold (2026-09-17)** is a script line
+    template so beers/coins/hair dryer cannot morph mid-clip.
+    **Appearance changes reach the picture, not just the motion prompt
+    (2026-09-18)** — a real reported bug: telling LTX a character is
+    "holding two bottles" via the motion prompt alone morphed/
+    duplicated the bottles mid-clip, because the composed starting
+    frame never showed them — LTX had to invent the prop from nothing.
+    `appearanceModifier` (from `[Character Name: description]`) now
+    also feeds `compositeSunnyBanksCharacterOntoLocation`'s xAI edit
+    prompt (`buildSunnyBanksCompositePlatePrompt`'s new optional
+    override param), so the starting frame already shows it before LTX
+    ever runs; it's still appended to the motion prompt too, for
+    consistency. **Automatic, invisible settle lead-in (2026-09-18,
+    Stuart's explicit "implied... built in... I don't need to see it"
+    ask)** — a Speak beat carrying an `appearanceModifier` gets
+    `SUNNY_BANKS_SETTLE_LEAD_SEC` (1.5s) of silence prepended to its own
+    driving audio (`lib/silentMp3.ts`'s `prependSilenceToMp3`) plus one
+    appended prompt sentence telling the character to hold the
+    newly-staged pose before speaking — folded into the *same* paid
+    render, never a second, separately-billed silent Hold clip, and
+    nothing new in the UI. Speak-only for now — a Hold's gold prompt
+    already covers "settle" for a no-dialogue beat. **Silent Hold (2026-09-17)** is a script line
     with no dialogue after the speaker name: no ElevenLabs call.
     Same route with `kind: "hold"`, a 5s silent MP3
     (`lib/silentMp3.ts`, `SUNNY_BANKS_HOLD_DURATION_SEC` — LTX still

@@ -105,6 +105,15 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   locationDataUrl: string;
   character: SunnyBanksCharacterLock;
   locationId?: string;
+  /** Per-beat prop/outfit text from `[Character Name: description]` —
+   * fed into the xAI compositing prompt itself (not just LTX's later
+   * motion prompt) so the STARTING FRAME already shows it. Fixes the
+   * class of bug where a described prop (e.g. "holding two bottles")
+   * only ever reached the motion prompt: the picture was already fixed
+   * without it, so LTX had to invent the object out of nothing over
+   * the clip, which is what morphed/duplicated. `undefined`/empty
+   * leaves the prompt byte-identical to before this field existed. */
+  appearanceOverride?: string;
 }): Promise<SunnyBanksCompositeOutcome | { ok: true; dataUrl: string; skipped: true }> {
   const heroPath = resolveSunnyBanksStartImage(opts.character);
   if (!heroPath) {
@@ -134,7 +143,7 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   }
 
   const location = resolveLocationLock(opts.locationId ?? "");
-  const prompt = buildSunnyBanksCompositePlatePrompt(opts.character, location);
+  const prompt = buildSunnyBanksCompositePlatePrompt(opts.character, location, opts.appearanceOverride);
 
   // Same two-image edits payload Studio's generateFaceImage sends
   // (`images: [{ url, type: "image_url" }, …]` — location then person).

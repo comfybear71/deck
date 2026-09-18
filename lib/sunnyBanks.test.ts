@@ -186,6 +186,37 @@ describe("buildSunnyBanksCompositePlatePrompt", () => {
     expect(prompt).not.toContain("character plate");
     expect(prompt).not.toContain("turnaround");
   });
+
+  it("with no appearance override, is byte-identical to the pre-2026-09-18 prompt (regression guard)", () => {
+    const withoutParam = buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Dazza, SUNNY_BANKS_LOCATIONS.tin_shed_mower);
+    const withEmptyOverride = buildSunnyBanksCompositePlatePrompt(
+      SUNNY_BANKS_CAST.Dazza,
+      SUNNY_BANKS_LOCATIONS.tin_shed_mower,
+      "   "
+    );
+    expect(withoutParam).toContain("Do not change their clothes.");
+    expect(withoutParam).toBe(withEmptyOverride);
+  });
+
+  it("real reported bug (2026-09-18): an appearance override reaches the picture itself, not just the later motion prompt", () => {
+    const prompt = buildSunnyBanksCompositePlatePrompt(
+      SUNNY_BANKS_CAST.Dazza,
+      SUNNY_BANKS_LOCATIONS.tin_shed_mower,
+      "holding two bottles of amber liquid, one in each hand"
+    );
+    expect(prompt).toContain("Shot-specific override for this render only: holding two bottles of amber liquid, one in each hand.");
+    // The override changes what's held, so the blanket "don't change
+    // their clothes" line (which would contradict it) must not appear —
+    // a narrower, override-aware line takes its place instead.
+    expect(prompt).not.toContain("Do not change their clothes.");
+    expect(prompt).toContain("Change only what the shot-specific override below explicitly names.");
+    expect(prompt).not.toContain("Only the held object named in the look lock.");
+    // Still keeps every other lock: same person, no second person, same place.
+    expect(prompt).toContain("<IMAGE_0> is the LOCKED background");
+    expect(prompt).toContain("do not invent a second person");
+    expect(prompt).toContain(SUNNY_BANKS_STYLE_LOCK);
+    expect(prompt).toContain("Dazza");
+  });
 });
 
 describe("buildSunnyBanksHoldPrompt", () => {

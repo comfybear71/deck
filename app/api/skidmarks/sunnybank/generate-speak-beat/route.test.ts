@@ -321,6 +321,93 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(prompt).toContain("Unit 4S, short purple alien");
   });
 
+  it("real reported bug fix (2026-09-18): appearanceModifier reaches the xAI compositing prompt, not just the motion prompt", async () => {
+    mockElevenLabs(encodeTestMp3(4));
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/dazza-bottles.mp4" });
+
+    await POST(
+      speakBeatRequest({
+        characterName: "Dazza",
+        line: "Righto, two for you and two for me.",
+        appearanceModifier: "holding two bottles of amber liquid, one in each hand",
+      })
+    );
+
+    const xaiCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/v1/images/edits"));
+    expect(xaiCall).toBeTruthy();
+    const xaiBody = JSON.parse(xaiCall![1].body as string) as { prompt: string };
+    expect(xaiBody.prompt).toContain(
+      "Shot-specific override for this render only: holding two bottles of amber liquid, one in each hand."
+    );
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string).prompt as Record<
+      string,
+      { inputs?: Record<string, unknown> }
+    >;
+    expect(graph["340:319"]?.inputs?.value).toContain("holding two bottles of amber liquid");
+  });
+
+  it("real reported ask (2026-09-18): appearanceModifier gives Speak an automatic, invisible settle lead-in — no appearanceModifier means no change", async () => {
+    const lineAudio = encodeTestMp3(4);
+    mockElevenLabs(lineAudio);
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/plain.mp4" });
+
+    await POST(speakBeatRequest());
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string).prompt as Record<
+      string,
+      { inputs?: Record<string, unknown> }
+    >;
+    // No settle sentence, and duration reflects the plain 4s line only.
+    expect(graph["340:319"]?.inputs?.value).not.toContain("holds the newly-staged");
+    expect(graph["340:331"]?.inputs?.value).toBeLessThan(4.6);
+  });
+
+  it("real reported ask (2026-09-18): appearanceModifier present — settle lead-in extends audio/duration and adds the settle sentence", async () => {
+    const lineAudio = encodeTestMp3(4);
+    mockElevenLabs(lineAudio);
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/settle.mp4" });
+
+    const res = await POST(
+      speakBeatRequest({
+        characterName: "Dazza",
+        line: "Righto, two for you and two for me.",
+        appearanceModifier: "holding two bottles of amber liquid",
+      })
+    );
+    const body = await res.json();
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string).prompt as Record<
+      string,
+      { inputs?: Record<string, unknown> }
+    >;
+    expect(graph["340:319"]?.inputs?.value).toContain(
+      "For the first ~1.5s, Dazza holds the newly-staged pose from the start image without speaking"
+    );
+    // Duration reflects the plain 4s line PLUS the ~1.5s settle lead-in.
+    expect(body.durationSec).toBeGreaterThan(5);
+    expect(body.durationSec).toBeLessThanOrEqual(15);
+    expect(graph["340:331"]?.inputs?.value).toBe(body.durationSec);
+  });
+
   it("still returns the render, honestly flagged as unsaved, when the Blob upload fails", async () => {
     mockElevenLabs(encodeTestMp3(4));
     mockXaiComposite();
