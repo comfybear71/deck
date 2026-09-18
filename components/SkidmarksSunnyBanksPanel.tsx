@@ -19,6 +19,13 @@ import {
 } from "@/lib/sunnyBanks";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
 import {
+  buildSunnyBanksGodScriptPrompt,
+  listSunnyBanksLocationIds,
+  listSunnyBanksSpeakingCast,
+  SUNNY_BANKS_GOD_SCRIPT_EXAMPLE,
+  SUNNY_BANKS_GOD_SCRIPT_RULES,
+} from "@/lib/sunnyBanksGodScriptGuide";
+import {
   deleteSunnyBanksWorkspace,
   getSkidmarksSnapshot,
   getSunnyBanksLiveOrDefault,
@@ -1068,6 +1075,257 @@ export function collectRenderedClips(args: {
   return clips;
 }
 
+/**
+ * On-page God Script cheat sheet (2026-09-18, Stuart's ask: "add this as
+ * a cheat sheet somewhere on the page so we can always refer back to it
+ * when we're writing the next lot of scripts").
+ *
+ * Default closed and collapsed behind its own 44px row, same pattern as
+ * "Show Script Text & Queued Lines" — a reference panel that pushed the
+ * Clips shelf off a 390px screen would be worse than no reference at
+ * all. Cast and location lists come from `SUNNY_BANKS_CAST` /
+ * `SUNNY_BANKS_LOCATIONS` via `lib/sunnyBanksGodScriptGuide.ts`, so a
+ * new location can never leave this panel quietly lying.
+ *
+ * The Copy button hands over the same rules as one prompt for whatever
+ * LLM is drafting the scripts — that is where these scripts actually
+ * come from, so the cheat sheet being human-readable only would mean
+ * re-typing the rules into a chat window every session. Clipboard
+ * failure is reported, never swallowed: a silent no-op on a copy button
+ * is indistinguishable from a copy that worked.
+ */
+/**
+ * Full-screen God Script editor (2026-09-18, Stuart's ask: "open the God
+ * Script box to full screen and edit everything in there without it
+ * updating before we update... rather than trying to read it in a tiny
+ * little window").
+ *
+ * The point is the **draft buffer**, not the size. The inline textarea
+ * re-parses the whole script on every keystroke, which re-derives the
+ * queue as you type: a half-finished line stops matching its rendered
+ * clip, so `preserveRenderedRuntimes` can't rebind it and the row
+ * flickers back to Idle mid-edit. Nothing is billed by that — Render is
+ * still a deliberate tap — but it makes a long edit unreadable. Here the
+ * text lives in local React state and touches nothing until **Done**,
+ * which runs the same `onApply` (`handleScriptChange`) one time.
+ *
+ * **Deliberate trade-off, stated in the sheet itself**: while this is
+ * open the draft is NOT saved. The rest of this panel autosaves on every
+ * keystroke (`patchSunnyBanksLive` → `persist`), and this one screen
+ * opts out of that, because not-updating-until-we-update is the whole
+ * request. So the header says so in as many words, and Cancel on a
+ * changed draft asks first. A localStorage draft mirror with a "recover
+ * your draft?" prompt on reopen is the obvious next step if a real
+ * session ever loses work here; not built speculatively.
+ *
+ * Reuses `SunnyBanksScriptHighlightOverlay` so the tag colours (and the
+ * "white text means the parser doesn't know this and will read it out
+ * loud" tell) work at full size too, and carries its own Format button
+ * since reflowing a pasted block is the main reason to be in here.
+ */
+function SunnyBanksFullScreenScriptEditor({
+  initialText,
+  onApply,
+  onClose,
+}: {
+  initialText: string;
+  onApply: (next: string) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(initialText);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const dirty = draft !== initialText;
+
+  const handleCancel = () => {
+    if (dirty && !confirmingDiscard) {
+      setConfirmingDiscard(true);
+      return;
+    }
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950">
+      <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
+        <button
+          type="button"
+          onClick={handleCancel}
+          className="min-h-[44px] shrink-0 px-1 text-[13px] font-medium text-white/60"
+        >
+          {confirmingDiscard ? "Discard?" : "Cancel"}
+        </button>
+        <span className="min-w-0 flex-1 truncate text-center text-[12px] font-semibold text-white/80">
+          {dirty ? "Editing — not saved yet" : "God Script"}
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            onApply(draft);
+            onClose();
+          }}
+          className="min-h-[44px] shrink-0 rounded-full bg-amber-300 px-4 text-[13px] font-semibold text-zinc-950"
+        >
+          Done
+        </button>
+      </div>
+
+      {confirmingDiscard && (
+        <p role="alert" className="border-b border-white/10 px-3 py-2 text-[11px] leading-snug text-rose-300/90">
+          Tap Discard again to throw these edits away, or Done to keep them.
+        </p>
+      )}
+
+      <div className="relative min-h-0 flex-1">
+        <SunnyBanksScriptHighlightOverlay text={draft} overlayRef={overlayRef} />
+        <textarea
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setConfirmingDiscard(false);
+          }}
+          onScroll={(e) => {
+            if (overlayRef.current) {
+              overlayRef.current.scrollTop = e.currentTarget.scrollTop;
+              overlayRef.current.scrollLeft = e.currentTarget.scrollLeft;
+            }
+          }}
+          onPaste={(e) => {
+            const raw = e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
+            const decoded = decodeSunnyBanksPastedScript(raw);
+            if (decoded === raw) return;
+            e.preventDefault();
+            const el = e.currentTarget;
+            const start = el.selectionStart ?? el.value.length;
+            const end = el.selectionEnd ?? el.value.length;
+            setDraft(`${el.value.slice(0, start)}${decoded}${el.value.slice(end)}`);
+          }}
+          autoFocus
+          spellCheck={false}
+          aria-label="God Script full screen editor"
+          className="relative z-10 h-full w-full resize-none bg-transparent px-3 py-2 text-sm leading-relaxed text-transparent caret-amber-300 focus:outline-none"
+        />
+      </div>
+
+      <div className="flex items-center gap-2 border-t border-white/10 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setDraft((prev) => formatSunnyBanksGodScript(prev))}
+          disabled={!draft.trim()}
+          className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+        >
+          {"\u21e5"} Format
+        </button>
+        <p className="min-w-0 flex-1 text-[10px] leading-snug text-white/40">
+          Nothing re-parses until you tap Done. Coloured text is a tag the app understands —
+          white text gets spoken out loud.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function SunnyBanksGodScriptCheatSheet() {
+  const [open, setOpen] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
+  const handleCopyPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(buildSunnyBanksGodScriptPrompt());
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02]">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        className="flex min-h-[44px] w-full items-center justify-between gap-2 px-3 text-left"
+      >
+        <span className="text-[12px] font-semibold text-white/80">God Script Cheat Sheet</span>
+        <ChevronIcon open={open} />
+      </button>
+      {open && (
+        <div className="flex touch-pan-y flex-col gap-3 overscroll-y-contain px-3 pb-3">
+          <p className="text-[11px] leading-snug text-amber-200/80">
+            Every queue row is a paid render. A line the parser doesn&apos;t recognise isn&apos;t
+            skipped — it gets spoken out loud in a real clip.
+          </p>
+
+          <div className="flex flex-col gap-2.5">
+            {SUNNY_BANKS_GOD_SCRIPT_RULES.map((rule) => (
+              <div key={rule.title} className="flex flex-col gap-1">
+                <p className="text-[11px] font-semibold text-white/75">{rule.title}</p>
+                {rule.body.map((paragraph) => (
+                  <p key={paragraph} className="text-[11px] leading-snug text-white/50">
+                    {paragraph}
+                  </p>
+                ))}
+                {rule.example && (
+                  <pre className="overflow-x-auto whitespace-pre rounded-lg bg-black/40 px-2 py-1.5 text-[10px] leading-relaxed text-white/60">
+                    {rule.example}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <p className="text-[11px] font-semibold text-white/75">Who can speak</p>
+            <p className="text-[11px] leading-snug text-white/50">
+              {listSunnyBanksSpeakingCast().join(", ")} — exact spelling and capitals. Any other
+              name with an empty line is a location shot with nobody in it.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <p className="text-[11px] font-semibold text-white/75">Location ids</p>
+            <div className="flex flex-col gap-0.5">
+              {listSunnyBanksLocationIds().map(({ id, label }) => (
+                <p key={id} className="text-[11px] leading-snug text-white/50">
+                  <span className="text-yellow-300/90">{id}</span> — {label}
+                </p>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <p className="text-[11px] font-semibold text-white/75">A correct script</p>
+            <pre className="overflow-x-auto whitespace-pre rounded-lg bg-black/40 px-2 py-1.5 text-[10px] leading-relaxed text-white/60">
+              {SUNNY_BANKS_GOD_SCRIPT_EXAMPLE}
+            </pre>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <button
+              type="button"
+              onClick={handleCopyPrompt}
+              className="min-h-[40px] rounded-full border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80"
+            >
+              Copy these rules as an AI prompt
+            </button>
+            {copyState === "copied" && (
+              <p role="status" className="text-[10px] leading-snug text-emerald-300/90">
+                Copied — paste it into your script-writing chat.
+              </p>
+            )}
+            {copyState === "failed" && (
+              <p role="alert" className="text-[10px] leading-snug text-rose-300/90">
+                This browser blocked the clipboard. Long-press the example above to select
+                instead.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChevronIcon({ open }: { open: boolean }) {
   return (
     <svg
@@ -1139,7 +1397,24 @@ export function SkidmarksSunnyBanksPanel() {
     }))
     .filter((group) => group.clips.length > 0);
 
+  /** Finished shots collapse out of the way (2026-09-18, Stuart's ask).
+   * Default closed: a real act is mostly Done rows once it has been
+   * rendered once, and on a 390px phone six of them fill the screen
+   * before the row you actually want to work on. Closed hides only
+   * `status === "done"` rows — a failed row stays visible, because that
+   * is unfinished work, not history. */
+  const [doneRowsOpen, setDoneRowsOpen] = useState(false);
+
   const pendingRows = queue.filter((row) => runtimeFor(row.index, row.chunk.raw).status !== "done");
+  /** Finished history vs. rows still worth looking at. A row that is
+   * currently rendering is never hidden, even though it is about to
+   * become Done — watching it is the whole point. */
+  const doneRowCount = queue.length - pendingRows.length;
+  const visibleQueue = doneRowsOpen
+    ? queue
+    : queue.filter(
+        (row) => row.index === runningIndex || runtimeFor(row.index, row.chunk.raw).status !== "done"
+      );
 
   const overlayCostUsd = pendingRows.length * ESTIMATED_STILL_COST_USD;
   const holdVideoCostUsd = pendingRows.filter((row) => row.kind === "hold").length * HOLD_COST_USD;
@@ -1393,6 +1668,11 @@ export function SkidmarksSunnyBanksPanel() {
    * `handleScriptChange` every other script edit uses, so this gets the
    * same undo-capture, act-header re-split, and Neon persistence for
    * free rather than needing its own copy of that logic. */
+  /** Open state for the full-screen God Script editor. Its draft lives
+   * inside that component, not here — this panel deliberately learns
+   * nothing about the edit until Done applies it in one go. */
+  const [fullScreenScriptOpen, setFullScreenScriptOpen] = useState(false);
+
   const handleFormatScript = () => {
     if (running) return;
     const formatted = formatSunnyBanksGodScript(scriptText);
@@ -1701,6 +1981,15 @@ export function SkidmarksSunnyBanksPanel() {
               </button>
               <button
                 type="button"
+                onClick={() => setFullScreenScriptOpen(true)}
+                disabled={running}
+                aria-label="Edit script full screen"
+                className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+              >
+                ⤢ Full screen
+              </button>
+              <button
+                type="button"
                 onClick={handleUndoScript}
                 disabled={!scriptUndo || running}
                 aria-label="Undo script"
@@ -1753,14 +2042,14 @@ export function SkidmarksSunnyBanksPanel() {
                     className="relative z-10 min-h-[7.5rem] w-full resize-y bg-transparent px-3 py-2 text-sm leading-relaxed text-transparent caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60"
                   />
                 </div>
+                {/* The prose hint that used to sit here (one-speaker-per-line,
+                  * + / − rows, Unit 4S stays barefoot) is gone as of 2026-09-18 —
+                  * every line of it is now in the God Script Cheat Sheet below,
+                  * properly laid out, and two copies of the same rules is how
+                  * they drift apart. The colour key stays: it is a legend for
+                  * what the textarea is doing right now, not documentation. */}
                 <p className="text-[10px] leading-snug text-white/40">
-                  One speaker per line — `Name:` or `Name says:`. Empty after the name is a
-                  silent hold. Tap + on a row to insert a shot under it. Tap − on an Idle
-                  row to drop an accidental one. Done clips stay. Continuation lines keep
-                  the last speaker. Unit 4S stays barefoot; gold look/voice strings are not
-                  edited here.
-                  <br />
-                  <span aria-hidden="true" className="mt-1 inline-flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                  <span aria-hidden="true" className="inline-flex flex-wrap items-center gap-x-2.5 gap-y-1">
                     <span className="inline-flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-yellow-300" />
                       <span className="text-yellow-300/90">[Location: ]</span>
@@ -1788,9 +2077,26 @@ export function SkidmarksSunnyBanksPanel() {
                   </button>
                 </div>
 
-                {queue.length > 0 && (
+                {doneRowCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setDoneRowsOpen((open) => !open)}
+                    aria-expanded={doneRowsOpen}
+                    className="flex min-h-[44px] w-full items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 text-left"
+                  >
+                    <span className="text-[12px] font-semibold text-white/60">
+                      {doneRowCount} finished shot{doneRowCount === 1 ? "" : "s"}
+                      <span aria-hidden className="ml-1.5 font-medium text-white/35">
+                        {doneRowsOpen ? "hide" : "show"}
+                      </span>
+                    </span>
+                    <ChevronIcon open={doneRowsOpen} />
+                  </button>
+                )}
+
+                {visibleQueue.length > 0 && (
                   <ol className="flex min-w-0 flex-col border-y border-white/10">
-                    {queue.map((row) => {
+                    {visibleQueue.map((row) => {
                       const runtime = runtimeFor(row.index, row.chunk.raw);
                       const status = row.index === runningIndex ? "rendering" : runtime?.status ?? "idle";
                       const isStatic = status === "done";
@@ -1948,6 +2254,16 @@ export function SkidmarksSunnyBanksPanel() {
                   </ol>
                 )}
               </div>
+            )}
+
+            <SunnyBanksGodScriptCheatSheet />
+
+            {fullScreenScriptOpen && (
+              <SunnyBanksFullScreenScriptEditor
+                initialText={scriptText}
+                onApply={handleScriptChange}
+                onClose={() => setFullScreenScriptOpen(false)}
+              />
             )}
 
             {pendingRows.length > 0 && !canRenderAll && !running && (
