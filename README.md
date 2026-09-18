@@ -2336,7 +2336,36 @@ now (see "Explicitly out of scope" below).
     rendered black-on-black and only the bracket tags were visible.
     `SUNNY_BANKS_HIGHLIGHT_CLASSES` now carries a `plain: "text-white"`
     entry and the overlay colors every segment from that one table; a
-    unit test asserts no entry is transparent. **God Script Cheat Sheet
+    unit test asserts no entry is transparent. **Full-screen God Script
+    editor (2026-09-18, Stuart's ask: "open the God Script box to full
+    screen and edit everything in there without it updating before we
+    update")** — `⤢ Full screen` beside `⇥ Format` opens
+    `SunnyBanksFullScreenScriptEditor`, a fixed-inset sheet whose text is
+    a **local draft**: nothing re-parses, re-derives the queue or
+    autosaves until **Done** applies it through the same
+    `handleScriptChange`, once. The draft buffer is the point, not the
+    size — the inline textarea re-parses on every keystroke, so a
+    half-typed line stops matching its rendered clip,
+    `preserveRenderedRuntimes` can't rebind it, and the row flickers back
+    to Idle mid-edit (nothing is billed by that: Render is still a
+    deliberate tap). It carries the same tag-highlight overlay and its
+    own Format button. Deliberate trade-off, stated in the sheet's own
+    header: while it is open the draft is **not saved** — the one screen
+    in this panel that opts out of keystroke autosave — and Cancel on a
+    changed draft asks before discarding. A localStorage draft mirror
+    with a "recover your draft?" prompt is the obvious next step if a
+    real session ever loses work there; not built speculatively.
+    **Finished shots collapse (2026-09-18, Stuart's ask)** — a
+    default-closed `N finished shots` row above the queue hides every
+    `status === "done"` row, so a re-rendered act doesn't bury the one
+    line still being worked on. A failed row and the row currently
+    rendering are never hidden: unfinished work and the thing being
+    watched, not history. The **prose hint that used to sit under the
+    textarea is gone** (one-speaker-per-line, + / −, Unit 4S stays
+    barefoot) — every line of it is in the cheat sheet below, and two
+    copies of the same rules is how they drift apart. The colour key
+    stays: it is a legend for what the textarea is doing right now, not
+    documentation. **God Script Cheat Sheet
     (2026-09-18, Stuart's ask: "so we can always refer back to it when
     we're writing the next lot of scripts")** — a default-closed 44px
     row under the script section (`SunnyBanksGodScriptCheatSheet`,
