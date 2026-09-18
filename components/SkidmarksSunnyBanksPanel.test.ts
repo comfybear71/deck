@@ -29,6 +29,7 @@ import {
   sunnyBanksQueueChunks,
   SUNNY_BANKS_ACTS,
   toSunnyBanksActId,
+  buildSunnyBanksHighlightSegments,
 } from "./SkidmarksSunnyBanksPanel";
 import { SUNNY_BANKS_CAST, SUNNY_BANKS_LOCATIONS, buildSunnyBanksSpeakingPrompt } from "@/lib/sunnyBanks";
 
@@ -773,5 +774,41 @@ describe("insert and rewrite script lines", () => {
 
   it("pulls later overrides down when an Idle row is removed", () => {
     expect(unshiftKeyedIndexRecord({ 0: "a", 1: "b", 2: "c" }, 1)).toEqual({ 0: "a", 1: "c" });
+  });
+});
+
+describe("buildSunnyBanksHighlightSegments (script editor tag coloring)", () => {
+  it("reconstructs the exact original text by concatenating every segment", () => {
+    const raw =
+      "[Location: office_storefront]\nDazza: [Action: holds a spray can] hey Shaz, where do you want me to setup the scam repellent?\n[Character Shazza: cigarette behind ear]\nShazza: not so loud.";
+    const segments = buildSunnyBanksHighlightSegments(raw);
+    expect(segments.map((s) => s.text).join("")).toBe(raw);
+  });
+
+  it("colors [Location: ...] as location, [Character ...] as character, [Action: ...] as action", () => {
+    const raw = "[Location: office_storefront] [Character Dazza: holding a can] [Action: sprays it around]";
+    const segments = buildSunnyBanksHighlightSegments(raw).filter((s) => s.kind !== "plain");
+    expect(segments).toEqual([
+      { kind: "location", text: "[Location: office_storefront]" },
+      { kind: "character", text: "[Character Dazza: holding a can]" },
+      { kind: "action", text: "[Action: sprays it around]" },
+    ]);
+  });
+
+  it("colors a literal [silence] the same as an action tag (display-only — not a parsed tag)", () => {
+    const segments = buildSunnyBanksHighlightSegments("Dazza: [silence]").filter((s) => s.kind !== "plain");
+    expect(segments).toEqual([{ kind: "action", text: "[silence]" }]);
+  });
+
+  it("leaves an unrecognized bracket (e.g. a bare parenthetical or [silent], no trailing e) uncolored", () => {
+    const segments = buildSunnyBanksHighlightSegments("Dazza: [silent] holds two bottles");
+    expect(segments.every((s) => s.kind === "plain")).toBe(true);
+  });
+
+  it("matches [Character Name look] without a colon, same as the parser's own tag shape", () => {
+    const segments = buildSunnyBanksHighlightSegments("[Character Dazza wrapped in bandages]").filter(
+      (s) => s.kind !== "plain"
+    );
+    expect(segments).toEqual([{ kind: "character", text: "[Character Dazza wrapped in bandages]" }]);
   });
 });

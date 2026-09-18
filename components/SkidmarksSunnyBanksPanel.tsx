@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { triggerBlobDownload } from "@/lib/clipRenders";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
@@ -440,6 +440,104 @@ function extractGodScriptTags(raw: string): {
     .replace(/\s+/g, " ")
     .trim();
   return { rest, locationId, actions, appearanceModifiers };
+}
+
+/** Highlight category for one bracket tag in the raw God Script text —
+ * display-only. This never changes parsing: `extractGodScriptTags`
+ * above is still the only thing that decides what a tag *does*. A
+ * bracket that isn't one of these three literal shapes (e.g. a plain
+ * parenthetical, or `[silent]`/`[silence]` used as if it silenced a
+ * line) is intentionally left uncolored ("plain") — coloring it here
+ * would visually imply the parser treats it specially, which it
+ * currently does not; see this module's own doc comment above
+ * `extractGodScriptTags` for the real silent-beat mechanism (empty
+ * dialogue after the speaker's name). */
+export type SunnyBanksHighlightTagKind = "location" | "character" | "action";
+export type SunnyBanksHighlightSegment =
+  | { kind: "plain"; text: string }
+  | { kind: SunnyBanksHighlightTagKind; text: string };
+
+/** Same three literal shapes `extractGodScriptTags` recognizes, plus a
+ * literal `[silence]` grouped into the same "action" color per Stuart's
+ * explicit ask — `[silence]` is not a real parsed tag (see doc comment
+ * above), only a display-only alias colored the same as `[Action: ]`. */
+const GOD_SCRIPT_HIGHLIGHT_TAG_RE = /\[Location:[^\]]*\]|\[Character\b[^\]]*\]|\[Action:[^\]]*\]|\[silence\]/gi;
+
+function classifySunnyBanksHighlightTag(matchedText: string): SunnyBanksHighlightTagKind {
+  const lower = matchedText.toLowerCase();
+  if (lower.startsWith("[location:")) return "location";
+  if (lower.startsWith("[character")) return "character";
+  return "action";
+}
+
+/** Splits raw God Script text into plain/tag segments for the textarea
+ * highlight overlay below. Concatenating every segment's `text` in
+ * order always reconstructs `raw` exactly — the overlay depends on
+ * that to stay pixel-aligned with the real (invisible) textarea text
+ * it sits behind. */
+export function buildSunnyBanksHighlightSegments(raw: string): SunnyBanksHighlightSegment[] {
+  const segments: SunnyBanksHighlightSegment[] = [];
+  const re = new RegExp(GOD_SCRIPT_HIGHLIGHT_TAG_RE);
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(raw)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ kind: "plain", text: raw.slice(lastIndex, match.index) });
+    }
+    segments.push({ kind: classifySunnyBanksHighlightTag(match[0]), text: match[0] });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < raw.length) {
+    segments.push({ kind: "plain", text: raw.slice(lastIndex) });
+  }
+  return segments;
+}
+
+const SUNNY_BANKS_HIGHLIGHT_CLASSES: Record<SunnyBanksHighlightTagKind, string> = {
+  location: "text-yellow-300",
+  character: "text-cyan-300",
+  action: "text-green-300",
+};
+
+/** Positioned behind the real `<textarea>` (which has its own text made
+ * transparent so this shows through) — never in front, and never
+ * `pointer-events`-capturing, so typing/selection/scrolling all still
+ * hit the real textarea untouched. Must mirror the textarea's font
+ * size, line height, padding, and white-space wrapping exactly, or the
+ * colored text drifts out from under the real caret/characters. Scroll
+ * position is synced imperatively (`onScroll` on the textarea sets this
+ * element's `scrollTop`) rather than through React state, so it can't
+ * lag a frame behind a fast scroll/paste. */
+function SunnyBanksScriptHighlightOverlay({
+  text,
+  overlayRef,
+}: {
+  text: string;
+  overlayRef: RefObject<HTMLDivElement | null>;
+}) {
+  const segments = buildSunnyBanksHighlightSegments(text);
+  return (
+    <div
+      ref={overlayRef}
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-sm leading-relaxed text-white/0"
+    >
+      {segments.map((segment, index) =>
+        segment.kind === "plain" ? (
+          <span key={index}>{segment.text}</span>
+        ) : (
+          <span key={index} className={SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]}>
+            {segment.text}
+          </span>
+        )
+      )}
+      {/* Trailing newline: a native textarea always reserves room for one more
+       * line after a final "\n" (where the caret sits); without this, the
+       * overlay's own wrapped-line count falls one short and drifts up
+       * relative to the real textarea once the script ends in a blank line. */}
+      {text.endsWith("\n") ? <span>{"\u200b"}</span> : null}
+    </div>
+  );
 }
 
 /** iPhone paste of a URL-encoded script lands as literal `%20` / `%0A`
@@ -914,6 +1012,7 @@ export function SkidmarksSunnyBanksPanel() {
   const [scriptUndo, setScriptUndo] = useState<ScriptUndoSnapshot | null>(null);
   const [bundleError, setBundleError] = useState<string | null>(null);
   const actStripRef = useRef<HTMLDivElement>(null);
+  const scriptHighlightRef = useRef<HTMLDivElement>(null);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
 
@@ -1514,31 +1613,55 @@ export function SkidmarksSunnyBanksPanel() {
             </button>
             {scriptOpen && (
               <div className="flex touch-pan-y flex-col gap-2.5 overscroll-y-contain">
-                <textarea
-                  value={scriptText}
-                  onChange={(e) => handleScriptChange(e.target.value)}
-                  onPaste={(e) => {
-                    const raw =
-                      e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
-                    const decoded = decodeSunnyBanksPastedScript(raw);
-                    if (decoded === raw) return;
-                    e.preventDefault();
-                    const el = e.currentTarget;
-                    const start = el.selectionStart ?? el.value.length;
-                    const end = el.selectionEnd ?? el.value.length;
-                    handleScriptChange(`${el.value.slice(0, start)}${decoded}${el.value.slice(end)}`);
-                  }}
-                  disabled={running}
-                  placeholder={"Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"}
-                  rows={5}
-                  className="min-h-[7.5rem] w-full resize-y rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm leading-relaxed text-white placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
-                />
+                <div className="relative rounded-xl border border-white/10 bg-white/[0.03] focus-within:border-amber-300/40">
+                  <SunnyBanksScriptHighlightOverlay text={scriptText} overlayRef={scriptHighlightRef} />
+                  <textarea
+                    value={scriptText}
+                    onChange={(e) => handleScriptChange(e.target.value)}
+                    onScroll={(e) => {
+                      if (scriptHighlightRef.current) {
+                        scriptHighlightRef.current.scrollTop = e.currentTarget.scrollTop;
+                        scriptHighlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
+                      }
+                    }}
+                    onPaste={(e) => {
+                      const raw =
+                        e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
+                      const decoded = decodeSunnyBanksPastedScript(raw);
+                      if (decoded === raw) return;
+                      e.preventDefault();
+                      const el = e.currentTarget;
+                      const start = el.selectionStart ?? el.value.length;
+                      const end = el.selectionEnd ?? el.value.length;
+                      handleScriptChange(`${el.value.slice(0, start)}${decoded}${el.value.slice(end)}`);
+                    }}
+                    disabled={running}
+                    placeholder={"Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"}
+                    rows={5}
+                    className="relative z-10 min-h-[7.5rem] w-full resize-y bg-transparent px-3 py-2 text-sm leading-relaxed text-transparent caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60"
+                  />
+                </div>
                 <p className="text-[10px] leading-snug text-white/40">
                   One speaker per line — `Name:` or `Name says:`. Empty after the name is a
                   silent hold. Tap + on a row to insert a shot under it. Tap − on an Idle
                   row to drop an accidental one. Done clips stay. Continuation lines keep
                   the last speaker. Unit 4S stays barefoot; gold look/voice strings are not
                   edited here.
+                  <br />
+                  <span aria-hidden="true" className="mt-1 inline-flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                    <span className="inline-flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-yellow-300" />
+                      <span className="text-yellow-300/90">[Location: ]</span>
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-cyan-300" />
+                      <span className="text-cyan-300/90">[Character ]</span>
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-green-300" />
+                      <span className="text-green-300/90">[Action: ] / [silence]</span>
+                    </span>
+                  </span>
                 </p>
 
                 <div className="flex justify-start">
