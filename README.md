@@ -2236,42 +2236,6 @@ now (see "Explicitly out of scope" below).
     speaker. Render POST
     sends `line` / `action` / `appearanceModifier` / `locationId`
     (`action` after gold, never into TTS; gold look strings untouched).
-    **`appearanceModifier` reaches the compositor, not just the motion
-    prompt (2026-09-18)** — it used to ride the LTX motion prompt only
-    (folded into `action`), so the starting frame was still built from
-    the character's base `look` and LTX had to invent the change over
-    the clip: live report, "Dazza holding two bottles" morphed,
-    duplicated and vanished mid-clip. The speak-beat route now also
-    hands it to `compositeSunnyBanksCharacterOntoLocation` as
-    `appearanceOverride`, which appends one extra staging line
-    (`Override for this shot only: …`) to
-    `buildSunnyBanksCompositePlatePrompt` and widens that prompt's
-    "do not invent extra objects" prop line to allow exactly what the
-    override names — additive, same "append, never rewrite gold"
-    pattern as Dazza's `SUNNY_BANKS_HELD_OBJECT_LOCK`; `character.look`
-    is never rewritten and a beat with no override produces a
-    byte-identical plate prompt. **Script textarea text was invisible
-    (2026-09-18)** — `SunnyBanksScriptHighlightOverlay` is the only
-    thing that draws the God Script textarea at all (the real
-    `<textarea>` is `text-transparent` so the colored tags can show
-    through it), and it shipped with a `text-white/0` base with only tag
-    spans colored. On a real iPhone every ordinary dialogue line
-    rendered black-on-black and only the bracket tags were visible.
-    `SUNNY_BANKS_HIGHLIGHT_CLASSES` now carries a `plain: "text-white"`
-    entry and the overlay colors every segment from that one table; a
-    unit test asserts no entry is transparent. It still rides the motion prompt too
-    (the panel sends it in both its own field and folded into
-    `action`). **No settle pause — the clip opens already in the new
-    state.** A first cut of this shipped ~1.5s of prepended silence so
-    the character could settle into the restaging before speaking;
-    Stuart dropped it on sight (2026-09-18): with the plate already
-    correct on frame 0 there is nothing to settle into, so the beat
-    goes straight to the new action place and starts talking. Speak
-    duration and driving audio stay exactly what ElevenLabs returned.
-    No new UI, no new tag, no new env var and no new paid call — the
-    same one xAI composite + one ElevenLabs TTS + one Comfy render,
-    with only the composite's prompt changed. Not live-verified in
-    this sandbox — same caveat as the rest of this backend.
     Queue rows do not scroll horizontally on a 390px phone. A **Done**
     row is static: character name (not a `<select>`), spoken line in a
     `<details>` disclosure under the name, status pill `flex-shrink-0`
@@ -2339,7 +2303,27 @@ now (see "Explicitly out of scope" below).
     the LoadAudio track. A mux miss still returns the paid picture with
     `audioMuxed: false`. Gold Speak string unchanged; Dazza Speak/Hold
     prompts append `SUNNY_BANKS_HELD_OBJECT_LOCK` after the gold
-    template so beers/coins/hair dryer cannot morph mid-clip. **Silent Hold (2026-09-17)** is a script line
+    template so beers/coins/hair dryer cannot morph mid-clip.
+    **Appearance changes reach the picture, not just the motion prompt
+    (2026-09-18)** — a real reported bug: telling LTX a character is
+    "holding two bottles" via the motion prompt alone morphed/
+    duplicated the bottles mid-clip, because the composed starting
+    frame never showed them — LTX had to invent the prop from nothing.
+    `appearanceModifier` (from `[Character Name: description]`) now
+    also feeds `compositeSunnyBanksCharacterOntoLocation`'s xAI edit
+    prompt (`buildSunnyBanksCompositePlatePrompt`'s new optional
+    override param), so the starting frame already shows it before LTX
+    ever runs; it's still appended to the motion prompt too, for
+    consistency. **Automatic, invisible settle lead-in (2026-09-18,
+    Stuart's explicit "implied... built in... I don't need to see it"
+    ask)** — a Speak beat carrying an `appearanceModifier` gets
+    `SUNNY_BANKS_SETTLE_LEAD_SEC` (1.5s) of silence prepended to its own
+    driving audio (`lib/silentMp3.ts`'s `prependSilenceToMp3`) plus one
+    appended prompt sentence telling the character to hold the
+    newly-staged pose before speaking — folded into the *same* paid
+    render, never a second, separately-billed silent Hold clip, and
+    nothing new in the UI. Speak-only for now — a Hold's gold prompt
+    already covers "settle" for a no-dialogue beat. **Silent Hold (2026-09-17)** is a script line
     with no dialogue after the speaker name: no ElevenLabs call.
     Same route with `kind: "hold"`, a 5s silent MP3
     (`lib/silentMp3.ts`, `SUNNY_BANKS_HOLD_DURATION_SEC` — LTX still

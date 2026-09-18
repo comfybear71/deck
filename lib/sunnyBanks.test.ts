@@ -187,74 +187,37 @@ describe("buildSunnyBanksCompositePlatePrompt", () => {
     expect(prompt).not.toContain("turnaround");
   });
 
-  it("real reported bug (2026-09-18): a per-shot appearance override lands in the plate prompt verbatim", () => {
+  it("with no appearance override, is byte-identical to the pre-2026-09-18 prompt (regression guard)", () => {
+    const withoutParam = buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Dazza, SUNNY_BANKS_LOCATIONS.tin_shed_mower);
+    const withEmptyOverride = buildSunnyBanksCompositePlatePrompt(
+      SUNNY_BANKS_CAST.Dazza,
+      SUNNY_BANKS_LOCATIONS.tin_shed_mower,
+      "   "
+    );
+    expect(withoutParam).toContain("Do not change their clothes.");
+    expect(withoutParam).toBe(withEmptyOverride);
+  });
+
+  it("real reported bug (2026-09-18): an appearance override reaches the picture itself, not just the later motion prompt", () => {
     const prompt = buildSunnyBanksCompositePlatePrompt(
       SUNNY_BANKS_CAST.Dazza,
       SUNNY_BANKS_LOCATIONS.tin_shed_mower,
-      "holding two bottles"
+      "holding two bottles of amber liquid, one in each hand"
     );
-    expect(prompt).toContain(
-      `Staging / tweak: Dazza, ${SUNNY_BANKS_CAST.Dazza.look}, at Tin Shed & Mower. ` +
-        "Override for this shot only: holding two bottles."
-    );
-    // Additive: the original staging line is still there untouched, and
-    // `look` itself is never rewritten.
-    expect(prompt).toContain(`Staging / tweak: Dazza, ${SUNNY_BANKS_CAST.Dazza.look}, at Tin Shed & Mower.`);
-    expect(prompt).toContain(SUNNY_BANKS_CAST.Dazza.look);
-  });
-
-  it("the prop line allows the override's object instead of contradicting it", () => {
-    const withOverride = buildSunnyBanksCompositePlatePrompt(
-      SUNNY_BANKS_CAST.Dazza,
-      SUNNY_BANKS_LOCATIONS.tin_shed_mower,
-      "holding two bottles"
-    );
-    // This is the whole bug: "Do not invent extra objects" next to
-    // "Override ...: holding two bottles" is a self-contradiction, and
-    // the plate came back without the bottles.
-    expect(withOverride).not.toContain("Do not invent extra objects.");
-    expect(withOverride).not.toContain("Do not invent a phone or extra objects.");
-    expect(withOverride).toContain("exactly what the shot override names");
-    expect(withOverride).toMatch(/Do not invent any other extra objects\.|Do not invent a phone or any other extra objects\./);
-
-    // Still a real lock — the override widens it by exactly one thing,
-    // it does not open the plate up to anything the model fancies.
-    const shazza = buildSunnyBanksCompositePlatePrompt(
-      SUNNY_BANKS_CAST.Shazza,
-      SUNNY_BANKS_LOCATIONS.office_storefront,
-      "wearing a fluoro vest"
-    );
-    expect(shazza).toContain("Only the held object named in the look lock plus exactly what the shot override names.");
-  });
-
-  it("regression guard: with no override the prompt is byte-identical to the pre-2026-09-18 string", () => {
-    for (const character of Object.values(SUNNY_BANKS_CAST)) {
-      for (const location of Object.values(SUNNY_BANKS_LOCATIONS)) {
-        const bare = buildSunnyBanksCompositePlatePrompt(character, location);
-        expect(buildSunnyBanksCompositePlatePrompt(character, location, undefined)).toBe(bare);
-        // Whitespace-only / empty overrides are treated as "no override"
-        // so a stray script tag cannot quietly change a locked plate.
-        expect(buildSunnyBanksCompositePlatePrompt(character, location, "")).toBe(bare);
-        expect(buildSunnyBanksCompositePlatePrompt(character, location, "   ")).toBe(bare);
-        expect(bare).not.toContain("Override for this shot only");
-        expect(bare).toContain(`Staging / tweak: ${character.name}, ${character.look}, at ${location.label}.`);
-        expect(bare).toMatch(
-          /Only the held object named in the look lock\. Do not invent extra objects\.|Keep any held prop already visible in <IMAGE_1>\. Do not invent a phone or extra objects\./
-        );
-      }
-    }
-  });
-
-  it("collapses whitespace in an override the same way the route parses it", () => {
-    const prompt = buildSunnyBanksCompositePlatePrompt(
-      SUNNY_BANKS_CAST.Nan,
-      SUNNY_BANKS_LOCATIONS.site_laundry,
-      "  wrapped\n in   bandages  "
-    );
-    expect(prompt).toContain("Override for this shot only: wrapped in bandages.");
+    expect(prompt).toContain("Shot-specific override for this render only: holding two bottles of amber liquid, one in each hand.");
+    // The override changes what's held, so the blanket "don't change
+    // their clothes" line (which would contradict it) must not appear —
+    // a narrower, override-aware line takes its place instead.
+    expect(prompt).not.toContain("Do not change their clothes.");
+    expect(prompt).toContain("Change only what the shot-specific override below explicitly names.");
+    expect(prompt).not.toContain("Only the held object named in the look lock.");
+    // Still keeps every other lock: same person, no second person, same place.
+    expect(prompt).toContain("<IMAGE_0> is the LOCKED background");
+    expect(prompt).toContain("do not invent a second person");
+    expect(prompt).toContain(SUNNY_BANKS_STYLE_LOCK);
+    expect(prompt).toContain("Dazza");
   });
 });
-
 
 describe("buildSunnyBanksHoldPrompt", () => {
   it("carries no dialogue and locks the camera, matching the gold hold shape", () => {

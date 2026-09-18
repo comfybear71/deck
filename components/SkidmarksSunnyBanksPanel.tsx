@@ -1179,11 +1179,12 @@ export function SkidmarksSunnyBanksPanel() {
   > => {
     const action = args.action?.trim() ?? "";
     const appearanceModifier = args.appearanceModifier?.trim() ?? "";
-    // Route already appends `action` after gold — do not rewrite it.
-    // Fold appearance into that same suffix so LTX sees the look note
-    // without editing gold in lib/sunnyBanks.ts, and still send
-    // `appearanceModifier` next to `characterName` as its own field.
-    const actionPayload = [action, appearanceModifier].filter(Boolean).join(" ");
+    // `action` and `appearanceModifier` travel as two separate fields —
+    // the route itself merges them into the motion prompt (2026-09-18).
+    // Previously this client pre-merged them into one `action` string,
+    // which left the route with no way to also route the appearance
+    // text into the xAI compositing prompt (the actual picture) without
+    // sending it to LTX's motion prompt twice.
     const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1196,7 +1197,7 @@ export function SkidmarksSunnyBanksPanel() {
               locationId: args.locationId,
               locationImage: args.locationImage,
               startImageDataUrl: args.startImageDataUrl,
-              ...(actionPayload ? { action: actionPayload } : {}),
+              ...(action ? { action } : {}),
             }
           : {
               characterName: args.characterName,
@@ -1205,7 +1206,7 @@ export function SkidmarksSunnyBanksPanel() {
               locationId: args.locationId,
               locationImage: args.locationImage,
               startImageDataUrl: args.startImageDataUrl,
-              ...(actionPayload ? { action: actionPayload } : {}),
+              ...(action ? { action } : {}),
             }
       ),
     });

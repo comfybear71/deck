@@ -100,18 +100,19 @@ function resolveLocationLock(locationId: string): SunnyBanksLocationLock {
  *
  * A character with no plate (Hans today) is a skip, not a guess —
  * callers keep the location canvas as-is.
- *
- * `appearanceOverride` (2026-09-18) is the per-shot appearance text
- * from a `[Character Name: description]` script tag, threaded straight
- * into `buildSunnyBanksCompositePlatePrompt` so the starting frame LTX
- * animates already shows the change ("Dazza holding two bottles")
- * instead of leaving LTX to invent it mid-clip. Still one xAI edits
- * call — this changes that call's prompt, it does not add a second one.
  */
 export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   locationDataUrl: string;
   character: SunnyBanksCharacterLock;
   locationId?: string;
+  /** Per-beat prop/outfit text from `[Character Name: description]` —
+   * fed into the xAI compositing prompt itself (not just LTX's later
+   * motion prompt) so the STARTING FRAME already shows it. Fixes the
+   * class of bug where a described prop (e.g. "holding two bottles")
+   * only ever reached the motion prompt: the picture was already fixed
+   * without it, so LTX had to invent the object out of nothing over
+   * the clip, which is what morphed/duplicated. `undefined`/empty
+   * leaves the prompt byte-identical to before this field existed. */
   appearanceOverride?: string;
 }): Promise<SunnyBanksCompositeOutcome | { ok: true; dataUrl: string; skipped: true }> {
   const heroPath = resolveSunnyBanksStartImage(opts.character);

@@ -232,58 +232,46 @@ export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock):
  * `generate-speak-beat` is the caller (Studio's gen-plate + LTX in one
  * route). Gold Hold/Speak strings stay untouched — they already assume
  * the start image has both the person and the place.
- *
- * `appearanceOverride` (2026-09-18) is the per-shot appearance text a
- * `[Character Name: description]` script tag produces — e.g. "Dazza
- * holding two bottles". It used to reach the LTX *motion* prompt only,
- * which meant the starting frame LTX animates still showed the base
- * `look` and LTX had to invent the bottles over the clip: live-reported
- * as the held object morphing, duplicating or vanishing mid-clip.
- * Feeding it here puts the change in the plate itself, so LTX's job
- * becomes holding it steady. Additive only — one extra line after the
- * existing staging line, same "append, never rewrite gold" pattern as
- * Dazza's `accessoryLockSuffix`. `character.look` is never rewritten,
- * and with no override every line is byte-identical to before.
  */
 export function buildSunnyBanksCompositePlatePrompt(
   character: SunnyBanksCharacterLock,
   location: SunnyBanksLocationLock,
   appearanceOverride?: string
 ): string {
-  const override = typeof appearanceOverride === "string" ? appearanceOverride.replace(/\s+/g, " ").trim() : "";
+  const trimmedOverride = appearanceOverride?.trim() || "";
   const heldProp = /\b(cigarette|pie|teacup|cricket bat|thongs|beer|camera|whistle)\b/i.test(
     character.look
   );
-  // With a per-shot override in play, the "do not invent extra objects"
-  // half of this line would flatly contradict the override line below
-  // (that is the whole bug: LTX was left to invent the two bottles over
-  // the clip because the plate never got them). Widen it to allow
-  // exactly what the override names, and nothing else.
-  const propLine = override
-    ? heldProp
-      ? "Only the held object named in the look lock plus exactly what the shot override names. Do not invent any other extra objects."
-      : "Keep any held prop already visible in <IMAGE_1> and add exactly what the shot override names. Do not invent a phone or any other extra objects."
+  // An override changes what's held/worn on purpose, so the base
+  // "don't change their clothes" line (below) would directly contradict
+  // it — swap in a narrower instruction that still forbids anything
+  // *not* named by the override (no free-for-all just because one prop
+  // changed).
+  const propLine = trimmedOverride
+    ? "Only the object(s)/outfit named in the shot-specific override below — do not invent anything beyond what it names."
     : heldProp
       ? "Only the held object named in the look lock. Do not invent extra objects."
       : "Keep any held prop already visible in <IMAGE_1>. Do not invent a phone or extra objects.";
+  const bodyLine = trimmedOverride
+    ? "Keep the same body pose, body, and face identity from image 2 — same person, do not turn them into a different person, do not invent a second person, no passer-by. Change only what the shot-specific override below explicitly names."
+    : "Keep the EXACT body pose, clothes, and body from image 2. Same face from image 2. Do not stand them up. Do not change their clothes. Do not invent a second person. No passer-by. No extra body in the distance.";
 
-  return [
+  const lines = [
     SUNNY_BANKS_STYLE_LOCK,
     "<IMAGE_0> is the LOCKED background — keep that exact place, lighting and materials. Do not move the camera. Do not replace the location with a photo street. Remove any people or crowds already in image 1 — empty place only.",
     "<IMAGE_1> is the person — same face identity, hair, age and body from image 2. Do not turn them into a different person.",
     "Place that same person from image 2 into image 1.",
-    "Keep the EXACT body pose, clothes, and body from image 2. Same face from image 2. Do not stand them up. Do not change their clothes. Do not invent a second person. No passer-by. No extra body in the distance.",
+    bodyLine,
     "One person only. Only that person in frame, no one else appears. Empty of extra people and animals.",
     "MEDIUM SHOT framing: figure large in frame, dead centre horizontally. Keep the locked place from image 1 behind them. One person only.",
     `Staging / tweak: ${character.name}, ${character.look}, at ${location.label}.`,
-    ...(override
-      ? [
-          `Staging / tweak: ${character.name}, ${character.look}, at ${location.label}. Override for this shot only: ${override}.`,
-        ]
-      : []),
     propLine,
     "No captions, no watermarks, no name tags. Keep any signage that is already part of the locked place in image 1.",
-  ].join("\n\n");
+  ];
+  if (trimmedOverride) {
+    lines.push(`Shot-specific override for this render only: ${trimmedOverride}.`);
+  }
+  return lines.join("\n\n");
 }
 
 /**
@@ -430,6 +418,21 @@ export function buildSunnyBanksSpeakingPrompt(character: SunnyBanksCharacterLock
  * number the silent-MP3 + graph duration both use.
  */
 export const SUNNY_BANKS_HOLD_DURATION_SEC = 5;
+
+/**
+ * Automatic, invisible settle lead-in — Stuart's explicit ask
+ * (2026-09-18): "implied... built in... I don't need to see it."
+ * Folded into the SAME Speak beat's own audio/prompt whenever that
+ * beat carries an `appearanceModifier` (the character is stepping into
+ * a prop/look/outfit that differs from their locked default), instead
+ * of a second, separately-billed silent Hold clip inserted by hand.
+ * Not a picker, not a per-beat override, not an env var — one fixed
+ * number, same lock discipline as `SUNNY_BANKS_HOLD_DURATION_SEC`
+ * above. See `lib/silentMp3.ts`'s `prependSilenceToMp3` and
+ * `generate-speak-beat/route.ts`'s Speak branch for where this is
+ * actually used.
+ */
+export const SUNNY_BANKS_SETTLE_LEAD_SEC = 1.5;
 
 function slugifySunnyBanksCharacterName(characterName: string): string {
   return characterName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "character";

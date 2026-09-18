@@ -61,6 +61,34 @@ export function padMp3ToMinimumDurationSec(bytes: Uint8Array, minDurationSec: nu
   return out;
 }
 
+/**
+ * Prepend a silent lead-in before real audio — the automatic "settle"
+ * beat (Stuart's explicit ask, 2026-09-18: "implied... built in... I
+ * don't need to see it"). When a Speak beat carries an
+ * `appearanceModifier` (the character is stepping into a prop/look
+ * that differs from their locked default), the character needs a
+ * visible moment to settle into that state before talking — this
+ * folds that moment into the SAME render's own audio/prompt instead of
+ * a second, separately-billed silent Hold clip (the only real
+ * mechanism for a settle beat before this). Same frame-concat approach
+ * as `padMp3ToMinimumDurationSec` (each MPEG frame carries its own
+ * header, so a differing sample-rate/bitrate lead can safely precede a
+ * real ElevenLabs body) — this one puts the silence first instead of
+ * last. Returns `bytes` unchanged for a non-positive `leadSec` or an
+ * empty/unparseable source (never invents a lead-in for a genuine TTS
+ * failure — same "don't paper over a real failure" rule as
+ * `padMp3ToMinimumDurationSec`).
+ */
+export function prependSilenceToMp3(bytes: Uint8Array, leadSec: number): Uint8Array {
+  if (leadSec <= 0) return bytes;
+  if (estimateMp3DurationSec(bytes) <= 0) return bytes;
+  const lead = encodeSilentMp3(leadSec);
+  const out = new Uint8Array(lead.length + bytes.length);
+  out.set(lead, 0);
+  out.set(bytes, lead.length);
+  return out;
+}
+
 export function encodeSilentMp3(durationSec: number): Uint8Array {
   const clamped = Math.max(0, durationSec);
   const encoder = new Mp3Encoder(1, SILENT_MP3_SAMPLE_RATE, SILENT_MP3_BITRATE_KBPS);
