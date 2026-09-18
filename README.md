@@ -2314,16 +2314,29 @@ now (see "Explicitly out of scope" below).
     prompt (`buildSunnyBanksCompositePlatePrompt`'s new optional
     override param), so the starting frame already shows it before LTX
     ever runs; it's still appended to the motion prompt too, for
-    consistency. **Automatic, invisible settle lead-in (2026-09-18,
-    Stuart's explicit "implied... built in... I don't need to see it"
-    ask)** — a Speak beat carrying an `appearanceModifier` gets
-    `SUNNY_BANKS_SETTLE_LEAD_SEC` (1.5s) of silence prepended to its own
-    driving audio (`lib/silentMp3.ts`'s `prependSilenceToMp3`) plus one
-    appended prompt sentence telling the character to hold the
-    newly-staged pose before speaking — folded into the *same* paid
-    render, never a second, separately-billed silent Hold clip, and
-    nothing new in the UI. Speak-only for now — a Hold's gold prompt
-    already covers "settle" for a no-dialogue beat. **Silent Hold (2026-09-17)** is a script line
+    consistency. **No settle pause — the clip opens already in the
+    new state (2026-09-18).** PR #142 shipped `SUNNY_BANKS_SETTLE_LEAD_SEC`
+    (1.5s) of silence prepended to a Speak beat carrying an
+    `appearanceModifier`, plus a prompt sentence telling the character
+    to hold the newly-staged pose before speaking. Stuart dropped it on
+    sight the same day: now that the change is baked into the composed
+    plate, frame 0 *is* the new action place, so there is nothing to
+    settle into — the beat goes straight there and starts talking. A
+    Speak beat's duration and driving audio are exactly what ElevenLabs
+    returned; `SUNNY_BANKS_SETTLE_LEAD_SEC` and `prependSilenceToMp3`
+    are gone rather than left unused. The `padMp3ToMinimumDurationSec`
+    tail is a different thing and stays — that's LTX's hard 2s
+    audio-input minimum, not a deliberate pause. Don't reintroduce a
+    lead-in without him asking. **Script textarea text was invisible
+    (2026-09-18)** — `SunnyBanksScriptHighlightOverlay` is the only
+    thing that draws the God Script textarea at all (the real
+    `<textarea>` is `text-transparent` so the colored tags can show
+    through it), and it shipped with a `text-white/0` base with only tag
+    spans colored. On a real iPhone every ordinary dialogue line
+    rendered black-on-black and only the bracket tags were visible.
+    `SUNNY_BANKS_HIGHLIGHT_CLASSES` now carries a `plain: "text-white"`
+    entry and the overlay colors every segment from that one table; a
+    unit test asserts no entry is transparent. **Silent Hold (2026-09-17)** is a script line
     with no dialogue after the speaker name: no ElevenLabs call.
     Same route with `kind: "hold"`, a 5s silent MP3
     (`lib/silentMp3.ts`, `SUNNY_BANKS_HOLD_DURATION_SEC` — LTX still
