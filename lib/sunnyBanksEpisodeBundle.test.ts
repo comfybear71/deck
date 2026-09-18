@@ -209,3 +209,68 @@ describe("buildSunnyBanksEpisodeBundle", () => {
     expect(slugifySunnyBanksEpisodeFilename("   ")).toBe("sunny-banks-episode.zip");
   });
 });
+
+describe("buildSunnyBanksEpisodeBundle progress + honest clip counts (2026-09-18)", () => {
+  const baseInput = {
+    title: "EP02 — Drop Bears Dilemma",
+    defaultLocationId: "main_entrance_sign",
+    actIds: ["I"] as const,
+    actScripts: { I: "Ranger Bazza: One.\nRanger Bazza: Two.\nRanger Bazza: Three." },
+    prompts: [],
+  };
+
+  function clip(index: number, videoUrl: string) {
+    return {
+      act: "I",
+      index,
+      characterName: "Ranger Bazza",
+      lineLabel: `Line ${index + 1}`,
+      videoUrl,
+    };
+  }
+
+  it("reports progress once per clip so a long download can't look like a dead button", async () => {
+    mockFetchFromUrl();
+    const seen: { done: number; total: number }[] = [];
+    const videoUrl = crashLabClipUrl(firstBeat.clipFile);
+    const result = await buildSunnyBanksEpisodeBundle({
+      ...baseInput,
+      clips: [clip(0, videoUrl), clip(1, videoUrl), clip(2, videoUrl)],
+      onProgress: ({ done, total }) => seen.push({ done, total }),
+    });
+
+    // Live QA: a 64-clip episode pulled 64 MP4s in silence for minutes.
+    expect(seen).toEqual([
+      { done: 1, total: 3 },
+      { done: 2, total: 3 },
+      { done: 3, total: 3 },
+    ]);
+    expect(result.clipCount).toBe(3);
+    expect(result.fetchedClipCount).toBe(3);
+  });
+
+  it("counts what actually arrived, not what was asked for, when a stream drops", async () => {
+    mockFetchFromUrl();
+    const result = await buildSunnyBanksEpisodeBundle({
+      ...baseInput,
+      clips: [
+        clip(0, crashLabClipUrl(firstBeat.clipFile)),
+        // A real URL shape the mock 404s — one dropped stream must not
+        // sink the zip, and must not be counted as downloaded either.
+        clip(1, "https://skidmarks.aiglitch.app/media/missing.mov"),
+      ],
+    });
+    expect(result.clipCount).toBe(2);
+    expect(result.fetchedClipCount).toBe(1);
+    expect(result.zipBytes.byteLength).toBeGreaterThan(0);
+  });
+
+  it("still builds a zip, and reports zero fetched, for an episode with no clips yet", async () => {
+    mockFetchFromUrl();
+    const result = await buildSunnyBanksEpisodeBundle({ ...baseInput, clips: [] });
+    expect(result.clipCount).toBe(0);
+    expect(result.fetchedClipCount).toBe(0);
+    expect(result.filename).toBe("ep02-drop-bears-dilemma.zip");
+    expect(result.zipBytes.byteLength).toBeGreaterThan(0);
+  });
+});

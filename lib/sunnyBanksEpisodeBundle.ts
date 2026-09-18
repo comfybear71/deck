@@ -39,6 +39,23 @@ export interface SunnyBanksEpisodeBundleInput {
   actScripts: Record<string, string>;
   prompts: SunnyBanksEpisodePromptEntry[];
   clips: SunnyBanksEpisodeClipEntry[];
+  /** Called after each clip is fetched. A 64-clip episode pulls 64
+   * MP4s one at a time over a phone connection — without this the
+   * button sat silent for minutes and read as broken (live QA,
+   * 2026-09-18: "cannot download episodes"). `fetched` counts clips
+   * whose video actually arrived, so the caller can say honestly how
+   * much of the episode made it in rather than implying all of it did. */
+  onProgress?: (progress: { done: number; total: number; fetched: number }) => void;
+}
+
+export interface SunnyBanksEpisodeBundleResult {
+  zipBytes: Uint8Array;
+  filename: string;
+  /** How many clips were asked for, and how many videos actually came
+   * down. A dropped stream is skipped rather than sinking the zip, so
+   * these can differ — and the caller must be able to say so. */
+  clipCount: number;
+  fetchedClipCount: number;
 }
 
 export function slugifySunnyBanksEpisodeFilename(title: string): string {
@@ -115,10 +132,9 @@ export async function fetchSunnyBanksBinaryAsset(url: string): Promise<Uint8Arra
   }
 }
 
-export async function buildSunnyBanksEpisodeBundle(input: SunnyBanksEpisodeBundleInput): Promise<{
-  zipBytes: Uint8Array;
-  filename: string;
-}> {
+export async function buildSunnyBanksEpisodeBundle(
+  input: SunnyBanksEpisodeBundleInput
+): Promise<SunnyBanksEpisodeBundleResult> {
   const title = input.title.trim() || "Sunny Banks episode";
   const actIds = input.actIds.length > 0 ? [...input.actIds] : Object.keys(input.actScripts);
   const clips = input.clips.map((clip) => ({
@@ -156,8 +172,18 @@ export async function buildSunnyBanksEpisodeBundle(input: SunnyBanksEpisodeBundl
     ]);
     if (videoBytes) videoEntries.push({ name: `video/${stem}.mp4`, data: videoBytes });
     if (audioBytes) audioEntries.push({ name: `audio/${stem}.mp3`, data: audioBytes });
+    input.onProgress?.({
+      done: rowIndex + 1,
+      total: input.clips.length,
+      fetched: videoEntries.length,
+    });
   }
 
   const zipBytes = buildStoreZip([...dataEntries, ...videoEntries, ...audioEntries]);
-  return { zipBytes, filename: slugifySunnyBanksEpisodeFilename(title) };
+  return {
+    zipBytes,
+    filename: slugifySunnyBanksEpisodeFilename(title),
+    clipCount: input.clips.length,
+    fetchedClipCount: videoEntries.length,
+  };
 }
