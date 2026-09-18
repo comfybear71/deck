@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Mp3Encoder } from "@breezystack/lamejs";
 import { estimateMp3DurationSec } from "./mp3Slice";
-import { encodeSilentMp3, padMp3ToMinimumDurationSec, silentMp3DurationSec } from "./silentMp3";
+import { encodeSilentMp3, padMp3ToMinimumDurationSec, prependSilenceToMp3, silentMp3DurationSec } from "./silentMp3";
 
 function encodeTestMp3(durationSec: number, sampleRate: number = 22050): Uint8Array {
   const encoder = new Mp3Encoder(1, sampleRate, 64);
@@ -64,5 +64,37 @@ describe("padMp3ToMinimumDurationSec", () => {
     expect(estimateMp3DurationSec(empty)).toBe(0);
     const padded = padMp3ToMinimumDurationSec(empty, 2);
     expect(padded).toBe(empty);
+  });
+});
+
+describe("prependSilenceToMp3", () => {
+  it("adds a silent lead-in before the real audio (settle beat, 2026-09-18)", () => {
+    const spoken = encodeTestMp3(3);
+    const spokenDurationSec = estimateMp3DurationSec(spoken);
+    const withLead = prependSilenceToMp3(spoken, 1.5);
+    expect(withLead.byteLength).toBeGreaterThan(spoken.byteLength);
+    const totalDurationSec = estimateMp3DurationSec(withLead);
+    // Lead + body, with the same frame-rounding slack every other test
+    // here already tolerates.
+    expect(totalDurationSec).toBeGreaterThan(spokenDurationSec + 1);
+    expect(totalDurationSec).toBeLessThan(spokenDurationSec + 2.5);
+  });
+
+  it("leaves the real audio bytes fully intact after the lead-in", () => {
+    const spoken = encodeTestMp3(2);
+    const withLead = prependSilenceToMp3(spoken, 1);
+    const tail = withLead.subarray(withLead.byteLength - spoken.byteLength);
+    expect(Buffer.compare(Buffer.from(tail), Buffer.from(spoken))).toBe(0);
+  });
+
+  it("is a no-op for a non-positive lead time", () => {
+    const spoken = encodeTestMp3(2);
+    expect(prependSilenceToMp3(spoken, 0)).toBe(spoken);
+    expect(prependSilenceToMp3(spoken, -1)).toBe(spoken);
+  });
+
+  it("does not invent a lead-in for an empty/unparseable source", () => {
+    const empty = new Uint8Array([0, 1, 2, 3]);
+    expect(prependSilenceToMp3(empty, 1.5)).toBe(empty);
   });
 });
