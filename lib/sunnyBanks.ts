@@ -431,35 +431,6 @@ export function buildSunnyBanksSpeakingPrompt(character: SunnyBanksCharacterLock
  */
 export const SUNNY_BANKS_HOLD_DURATION_SEC = 5;
 
-/**
- * Automatic settle lead-in (2026-09-18) — how long a Speak beat holds
- * the freshly staged pose before the dialogue starts, when that beat
- * carries a per-shot appearance change (`appearanceModifier`, from a
- * `[Character Name: description]` script tag).
- *
- * Stuart's ask, verbatim: when a beat involves an action or an
- * appearance change from the character's default plate, give it "a
- * second or two" to settle into that new state, **built into the same
- * beat** — "I don't need to see it". So this is not a manual Hold row
- * and not a new control: the speak-beat route prepends this much
- * silence to the ElevenLabs MP3 (`prependSilenceToMp3`) and appends
- * `SUNNY_BANKS_SETTLE_LEAD_IN_LINE` after the gold Speak string.
- *
- * Deliberately Speak-only. He described going "from character plate to
- * action plate", which is the Speak-with-appearance-change case; a Hold
- * is already a held pose with nothing to settle into mid-clip. Not a
- * new render and not a new API call — it rides the same one Comfy
- * render, inside the existing `MAX_LTX_CLIP_DURATION_SEC` (15s) clamp.
- */
-export const SUNNY_BANKS_SETTLE_LEAD_SEC = 1.5;
-
-/** Appended after the gold Speak string (never inserted into it) on a
- * beat that got a settle lead-in, so LTX knows the opening silence is
- * a deliberate held pose rather than a missed cue. */
-export const SUNNY_BANKS_SETTLE_LEAD_IN_LINE =
-  `For the first ~${SUNNY_BANKS_SETTLE_LEAD_SEC} seconds, holds the newly-staged pose without speaking, then ` +
-  "begins speaking naturally in sync with the audio.";
-
 function slugifySunnyBanksCharacterName(characterName: string): string {
   return characterName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "character";
 }

@@ -7,11 +7,7 @@ vi.mock("@vercel/blob", () => ({
 }));
 
 import { estimateMp3DurationSec } from "@/lib/mp3Slice";
-import {
-  buildSunnyBanksSpeakingPrompt,
-  SUNNY_BANKS_CAST,
-  SUNNY_BANKS_SETTLE_LEAD_IN_LINE,
-} from "@/lib/sunnyBanks";
+import { buildSunnyBanksSpeakingPrompt, SUNNY_BANKS_CAST } from "@/lib/sunnyBanks";
 import { POST } from "./route";
 
 /** Same real-encoder fixture helper as `lib/mp3Slice.test.ts` and
@@ -371,7 +367,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).text).toBe("Grab us a coldie.");
   });
 
-  it("settle lead-in: an appearance change buys ~1.5s of silence before the line and says so after gold", async () => {
+  it("no settle pause (2026-09-18): the beat goes straight to the new action plate and starts talking", async () => {
     const lineAudio = encodeTestMp3(4);
     mockElevenLabs(lineAudio);
     mockXaiComposite();
@@ -379,7 +375,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     mockSubmit();
     mockJobPoll();
     mockDownload(new Uint8Array([1]));
-    putMock.mockResolvedValueOnce({ url: "https://blob.example/settle.mp4" });
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/no-settle.mp4" });
 
     const res = await POST(
       speakBeatRequest({
@@ -391,31 +387,27 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     const body = await res.json();
     expect(res.status).toBe(200);
 
-    // The clip is the line plus the settle, not a second render.
-    const lineDurationSec = estimateMp3DurationSec(lineAudio);
-    expect(body.durationSec).toBeGreaterThan(lineDurationSec + 1.2);
-    expect(body.durationSec).toBeLessThanOrEqual(15);
-
-    // The MP3 actually uploaded to LoadAudio is the line plus the
-    // silent head — not the raw ElevenLabs bytes.
+    // An earlier cut prepended ~1.5s of silence so the character could
+    // "settle" into the restaging. Stuart dropped it: the plate is
+    // already correct on frame 0, so there is nothing to settle into.
+    // Duration and driving audio are exactly the spoken line.
+    expect(body.durationSec).toBeCloseTo(estimateMp3DurationSec(lineAudio), 1);
     const uploadCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/api/upload/image"));
     expect(uploadCalls).toHaveLength(2);
-    const uploadedAudio = (uploadCalls[1][1].body as FormData).get("image") as Blob;
-    expect(uploadedAudio.size).toBeGreaterThan(lineAudio.byteLength);
+    expect((uploadCalls[1][1].body as FormData).get("image")).toHaveProperty("size", lineAudio.byteLength);
 
+    // Gold Speak string, with `action` after it and nothing else spliced in.
     const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
     const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string).prompt as Record<
       string,
       { inputs?: Record<string, unknown> }
     >;
     const prompt = String(graph["340:319"]?.inputs?.value);
-    expect(prompt).toContain(SUNNY_BANKS_SETTLE_LEAD_IN_LINE);
-    // Appended after gold, never spliced into it.
     expect(prompt).toContain(buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST.Dazza, "Grab us a coldie."));
-    expect(prompt.startsWith("Use the provided start image")).toBe(true);
+    expect(prompt).not.toMatch(/without speaking|first ~1\.5 seconds|settle/i);
   });
 
-  it("no appearance change: no settle lead-in, no override line — the existing Speak path is untouched", async () => {
+  it("no appearance change: no override line — the existing Speak path is untouched", async () => {
     const lineAudio = encodeTestMp3(4);
     mockElevenLabs(lineAudio);
     mockXaiComposite();
@@ -441,7 +433,6 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
       { inputs?: Record<string, unknown> }
     >;
     const prompt = String(graph["340:319"]?.inputs?.value);
-    expect(prompt).not.toContain(SUNNY_BANKS_SETTLE_LEAD_IN_LINE);
     expect(prompt).toBe(buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST.Dazza, "Grab us a coldie."));
   });
 

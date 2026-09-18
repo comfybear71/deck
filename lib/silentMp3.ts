@@ -61,34 +61,6 @@ export function padMp3ToMinimumDurationSec(bytes: Uint8Array, minDurationSec: nu
   return out;
 }
 
-/**
- * Prepend a silent MP3 lead-in so a Sunny Banks Speak beat opens on a
- * beat or two of held pose before the dialogue starts — the automatic
- * "settle" a beat gets when it carries an appearance change from the
- * character's default plate (`SUNNY_BANKS_SETTLE_LEAD_SEC`, 2026-09-18).
- *
- * Mirror image of `padMp3ToMinimumDurationSec` above: same frame-concat
- * trick (each MPEG frame carries its own header, so a 22.05 kHz silent
- * lead can sit in front of a 44.1 kHz ElevenLabs body) and the same
- * `encodeSilentMp3` encoder — the silence just lands *before* the
- * spoken bytes instead of after. The spoken audio is passed through
- * untouched: no second ElevenLabs bill, no invented pause text.
- *
- * Returns `bytes` unchanged for a non-positive lead or an
- * empty/unparseable source (duration 0) — same rule as the padder, so
- * a real TTS failure stays visible to the caller instead of being
- * papered over with silence.
- */
-export function prependSilenceToMp3(bytes: Uint8Array, leadSec: number): Uint8Array {
-  if (!(leadSec > 0)) return bytes;
-  if (estimateMp3DurationSec(bytes) <= 0) return bytes;
-  const lead = encodeSilentMp3(leadSec);
-  const out = new Uint8Array(lead.length + bytes.length);
-  out.set(lead, 0);
-  out.set(bytes, lead.length);
-  return out;
-}
-
 export function encodeSilentMp3(durationSec: number): Uint8Array {
   const clamped = Math.max(0, durationSec);
   const encoder = new Mp3Encoder(1, SILENT_MP3_SAMPLE_RATE, SILENT_MP3_BITRATE_KBPS);

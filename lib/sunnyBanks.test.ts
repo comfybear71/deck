@@ -15,9 +15,6 @@ import {
   SUNNY_BANKS_DEFAULT_LOCATION_ID,
   SUNNY_BANKS_LOCATIONS,
   SUNNY_BANKS_HELD_OBJECT_LOCK,
-  SUNNY_BANKS_HOLD_DURATION_SEC,
-  SUNNY_BANKS_SETTLE_LEAD_IN_LINE,
-  SUNNY_BANKS_SETTLE_LEAD_SEC,
   SUNNY_BANKS_STYLE_LOCK,
 } from "./sunnyBanks";
 
@@ -258,21 +255,6 @@ describe("buildSunnyBanksCompositePlatePrompt", () => {
   });
 });
 
-describe("SUNNY_BANKS_SETTLE_LEAD_SEC", () => {
-  it("is the 'second or two' settle Stuart asked for, and sits inside LTX's 2–15s window", () => {
-    expect(SUNNY_BANKS_SETTLE_LEAD_SEC).toBe(1.5);
-    expect(SUNNY_BANKS_SETTLE_LEAD_SEC).toBeLessThan(SUNNY_BANKS_HOLD_DURATION_SEC);
-  });
-
-  it("the appended lead-in line quotes that same constant and never rewrites gold", () => {
-    expect(SUNNY_BANKS_SETTLE_LEAD_IN_LINE).toContain(`~${SUNNY_BANKS_SETTLE_LEAD_SEC} seconds`);
-    expect(SUNNY_BANKS_SETTLE_LEAD_IN_LINE).toContain("holds the newly-staged pose without speaking");
-    // It is an appended sentence, not an edit of the gold Speak string.
-    const gold = buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST.Dazza, "Grab us a coldie.");
-    expect(gold).not.toContain(SUNNY_BANKS_SETTLE_LEAD_IN_LINE);
-    expect(`${gold} ${SUNNY_BANKS_SETTLE_LEAD_IN_LINE}`.startsWith(gold)).toBe(true);
-  });
-});
 
 describe("buildSunnyBanksHoldPrompt", () => {
   it("carries no dialogue and locks the camera, matching the gold hold shape", () => {

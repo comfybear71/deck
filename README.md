@@ -2252,21 +2252,17 @@ now (see "Explicitly out of scope" below).
     is never rewritten and a beat with no override produces a
     byte-identical plate prompt. It still rides the motion prompt too
     (the panel sends it in both its own field and folded into
-    `action`). **Automatic settle lead-in (2026-09-18)** — a *Speak*
-    beat carrying an `appearanceModifier` also gets
-    `SUNNY_BANKS_SETTLE_LEAD_SEC` (1.5s) of silence prepended to the
-    ElevenLabs MP3 (`prependSilenceToMp3` in `lib/silentMp3.ts`, the
-    mirror of `padMp3ToMinimumDurationSec`'s silent tail) plus
-    `SUNNY_BANKS_SETTLE_LEAD_IN_LINE` appended after the gold Speak
-    string, so the character lands in the new staging before speaking.
-    Stuart's ask was for that settle "built into the same beat" and
-    "I don't need to see it" — so there is **no new UI, no new tag and
-    no manual Hold row**, and Hold beats are deliberately out of scope
-    (a Hold is already a held pose). No new render and no new API
-    call: the same one xAI composite + one ElevenLabs TTS + one Comfy
-    render, with that one clip 1.5s longer inside the existing
-    `MAX_LTX_CLIP_DURATION_SEC` (15s) clamp. Not live-verified in this
-    sandbox — same caveat as the rest of this backend.
+    `action`). **No settle pause — the clip opens already in the new
+    state.** A first cut of this shipped ~1.5s of prepended silence so
+    the character could settle into the restaging before speaking;
+    Stuart dropped it on sight (2026-09-18): with the plate already
+    correct on frame 0 there is nothing to settle into, so the beat
+    goes straight to the new action place and starts talking. Speak
+    duration and driving audio stay exactly what ElevenLabs returned.
+    No new UI, no new tag, no new env var and no new paid call — the
+    same one xAI composite + one ElevenLabs TTS + one Comfy render,
+    with only the composite's prompt changed. Not live-verified in
+    this sandbox — same caveat as the rest of this backend.
     Queue rows do not scroll horizontally on a 390px phone. A **Done**
     row is static: character name (not a `<select>`), spoken line in a
     `<details>` disclosure under the name, status pill `flex-shrink-0`
