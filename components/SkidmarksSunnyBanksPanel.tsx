@@ -1164,7 +1164,7 @@ function SunnyBanksFullScreenScriptEditor({
             onApply(draft);
             onClose();
           }}
-          className="min-h-[44px] shrink-0 rounded-full bg-amber-300 px-4 text-[13px] font-semibold text-zinc-950"
+          className="min-h-[44px] shrink-0 rounded-md bg-amber-300 px-4 text-[13px] font-semibold text-zinc-950"
         >
           Done
         </button>
@@ -1212,7 +1212,7 @@ function SunnyBanksFullScreenScriptEditor({
           type="button"
           onClick={() => setDraft((prev) => formatSunnyBanksGodScript(prev))}
           disabled={!draft.trim()}
-          className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+          className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
         >
           {"\u21e5"} Format
         </button>
@@ -1304,7 +1304,7 @@ function SunnyBanksGodScriptCheatSheet() {
             <button
               type="button"
               onClick={handleCopyPrompt}
-              className="min-h-[40px] rounded-full border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80"
+              className="min-h-[40px] rounded-md border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80"
             >
               Copy these rules as an AI prompt
             </button>
@@ -1359,7 +1359,6 @@ export function SkidmarksSunnyBanksPanel() {
   const [scriptOpen, setScriptOpen] = useState(false);
   const [scriptUndo, setScriptUndo] = useState<ScriptUndoSnapshot | null>(null);
   const [bundleError, setBundleError] = useState<string | null>(null);
-  const actStripRef = useRef<HTMLDivElement>(null);
   const scriptHighlightRef = useRef<HTMLDivElement>(null);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
@@ -1841,9 +1840,6 @@ export function SkidmarksSunnyBanksPanel() {
       locationOverrides: { ...prev.locationOverrides, [id]: {} },
       runtimeMap: { ...prev.runtimeMap, [id]: {} },
     }));
-    window.setTimeout(() => {
-      actStripRef.current?.scrollTo({ left: actStripRef.current.scrollWidth, behavior: "smooth" });
-    }, 0);
   };
 
   const handleSaveWorkspace = () => {
@@ -1929,53 +1925,58 @@ export function SkidmarksSunnyBanksPanel() {
           </p>
         ) : (
           <>
-            <div className="flex min-w-0 items-start gap-2">
-              <div
-                ref={actStripRef}
-                role="tablist"
-                aria-label="Act"
-                className="flex min-w-0 flex-1 flex-row flex-nowrap gap-2 overflow-x-auto overscroll-x-contain whitespace-nowrap touch-pan-x pb-2 [-webkit-overflow-scrolling:touch] [scrollbar-width:none]"
+            {/* Two wrapping rows, not one horizontal scroll strip
+              * (2026-09-18). Adding the Full screen button pushed the
+              * single strip wide enough that Act I/II/III and + Add Act
+              * scrolled off the left edge on a 390px phone and simply
+              * looked missing. Acts now wrap onto their own row so every
+              * act is reachable without a sideways swipe, and the script
+              * tools wrap under them. `actStripRef`'s scroll-to-end on
+              * Add Act went with it: a wrapped row has nothing to
+              * scroll, and a new act is visible where it lands. */}
+            <div role="tablist" aria-label="Act" className="flex min-w-0 flex-row flex-wrap items-center gap-2">
+              {actIds.map((act) => {
+                const selected = act === activeAct;
+                const lineCount = sunnyBanksQueueChunks(
+                  parseSunnyBanksScriptBlock(actScripts[act] ?? "")
+                ).length;
+                return (
+                  <button
+                    key={act}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => patchSunnyBanksLive((prev) => ({ ...prev, activeAct: act }))}
+                    disabled={running}
+                    className={[
+                      "min-h-[40px] shrink-0 rounded-md px-3.5 text-[12px] font-semibold transition-colors disabled:opacity-60",
+                      selected
+                        ? "bg-amber-300 text-zinc-950"
+                        : "bg-white/[0.04] text-white/70 ring-1 ring-inset ring-white/10",
+                    ].join(" ")}
+                  >
+                    Act {act}
+                    {lineCount > 0 ? ` · ${lineCount}` : ""}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={handleAddAct}
+                disabled={running || actIds.length >= MAX_SUNNY_BANKS_ACTS}
+                className="min-h-[40px] shrink-0 rounded-md bg-white/[0.04] px-3.5 text-[12px] font-semibold text-white/80 ring-1 ring-inset ring-white/10 disabled:opacity-60"
               >
-                {actIds.map((act) => {
-                  const selected = act === activeAct;
-                  const lineCount = sunnyBanksQueueChunks(
-                    parseSunnyBanksScriptBlock(actScripts[act] ?? "")
-                  ).length;
-                  return (
-                    <button
-                      key={act}
-                      type="button"
-                      role="tab"
-                      aria-selected={selected}
-                      onClick={() => patchSunnyBanksLive((prev) => ({ ...prev, activeAct: act }))}
-                      disabled={running}
-                      className={[
-                        "min-h-[40px] shrink-0 rounded-full px-3.5 text-[12px] font-semibold transition-colors disabled:opacity-60",
-                        selected
-                          ? "bg-amber-300 text-zinc-950"
-                          : "bg-white/[0.04] text-white/70 ring-1 ring-inset ring-white/10",
-                      ].join(" ")}
-                    >
-                      Act {act}
-                      {lineCount > 0 ? ` · ${lineCount}` : ""}
-                    </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={handleAddAct}
-                  disabled={running || actIds.length >= MAX_SUNNY_BANKS_ACTS}
-                  className="min-h-[40px] shrink-0 rounded-full bg-white/[0.04] px-3.5 text-[12px] font-semibold text-white/80 ring-1 ring-inset ring-white/10 disabled:opacity-60"
-                >
-                  + Add Act
-                </button>
-              </div>
+                + Add Act
+              </button>
+            </div>
+
+            <div className="flex min-w-0 flex-row flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleFormatScript}
                 disabled={running || !scriptText.trim()}
                 aria-label="Auto-format script spacing"
-                className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+                className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
               >
                 ⇥ Format
               </button>
@@ -1984,7 +1985,7 @@ export function SkidmarksSunnyBanksPanel() {
                 onClick={() => setFullScreenScriptOpen(true)}
                 disabled={running}
                 aria-label="Edit script full screen"
-                className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+                className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
               >
                 ⤢ Full screen
               </button>
@@ -1993,7 +1994,7 @@ export function SkidmarksSunnyBanksPanel() {
                 onClick={handleUndoScript}
                 disabled={!scriptUndo || running}
                 aria-label="Undo script"
-                className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+                className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
               >
                 ↩ Undo
               </button>
@@ -2277,7 +2278,7 @@ export function SkidmarksSunnyBanksPanel() {
               type="button"
               onClick={() => void handleRenderAll()}
               disabled={!canRenderAll}
-              className="min-h-[44px] w-full rounded-full bg-amber-300 px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
+              className="min-h-[44px] w-full rounded-md bg-amber-300 px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {running
                 ? `Rendering line ${(runningIndex ?? 0) + 1} of ${queue.length}…`
@@ -2385,7 +2386,7 @@ export function SkidmarksSunnyBanksPanel() {
             type="button"
             onClick={handleSaveWorkspace}
             disabled={running}
-            className="min-h-[44px] rounded-full bg-white px-3 text-[13px] font-semibold text-zinc-950 disabled:opacity-60"
+            className="min-h-[44px] rounded-md bg-white px-3 text-[13px] font-semibold text-zinc-950 disabled:opacity-60"
           >
             Save Project Workspace
           </button>
@@ -2393,7 +2394,7 @@ export function SkidmarksSunnyBanksPanel() {
             type="button"
             onClick={handleDownloadEpisodeBundle}
             disabled={running}
-            className="min-h-[40px] rounded-full border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80 disabled:opacity-60"
+            className="min-h-[40px] rounded-md border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80 disabled:opacity-60"
           >
             Download Episode Bundle (.zip)
           </button>

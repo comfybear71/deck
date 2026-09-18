@@ -2222,11 +2222,22 @@ now (see "Explicitly out of scope" below).
   - A **Script** card — a textarea of six locked park plates used
     per queue row (`SUNNY_BANKS_LOCATIONS`, default Office Storefront
     until a `[Location: id]` tag). There is **no** act-level location
-    dropdown above the script accordion. A swipeable
-    **Act I / Act II / Act III** row sits at the **top** of that card
-    (`touch-pan-x`, `flex-nowrap`, overflow-x). **+ Add Act** at the
-    far right appends the next roman in-memory buffer (IV, V, …, cap
-    20) with an empty script — not a Neon act table. Save and the
+    dropdown above the script accordion. An **Act I / Act II / Act III**
+    row sits at the **top** of that card, **wrapping** onto as many
+    lines as it needs, with the script tools (`⇥ Format` /
+    `⤢ Full screen` / `↩ Undo`) wrapping on their own row underneath.
+    That replaced the single swipeable `touch-pan-x` / `flex-nowrap`
+    strip this shipped with, after live QA (2026-09-18): adding the Full
+    screen button pushed that one strip wide enough that Act I/II/III
+    and + Add Act scrolled off the left edge on a 390px phone and simply
+    looked missing. A wrapped row has nothing to scroll, so the
+    scroll-to-end on Add Act went with it. **Buttons in this panel are
+    `rounded-md`, not `rounded-full`** (2026-09-18, Stuart: "square edge
+    buttons only slightly rounded... them big round buttons, I don't
+    like them") — the colour-key dots and the Idle/Done status chip stay
+    round, being indicators rather than buttons. **+ Add Act** appends
+    the next roman in-memory buffer (IV, V, …, cap 20) with an empty
+    script — not a Neon act table. Save and the
     episode zip walk every `actIds` entry so a typed Act IV is not
     dropped. The three EP02 seed acts still open first.
     The textarea and queued rows collapse behind **Show Script Text &
