@@ -493,7 +493,21 @@ export function buildSunnyBanksHighlightSegments(raw: string): SunnyBanksHighlig
   return segments;
 }
 
-const SUNNY_BANKS_HIGHLIGHT_CLASSES: Record<SunnyBanksHighlightTagKind, string> = {
+/**
+ * Text color for every segment the overlay draws — tags *and* plain
+ * text.
+ *
+ * `plain` is not decoration: the overlay is the **only** thing that
+ * draws this textarea's text at all (the real `<textarea>` is
+ * `text-transparent` so the colored tags can show through it), so plain
+ * text needs a real, opaque color here or it renders as nothing. Live
+ * QA (2026-09-18, real iPhone): the overlay shipped with a base of
+ * `text-white/0` and every non-tag line was invisible — black text on
+ * the black card, with only the bracket tags showing. Keep every value
+ * in this table opaque.
+ */
+export const SUNNY_BANKS_HIGHLIGHT_CLASSES: Record<SunnyBanksHighlightSegment["kind"], string> = {
+  plain: "text-white",
   location: "text-yellow-300",
   character: "text-cyan-300",
   action: "text-green-300",
@@ -581,7 +595,10 @@ export function formatSunnyBanksGodScript(text: string): string {
  * `pointer-events`-capturing, so typing/selection/scrolling all still
  * hit the real textarea untouched. Must mirror the textarea's font
  * size, line height, padding, and white-space wrapping exactly, or the
- * colored text drifts out from under the real caret/characters. Scroll
+ * colored text drifts out from under the real caret/characters. Because
+ * the textarea's own text is transparent, this overlay draws **all** of
+ * it — plain segments included — so every segment gets a color from
+ * `SUNNY_BANKS_HIGHLIGHT_CLASSES`, never a transparent base. Scroll
  * position is synced imperatively (`onScroll` on the textarea sets this
  * element's `scrollTop`) rather than through React state, so it can't
  * lag a frame behind a fast scroll/paste. */
@@ -597,17 +614,13 @@ function SunnyBanksScriptHighlightOverlay({
     <div
       ref={overlayRef}
       aria-hidden="true"
-      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-sm leading-relaxed text-white/0"
+      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-sm leading-relaxed"
     >
-      {segments.map((segment, index) =>
-        segment.kind === "plain" ? (
-          <span key={index}>{segment.text}</span>
-        ) : (
-          <span key={index} className={SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]}>
-            {segment.text}
-          </span>
-        )
-      )}
+      {segments.map((segment, index) => (
+        <span key={index} className={SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]}>
+          {segment.text}
+        </span>
+      ))}
       {/* Trailing newline: a native textarea always reserves room for one more
        * line after a final "\n" (where the caret sits); without this, the
        * overlay's own wrapped-line count falls one short and drifts up

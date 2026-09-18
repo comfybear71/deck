@@ -419,21 +419,6 @@ export function buildSunnyBanksSpeakingPrompt(character: SunnyBanksCharacterLock
  */
 export const SUNNY_BANKS_HOLD_DURATION_SEC = 5;
 
-/**
- * Automatic, invisible settle lead-in — Stuart's explicit ask
- * (2026-09-18): "implied... built in... I don't need to see it."
- * Folded into the SAME Speak beat's own audio/prompt whenever that
- * beat carries an `appearanceModifier` (the character is stepping into
- * a prop/look/outfit that differs from their locked default), instead
- * of a second, separately-billed silent Hold clip inserted by hand.
- * Not a picker, not a per-beat override, not an env var — one fixed
- * number, same lock discipline as `SUNNY_BANKS_HOLD_DURATION_SEC`
- * above. See `lib/silentMp3.ts`'s `prependSilenceToMp3` and
- * `generate-speak-beat/route.ts`'s Speak branch for where this is
- * actually used.
- */
-export const SUNNY_BANKS_SETTLE_LEAD_SEC = 1.5;
-
 function slugifySunnyBanksCharacterName(characterName: string): string {
   return characterName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "character";
 }
