@@ -1358,6 +1358,10 @@ export function SkidmarksSunnyBanksPanel() {
   const [clipsOpen, setClipsOpen] = useState(true);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [scriptUndo, setScriptUndo] = useState<ScriptUndoSnapshot | null>(null);
+  /** The acts row scrolls sideways, so a freshly added act can land
+   * past the right edge — `handleAddAct` scrolls it into view rather
+   * than leaving Stuart to discover it by swiping. */
+  const actStripRef = useRef<HTMLDivElement>(null);
   const [bundleError, setBundleError] = useState<string | null>(null);
   /** What the save/download buttons are doing right now, in plain words.
    * Live QA (2026-09-18): both buttons did their job silently, which is
@@ -1855,6 +1859,9 @@ export function SkidmarksSunnyBanksPanel() {
       locationOverrides: { ...prev.locationOverrides, [id]: {} },
       runtimeMap: { ...prev.runtimeMap, [id]: {} },
     }));
+    window.setTimeout(() => {
+      actStripRef.current?.scrollTo({ left: actStripRef.current.scrollWidth, behavior: "smooth" });
+    }, 0);
   };
 
   const handleSaveWorkspace = () => {
@@ -2009,16 +2016,21 @@ export function SkidmarksSunnyBanksPanel() {
           </p>
         ) : (
           <>
-            {/* Two wrapping rows, not one horizontal scroll strip
-              * (2026-09-18). Adding the Full screen button pushed the
-              * single strip wide enough that Act I/II/III and + Add Act
-              * scrolled off the left edge on a 390px phone and simply
-              * looked missing. Acts now wrap onto their own row so every
-              * act is reachable without a sideways swipe, and the script
-              * tools wrap under them. `actStripRef`'s scroll-to-end on
-              * Add Act went with it: a wrapped row has nothing to
-              * scroll, and a new act is visible where it lands. */}
-            <div role="tablist" aria-label="Act" className="flex min-w-0 flex-row flex-wrap items-center gap-2">
+            {/* Acts scroll sideways; the script tools sit on their own
+              * row below. Two separate rows is the fix (2026-09-18):
+              * acts and tools used to share one strip, so adding the
+              * Full screen button pushed Act I/II/III clean off the
+              * left edge and they read as missing. Wrapping the acts
+              * instead fixed that but cost two rows of vertical space
+              * on a 390px phone for what is a one-line control, so
+              * they're a scroll strip again — just one that only ever
+              * holds acts, and can't be crowded out by a tool button. */}
+            <div
+              ref={actStripRef}
+              role="tablist"
+              aria-label="Act"
+              className="flex min-w-0 flex-row flex-nowrap gap-2 overflow-x-auto overscroll-x-contain whitespace-nowrap touch-pan-x pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:none]"
+            >
               {actIds.map((act) => {
                 const selected = act === activeAct;
                 const lineCount = sunnyBanksQueueChunks(

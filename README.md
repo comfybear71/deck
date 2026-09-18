@@ -2222,16 +2222,18 @@ now (see "Explicitly out of scope" below).
   - A **Script** card — a textarea of six locked park plates used
     per queue row (`SUNNY_BANKS_LOCATIONS`, default Office Storefront
     until a `[Location: id]` tag). There is **no** act-level location
-    dropdown above the script accordion. An **Act I / Act II / Act III**
-    row sits at the **top** of that card, **wrapping** onto as many
-    lines as it needs, with the script tools (`⇥ Format` /
-    `⤢ Full screen` / `↩ Undo`) wrapping on their own row underneath.
-    That replaced the single swipeable `touch-pan-x` / `flex-nowrap`
-    strip this shipped with, after live QA (2026-09-18): adding the Full
-    screen button pushed that one strip wide enough that Act I/II/III
-    and + Add Act scrolled off the left edge on a 390px phone and simply
-    looked missing. A wrapped row has nothing to scroll, so the
-    scroll-to-end on Add Act went with it. **Buttons in this panel are
+    dropdown above the script accordion. A swipeable **Act I / Act II /
+    Act III** row sits at the **top** of that card (`touch-pan-x`,
+    `flex-nowrap`, overflow-x), with the script tools (`⇥ Format` /
+    `⤢ Full screen` / `↩ Undo`) on their **own row underneath**. Two
+    separate rows is the fix (2026-09-18): acts and tools shared one
+    strip, so adding the Full screen button pushed Act I/II/III clean
+    off the left edge on a 390px phone and they read as missing.
+    Wrapping the acts fixed that but cost two rows of vertical space for
+    a one-line control, so they scroll again — in a strip that only ever
+    holds acts and cannot be crowded out by a tool button. The
+    scroll-to-end on Add Act stays, since a new act can land past the
+    right edge. **Buttons in this panel are
     `rounded-md`, not `rounded-full`** (2026-09-18, Stuart: "square edge
     buttons only slightly rounded... them big round buttons, I don't
     like them") — the colour-key dots and the Idle/Done status chip stay
