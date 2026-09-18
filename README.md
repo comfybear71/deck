@@ -2438,7 +2438,25 @@ now (see "Explicitly out of scope" below).
     (best-effort; CORS or a dead stream omits that file) and keeps
     script/prompts/URL records under `data/`. Sunny Banks
     has no song MP3; TTS is generated at render time.
-    **Save / Download / Open now show their results (2026-09-18)** —
+    **Clip proxy (2026-09-18)** — live QA: the zip shipped **18 of 64
+    clips**. The 18 were this app's own renders on Vercel Blob; the 46
+    that failed were the Crash Lab EP02 seed clips on
+    `skidmarks.aiglitch.app`. A browser plays a cross-origin MP4 in a
+    `<video>` fine, but refuses to let page JavaScript read its bytes
+    without a CORS header, and that host doesn't send one — so `fetch`
+    threw and the clip was silently dropped.
+    `GET /api/skidmarks/sunnybank/clip-proxy?url=…` now streams a clip
+    back from this origin (CORS is a browser policy and is never applied
+    to a server-to-server request), and `fetchSunnyBanksBinaryAsset`
+    retries through it **only** when the direct fetch fails — a Blob URL
+    already works cross-origin, and proxying it too would double the
+    bytes for nothing. The host allowlist in `lib/sunnyBanksClipProxy.ts`
+    is the security boundary and is tested on its own: HTTPS only, exact
+    host match or a dot-anchored `.public.blob.vercel-storage.com`
+    suffix, no userinfo, no port, non-media content types refused, and
+    the URL is validated **before** any fetch happens — the fetch itself
+    is the vulnerability, so "fetched but not returned" would still be a
+    hole. **Save / Download / Open now show their results (2026-09-18)** —
     live QA was "cannot download episodes", "I don't even know if the
     save button is working" and "how do we open it back up in an
     editor?". All three already worked; all three were silent or
