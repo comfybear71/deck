@@ -2236,6 +2236,37 @@ now (see "Explicitly out of scope" below).
     speaker. Render POST
     sends `line` / `action` / `appearanceModifier` / `locationId`
     (`action` after gold, never into TTS; gold look strings untouched).
+    **`appearanceModifier` reaches the compositor, not just the motion
+    prompt (2026-09-18)** — it used to ride the LTX motion prompt only
+    (folded into `action`), so the starting frame was still built from
+    the character's base `look` and LTX had to invent the change over
+    the clip: live report, "Dazza holding two bottles" morphed,
+    duplicated and vanished mid-clip. The speak-beat route now also
+    hands it to `compositeSunnyBanksCharacterOntoLocation` as
+    `appearanceOverride`, which appends one extra staging line
+    (`Override for this shot only: …`) to
+    `buildSunnyBanksCompositePlatePrompt` and widens that prompt's
+    "do not invent extra objects" prop line to allow exactly what the
+    override names — additive, same "append, never rewrite gold"
+    pattern as Dazza's `SUNNY_BANKS_HELD_OBJECT_LOCK`; `character.look`
+    is never rewritten and a beat with no override produces a
+    byte-identical plate prompt. It still rides the motion prompt too
+    (the panel sends it in both its own field and folded into
+    `action`). **Automatic settle lead-in (2026-09-18)** — a *Speak*
+    beat carrying an `appearanceModifier` also gets
+    `SUNNY_BANKS_SETTLE_LEAD_SEC` (1.5s) of silence prepended to the
+    ElevenLabs MP3 (`prependSilenceToMp3` in `lib/silentMp3.ts`, the
+    mirror of `padMp3ToMinimumDurationSec`'s silent tail) plus
+    `SUNNY_BANKS_SETTLE_LEAD_IN_LINE` appended after the gold Speak
+    string, so the character lands in the new staging before speaking.
+    Stuart's ask was for that settle "built into the same beat" and
+    "I don't need to see it" — so there is **no new UI, no new tag and
+    no manual Hold row**, and Hold beats are deliberately out of scope
+    (a Hold is already a held pose). No new render and no new API
+    call: the same one xAI composite + one ElevenLabs TTS + one Comfy
+    render, with that one clip 1.5s longer inside the existing
+    `MAX_LTX_CLIP_DURATION_SEC` (15s) clamp. Not live-verified in this
+    sandbox — same caveat as the rest of this backend.
     Queue rows do not scroll horizontally on a 390px phone. A **Done**
     row is static: character name (not a `<select>`), spoken line in a
     `<details>` disclosure under the name, status pill `flex-shrink-0`
