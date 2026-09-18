@@ -3,7 +3,7 @@ import { put } from "@vercel/blob";
 import { decodeDataUrl } from "@/lib/dataUrl";
 import { synthesizeSunnyBanksLine } from "@/lib/elevenLabsSpeech";
 import { estimateMp3DurationSec } from "@/lib/mp3Slice";
-import { encodeSilentMp3, padMp3ToMinimumDurationSec } from "@/lib/silentMp3";
+import { encodeSilentMp3, padMp3ToMinimumDurationSec, prependSilenceToMp3 } from "@/lib/silentMp3";
 import {
   buildSunnyBanksHoldBeatPathname,
   buildSunnyBanksHoldPrompt,
@@ -11,6 +11,7 @@ import {
   buildSunnyBanksSpeakingPrompt,
   getSunnyBanksCharacterLock,
   SUNNY_BANKS_HOLD_DURATION_SEC,
+  SUNNY_BANKS_SETTLE_LEAD_SEC,
 } from "@/lib/sunnyBanks";
 import { compositeSunnyBanksCharacterOntoLocation } from "@/lib/sunnyBanksComposite";
 import {
@@ -70,6 +71,31 @@ import { muxClipAudio } from "@/lib/muxClipAudio";
  * `audioMuxed: false` is the honest flag, same "never throw away a
  * render Stuart already paid for" rule as a Blob miss.
  *
+ * **Appearance changes reach the picture, not just the motion prompt
+ * (2026-09-18)** — a real reported bug: telling LTX a character is
+ * "holding two bottles" via the motion prompt alone (the only thing
+ * `appearanceModifier` fed before this) morphed/duplicated the bottles
+ * mid-clip, because the starting frame was already composed *without*
+ * them — LTX had to invent the prop from nothing. `appearanceModifier`
+ * (from `[Character Name: description]`) is now also passed into
+ * `compositeSunnyBanksCharacterOntoLocation`'s xAI edit prompt, so the
+ * composed starting frame already shows it; LTX's job becomes "hold it
+ * steady," not "invent it." Still also appended to the motion prompt
+ * as before (via the client's own `action` merge), for consistency
+ * across the clip.
+ *
+ * **Automatic, invisible settle lead-in (2026-09-18, Stuart's explicit
+ * "implied... built in... I don't need to see it" ask)** — a Speak
+ * beat carrying an `appearanceModifier` gets `SUNNY_BANKS_SETTLE_LEAD_SEC`
+ * (1.5s) of silence prepended to its own driving audio, plus one
+ * appended prompt sentence telling LTX to hold the newly-staged pose
+ * before speaking. Folded into this SAME paid render — no second Hold
+ * clip, no new UI, no extra cost beyond the small duration increase
+ * already absorbed by `MAX_LTX_CLIP_DURATION_SEC`'s existing clamp.
+ * Speak-only for now (not Hold) — a Hold's whole point is already
+ * "holds pose, no dialogue," so a Hold beat's existing gold prompt
+ * already covers the "settle" case for it.
+ *
  * **Real per-beat pathname/shelf, resume-on-failure, last-frame
  * chaining between beats — all deliberately out of scope for this
  * route.** Every one of those is real, working infrastructure this app
@@ -119,6 +145,21 @@ interface GenerateSpeakBeatRequestBody {
   /** Extra LTX prompt context from `[Action: text]`. Appended after
    * gold Hold/Speak strings. Never sent to ElevenLabs. */
   action?: unknown;
+  /** Prop/outfit text from `[Character Name: description]` — the
+   * client already sends this as its own field (folded into `action`
+   * too, for the motion prompt), but until 2026-09-18 nothing here
+   * read it. Now: (1) fed into the xAI compositing prompt itself so
+   * the STARTING FRAME already shows it, not just LTX's later motion
+   * text — see `compositeSunnyBanksCharacterOntoLocation`'s doc
+   * comment for why that's the actual fix for the class of bug where a
+   * described prop morphed/duplicated mid-clip; (2) on a Speak beat,
+   * triggers an automatic, invisible settle lead-in
+   * (`SUNNY_BANKS_SETTLE_LEAD_SEC`) — Stuart's explicit "implied...
+   * built in... I don't need to see it" ask, so a character stepping
+   * into a described prop/look gets a beat to visibly settle before
+   * talking, folded into this SAME render rather than a second,
+   * separately-billed silent Hold clip. */
+  appearanceModifier?: unknown;
 }
 
 function parseBeatKind(value: unknown): BeatKind {
@@ -139,6 +180,8 @@ export async function POST(request: Request) {
   const startImageDataUrl = typeof body.startImageDataUrl === "string" ? body.startImageDataUrl : "";
   const locationId = typeof body.locationId === "string" ? body.locationId.trim() : "";
   const action = typeof body.action === "string" ? body.action.replace(/\s+/g, " ").trim() : "";
+  const appearanceModifier =
+    typeof body.appearanceModifier === "string" ? body.appearanceModifier.replace(/\s+/g, " ").trim() : "";
 
   if (!startImageDataUrl || (kind === "speak" && (!characterName || !line))) {
     return NextResponse.json(
@@ -251,15 +294,38 @@ export async function POST(request: Request) {
         { status: 422 }
       );
     }
-    durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, paddedDurationSec);
+    // Automatic, invisible settle lead-in (2026-09-18, Stuart's explicit
+    // "implied... built in... I don't need to see it" ask) — folded
+    // into this SAME render's own audio + prompt, not a second,
+    // separately-billed silent Hold clip. Only fires when this beat
+    // actually carries an appearance change; a plain conversational
+    // line with no wardrobe/prop change needs no settle time. Applied
+    // after the audio-floor pad above (that pad is about meeting LTX's
+    // hard minimum; this is a deliberate, always-additional lead-in).
+    if (appearanceModifier) {
+      audioBytes = prependSilenceToMp3(audioBytes, SUNNY_BANKS_SETTLE_LEAD_SEC);
+    }
+    const finalDurationSec = estimateMp3DurationSec(audioBytes);
+    durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, finalDurationSec);
     prompt = buildSunnyBanksSpeakingPrompt(character!, line);
+    if (appearanceModifier) {
+      prompt =
+        `${prompt} For the first ~${SUNNY_BANKS_SETTLE_LEAD_SEC}s, ${character!.name} holds the newly-staged ` +
+        `pose from the start image without speaking, then begins speaking naturally in sync with the audio.`;
+    }
   }
 
-  // `[Action:]` is extra LTX context after gold, never a rewrite of
-  // the locked Hold/Speak strings and never part of the TTS `line`.
+  // `[Action:]` and the appearance modifier are extra LTX context after
+  // gold, never a rewrite of the locked Hold/Speak strings and never
+  // part of the TTS `line`. The server (not the client) is the single
+  // place these get merged into the motion prompt now (2026-09-18) —
+  // previously the client pre-merged `appearanceModifier` into `action`
+  // itself, which this route had no way to also route into the
+  // compositing prompt above without double-counting it here.
   // Location cutaways already baked action into the motion prompt.
-  if (action && !isLocationCutaway) {
-    prompt = `${prompt} ${action}`;
+  const motionExtras = [action, appearanceModifier].filter(Boolean).join(" ");
+  if (motionExtras && !isLocationCutaway) {
+    prompt = `${prompt} ${motionExtras}`;
   }
 
   let plateDataUrl = startImageDataUrl;
@@ -268,6 +334,7 @@ export async function POST(request: Request) {
       locationDataUrl: startImageDataUrl,
       character: character!,
       locationId,
+      appearanceOverride: appearanceModifier || undefined,
     });
     if (!plated.ok) {
       return NextResponse.json({ error: plated.error, code: plated.code }, { status: plated.status });
