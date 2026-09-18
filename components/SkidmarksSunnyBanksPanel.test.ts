@@ -30,6 +30,7 @@ import {
   SUNNY_BANKS_ACTS,
   toSunnyBanksActId,
   buildSunnyBanksHighlightSegments,
+  formatSunnyBanksGodScript,
 } from "./SkidmarksSunnyBanksPanel";
 import { SUNNY_BANKS_CAST, SUNNY_BANKS_LOCATIONS, buildSunnyBanksSpeakingPrompt } from "@/lib/sunnyBanks";
 
@@ -810,5 +811,53 @@ describe("buildSunnyBanksHighlightSegments (script editor tag coloring)", () => 
       (s) => s.kind !== "plain"
     );
     expect(segments).toEqual([{ kind: "character", text: "[Character Dazza wrapped in bandages]" }]);
+  });
+});
+
+describe("formatSunnyBanksGodScript (one-tap spacing/format button)", () => {
+  it("breaks a single run-together wall of text into one line per tag/speaker", () => {
+    const wall =
+      "[Location: office_storefront]Dazza: hey Shaz, where do you want me to setup the scam repellent for these suckers?Shazza: not so loud Dazza, we don't want the suckers to find out";
+    const formatted = formatSunnyBanksGodScript(wall);
+    expect(formatted).toBe(
+      "[Location: office_storefront]\n" +
+        "Dazza: hey Shaz, where do you want me to setup the scam repellent for these suckers?\n" +
+        "Shazza: not so loud Dazza, we don't want the suckers to find out"
+    );
+    const chunks = parseSunnyBanksScriptBlock(formatted);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toMatchObject({ characterName: "Dazza", locationId: "office_storefront" });
+    expect(chunks[1].characterName).toBe("Shazza");
+  });
+
+  it("splits an inline [Character ...] tag from the dialogue line that follows it, without corrupting the tag", () => {
+    const raw = "[Character Dazza: holding a rusty tin spray can] Dazza: hey Shaz, where do you want this?";
+    const formatted = formatSunnyBanksGodScript(raw);
+    expect(formatted).toBe(
+      "[Character Dazza: holding a rusty tin spray can]\nDazza: hey Shaz, where do you want this?"
+    );
+  });
+
+  it("never breaks a name+colon that sits inside a tag's own brackets", () => {
+    const formatted = formatSunnyBanksGodScript("[Character Dazza: wrapped in bandages] Dazza:");
+    expect(formatted).toContain("[Character Dazza: wrapped in bandages]");
+    expect(formatted).not.toContain("Dazza\n:");
+  });
+
+  it("collapses blank lines and trims trailing whitespace without touching real content", () => {
+    const raw = "Shazza: You right?   \n\n\n\nDazza: Yeah nah.\n\n";
+    expect(formatSunnyBanksGodScript(raw)).toBe("Shazza: You right?\nDazza: Yeah nah.");
+  });
+
+  it("is idempotent — formatting already-clean text is a no-op", () => {
+    const clean = "[Location: site_laundry]\nShazza: You right?\nDazza: Yeah nah.";
+    expect(formatSunnyBanksGodScript(clean)).toBe(clean);
+    expect(formatSunnyBanksGodScript(formatSunnyBanksGodScript(clean))).toBe(formatSunnyBanksGodScript(clean));
+  });
+
+  it("leaves a `Name says:` beat correctly split from a preceding tag", () => {
+    const raw = "[Action: leans in][Location: site_laundry]Shazza says: careful with that";
+    const formatted = formatSunnyBanksGodScript(raw);
+    expect(formatted).toBe("[Action: leans in]\n[Location: site_laundry]\nShazza says: careful with that");
   });
 });

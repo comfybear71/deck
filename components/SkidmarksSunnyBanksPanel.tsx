@@ -499,6 +499,83 @@ const SUNNY_BANKS_HIGHLIGHT_CLASSES: Record<SunnyBanksHighlightTagKind, string> 
   action: "text-green-300",
 };
 
+/** Placeholder marker used only inside `formatSunnyBanksGodScript`'s own
+ * working copy of the text — never appears in real output. Null bytes
+ * can't come from a pasted script, so this can't collide with anything
+ * a real God Script would contain. */
+const FORMAT_TAG_PLACEHOLDER_RE = /\u0000TAG(\d+)\u0000/g;
+
+/**
+ * One-tap "Format" — reflows a pasted/typed God Script onto the
+ * "one tag or one speaker per line" shape the parser actually expects,
+ * without touching a single character of real content (no tag is
+ * rewritten, no dialogue word is added or removed — only whitespace/
+ * newlines move). Built for the exact complaint that prompted it: text
+ * pasted in from elsewhere with no line breaks at all, where every
+ * tag and every `Name:` run together on one line.
+ *
+ * Never needed for *color* — `buildSunnyBanksHighlightSegments` above
+ * colors bracket tags wherever they sit, line breaks or not. This is
+ * strictly about restoring the parser's own line-per-beat shape so
+ * `parseSunnyBanksScriptBlock` reads back the right number of rows
+ * instead of merging several beats into one giant line.
+ *
+ * How: protect every real bracket tag (the same shapes
+ * `buildSunnyBanksHighlightSegments` finds) behind a placeholder token
+ * first, so the speaker-prefix pass below can never match text sitting
+ * *inside* a tag (e.g. the "Dazza:" inside `[Character Dazza: ...]`)
+ * and split a tag in half. Then: force a newline before every tag and
+ * every recognized `Name:`/`Name says:` prefix that isn't already at
+ * the start of a line, drop blank lines (never meaningful to the
+ * parser), and restore the real tag text.
+ *
+ * Known, accepted limitation: a cast member's name followed by a colon
+ * *inside* real dialogue (e.g. `Shazza: ask Dazza: he'd know`) reads as
+ * a second speaker line, same ambiguity `matchSpeakerPrefix` already
+ * has for text at the start of a real line — this formatter can't
+ * disambiguate that any better than the parser it's formatting for.
+ * Idempotent: running it again on its own output is a no-op.
+ */
+export function formatSunnyBanksGodScript(text: string): string {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const segments = buildSunnyBanksHighlightSegments(normalized);
+  const tagTexts: string[] = [];
+  let working = "";
+  for (const segment of segments) {
+    if (segment.kind === "plain") {
+      working += segment.text;
+    } else {
+      const index = tagTexts.push(segment.text) - 1;
+      working += `\u0000TAG${index}\u0000`;
+    }
+  }
+
+  // Force a newline before every tag placeholder not already at a line start,
+  // trimming any inline spacing that used to sit between it and prior text.
+  working = working.replace(/[ \t]*(\u0000TAG\d+\u0000)/g, (match, placeholder: string, offset: number, full: string) => {
+    const before = full.slice(0, offset);
+    return before.length === 0 || before.endsWith("\n") ? placeholder : `\n${placeholder}`;
+  });
+
+  // Same for a recognized speaker prefix (`Name:` / `Name says:`).
+  if (SPEAKER_NAMES.length > 0) {
+    const speakerAlternation = SPEAKER_NAMES.map(escapeRegExp).join("|");
+    const speakerRe = new RegExp(`[ \\t]*\\b(?:${speakerAlternation})\\s*(?:says\\s*)?:`, "gi");
+    working = working.replace(speakerRe, (match, offset: number, full: string) => {
+      const before = full.slice(0, offset);
+      const trimmed = match.replace(/^[ \t]+/, "");
+      return before.length === 0 || before.endsWith("\n") ? trimmed : `\n${trimmed}`;
+    });
+  }
+
+  const lines = working
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""))
+    .filter((line) => line.trim().length > 0);
+
+  return lines.join("\n").replace(FORMAT_TAG_PLACEHOLDER_RE, (_, index: string) => tagTexts[Number(index)]);
+}
+
 /** Positioned behind the real `<textarea>` (which has its own text made
  * transparent so this shows through) — never in front, and never
  * `pointer-events`-capturing, so typing/selection/scrolling all still
@@ -1296,6 +1373,18 @@ export function SkidmarksSunnyBanksPanel() {
     setScriptUndo(null);
   };
 
+  /** One tap: reflow the pasted/typed script onto one tag or speaker per
+   * line (`formatSunnyBanksGodScript`) — never rewrites a tag or a word
+   * of dialogue, only whitespace. Routed through the same
+   * `handleScriptChange` every other script edit uses, so this gets the
+   * same undo-capture, act-header re-split, and Neon persistence for
+   * free rather than needing its own copy of that logic. */
+  const handleFormatScript = () => {
+    if (running) return;
+    const formatted = formatSunnyBanksGodScript(scriptText);
+    if (formatted !== scriptText) handleScriptChange(formatted);
+  };
+
   const handleScriptChange = (value: string) => {
     const decoded = decodeSunnyBanksPastedScript(value);
     const doc = parseSunnyBanksGodDocument(decoded, activeAct);
@@ -1587,6 +1676,15 @@ export function SkidmarksSunnyBanksPanel() {
                   + Add Act
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={handleFormatScript}
+                disabled={running || !scriptText.trim()}
+                aria-label="Auto-format script spacing"
+                className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+              >
+                ⇥ Format
+              </button>
               <button
                 type="button"
                 onClick={handleUndoScript}
