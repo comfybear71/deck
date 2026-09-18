@@ -25,11 +25,24 @@ export async function GET() {
   if (!outcome.configured) {
     return NextResponse.json({ configured: false, state: null, error: outcome.error });
   }
-  return NextResponse.json({ configured: true, state: outcome.state, updatedAt: outcome.updatedAt });
+  return NextResponse.json({
+    configured: true,
+    state: outcome.state,
+    updatedAt: outcome.updatedAt,
+    revision: outcome.revision,
+  });
 }
 
 interface SessionPutBody {
   state?: unknown;
+  /** The `revision` this client last read from `GET` (or got back from
+   * its own previous `PUT`). Present = conditional write: the save is
+   * refused if the row has moved on since, so a device holding a stale
+   * copy cannot silently overwrite newer work from another device.
+   * Omitted = unconditional, the pre-2026-09-18 behaviour, kept only so
+   * an older client build in a still-open tab keeps saving rather than
+   * hard-failing on deploy. */
+  expectedRevision?: unknown;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -48,8 +61,28 @@ export async function PUT(request: Request) {
     return NextResponse.json({ ok: false, error: "Missing or malformed `state`." }, { status: 400 });
   }
 
-  const outcome = await saveSkidmarksSession(body.state);
+  const expectedRevision =
+    typeof body.expectedRevision === "number" && Number.isFinite(body.expectedRevision)
+      ? body.expectedRevision
+      : undefined;
+
+  const outcome = await saveSkidmarksSession(body.state, expectedRevision);
   if (!outcome.ok) {
+    // A conflict is not a server fault and not worth retrying — the
+    // client has to reconcile. `409` so that's unambiguous on the wire.
+    if ("conflict" in outcome && outcome.conflict) {
+      return NextResponse.json(
+        {
+          ok: false,
+          conflict: true,
+          configured: true,
+          revision: outcome.revision,
+          updatedAt: outcome.updatedAt,
+          error: outcome.error,
+        },
+        { status: 409 }
+      );
+    }
     // `configured: false` (Neon not connected here) is an honest,
     // expected outcome, not a server error — 200, same as GET's own
     // `configured: false` shape. A real query failure after the
@@ -59,5 +92,6 @@ export async function PUT(request: Request) {
       { status: outcome.configured ? 502 : 200 }
     );
   }
-  return NextResponse.json({ ok: true, updatedAt: outcome.updatedAt });
+
+  return NextResponse.json({ ok: true, updatedAt: outcome.updatedAt, revision: outcome.revision });
 }

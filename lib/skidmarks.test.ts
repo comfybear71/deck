@@ -34,6 +34,7 @@ import {
   SEGMENT_NUDGE_STEP_SEC,
   shouldApplyHydratedSkidmarksSession,
   shouldPushSkidmarksSession,
+  isSkidmarksStaleLocalFork,
   resolveSkidmarksHydrationWinner,
   computeSkidmarksArchiveFingerprint,
   isSkidmarksSessionAlreadyArchived,
@@ -1886,6 +1887,10 @@ describe("resolveSkidmarksHydrationWinner", () => {
     localSavedAt: 1000,
     remoteIsSubstantive: true,
     remoteUpdatedAt: 2000,
+    // No revisions on either side: a mirror written before 2026-09-18,
+    // so these cases still exercise the original clock tie-break.
+    localRevision: null,
+    remoteRevision: null,
   };
 
   it("audit failure mode #3: a real Neon row always beats a seed-only local state, even after a tap during the load", () => {
@@ -1914,6 +1919,63 @@ describe("resolveSkidmarksHydrationWinner", () => {
   it("with nothing real in Neon, keeps whatever real session this phone has", () => {
     expect(resolveSkidmarksHydrationWinner({ ...base, remoteIsSubstantive: false })).toBe("local");
     expect(resolveSkidmarksHydrationWinner({ ...base, remoteIsSubstantive: false, localIsSubstantive: false })).toBe("remote");
+  });
+
+  /** The reported 2026-09-18 failure: episodes are built on the phone,
+   * then opened on a PC purely to download them for Resolve — and the
+   * PC showed an older copy. Revisions are server-assigned and
+   * monotonic, so once both sides know one there is nothing to guess. */
+  describe("exact revision comparison (2026-09-18)", () => {
+    const withRevisions = { ...base, localRevision: 4, remoteRevision: 9 };
+
+    it("a device built from an older revision takes the server's copy, whatever the clocks say", () => {
+      // The clock tie-break kept local here — and a second machine is
+      // exactly where two clocks disagree.
+      expect(
+        resolveSkidmarksHydrationWinner({ ...withRevisions, localSavedAt: 9_999_999, remoteUpdatedAt: 1 })
+      ).toBe("remote");
+    });
+
+    it("keeps local when it is level with the row it last saw", () => {
+      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, localRevision: 9 })).toBe("local");
+    });
+
+    it("still keeps local when it holds edits the server never took, even against a newer row", () => {
+      // Silently dropping unsent work to show a newer copy would just
+      // be a different kind of data loss.
+      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, localUnsynced: true })).toBe("local");
+    });
+
+    it("falls back to the clock tie-break when either side has no revision", () => {
+      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, localRevision: null })).toBe("remote");
+      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, remoteRevision: null, localSavedAt: 3000 })).toBe(
+        "local"
+      );
+    });
+  });
+
+  describe("isSkidmarksStaleLocalFork", () => {
+    it("flags the one case the winner cannot resolve without discarding someone's work", () => {
+      expect(isSkidmarksStaleLocalFork({ ...base, localUnsynced: true, localRevision: 4, remoteRevision: 9 })).toBe(
+        true
+      );
+    });
+
+    it("is not a fork when this device is merely behind with nothing unsent", () => {
+      expect(isSkidmarksStaleLocalFork({ ...base, localRevision: 4, remoteRevision: 9 })).toBe(false);
+    });
+
+    it("is not a fork when this device is level with or ahead of the row", () => {
+      expect(isSkidmarksStaleLocalFork({ ...base, localUnsynced: true, localRevision: 9, remoteRevision: 9 })).toBe(
+        false
+      );
+    });
+
+    it("never guesses a fork from clocks when a revision is missing", () => {
+      expect(
+        isSkidmarksStaleLocalFork({ ...base, localUnsynced: true, localRevision: null, remoteRevision: 9 })
+      ).toBe(false);
+    });
   });
 });
 

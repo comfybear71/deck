@@ -10,6 +10,7 @@ import {
   flushSkidmarksSessionNow,
   isSkidmarksSessionAlreadyArchived,
   resolveChainedPlateTarget,
+  loadSkidmarksSessionFromServerNow,
 } from "@/lib/skidmarks";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 import {
@@ -493,6 +494,34 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             className="mx-4 mb-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] leading-snug text-white/60"
           >
             Saving\u2026 hold on before refreshing.
+          </p>
+        )}
+
+        {sessionSync.status === "conflict" && (
+          // A newer save exists somewhere else (2026-09-18, after a real
+          // report: a second device opened the app, showed an older
+          // copy, and would have pushed it back over the good one). The
+          // server refused the write — that refusal is the feature, so
+          // this says which copy is newer and what to do, instead of
+          // implying something broke. Deliberately not auto-retried:
+          // retrying IS the overwrite.
+          <p
+            role="alert"
+            className="mx-4 mb-2 rounded-lg border border-amber-300/40 bg-amber-300/10 px-2.5 py-1.5 text-[10px] leading-snug text-amber-100/90"
+          >
+            NOT SAVED — a newer version was saved
+            {sessionSync.remoteSavedAt
+              ? ` elsewhere at ${new Date(sessionSync.remoteSavedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+              : " from another device"}
+            , so this device will not write over it. Your edits here are safe on this phone and are not lost.
+            Back up anything you changed here first, then load the newer copy.
+            <button
+              type="button"
+              onClick={() => void loadSkidmarksSessionFromServerNow()}
+              className="mt-1.5 block min-h-[40px] rounded-full bg-amber-300 px-3 text-[11px] font-semibold text-zinc-950"
+            >
+              Load the latest saved version
+            </button>
           </p>
         )}
 

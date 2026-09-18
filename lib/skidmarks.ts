@@ -1752,7 +1752,7 @@ const SESSION_PUSH_DEBOUNCE_MS = 600;
  * intermittent connection still ends up saved well before morning. */
 const SESSION_UNSYNCED_RETRY_INTERVAL_MS = 60_000;
 
-export type SkidmarksSessionSyncStatus = "loading" | "synced" | "saving" | "unconfigured" | "error";
+export type SkidmarksSessionSyncStatus = "loading" | "synced" | "saving" | "unconfigured" | "error" | "conflict";
 
 /** Live, ephemeral status of the Neon round trip — see this section's
  * doc comment. Never persisted, never sent to or read from the server
@@ -1765,6 +1765,10 @@ export interface SkidmarksSessionSyncState {
   /** Wall-clock time of the most recent successful push, if any —
    * purely informational. */
   lastSavedAt?: number;
+  /** `"conflict"` only — when the copy this device is refusing to
+   * overwrite was last saved, so the UI can say *which* copy is newer
+   * rather than just "something went wrong". */
+  remoteSavedAt?: number;
 }
 
 let sessionSync: SkidmarksSessionSyncState = { status: "loading" };
@@ -1822,6 +1826,36 @@ interface SessionGetRouteBody {
   state?: unknown;
   error?: unknown;
   updatedAt?: unknown;
+  revision?: unknown;
+}
+
+/**
+ * What revision of the Neon row this page load last actually saw —
+ * the compare-and-swap token sent with every `PUT` (2026-09-18).
+ *
+ * `known: false` is the honest "this page load never got a readable
+ * answer out of the server" state: the hydrate `GET` threw, or came
+ * back unparseable. **A push in that state is refused**, because the
+ * one thing worse than not saving is saving a stale copy over a newer
+ * one — which is the real, reported failure this whole mechanism
+ * exists for (a second device opened the app, showed an older copy,
+ * and would have pushed it back over the good one).
+ *
+ * `configured: false` (no `DATABASE_URL` here at all) counts as known:
+ * there is no row to protect, and the push will report `unconfigured`
+ * on its own without this getting in the way.
+ */
+type RemoteRevision = { known: true; revision: number } | { known: false };
+let remoteRevision: RemoteRevision = { known: false };
+
+/** Mirrors `SKIDMARKS_SESSION_NO_ROW_REVISION` on the server — 0 means
+ * "I read the row and there wasn't one", which is what lets a genuinely
+ * first-ever save insert rather than being refused as a conflict. */
+const NO_ROW_REVISION = 0;
+
+function readRevision(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return null;
 }
 
 let hydrationStarted = false;
@@ -1918,6 +1952,14 @@ interface LocalMirrorEnvelope {
    * `resolveSkidmarksHydrationWinner` trusts first; the timestamp
    * comparison is only the tie-breaker for a mirror that *was* synced. */
   unsynced?: boolean;
+  /** The server `revision` this mirrored copy was built from — set on a
+   * confirmed save and on a hydrate that adopted the server's copy.
+   * Server-assigned and monotonic, so comparing it against the row's
+   * current revision on the next hydrate is **exact**: it says which
+   * copy is older without guessing from two devices' clocks. Absent on
+   * a mirror written before 2026-09-18, which just falls back to the
+   * old timestamp tie-break. */
+  revision?: number;
 }
 
 /** Best-effort, synchronous, never throws — private-mode Safari, a full
@@ -1930,7 +1972,12 @@ interface LocalMirrorEnvelope {
 function writeLocalMirror(state: SkidmarksState, unsynced = true): void {
   if (!isBrowser() || !sessionHasSubstantiveContent(state)) return;
   try {
-    const envelope: LocalMirrorEnvelope = { state, savedAt: Date.now(), unsynced };
+    const envelope: LocalMirrorEnvelope = {
+      state,
+      savedAt: Date.now(),
+      unsynced,
+      ...(remoteRevision.known ? { revision: remoteRevision.revision } : {}),
+    };
     window.localStorage.setItem(LOCAL_MIRROR_STORAGE_KEY, JSON.stringify(envelope));
   } catch {
     // Quota exceeded, private mode, or storage disabled — nothing to do.
@@ -1953,7 +2000,14 @@ function readLocalMirrorWithTimestamp(): LocalMirrorEnvelope | null {
     if (typeof parsed.savedAt !== "number" || !parsed.state) return null;
     const state = normalizeState(parsed.state);
     return sessionHasSubstantiveContent(state)
-      ? { state, savedAt: parsed.savedAt, unsynced: parsed.unsynced === true }
+      ? {
+          state,
+          savedAt: parsed.savedAt,
+          unsynced: parsed.unsynced === true,
+          ...(typeof parsed.revision === "number" && Number.isFinite(parsed.revision)
+            ? { revision: parsed.revision }
+            : {}),
+        }
       : null;
   } catch {
     return null;
@@ -2010,6 +2064,11 @@ export interface SkidmarksHydrationCandidates {
   remoteIsSubstantive: boolean;
   /** Neon's own `updated_at`, or `null` when unknown/unparseable. */
   remoteUpdatedAt: number | null;
+  /** The server revision this device's mirrored copy was built from, or
+   * `null` for a mirror written before revisions existed. */
+  localRevision: number | null;
+  /** The row's current revision, or `null` if the server didn't say. */
+  remoteRevision: number | null;
 }
 
 /**
@@ -2037,9 +2096,43 @@ export interface SkidmarksHydrationCandidates {
 export function resolveSkidmarksHydrationWinner(c: SkidmarksHydrationCandidates): "local" | "remote" {
   if (!c.remoteIsSubstantive) return c.localIsSubstantive ? "local" : "remote";
   if (!c.localIsSubstantive) return "remote";
-  if (c.editedDuringLoad || c.localUnsynced) return "local";
+  if (c.editedDuringLoad) return "local";
+
+  // Revisions are server-assigned and monotonic, so when both sides
+  // know one there is nothing to guess: a mirror built from an older
+  // revision is definitively behind. This replaces the clock tie-break
+  // below for the case that actually bit (2026-09-18) — a second device
+  // opened the app and showed an older copy of the project, because the
+  // comparison was its own clock against the server's, and a
+  // second machine is exactly where two clocks disagree.
+  //
+  // `unsynced` still wins even against a newer row: that flag means
+  // this device holds edits the server never took, and silently
+  // throwing those away to show the newer copy would be its own data
+  // loss. `hydrateSkidmarksSessionOnce` surfaces that fork instead, so
+  // it is a visible choice rather than a silent one.
+  if (c.localRevision !== null && c.remoteRevision !== null) {
+    if (c.localRevision < c.remoteRevision) return c.localUnsynced ? "local" : "remote";
+    return "local";
+  }
+
+  if (c.localUnsynced) return "local";
   if (c.localSavedAt !== null && (c.remoteUpdatedAt === null || c.localSavedAt > c.remoteUpdatedAt)) return "local";
   return "remote";
+}
+
+/** True when this device kept its own copy only because it holds unsent
+ * edits, while the server has a strictly newer one — the one case the
+ * winner above cannot resolve without throwing away somebody's work. */
+export function isSkidmarksStaleLocalFork(c: SkidmarksHydrationCandidates): boolean {
+  return (
+    c.localUnsynced &&
+    c.localIsSubstantive &&
+    c.remoteIsSubstantive &&
+    c.localRevision !== null &&
+    c.remoteRevision !== null &&
+    c.localRevision < c.remoteRevision
+  );
 }
 
 /** Whether the one-time hydrate has reached a terminal outcome (applied
@@ -2235,6 +2328,13 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
 
     if (!res.ok || !body || body.configured !== true) {
       recoverLocallyOnly();
+      // An explicit `configured: false` means there is no database here
+      // at all — no row to overwrite, so the push guard below must not
+      // treat it as "never read the row". A transport/HTTP failure is
+      // the opposite: we genuinely don't know what Neon holds, so leave
+      // `remoteRevision` unknown and let the guard refuse to push.
+      remoteRevision =
+        body && body.configured === false ? { known: true, revision: NO_ROW_REVISION } : { known: false };
       setSessionSync({
         status: "unconfigured",
         error: typeof body?.error === "string" ? body.error : `HTTP ${res.status}`,
@@ -2244,18 +2344,51 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
 
     const fetched = body.state == null ? null : normalizeState(body.state);
     const fetchedUpdatedAt = typeof body.updatedAt === "string" ? Date.parse(body.updatedAt) : NaN;
+    // This page load has now genuinely read the row — every push from
+    // here on is conditional on this exact revision.
+    const fetchedRevision = readRevision(body.revision);
+    remoteRevision =
+      fetchedRevision !== null
+        ? { known: true, revision: fetchedRevision }
+        : // An older server build (no `revision` in the response) still
+          // has to be saveable, or a mid-deploy tab is stuck read-only.
+          // The server treats an omitted `expectedRevision` as the old
+          // unconditional write, which is exactly the pre-2026-09-18
+          // behaviour rather than a new risk.
+          { known: false };
     // The legacy pre-#57 blob only ever matters when neither side has
     // anything real — read it into "local" for the decision below.
     if (!localIsSubstantive()) recoverLocallyOnly();
 
-    const winner = resolveSkidmarksHydrationWinner({
+    const candidates: SkidmarksHydrationCandidates = {
       editedDuringLoad: !shouldApplyHydratedSkidmarksSession(editsAtStart, localEditCount),
       localIsSubstantive: localIsSubstantive(),
       localUnsynced: mirrorAtStart?.unsynced ?? false,
       localSavedAt: mirrorAtStart?.savedAt ?? null,
       remoteIsSubstantive: !!fetched && sessionHasSubstantiveContent(fetched),
       remoteUpdatedAt: Number.isNaN(fetchedUpdatedAt) ? null : fetchedUpdatedAt,
-    });
+      localRevision: mirrorAtStart?.revision ?? null,
+      remoteRevision: fetchedRevision,
+    };
+    const winner = resolveSkidmarksHydrationWinner(candidates);
+
+    if (isSkidmarksStaleLocalFork(candidates)) {
+      // This device holds edits the server never took, AND the server
+      // has moved on since. Neither copy can be thrown away silently.
+      // Keep this device's (its edits are the ones nothing else has)
+      // and say so, with `loadSkidmarksSessionFromServerNow` as the
+      // one-tap way to take the newer copy instead.
+      noteContentObserved(local());
+      settleHydration();
+      setSessionSync({
+        status: "conflict",
+        error:
+          "This device has changes that were never saved, and a newer version was saved somewhere else. " +
+          "Nothing has been thrown away — choose which one you want.",
+        ...(Number.isNaN(fetchedUpdatedAt) ? {} : { remoteSavedAt: fetchedUpdatedAt }),
+      });
+      return;
+    }
 
     if (winner === "local") {
       // This phone holds the real/newer copy — make Neon match it.
@@ -2313,6 +2446,9 @@ interface SessionPutRouteBody {
   ok?: unknown;
   configured?: unknown;
   error?: unknown;
+  revision?: unknown;
+  conflict?: unknown;
+  updatedAt?: unknown;
 }
 
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2367,6 +2503,25 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   // `shouldPushSkidmarksSession`'s doc comment. This is a refusal, not
   // a network failure, so it never enters the retry-with-backoff path
   // below at all; retrying the exact same thin state wouldn't help.
+  // Real, reported failure mode (2026-09-18) this guard closes: a
+  // second device opened the app, could not read Neon, and would then
+  // have pushed its own older copy straight over the good one. If this
+  // page load never learned what the row holds, it does not get to
+  // replace it. A reload (which re-runs the hydrate) is the fix.
+  if (!remoteRevision.known) {
+    setSessionSync({
+      status: "error",
+      error:
+        "Not saved — this device could not read your saved session, so it will not write over it. " +
+        "Reload the app to try again.",
+    });
+    pushInFlight = false;
+    if (pushQueued) {
+      pushQueued = false;
+      void pushSkidmarksSessionNow(keepalive);
+    }
+    return;
+  }
   if (!shouldPushSkidmarksSession(hadSubstantiveContentThisLoad, snapshot !== null && sessionHasSubstantiveContent(snapshot))) {
     setSessionSync({
       status: "error",
@@ -2423,7 +2578,10 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   // error message turns the next report into a measurement instead of
   // another guess: a small number here rules that theory out entirely;
   // a multi-MB number confirms it and says exactly where to look next.
-  const payloadJson = JSON.stringify({ state: toSend });
+  const payloadJson = JSON.stringify({
+    state: toSend,
+    expectedRevision: remoteRevision.known ? remoteRevision.revision : undefined,
+  });
   const payloadSizeMb = (new TextEncoder().encode(payloadJson).length / (1024 * 1024)).toFixed(1);
   try {
     let lastNetworkError: unknown = null;
@@ -2436,7 +2594,25 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
           keepalive,
         });
         const body = (await res.json().catch(() => ({}))) as SessionPutRouteBody;
-        if (!res.ok || body.ok !== true) {
+        if (res.status === 409 || body.conflict === true) {
+          // Another device (or tab) saved since this page load read the
+          // row. Refusing is the point — retrying would be the
+          // overwrite. Adopt the server's revision so the next push
+          // after a reconcile isn't stuck failing forever, but leave
+          // the local state alone: this device's edits are still here,
+          // unsent, and a reload will show both sides honestly.
+          const conflictRevision = readRevision(body.revision);
+          if (conflictRevision !== null) remoteRevision = { known: true, revision: conflictRevision };
+          const remoteSavedAt = typeof body.updatedAt === "string" ? Date.parse(body.updatedAt) : NaN;
+          setSessionSync({
+            status: "conflict",
+            error:
+              typeof body.error === "string"
+                ? body.error
+                : "Not saved — a newer version was saved from somewhere else.",
+            ...(Number.isNaN(remoteSavedAt) ? {} : { remoteSavedAt }),
+          });
+        } else if (!res.ok || body.ok !== true) {
           setSessionSync({
             status: body.configured === false ? "unconfigured" : "error",
             error: `${typeof body.error === "string" ? body.error : `HTTP ${res.status}`} (payload ${payloadSizeMb}MB)`,
@@ -2446,6 +2622,8 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
           // while the request was out, the mirror can drop its
           // `unsynced` flag — see `LocalMirrorEnvelope.unsynced`.
           if (preStrip && cachedState === preStrip) writeLocalMirror(preStrip, false);
+          const savedRevision = readRevision(body.revision);
+          if (savedRevision !== null) remoteRevision = { known: true, revision: savedRevision };
           setSessionSync({ status: "synced", lastSavedAt: Date.now() });
         }
         return;
@@ -2519,6 +2697,62 @@ export function flushSkidmarksSessionNow(keepalive = false): void {
     pushTimer = null;
   }
   void pushSkidmarksSessionNow(keepalive);
+}
+
+/**
+ * Explicitly replace whatever this device is holding with the copy on
+ * the server (2026-09-18, after the real report: episodes are built on
+ * the phone, then opened on a PC purely to download them for Resolve —
+ * so the PC showing an older copy is the thing that actually blocks the
+ * work, and it never has edits of its own worth protecting).
+ *
+ * The automatic rule above gets this right on its own now that
+ * revisions are exact, so this is the escape hatch for the one case it
+ * deliberately won't decide — a device with unsent edits *and* a newer
+ * row on the server. Always user-initiated, never automatic: it
+ * discards this device's unsaved edits by definition, so nothing should
+ * fire it without someone asking.
+ *
+ * Returns `false` (leaving the current state untouched) for every
+ * honest failure — no database, nothing saved yet, an unreachable
+ * server — rather than blanking the app because a fetch went wrong.
+ */
+export async function loadSkidmarksSessionFromServerNow(): Promise<boolean> {
+  if (!isBrowser()) return false;
+  setSessionSync({ status: "loading" });
+  try {
+    const res = await fetch(SESSION_ENDPOINT, { cache: "no-store" });
+    const body = (await res.json().catch(() => null)) as SessionGetRouteBody | null;
+    if (!res.ok || !body || body.configured !== true) {
+      setSessionSync({
+        status: body && body.configured === false ? "unconfigured" : "error",
+        error: typeof body?.error === "string" ? body.error : `HTTP ${res.status}`,
+      });
+      return false;
+    }
+    const fetched = body.state == null ? null : normalizeState(body.state);
+    if (!fetched || !sessionHasSubstantiveContent(fetched)) {
+      setSessionSync({
+        status: "error",
+        error: "There is no saved project on the server to load.",
+      });
+      return false;
+    }
+    const fetchedRevision = readRevision(body.revision);
+    remoteRevision = fetchedRevision !== null ? { known: true, revision: fetchedRevision } : { known: false };
+    cachedState = fetched;
+    noteContentObserved(fetched);
+    writeLocalMirror(fetched, false);
+    notify();
+    setSessionSync({ status: "synced" });
+    return true;
+  } catch (err) {
+    setSessionSync({
+      status: "error",
+      error: err instanceof Error ? err.message : "Could not reach the server.",
+    });
+    return false;
+  }
 }
 
 let sessionLifecycleWired = false;
