@@ -8,6 +8,7 @@ import { crashLabClipUrl } from "./sunnyBanksDropBears";
 import fixture from "./sunnyBanksDropBears.fixture.json";
 import {
   buildSunnyBanksEpisodeBundle,
+  fetchSunnyBanksBinaryAsset,
   resolveSunnyBanksEpisodeAudioUrl,
   slugifySunnyBanksEpisodeFilename,
 } from "./sunnyBanksEpisodeBundle";
@@ -272,5 +273,72 @@ describe("buildSunnyBanksEpisodeBundle progress + honest clip counts (2026-09-18
     expect(result.fetchedClipCount).toBe(0);
     expect(result.filename).toBe("ep02-drop-bears-dilemma.zip");
     expect(result.zipBytes.byteLength).toBeGreaterThan(0);
+  });
+});
+
+describe("fetchSunnyBanksBinaryAsset proxy fallback (2026-09-18)", () => {
+  /** The exact live failure: "Downloaded EP02 — 18 of 64 clips". The 18
+   * were Vercel Blob renders; the 46 that failed were Crash Lab seed
+   * clips on another host, where the browser blocks reading the bytes. */
+  const CROSS_ORIGIN = crashLabClipUrl(firstBeat.clipFile);
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("retries a CORS-blocked clip through the same-origin proxy and gets the bytes", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        // A CORS block surfaces as a thrown TypeError, not a status —
+        // the browser deliberately hides why.
+        if (url === CROSS_ORIGIN) throw new TypeError("Load failed");
+        if (url.startsWith("/api/skidmarks/sunnybank/clip-proxy")) {
+          return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        }
+        return new Response(null, { status: 404 });
+      })
+    );
+
+    const bytes = await fetchSunnyBanksBinaryAsset(CROSS_ORIGIN);
+    expect(bytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(calls[0]).toBe(CROSS_ORIGIN);
+    expect(calls[1]).toContain("/api/skidmarks/sunnybank/clip-proxy?url=");
+    expect(decodeURIComponent(calls[1].split("url=")[1])).toBe(CROSS_ORIGIN);
+  });
+
+  it("does not spend a second request when the direct fetch already worked", async () => {
+    // A Blob URL is readable cross-origin already; proxying it too
+    // would double the bytes for nothing.
+    const fetchSpy = vi.fn(async () => new Response(new Uint8Array([7]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const bytes = await fetchSunnyBanksBinaryAsset(
+      "https://abc.public.blob.vercel-storage.com/sunnybanks/speak-beats/1-shazza.mp4"
+    );
+    expect(bytes).toEqual(new Uint8Array([7]));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a URL the proxy would refuse — that request can only fail", async () => {
+    const fetchSpy = vi.fn(async () => {
+      throw new TypeError("Load failed");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    expect(await fetchSunnyBanksBinaryAsset("https://example.com/clip.mp4")).toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null, never throws, when the proxy fails too", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === CROSS_ORIGIN) throw new TypeError("Load failed");
+        return new Response(null, { status: 502 });
+      })
+    );
+    expect(await fetchSunnyBanksBinaryAsset(CROSS_ORIGIN)).toBeNull();
   });
 });

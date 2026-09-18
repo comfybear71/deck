@@ -1,6 +1,7 @@
 import { crashLabClipUrl } from "./sunnyBanksDropBears";
 import fixture from "./sunnyBanksDropBears.fixture.json";
 import { buildStoreZip } from "./zipDownload";
+import { buildSunnyBanksClipProxyUrl, isAllowedSunnyBanksClipUrl } from "./sunnyBanksClipProxy";
 
 /**
  * Client-side Sunny Banks episode zip (2026-09-17) — scripts, the gold
@@ -114,19 +115,45 @@ export function resolveSunnyBanksEpisodeAudioUrl(clip: SunnyBanksEpisodeClipEntr
   return crashLabClipUrl(beat.voiceFile);
 }
 
+async function readBinaryResponse(url: string): Promise<Uint8Array | null> {
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const buffer = await res.arrayBuffer();
+  if (buffer.byteLength === 0) return null;
+  return new Uint8Array(buffer);
+}
+
 /**
  * Fetch equivalent of axios `responseType: 'arraybuffer'`. A network
  * drop, a non-OK status, or an empty body returns null — never throws
  * — so one missing stream cannot sink the zip.
+ *
+ * **Falls back to the same-origin clip proxy** (2026-09-18). Live QA:
+ * the zip shipped 18 of 64 clips. The 18 were this app's own renders
+ * on Vercel Blob; the 46 that failed were the Crash Lab EP02 seed
+ * clips on another host. A browser plays a cross-origin MP4 happily
+ * but refuses to let page JavaScript read its bytes without a CORS
+ * header, and that host doesn't send one — the `fetch` throws and this
+ * used to return null and quietly drop the clip.
+ *
+ * Direct first, proxy second, deliberately: a Blob URL already works
+ * cross-origin, and sending it through the server too would double the
+ * bytes for no gain. The proxy only carries what the browser refused.
+ * A URL the proxy's allowlist would reject is not retried at all —
+ * that request can only fail, and asking would just be noise.
  */
 export async function fetchSunnyBanksBinaryAsset(url: string): Promise<Uint8Array | null> {
   if (!isSunnyBanksMediaUrl(url)) return null;
   try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const buffer = await res.arrayBuffer();
-    if (buffer.byteLength === 0) return null;
-    return new Uint8Array(buffer);
+    const direct = await readBinaryResponse(url);
+    if (direct) return direct;
+  } catch {
+    // CORS block, DNS failure, offline — all indistinguishable here by
+    // design (the browser deliberately hides which). Try the proxy.
+  }
+  if (!isAllowedSunnyBanksClipUrl(url)) return null;
+  try {
+    return await readBinaryResponse(buildSunnyBanksClipProxyUrl(url));
   } catch {
     return null;
   }
