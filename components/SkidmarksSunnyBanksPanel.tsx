@@ -1164,7 +1164,7 @@ function SunnyBanksFullScreenScriptEditor({
             onApply(draft);
             onClose();
           }}
-          className="min-h-[44px] shrink-0 rounded-full bg-amber-300 px-4 text-[13px] font-semibold text-zinc-950"
+          className="min-h-[44px] shrink-0 rounded-md bg-amber-300 px-4 text-[13px] font-semibold text-zinc-950"
         >
           Done
         </button>
@@ -1212,7 +1212,7 @@ function SunnyBanksFullScreenScriptEditor({
           type="button"
           onClick={() => setDraft((prev) => formatSunnyBanksGodScript(prev))}
           disabled={!draft.trim()}
-          className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+          className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
         >
           {"\u21e5"} Format
         </button>
@@ -1304,7 +1304,7 @@ function SunnyBanksGodScriptCheatSheet() {
             <button
               type="button"
               onClick={handleCopyPrompt}
-              className="min-h-[40px] rounded-full border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80"
+              className="min-h-[40px] rounded-md border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80"
             >
               Copy these rules as an AI prompt
             </button>
@@ -1359,7 +1359,11 @@ export function SkidmarksSunnyBanksPanel() {
   const [scriptOpen, setScriptOpen] = useState(false);
   const [scriptUndo, setScriptUndo] = useState<ScriptUndoSnapshot | null>(null);
   const [bundleError, setBundleError] = useState<string | null>(null);
-  const actStripRef = useRef<HTMLDivElement>(null);
+  /** What the save/download buttons are doing right now, in plain words.
+   * Live QA (2026-09-18): both buttons did their job silently, which is
+   * indistinguishable from a broken button on a phone. */
+  const [bundleNotice, setBundleNotice] = useState<string | null>(null);
+  const [bundleBusy, setBundleBusy] = useState(false);
   const scriptHighlightRef = useRef<HTMLDivElement>(null);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
@@ -1590,7 +1594,17 @@ export function SkidmarksSunnyBanksPanel() {
     }
   };
 
-  const collectEpisodePrompts = () => {
+  /** Prompts for any episode source — the live working copy, or a saved
+   * card straight off the shelf. Parameterised (2026-09-18) so
+   * "download that episode" doesn't have to load it into the editor
+   * first, which would quietly replace whatever is open. */
+  const collectEpisodePrompts = (source: {
+    actIds: readonly SunnyBanksActId[];
+    actScripts: ActKeyed<string>;
+    characterOverrides: ActKeyed<Record<number, string>>;
+    locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
+    defaultLocationId: SunnyBanksLocationId;
+  }) => {
     const prompts: Array<{
       act: SunnyBanksActId;
       index: number;
@@ -1600,14 +1614,14 @@ export function SkidmarksSunnyBanksPanel() {
       locationId: string;
       prompt: string;
     }> = [];
-    for (const act of actIds) {
-      const chunks = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(actScripts[act] ?? ""));
-      const overrides = characterOverridesByAct[act] ?? {};
-      const locations = locationOverridesByAct[act] ?? {};
+    for (const act of source.actIds) {
+      const chunks = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(source.actScripts[act] ?? ""));
+      const overrides = source.characterOverrides[act] ?? {};
+      const locations = source.locationOverrides[act] ?? {};
       chunks.forEach((chunk, index) => {
         const characterName = overrides[index] ?? chunk.characterName;
         const lock = getSunnyBanksCharacterLock(characterName);
-        const locationId = locations[index] ?? chunk.locationId ?? defaultLocationId;
+        const locationId = locations[index] ?? chunk.locationId ?? source.defaultLocationId;
         const kind = chunk.kind;
         const extra = [chunk.action, chunk.appearanceModifier].filter(Boolean).join(" ");
         const gold = lock
@@ -1841,33 +1855,97 @@ export function SkidmarksSunnyBanksPanel() {
       locationOverrides: { ...prev.locationOverrides, [id]: {} },
       runtimeMap: { ...prev.runtimeMap, [id]: {} },
     }));
-    window.setTimeout(() => {
-      actStripRef.current?.scrollTo({ left: actStripRef.current.scrollWidth, behavior: "smooth" });
-    }, 0);
   };
 
   const handleSaveWorkspace = () => {
-    saveSunnyBanksProjectWorkspace();
+    const saved = saveSunnyBanksProjectWorkspace();
     setShelfOpen(true);
+    // Live QA (2026-09-18): "I don't even know if the save button is
+    // working." It was — it just said nothing. Name what was saved and
+    // what is in it, so the tap has a visible result.
+    setBundleNotice(`Saved "${saved.label}" — ${describeSunnyBanksWorkspace(saved)}.`);
+    setBundleError(null);
   };
 
-  const handleDownloadEpisodeBundle = async () => {
+  /**
+   * Zip one episode — the live working copy, or a saved card straight
+   * off the shelf without opening it first.
+   *
+   * Live QA (2026-09-18): "cannot download episodes". The zip itself
+   * worked; it fetches every clip's MP4 one at a time, and a 64-clip
+   * episode over a phone connection left the button silent for minutes
+   * with no way to tell it apart from a dead button. So this reports
+   * progress per clip, then says how many clips actually made it in —
+   * a dropped stream is skipped rather than sinking the whole zip, so
+   * "64 clips" and "what you got" are genuinely different numbers and
+   * claiming otherwise would be a lie.
+   */
+  const downloadEpisodeBundle = async (source: {
+    title: string;
+    defaultLocationId: SunnyBanksLocationId;
+    actIds: readonly SunnyBanksActId[];
+    actScripts: ActKeyed<string>;
+    characterOverrides: ActKeyed<Record<number, string>>;
+    locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
+    runtimeMap: ActKeyed<Record<number, RowRuntime>>;
+  }) => {
+    if (bundleBusy) return;
     setBundleError(null);
+    setBundleBusy(true);
+    setBundleNotice(`Preparing "${source.title}"…`);
     try {
-      const { zipBytes, filename } = await buildSunnyBanksEpisodeBundle({
-        title: resolvedWorkspaceTitle(),
-        defaultLocationId,
-        actIds,
-        actScripts,
-        prompts: collectEpisodePrompts(),
-        clips: renderedClips,
+      const clips = collectRenderedClips({
+        actIds: source.actIds,
+        actScripts: source.actScripts,
+        runtimeMap: source.runtimeMap,
+        characterOverrides: source.characterOverrides,
       });
-      const zipBlob = new Blob([zipBytes.slice().buffer], { type: "application/zip" });
-      triggerBlobDownload(zipBlob, filename);
+      const result = await buildSunnyBanksEpisodeBundle({
+        title: source.title,
+        defaultLocationId: source.defaultLocationId,
+        actIds: source.actIds,
+        actScripts: source.actScripts,
+        prompts: collectEpisodePrompts(source),
+        clips,
+        onProgress: ({ done, total }) => setBundleNotice(`Getting clip ${done} of ${total}…`),
+      });
+      const zipBlob = new Blob([result.zipBytes.slice().buffer], { type: "application/zip" });
+      triggerBlobDownload(zipBlob, result.filename);
+      setBundleNotice(
+        result.fetchedClipCount === result.clipCount
+          ? `Downloaded "${source.title}" — ${result.clipCount} clip${result.clipCount === 1 ? "" : "s"}.`
+          : `Downloaded "${source.title}" — ${result.fetchedClipCount} of ${result.clipCount} clips. ` +
+              "The rest could not be fetched; try again on a better connection."
+      );
     } catch (err) {
+      setBundleNotice(null);
       setBundleError(err instanceof Error ? err.message : "Could not build the episode zip.");
+    } finally {
+      setBundleBusy(false);
     }
   };
+
+  const handleDownloadEpisodeBundle = () =>
+    void downloadEpisodeBundle({
+      title: resolvedWorkspaceTitle(),
+      defaultLocationId,
+      actIds,
+      actScripts,
+      characterOverrides: characterOverridesByAct,
+      locationOverrides: locationOverridesByAct,
+      runtimeMap: runtimeMapByAct,
+    });
+
+  const handleDownloadWorkspace = (workspace: EpisodeWorkspace) =>
+    void downloadEpisodeBundle({
+      title: workspace.label,
+      defaultLocationId: workspace.defaultLocationId,
+      actIds: workspace.actIds,
+      actScripts: workspace.actScripts,
+      characterOverrides: workspace.characterOverrides,
+      locationOverrides: workspace.locationOverrides,
+      runtimeMap: workspace.runtimeMap,
+    });
 
   const handleDeleteWorkspace = (id: string) => {
     deleteSunnyBanksWorkspace(id);
@@ -1876,6 +1954,8 @@ export function SkidmarksSunnyBanksPanel() {
   const handleOpenWorkspace = (workspace: EpisodeWorkspace) => {
     if (running) return;
     openSunnyBanksWorkspace(workspace.id);
+    setBundleError(null);
+    setBundleNotice(`Opened "${workspace.label}" — ${describeSunnyBanksWorkspace(workspace)}.`);
     setProgressText(null);
   };
 
@@ -1929,53 +2009,58 @@ export function SkidmarksSunnyBanksPanel() {
           </p>
         ) : (
           <>
-            <div className="flex min-w-0 items-start gap-2">
-              <div
-                ref={actStripRef}
-                role="tablist"
-                aria-label="Act"
-                className="flex min-w-0 flex-1 flex-row flex-nowrap gap-2 overflow-x-auto overscroll-x-contain whitespace-nowrap touch-pan-x pb-2 [-webkit-overflow-scrolling:touch] [scrollbar-width:none]"
+            {/* Two wrapping rows, not one horizontal scroll strip
+              * (2026-09-18). Adding the Full screen button pushed the
+              * single strip wide enough that Act I/II/III and + Add Act
+              * scrolled off the left edge on a 390px phone and simply
+              * looked missing. Acts now wrap onto their own row so every
+              * act is reachable without a sideways swipe, and the script
+              * tools wrap under them. `actStripRef`'s scroll-to-end on
+              * Add Act went with it: a wrapped row has nothing to
+              * scroll, and a new act is visible where it lands. */}
+            <div role="tablist" aria-label="Act" className="flex min-w-0 flex-row flex-wrap items-center gap-2">
+              {actIds.map((act) => {
+                const selected = act === activeAct;
+                const lineCount = sunnyBanksQueueChunks(
+                  parseSunnyBanksScriptBlock(actScripts[act] ?? "")
+                ).length;
+                return (
+                  <button
+                    key={act}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => patchSunnyBanksLive((prev) => ({ ...prev, activeAct: act }))}
+                    disabled={running}
+                    className={[
+                      "min-h-[40px] shrink-0 rounded-md px-3.5 text-[12px] font-semibold transition-colors disabled:opacity-60",
+                      selected
+                        ? "bg-amber-300 text-zinc-950"
+                        : "bg-white/[0.04] text-white/70 ring-1 ring-inset ring-white/10",
+                    ].join(" ")}
+                  >
+                    Act {act}
+                    {lineCount > 0 ? ` · ${lineCount}` : ""}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={handleAddAct}
+                disabled={running || actIds.length >= MAX_SUNNY_BANKS_ACTS}
+                className="min-h-[40px] shrink-0 rounded-md bg-white/[0.04] px-3.5 text-[12px] font-semibold text-white/80 ring-1 ring-inset ring-white/10 disabled:opacity-60"
               >
-                {actIds.map((act) => {
-                  const selected = act === activeAct;
-                  const lineCount = sunnyBanksQueueChunks(
-                    parseSunnyBanksScriptBlock(actScripts[act] ?? "")
-                  ).length;
-                  return (
-                    <button
-                      key={act}
-                      type="button"
-                      role="tab"
-                      aria-selected={selected}
-                      onClick={() => patchSunnyBanksLive((prev) => ({ ...prev, activeAct: act }))}
-                      disabled={running}
-                      className={[
-                        "min-h-[40px] shrink-0 rounded-full px-3.5 text-[12px] font-semibold transition-colors disabled:opacity-60",
-                        selected
-                          ? "bg-amber-300 text-zinc-950"
-                          : "bg-white/[0.04] text-white/70 ring-1 ring-inset ring-white/10",
-                      ].join(" ")}
-                    >
-                      Act {act}
-                      {lineCount > 0 ? ` · ${lineCount}` : ""}
-                    </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={handleAddAct}
-                  disabled={running || actIds.length >= MAX_SUNNY_BANKS_ACTS}
-                  className="min-h-[40px] shrink-0 rounded-full bg-white/[0.04] px-3.5 text-[12px] font-semibold text-white/80 ring-1 ring-inset ring-white/10 disabled:opacity-60"
-                >
-                  + Add Act
-                </button>
-              </div>
+                + Add Act
+              </button>
+            </div>
+
+            <div className="flex min-w-0 flex-row flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleFormatScript}
                 disabled={running || !scriptText.trim()}
                 aria-label="Auto-format script spacing"
-                className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+                className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
               >
                 ⇥ Format
               </button>
@@ -1984,7 +2069,7 @@ export function SkidmarksSunnyBanksPanel() {
                 onClick={() => setFullScreenScriptOpen(true)}
                 disabled={running}
                 aria-label="Edit script full screen"
-                className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+                className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
               >
                 ⤢ Full screen
               </button>
@@ -1993,7 +2078,7 @@ export function SkidmarksSunnyBanksPanel() {
                 onClick={handleUndoScript}
                 disabled={!scriptUndo || running}
                 aria-label="Undo script"
-                className="min-h-[40px] shrink-0 rounded-full bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+                className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
               >
                 ↩ Undo
               </button>
@@ -2277,7 +2362,7 @@ export function SkidmarksSunnyBanksPanel() {
               type="button"
               onClick={() => void handleRenderAll()}
               disabled={!canRenderAll}
-              className="min-h-[44px] w-full rounded-full bg-amber-300 px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
+              className="min-h-[44px] w-full rounded-md bg-amber-300 px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {running
                 ? `Rendering line ${(runningIndex ?? 0) + 1} of ${queue.length}…`
@@ -2384,19 +2469,24 @@ export function SkidmarksSunnyBanksPanel() {
           <button
             type="button"
             onClick={handleSaveWorkspace}
-            disabled={running}
-            className="min-h-[44px] rounded-full bg-white px-3 text-[13px] font-semibold text-zinc-950 disabled:opacity-60"
+            disabled={running || bundleBusy}
+            className="min-h-[44px] rounded-md bg-white px-3 text-[13px] font-semibold text-zinc-950 disabled:opacity-60"
           >
-            Save Project Workspace
+            Save Episode
           </button>
           <button
             type="button"
             onClick={handleDownloadEpisodeBundle}
-            disabled={running}
-            className="min-h-[40px] rounded-full border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80 disabled:opacity-60"
+            disabled={running || bundleBusy}
+            className="min-h-[40px] rounded-md border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80 disabled:opacity-60"
           >
-            Download Episode Bundle (.zip)
+            {bundleBusy ? "Working…" : "Download Episode (.zip)"}
           </button>
+          {bundleNotice && (
+            <p role="status" className="text-[11px] leading-snug text-emerald-200/90">
+              {bundleNotice}
+            </p>
+          )}
           {bundleError && (
             <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
               {bundleError}
@@ -2425,35 +2515,54 @@ export function SkidmarksSunnyBanksPanel() {
                 script + gold prompts + clip files, not a re-render.
               </p>
             ) : (
-              <div className="flex gap-2 overflow-x-auto overscroll-x-contain touch-pan-x pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+              // Full-width rows with their own named Open / Download
+              // buttons (2026-09-18). These used to be small cards in a
+              // sideways-scrolling strip where the whole card was the
+              // (unlabelled) open target: live QA was "how do we open it
+              // back up in an editor?" and "why can't I just download
+              // that?" — both were possible, neither looked it.
+              <div className="flex flex-col gap-2">
                 {workspaces.map((workspace) => (
                   <div
                     key={workspace.id}
-                    className="relative h-16 min-w-[9.5rem] shrink-0 rounded-xl border border-white/10 bg-white/[0.04]"
+                    className="flex flex-col gap-2 rounded-lg border border-white/10 bg-white/[0.04] p-2.5"
                   >
-                    <button
-                      type="button"
-                      onClick={() => handleOpenWorkspace(workspace)}
-                      disabled={running}
-                      className="flex h-full w-full flex-col justify-center py-1.5 pl-2.5 pr-10 text-left disabled:opacity-60"
-                    >
-                      <span className="line-clamp-2 text-[11px] font-semibold text-white/85">
-                        {workspace.label}
-                      </span>
-                      <span className="mt-0.5 text-[10px] text-white/40">
-                        {describeSunnyBanksWorkspace(workspace)}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteWorkspace(workspace.id)}
-                      aria-label={`Delete ${workspace.label}`}
-                      className="absolute right-0 top-0 flex h-10 w-10 items-center justify-center text-rose-400"
-                    >
-                      <span aria-hidden className="text-[16px] font-semibold leading-none">
-                        ✕
-                      </span>
-                    </button>
+                    <div className="flex min-w-0 items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[12px] font-semibold text-white/85">{workspace.label}</p>
+                        <p className="mt-0.5 text-[10px] text-white/40">
+                          {describeSunnyBanksWorkspace(workspace)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteWorkspace(workspace.id)}
+                        aria-label={`Delete ${workspace.label}`}
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-rose-400"
+                      >
+                        <span aria-hidden className="text-[16px] font-semibold leading-none">
+                          ✕
+                        </span>
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenWorkspace(workspace)}
+                        disabled={running || bundleBusy}
+                        className="min-h-[40px] flex-1 rounded-md bg-amber-300 px-3 text-[12px] font-semibold text-zinc-950 disabled:opacity-60"
+                      >
+                        Open in editor
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadWorkspace(workspace)}
+                        disabled={running || bundleBusy}
+                        className="min-h-[40px] flex-1 rounded-md border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80 disabled:opacity-60"
+                      >
+                        {bundleBusy ? "Working…" : "Download (.zip)"}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

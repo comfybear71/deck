@@ -2222,11 +2222,22 @@ now (see "Explicitly out of scope" below).
   - A **Script** card — a textarea of six locked park plates used
     per queue row (`SUNNY_BANKS_LOCATIONS`, default Office Storefront
     until a `[Location: id]` tag). There is **no** act-level location
-    dropdown above the script accordion. A swipeable
-    **Act I / Act II / Act III** row sits at the **top** of that card
-    (`touch-pan-x`, `flex-nowrap`, overflow-x). **+ Add Act** at the
-    far right appends the next roman in-memory buffer (IV, V, …, cap
-    20) with an empty script — not a Neon act table. Save and the
+    dropdown above the script accordion. An **Act I / Act II / Act III**
+    row sits at the **top** of that card, **wrapping** onto as many
+    lines as it needs, with the script tools (`⇥ Format` /
+    `⤢ Full screen` / `↩ Undo`) wrapping on their own row underneath.
+    That replaced the single swipeable `touch-pan-x` / `flex-nowrap`
+    strip this shipped with, after live QA (2026-09-18): adding the Full
+    screen button pushed that one strip wide enough that Act I/II/III
+    and + Add Act scrolled off the left edge on a 390px phone and simply
+    looked missing. A wrapped row has nothing to scroll, so the
+    scroll-to-end on Add Act went with it. **Buttons in this panel are
+    `rounded-md`, not `rounded-full`** (2026-09-18, Stuart: "square edge
+    buttons only slightly rounded... them big round buttons, I don't
+    like them") — the colour-key dots and the Idle/Done status chip stay
+    round, being indicators rather than buttons. **+ Add Act** appends
+    the next roman in-memory buffer (IV, V, …, cap 20) with an empty
+    script — not a Neon act table. Save and the
     episode zip walk every `actIds` entry so a typed Act IV is not
     dropped. The three EP02 seed acts still open first.
     The textarea and queued rows collapse behind **Show Script Text &
@@ -2415,16 +2426,33 @@ now (see "Explicitly out of scope" below).
     needs a `LoadAudio` input; silence is the honest one for "No
     dialogue"), `buildSunnyBanksHoldPrompt` as the motion text. One clip at a
     time; a failed line stops the rest so they are not billed.
-    A named **Save Project Workspace** control at the bottom of the
+    A named **Save Episode** control at the bottom of the
     panel writes every act script, location id, and finished clip URL
     onto the existing Neon session row — not `localStorage`, not a new
     episode/beat table. Same episode name updates that one card. Live
     working copy persists beside the shelf so a refresh or ✕ on a named
     card does not wipe the episode. **Download
-    Episode Bundle** fetches MP4/MP3 bytes into `video/` and `audio/`
+    Episode (.zip)** fetches MP4/MP3 bytes into `video/` and `audio/`
     (best-effort; CORS or a dead stream omits that file) and keeps
     script/prompts/URL records under `data/`. Sunny Banks
     has no song MP3; TTS is generated at render time.
+    **Save / Download / Open now show their results (2026-09-18)** —
+    live QA was "cannot download episodes", "I don't even know if the
+    save button is working" and "how do we open it back up in an
+    editor?". All three already worked; all three were silent or
+    unlabelled. Save names what it saved. Download reports
+    `Getting clip N of M…` per clip (`buildSunnyBanksEpisodeBundle`'s
+    `onProgress`) and then how many clips actually made it in — a
+    64-clip episode pulls 64 MP4s one at a time over a phone connection,
+    which previously left the button silent for minutes and read as
+    broken, and `clipCount` vs `fetchedClipCount` genuinely differ when
+    a stream drops. Each saved episode is a full-width row with named
+    **Open in editor** and **Download (.zip)** buttons, replacing the
+    sideways-scrolling card whose only affordance was that the whole
+    card happened to be an open target. Downloading a saved episode
+    does **not** open it first (`collectEpisodePrompts` takes a source
+    rather than closing over live state), so pulling an old episode
+    never replaces what is currently open.
   - **Still not the episode wizard** — Grok's own earlier scope was
     "render one speak beat, then stop." There is still no Neon
     episode/beat model, no `lib/scriptSequenceRunner`, no per-beat
