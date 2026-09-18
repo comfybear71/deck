@@ -897,6 +897,20 @@ the request, and validate length against `shotPrompt` only.
   "conflict"` and is **never auto-retried**: retrying is the overwrite.
   An omitted `expectedRevision` still writes unconditionally, only so a
   mid-deploy tab on the old client bundle keeps saving.
+- **Which copy wins on open is decided by revision, not clocks
+  (2026-09-18).** The local mirror records the server revision it was
+  built from; `resolveSkidmarksHydrationWinner` compares revisions when
+  both sides know one, and only falls back to the old
+  `localSavedAt` vs `updated_at` tie-break when one is missing. The real
+  workflow this fixes: episodes get built on the phone, then opened on a
+  PC purely to **download** them for Resolve — the PC never edits — and
+  the PC was showing an older copy because the tie-break was its own
+  clock against the server's. A device holding genuinely unsent edits
+  still wins even against a newer row (`isSkidmarksStaleLocalFork`), but
+  that is now surfaced as a `"conflict"` with a **Load the latest saved
+  version** button (`loadSkidmarksSessionFromServerNow`) instead of
+  silently keeping the stale copy. That action is always user-initiated
+  — it discards unsaved local edits by definition.
 - None of the above being unset should ever crash anything — every
   route returns an honest `missing_api_key`/`unconfigured` outcome
   instead. If you add a new real API call, match that shape.
