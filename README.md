@@ -1989,6 +1989,18 @@ now (see "Explicitly out of scope" below).
     persists per clip (`SkidmarksClipSegment.instrumentalVideoModel`,
     the existing session mirror — the Neon row as of #57, not
     `localStorage`, same as `motionPrompt`/`selectedPlateId`).
+  - **Saving is compare-and-swap as of 2026-09-18** (app-wide, not just
+    Skidmarks clips). The one Neon session row carries a `revision`;
+    every save sends back the revision that page load actually read, and
+    the server refuses the write (`409`) if the row has moved on. A page
+    load that never managed to read the row **refuses to push at all**
+    rather than writing over something it hasn't seen. Both cases show a
+    banner saying so, and a conflict is never auto-retried — retrying is
+    the overwrite. The reported failure this closes: a second device
+    opened the app, showed an older copy of the project, and was one
+    autosave away from pushing that older copy back over the good one.
+    Edits on the refusing device stay on that device; nothing is
+    discarded silently.
   - None of the three keys blocks the other two paths — a Vocal render
     with no `COMFY_CLOUD_API_KEY` and an Instrumental render with no
     `MINIMAX_API_KEY` each fail with their own honest

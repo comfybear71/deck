@@ -884,6 +884,19 @@ the request, and validate length against `shotPrompt` only.
   **archive** (`lib/skidmarksArchive.ts`) still uses Vercel Blob JSON,
   unchanged by this migration — only the live edit session moved to
   Neon.
+- **Session saves are compare-and-swap as of 2026-09-18.** The
+  `skidmarks_sessions` row carries a `revision BIGINT` (backfilled to
+  `1`, so `0` uniquely means "I read the row and there wasn't one").
+  `GET /api/skidmarks/session` returns it; `PUT` takes it back as
+  `expectedRevision` and the write is refused with a `409` if the row
+  moved on. `lib/skidmarks.ts` tracks it per page load and **refuses to
+  push at all when a page load never managed to read the row** — the
+  reported failure (2026-09-18) was a second device opening the app,
+  showing an older copy, and being one autosave away from pushing it
+  back over the good one. A conflict sets `sessionSync.status ===
+  "conflict"` and is **never auto-retried**: retrying is the overwrite.
+  An omitted `expectedRevision` still writes unconditionally, only so a
+  mid-deploy tab on the old client bundle keeps saving.
 - None of the above being unset should ever crash anything — every
   route returns an honest `missing_api_key`/`unconfigured` outcome
   instead. If you add a new real API call, match that shape.
