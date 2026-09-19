@@ -240,6 +240,13 @@ export function SkidmarksScriptSequencePanel({
         : { ok: false, message: placeOutcome.message ?? "Couldn't build this clip's scene." };
     },
     generateIdentityStill: async ({ shotPrompt, bandName, vocal, vocalist, locationStillDataUrl }) => {
+      const photo = vocalist.avatarImage?.trim();
+      if (!photo) {
+        return {
+          ok: false,
+          message: `${vocalist.name || "The artist"}'s photo is missing — refusing to invent a face.`,
+        };
+      }
       const request = buildPlateGenerationRequest({
         shotPrompt,
         vocal,
@@ -248,6 +255,14 @@ export function SkidmarksScriptSequencePanel({
         vocalist,
         locationStillDataUrl,
       });
+      // Fail closed: Intro/Instrumental used to drop the identity ref inside
+      // resolvePlateIdentity; never send a costume-only invent-a-face request.
+      if (!request.referenceImageDataUrls.includes(photo)) {
+        return {
+          ok: false,
+          message: `${vocalist.name || "The artist"}'s photo was not attached as the identity reference — refusing to invent a face.`,
+        };
+      }
       const stillOutcome = await generatePlateStill(request);
       return stillOutcome.ok ? { ok: true, dataUrl: stillOutcome.dataUrl } : { ok: false, message: stillOutcome.message };
     },

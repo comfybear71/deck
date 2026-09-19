@@ -443,6 +443,99 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt).not.toContain("Do not show:");
   });
 
+  /**
+   * 2026-09-19 live bug: Generate plates dropped the artist photo on
+   * Intro/Instrumental because resolvePlateIdentity only attached
+   * avatarImage when vocal===true or the member was Jack-locked. The
+   * identity-safe / Generate plates path always resolves a place still
+   * first and passes it as locationStillDataUrl — that signal means the
+   * artist is IN FRAME on every person plate (all artists, all songs).
+   * Photo is the lock; costume words alone must never invent a face.
+   */
+  describe("Generate plates path: place still always attaches artist photo", () => {
+    const PLACE = "data:image/jpeg;base64,emptyPlaceBytes";
+    const ARTIST = "data:image/jpeg;base64,novaPhotoBytes";
+    const nova = member({ id: "solar-rebel-vocals", name: "Nova", avatarImage: ARTIST });
+
+    it("Instrumental person plate gets avatarImage as identity ref (unlocked artist)", () => {
+      const { prompt, referenceImageDataUrls, featuresLockedCharacter } = buildPlateGenerationRequest({
+        shotPrompt: "driving at night in a leather jacket, chrome headphones, gold chain",
+        vocal: false,
+        model: "grok",
+        bandName: "Solar Rebel",
+        vocalist: nova,
+        locationStillDataUrl: PLACE,
+      });
+      expect(referenceImageDataUrls).toEqual([PLACE, ARTIST]);
+      expect(prompt).toContain("is the person");
+      expect(prompt).toContain("Do not turn them into a different person.");
+      expect(prompt).toContain("Staging / tweak:");
+      expect(prompt).toContain("driving at night in a leather jacket");
+      // Unlocked artist: photo hold only — no Soul Rebel / Jack lock card.
+      expect(prompt).not.toContain("Do not show:");
+      expect(prompt).not.toContain("the vocalist");
+      expect(featuresLockedCharacter).toBe(true);
+    });
+
+    it("Intro person plate gets avatarImage as identity ref", () => {
+      const { referenceImageDataUrls, prompt } = buildPlateGenerationRequest({
+        shotPrompt: "walking onto the stage, small smile, mouth closed",
+        vocal: false,
+        model: "grok",
+        bandName: "Solar Rebel",
+        vocalist: nova,
+        locationStillDataUrl: PLACE,
+      });
+      expect(referenceImageDataUrls).toEqual([PLACE, ARTIST]);
+      expect(prompt).toContain("is the person");
+      expect(plateGenerationHoldsIdentity({
+        shotPrompt: "walking onto the stage, small smile, mouth closed",
+        vocal: false,
+        model: "grok",
+        bandName: "Solar Rebel",
+        vocalist: nova,
+        locationStillDataUrl: PLACE,
+      })).toBe(true);
+    });
+
+    it("does not invent a face when place is set but the artist has no photo", () => {
+      const noPhoto = member({ id: "solar-rebel-vocals", name: "Nova" });
+      const params = {
+        shotPrompt: "leather jacket, chrome headphones, gold chain — invent this face",
+        vocal: false as const,
+        model: "grok" as const,
+        bandName: "Solar Rebel",
+        vocalist: noPhoto,
+        locationStillDataUrl: PLACE,
+      };
+      expect(plateGenerationHoldsIdentity(params)).toBe(false);
+      const { referenceImageDataUrls, prompt } = buildPlateGenerationRequest(params);
+      // No identity image — callers (runGeneratePlates) must fail the clip
+      // before this; if they don't, we still refuse to attach a fake face.
+      expect(referenceImageDataUrls).toEqual([PLACE]);
+      expect(prompt).not.toContain("is the person");
+      expect(prompt).not.toContain("Do not turn them into a different person.");
+    });
+
+    it("person-less B-roll without a place still still omits identity (door/keyhole unchanged)", () => {
+      const { referenceImageDataUrls } = buildPlateGenerationRequest({
+        shotPrompt: "a brass keyhole, lit from behind, dust in the light",
+        vocal: false,
+        model: "grok",
+        bandName: "Solar Rebel",
+        vocalist: nova,
+      });
+      expect(referenceImageDataUrls).toEqual([]);
+      expect(plateGenerationHoldsIdentity({
+        shotPrompt: "a brass keyhole, lit from behind, dust in the light",
+        vocal: false,
+        model: "grok",
+        bandName: "Solar Rebel",
+        vocalist: nova,
+      })).toBe(false);
+    });
+  });
+
   it("follow-up fix: combines continuity (first) and the Instrumental cast-ref identity (second) in order", () => {
     const previousPlate = "data:image/jpeg;base64,previousPlateBytes";
     const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
