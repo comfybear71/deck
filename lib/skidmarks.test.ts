@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+
   addSkidmarksClipPlate,
   applySkidmarksAnalysisResult,
   applySkidmarksTranscriptionResult,
@@ -62,6 +63,8 @@ import {
   type SkidmarksClipSegment,
   type SkidmarksPlateStill,
   type SkidmarksState,
+  resolveScriptPartVocal,
+  scriptPartTitleKind,
 } from "./skidmarks";
 import {
   buildDefaultSunnyBanksLive,
@@ -2150,5 +2153,66 @@ describe("identity-context wipe signal (rule 2: band/song switches clear identit
     selectSkidmarksBand("solar-rebel");
 
     expect(getSkidmarksSnapshot().session.mp3).toBeNull();
+  });
+});
+
+
+describe("scriptPartTitleKind / resolveScriptPartVocal title override", () => {
+  // Product rule: pasted part titles own vocal/instrumental routing.
+  // Audio midpoint must not flip a titled Vocal/Intro/etc.
+
+  function instrumentalSeg(startSec: number, endSec: number) {
+    return {
+      id: `seg_${startSec}`,
+      startSec,
+      endSec,
+      label: "instrumental" as const,
+      model: "grok" as const,
+      shotPrompt: "",
+      negativePrompt: "",
+      uncensoredPlateStills: false,
+      plates: [{ id: "p1" }],
+      selectedPlateId: null,
+    };
+  }
+  function vocalSeg(startSec: number, endSec: number) {
+    return {
+      ...instrumentalSeg(startSec, endSec),
+      label: "vocal" as const,
+      model: "ltx-lipsync" as const,
+    };
+  }
+
+  it('title "Vocal" → vocal even when realSegments say instrumental', () => {
+    const real = [instrumentalSeg(0, 60)];
+    expect(
+      resolveScriptPartVocal({ startSec: 10, endSec: 20, title: "Part 3 — Vocal" }, real)
+    ).toBe(true);
+    expect(scriptPartTitleKind("Part 3 — Vocal")).toBe("vocal");
+  });
+
+  it('title "Intro" → instrumental even when realSegments say vocal', () => {
+    const real = [vocalSeg(0, 60)];
+    expect(
+      resolveScriptPartVocal({ startSec: 0, endSec: 15, title: "Part 1 — Intro" }, real)
+    ).toBe(false);
+    expect(scriptPartTitleKind("Part 1 — Intro")).toBe("instrumental");
+  });
+
+  it('title with no type word → audio midpoint fallback', () => {
+    const real = [vocalSeg(0, 30), instrumentalSeg(30, 60)];
+    expect(
+      resolveScriptPartVocal(
+        { startSec: 5, endSec: 15, title: "A thought comes to mind" },
+        real
+      )
+    ).toBe(true);
+    expect(
+      resolveScriptPartVocal(
+        { startSec: 35, endSec: 45, title: "A thought comes to mind" },
+        real
+      )
+    ).toBe(false);
+    expect(scriptPartTitleKind("A thought comes to mind")).toBeNull();
   });
 });
