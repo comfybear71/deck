@@ -939,6 +939,49 @@ export function resolveScriptPartVocal(
 }
 
 /**
+ * Finds a previous script-timeline clip to re-attach onto a newly
+ * parsed part when the script is re-pasted / rebuilt (fresh segment ids
+ * otherwise orphan plate stills and finished videos).
+ *
+ * Match order (each previous segment used at most once):
+ * 1. Exact `startSec` + `endSec`
+ * 2. Exact `startSec` (end may have nudged)
+ * 3. Same part index when the ranges overlap
+ *
+ * Live bug (2026-09-19): paste parts 7–25 after plating 1–6 reminted
+ * every id; Generate plates then treated 1–6 as "missing" and overwrote
+ * them. Time-range (or index) match is what keeps early plated ranges.
+ */
+export function findMatchingPreviousScriptSegment(
+  previousSegments: SkidmarksClipSegment[],
+  part: { startSec: number; endSec: number },
+  partIndex: number,
+  usedPreviousIds: ReadonlySet<string>
+): SkidmarksClipSegment | undefined {
+  const available = previousSegments.filter((s) => !usedPreviousIds.has(s.id));
+  if (available.length === 0) return undefined;
+
+  const exact = available.find(
+    (s) => s.startSec === part.startSec && s.endSec === part.endSec
+  );
+  if (exact) return exact;
+
+  const sameStart = available.find((s) => s.startSec === part.startSec);
+  if (sameStart) return sameStart;
+
+  const byIndex = previousSegments[partIndex];
+  if (
+    byIndex &&
+    !usedPreviousIds.has(byIndex.id) &&
+    Math.max(byIndex.startSec, part.startSec) < Math.min(byIndex.endSec, part.endSec)
+  ) {
+    return byIndex;
+  }
+
+  return undefined;
+}
+
+/**
  * Stuart's "paste a script, get a real clip timeline" automation
  * (2026-09-14, the "Liquid Horizon" 16-part black-and-white trippy
  * sequence) — turns `lib/scriptSequence.ts`'s parsed parts into real
@@ -962,6 +1005,16 @@ export function resolveScriptPartVocal(
  * run" ask (`instrumentalVideoModel: "grok"`, never the app-wide H3
  * default).
  *
+ * **Re-attach on remint (2026-09-19):** when `realSegments` already hold
+ * plate stills / plate ids from an earlier script build (script grew,
+ * Build timeline tapped again, etc.), match by time range (or overlapping
+ * part index) and keep that clip's `id`, `plates` (stills, motion notes,
+ * plate ids), and `selectedPlateId` so Generate plates does not treat
+ * plated ranges as missing and so finished videos keyed by
+ * `(segmentId, plateId)` still resolve. Brand-new parts (no match) still
+ * mint fresh ids and a blank plate. Prompt / title-driven vocal routing
+ * always come from the new part — never from the carried clip.
+ *
  * Pure — builds segment objects only, no store write;
  * `setSkidmarksScriptSequence` below is the one that actually persists
  * the result.
@@ -970,20 +1023,39 @@ export function buildScriptSequenceSegments(
   parts: ScriptSequencePart[],
   realSegments: SkidmarksClipSegment[]
 ): SkidmarksClipSegment[] {
-  return parts.map((part) => {
+  const usedPreviousIds = new Set<string>();
+  return parts.map((part, partIndex) => {
     const vocal = resolveScriptPartVocal(part, realSegments);
+    const previous = findMatchingPreviousScriptSegment(
+      realSegments,
+      part,
+      partIndex,
+      usedPreviousIds
+    );
+    if (previous) usedPreviousIds.add(previous.id);
+
+    const plates =
+      previous && previous.plates.length > 0
+        ? previous.plates.map((plate) => ({ ...plate }))
+        : [buildBlankPlateSlot()];
+
     return {
-      id: generateId("segment"),
+      id: previous?.id ?? generateId("segment"),
       startSec: part.startSec,
       endSec: part.endSec,
       label: vocal ? "vocal" : "instrumental",
       model: vocal ? "ltx-lipsync" : "grok",
       shotPrompt: part.prompt,
       negativePrompt: part.negativePrompt ?? "",
-      uncensoredPlateStills: false,
-      plates: [buildBlankPlateSlot()],
-      selectedPlateId: null,
-      ...(vocal ? {} : { instrumentalVideoModel: "grok" as const }),
+      uncensoredPlateStills: previous?.uncensoredPlateStills ?? false,
+      plates,
+      selectedPlateId: previous?.selectedPlateId ?? null,
+      ...(vocal
+        ? {}
+        : {
+            instrumentalVideoModel:
+              previous?.instrumentalVideoModel ?? ("grok" as const),
+          }),
     };
   });
 }

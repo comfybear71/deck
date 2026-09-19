@@ -162,6 +162,27 @@ export function persistedRenderKey(segmentId: string, plateId: string): string {
 }
 
 /**
+ * Looks up a finished video for a clip — by `(segmentId, plateId)` first,
+ * then by exact `startSec`/`endSec` if ids were reminted (script paste
+ * rebuild). Used by Generate plates so a reminted timeline does not treat
+ * an already-rendered range as "missing" and overwrite it.
+ */
+export function findPersistedRenderForClip(
+  renders: ReadonlyMap<string, PersistedClipRender>,
+  segmentId: string,
+  plateId: string,
+  startSec: number,
+  endSec: number
+): PersistedClipRender | undefined {
+  const byId = renders.get(persistedRenderKey(segmentId, plateId));
+  if (byId) return byId;
+  for (const render of renders.values()) {
+    if (render.startSec === startSec && render.endSec === endSec) return render;
+  }
+  return undefined;
+}
+
+/**
  * The one, shared "what order does the shelf read in" rule —
  * **timeline/plate position, never "most recently rendered."** Sorts by
  * `clipIndex` first (a clip's literal 1-based position in the

@@ -8,6 +8,7 @@ import {
   buildRendersZip,
   deletePersistedClipRender,
   fetchPersistedClipRenders,
+  findPersistedRenderForClip,
   persistedRenderKey,
   sortPersistedRenders,
   type PersistedClipRender,
@@ -20,6 +21,41 @@ function jsonResponse(status: number, body: unknown): Response {
 describe("persistedRenderKey", () => {
   it("joins segmentId and plateId with a colon", () => {
     expect(persistedRenderKey("seg-1", "plate-1")).toBe("seg-1:plate-1");
+  });
+});
+
+describe("findPersistedRenderForClip", () => {
+  const render = (overrides: Partial<PersistedClipRender> = {}): PersistedClipRender => ({
+    segmentId: "seg-old",
+    plateId: "plate-old",
+    url: "https://blob.example/clip.mp4",
+    filename: "01_clip.mp4",
+    clipIndex: 1,
+    startSec: 0,
+    endSec: 10,
+    ...overrides,
+  });
+
+  it("hits by segmentId/plateId first", () => {
+    const map = new Map<string, PersistedClipRender>();
+    const r = render();
+    map.set(persistedRenderKey(r.segmentId, r.plateId), r);
+    expect(findPersistedRenderForClip(map, "seg-old", "plate-old", 0, 10)).toBe(r);
+  });
+
+  it("falls back to exact startSec/endSec when ids were reminted", () => {
+    const map = new Map<string, PersistedClipRender>();
+    const r = render({ segmentId: "seg-old", plateId: "plate-old", startSec: 0, endSec: 10 });
+    map.set(persistedRenderKey(r.segmentId, r.plateId), r);
+    // New reminted ids, same time range
+    expect(findPersistedRenderForClip(map, "seg-new", "plate-new", 0, 10)).toBe(r);
+  });
+
+  it("returns undefined when neither id nor time range match", () => {
+    const map = new Map<string, PersistedClipRender>();
+    const r = render({ startSec: 0, endSec: 10 });
+    map.set(persistedRenderKey(r.segmentId, r.plateId), r);
+    expect(findPersistedRenderForClip(map, "seg-x", "plate-x", 50, 60)).toBeUndefined();
   });
 });
 

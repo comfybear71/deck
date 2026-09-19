@@ -6,6 +6,7 @@ import {
   applySkidmarksTranscriptionResult,
   attachSkidmarksMp3,
   buildScriptSequenceSegments,
+  findMatchingPreviousScriptSegment,
   canNudgeSkidmarksSegmentBoundary,
   createMp3Attachment,
   createSkidmarksBand,
@@ -1769,11 +1770,107 @@ describe("buildScriptSequenceSegments / setSkidmarksScriptSequence", () => {
     expect(segments[0].plates[0].still).toBeUndefined();
   });
 
-  it("mints a fresh segment id for each part, so two script runs never collide", () => {
+  it("mints a fresh segment id for each part when there is nothing to re-attach, so two empty builds never collide", () => {
     const parts = [{ index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" }];
     const first = buildScriptSequenceSegments(parts, []);
     const second = buildScriptSequenceSegments(parts, []);
     expect(first[0].id).not.toBe(second[0].id);
+  });
+
+  it("live bug (2026-09-19): remint after script grows re-attaches plated ranges by time — keeps ids/stills, blanks only new parts", () => {
+    const plated = buildScriptSequenceSegments(
+      [
+        { index: 1, title: "Intro", startSec: 0, endSec: 10, prompt: "old-1" },
+        { index: 2, title: "Vocal", startSec: 10, endSec: 20, prompt: "old-2" },
+        { index: 3, title: "Instrumental", startSec: 20, endSec: 30, prompt: "old-3" },
+        { index: 4, title: "Vocal", startSec: 30, endSec: 40, prompt: "old-4" },
+        { index: 5, title: "Bridge", startSec: 40, endSec: 50, prompt: "old-5" },
+        { index: 6, title: "Outro", startSec: 50, endSec: 60, prompt: "old-6" },
+      ],
+      []
+    );
+    for (let i = 0; i < plated.length; i++) {
+      plated[i] = {
+        ...plated[i],
+        plates: [
+          {
+            id: plated[i].plates[0].id,
+            still: {
+              dataUrl: `https://blob.example/plate-${i + 1}.jpg`,
+              source: "generated",
+              createdAt: i + 1,
+            },
+          },
+        ],
+      };
+    }
+
+    const grownParts = [
+      ...[0, 10, 20, 30, 40, 50].map((start, i) => ({
+        index: i + 1,
+        title: `Part ${i + 1}`,
+        startSec: start,
+        endSec: start + 10,
+        prompt: `new-${i + 1}`,
+      })),
+      ...Array.from({ length: 19 }, (_, j) => {
+        const start = 60 + j * 10;
+        return {
+          index: j + 7,
+          title: `Part ${j + 7}`,
+          startSec: start,
+          endSec: start + 10,
+          prompt: `new-${j + 7}`,
+        };
+      }),
+    ];
+
+    const reminted = buildScriptSequenceSegments(grownParts, plated);
+    expect(reminted).toHaveLength(25);
+
+    for (let i = 0; i < 6; i++) {
+      expect(reminted[i].id).toBe(plated[i].id);
+      expect(reminted[i].plates[0].id).toBe(plated[i].plates[0].id);
+      expect(reminted[i].plates[0].still?.dataUrl).toBe(`https://blob.example/plate-${i + 1}.jpg`);
+      expect(reminted[i].shotPrompt).toBe(`new-${i + 1}`);
+    }
+    for (let i = 6; i < 25; i++) {
+      expect(reminted[i].plates[0].still).toBeUndefined();
+      expect(plated.every((p) => p.id !== reminted[i].id)).toBe(true);
+    }
+  });
+
+  it("never reuses the same previous segment twice when two new parts could match it", () => {
+    const previous = buildScriptSequenceSegments(
+      [{ index: 1, title: "A", startSec: 0, endSec: 10, prompt: "old" }],
+      []
+    );
+    previous[0] = {
+      ...previous[0],
+      plates: [{ id: previous[0].plates[0].id, still: plateStill({ dataUrl: "https://blob.example/only-once.jpg" }) }],
+    };
+    // Two parts share startSec 0 — only the first should carry the still.
+    const reminted = buildScriptSequenceSegments(
+      [
+        { index: 1, title: "A", startSec: 0, endSec: 10, prompt: "a" },
+        { index: 2, title: "B", startSec: 0, endSec: 5, prompt: "b" },
+      ],
+      previous
+    );
+    expect(reminted[0].plates[0].still?.dataUrl).toBe("https://blob.example/only-once.jpg");
+    expect(reminted[0].id).toBe(previous[0].id);
+    expect(reminted[1].plates[0].still).toBeUndefined();
+    expect(reminted[1].id).not.toBe(previous[0].id);
+  });
+
+  it("findMatchingPreviousScriptSegment prefers exact start/end over index", () => {
+    const previous = [
+      chainSegment({ id: "early", startSec: 0, endSec: 10, plates: [{ id: "p0" }] }),
+      chainSegment({ id: "mid", startSec: 10, endSec: 20, plates: [{ id: "p1" }] }),
+    ];
+    const used = new Set<string>();
+    const match = findMatchingPreviousScriptSegment(previous, { startSec: 10, endSec: 20 }, 0, used);
+    expect(match?.id).toBe("mid");
   });
 
   it("every built segment spans exactly [startSec, endSec) with one plate — the real 15s enforcement, not just prompt text", () => {
