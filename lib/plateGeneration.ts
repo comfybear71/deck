@@ -152,6 +152,27 @@ export interface SkidmarksCharacterLock {
    * `directorNote` yet just leaves that line blank for Stuart to fill
    * in by hand, same as an unlocked member always has. */
   directorNote?: string;
+  /**
+   * Video-only prompt text that belongs to **this character**, not to
+   * "having a lock at all" — `lib/clipGeneration.ts` uses each of these
+   * when present and falls back to its own generic wrap when not.
+   *
+   * Real reported bug (2026-09-19) this exists to fix: a second band's
+   * singer got a lock card written in the app, and his rendered clips
+   * came back wearing a wide-brim fedora with glowing neon-blue lips —
+   * Jack Ash's look, on a different artist entirely. The three strings
+   * below used to be module constants in `clipGeneration.ts` applied to
+   * **any** locked character, so writing any lock card silently opted
+   * that member into Jack's shadow-face/neon-lips video treatment.
+   *
+   * A lock card written in the app sets none of these, which is the
+   * point: a new locked character gets their own `promptHallmarks` and
+   * the standard Vocal wrap, never Jack's. Same rule as the registry
+   * itself — don't guess at a look for a character nobody described.
+   */
+  vocalLipSyncLock?: string;
+  vocalVideoNote?: string;
+  instrumentalVideoNote?: string;
 }
 
 export const SKIDMARKS_CHARACTER_LOCKS: Record<string, SkidmarksCharacterLock> = {
@@ -188,6 +209,32 @@ export const SKIDMARKS_CHARACTER_LOCKS: Record<string, SkidmarksCharacterLock> =
       "contact with the lens, a square-on stare toward camera, passport- or headshot-style framing centered on " +
       "his face toward the lens, eye sockets, iris, mouth cavity showing teeth, skin pores, forehead, photoreal " +
       "human features, portrait photography, talking-head close-up on a lit face",
+    // Moved here verbatim from `lib/clipGeneration.ts` (2026-09-19),
+    // where they were module constants applied to *any* locked
+    // character. That is what put a fedora and glowing neon-blue lips
+    // on a different band's singer the moment he was given a lock card.
+    // They describe Jack, so they live on Jack.
+    vocalLipSyncLock:
+      "perfect lip sync through his glowing neon-blue lips, clear lip movement, citing the dialogue clearly, hand " +
+      "gestures are lively, dication is perfect.",
+    vocalVideoNote:
+      "Across this clip's motion, his glowing neon-blue lips are only ever visible while his mouth is actually " +
+      "in frame \u2014 never invented on a shot where his face turns away or his mouth leaves frame. His face " +
+      "never becomes legible, well-lit, or reads as a normal, watchable stare at any point in the motion, even " +
+      "while he's singing \u2014 the shadow-face lock holds for the whole clip, not just its first frame. The " +
+      "closer his face is to the lens, the darker and deeper the shadow under the brim, never lighter or thinner. " +
+      "But the frame must never go fully, totally black or empty \u2014 keep one small real anchor visible at all " +
+      "times: the hat-brim edge, a faint rim of light along the shadow's outline, or the glowing neon lips. A " +
+      "pure black, featureless frame is wrong here, not the goal \u2014 deep near-black shadow with one visible " +
+      "anchor point is. He must never resolve into a normal, visible human face at any point.",
+    instrumentalVideoNote:
+      "Across this clip's motion, his face never becomes legible, well-lit, or reads as a normal, watchable " +
+      "stare at any point — the shadow-face lock holds for the whole clip, not just its first frame. The " +
+      "closer his face is to the lens, the darker and deeper the shadow under the brim, never lighter or thinner. " +
+      "But the frame must never go fully, totally black or empty — keep one small real anchor visible at all " +
+      "times: the hat-brim edge, or a faint rim of light along the shadow's outline. A pure black, featureless " +
+      "frame is wrong here, not the goal — deep near-black shadow with one visible anchor point is. He must " +
+      "never resolve into a normal, visible human face at any point. He is the only figure in frame throughout.",
   },
 };
 

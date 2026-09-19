@@ -598,22 +598,6 @@ export interface ClipCameraWarnings {
  * so this now steers the energy of the shot onto his own small body
  * movement instead of onto camera motion.
  */
-function lockedCharacterVideoNote(): string {
-  // Constrains Jack only. Never names a camera move (push-in, zoom,
-  // orbit, pan) even to forbid it — naming one in the positive prompt
-  // teaches the model to expect it (audit Part 3, rule 4).
-  return (
-    "Across this clip's motion, his glowing neon-blue lips are only ever visible while his mouth is actually " +
-    "in frame \u2014 never invented on a shot where his face turns away or his mouth leaves frame. His face " +
-    "never becomes legible, well-lit, or reads as a normal, watchable stare at any point in the motion, even " +
-    "while he's singing \u2014 the shadow-face lock holds for the whole clip, not just its first frame. The " +
-    "closer his face is to the lens, the darker and deeper the shadow under the brim, never lighter or thinner. " +
-    "But the frame must never go fully, totally black or empty \u2014 keep one small real anchor visible at all " +
-    "times: the hat-brim edge, a faint rim of light along the shadow's outline, or the glowing neon lips. A " +
-    "pure black, featureless frame is wrong here, not the goal \u2014 deep near-black shadow with one visible " +
-    "anchor point is. He must never resolve into a normal, visible human face at any point."
-  );
-}
 
 /** Real gap found 2026-09-16 (Stuart's "Jack Ghost" spec): the note above
  * only ever ran on a Vocal/Singing render — an Instrumental/Mute locked
@@ -627,17 +611,6 @@ function lockedCharacterVideoNote(): string {
  * has: the hat-brim edge / shadow outline itself. A character whose own
  * hallmark text does claim glowing lips still gets that stated there,
  * same as it always has been. */
-function lockedCharacterInstrumentalVideoNote(): string {
-  return (
-    "Across this clip's motion, his face never becomes legible, well-lit, or reads as a normal, watchable " +
-    "stare at any point — the shadow-face lock holds for the whole clip, not just its first frame. The " +
-    "closer his face is to the lens, the darker and deeper the shadow under the brim, never lighter or thinner. " +
-    "But the frame must never go fully, totally black or empty — keep one small real anchor visible at all " +
-    "times: the hat-brim edge, or a faint rim of light along the shadow's outline. A pure black, featureless " +
-    "frame is wrong here, not the goal — deep near-black shadow with one visible anchor point is. He must " +
-    "never resolve into a normal, visible human face at any point. He is the only figure in frame throughout."
-  );
-}
 
 /** Skidmarks' own original Vocal/LTX prompt lock (2026-09-14, "Vocal LTX
  * prompt wrap only" ask) — kept byte-for-byte, typo included ("dication"),
@@ -701,26 +674,6 @@ export function describeClipPayload(
     sentAt: Date.now(),
   };
 }
-
-/** Real bug found 2026-09-16 from a live render: Jack Ash's shadow-face
- * lock was still losing to a normal, lit, photoreal human face on some
- * clips even after the darkness/camera-speed fixes above. Root cause —
- * this exact prompt was telling the model two contradictory things in
- * the same breath: `VOCAL_LTX_PROMPT_LOCK`'s "facial expressions ... are
- * lively" (asking for a visible, expressive, legible face) right next to
- * `lockedCharacterVideoNote()`'s "his face never becomes legible,
- * well-lit ... at any point" (asking for the opposite). Given that
- * contradiction, the model was free to resolve it by picking the
- * lit-face reading. A locked character has no visible face to be
- * expressive with — only his glowing lips and his body do that job —
- * so for a locked character this drops "facial expressions" entirely
- * rather than asking for it and then forbidding it. Everything else
- * stays byte-for-byte identical to `VOCAL_LTX_PROMPT_LOCK`, including
- * staying just as short post-audit-Part-4 — no style/start-image text
- * reintroduced here either. */
-const VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER =
-  "perfect lip sync through his glowing neon-blue lips, clear lip movement, citing the dialogue clearly, hand " +
-  "gestures are lively, dication is perfect.";
 
 /** Real bug found 2026-09-16, same live render as the "facial expressions"
  * fix above, spotted again after that fix went out: an extra human head
@@ -787,10 +740,17 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   const parts = [
     params.shotPrompt.trim(),
     motionText,
-    params.vocal ? (lockedVocal ? VOCAL_LTX_PROMPT_LOCK_LOCKED_CHARACTER : VOCAL_LTX_PROMPT_LOCK) : "",
+    // Each of the three character-specific notes below is used only
+    // when *that character's own lock* supplies it (2026-09-19). They
+    // used to be module constants here, applied to any locked
+    // character — which is how a second band's singer ended up in a
+    // fedora with glowing neon-blue lips the moment he was given a lock
+    // card in the app. A lock card supplies none of them, so a new
+    // locked character gets their own hallmarks and the standard wrap.
+    params.vocal ? (lockedVocal && lock!.vocalLipSyncLock ? lock!.vocalLipSyncLock : VOCAL_LTX_PROMPT_LOCK) : "",
     locked ? (lock!.videoPromptHallmarks ?? lock!.promptHallmarks) : "",
-    lockedVocal ? lockedCharacterVideoNote() : "",
-    lockedInstrumental ? lockedCharacterInstrumentalVideoNote() : "",
+    lockedVocal ? (lock!.vocalVideoNote ?? "") : "",
+    lockedInstrumental ? (lock!.instrumentalVideoNote ?? "") : "",
     `Music video for ${params.bandName}. no on-screen text, no watermark.`,
   ];
 

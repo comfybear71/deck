@@ -615,6 +615,21 @@ character in this build:
   positions remain real, valid entries in Stuart's own numbered pack —
   only *auto*-pick is restricted; don't remove them from
   `SIRAY_17_POSITIONS` itself.
+- **Jack's video-only notes belong to Jack, not to "has a lock"
+  (2026-09-19).** `vocalLipSyncLock`, `vocalVideoNote` and
+  `instrumentalVideoNote` are fields on `SkidmarksCharacterLock`, set
+  only on his registry entry. They used to be module constants in
+  `lib/clipGeneration.ts` applied to **any** locked character, so the
+  moment a second band's singer was given a lock card in the app — the
+  supported way to lock a new artist — his clips came back wearing a
+  wide-brim fedora with glowing neon-blue lips. A real reported bug, and
+  a nasty one: the app's own "write a lock card" feature was what turned
+  it on. A lock card sets none of those three, so a new locked character
+  gets their own `promptHallmarks` plus the standard
+  `VOCAL_LTX_PROMPT_LOCK`. `LOCKED_CHARACTER_SOLO_SHOT_NEGATIVE_CUES`
+  stays generic on purpose — "no second person in frame" is right for
+  any locked character. If you add character-specific prompt text to
+  `lib/clipGeneration.ts`, put it on the lock, not in a module constant.
 - This is a small, hand-authored allowlist, not inferred from anything.
   A new locked character needs the same explicit, hand-written
   hallmarks/negative-cues treatment — don't guess at a "look" for a

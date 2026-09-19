@@ -1481,6 +1481,21 @@ now (see "Explicitly out of scope" below).
        shot) can still omit the artist entirely, even for a band with an
        obvious single vocalist — this only fires when the clip itself
        is tagged Vocal.
+     - **Jack's video-only notes belong to Jack, not to "has a lock"
+       (2026-09-19)** — `vocalLipSyncLock`, `vocalVideoNote` and
+       `instrumentalVideoNote` are fields on `SkidmarksCharacterLock`,
+       set only on his registry entry. They used to be module constants
+       in `lib/clipGeneration.ts` applied to **any** locked character,
+       so the moment a second band's singer was given a lock card in the
+       app — the supported way to lock a new artist without a code
+       change — his rendered clips came back wearing a wide-brim fedora
+       with glowing neon-blue lips. A real reported bug, and a nasty one:
+       the app's own "write a lock card" feature was what switched it
+       on. A lock card sets none of the three, so a new locked character
+       gets their own look plus the standard Vocal wrap. The solo-shot
+       negative cues stay generic on purpose — "no second person in
+       frame" is right for anyone. New character-specific prompt text
+       goes on the lock, never in a module constant.
      - **Jack Ash's look is locked** (`SKIDMARKS_CHARACTER_LOCKS`,
        keyed by member id) — per Stuart's reference photo (seeded as
        `public/skidmarks/jack-ash-reference.jpg` and, so an identity
