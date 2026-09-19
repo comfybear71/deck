@@ -114,6 +114,91 @@ const BAND_NAME = "Jack Ash";
 const JACK_ASH_AVATAR = "data:image/jpeg;base64,jackAshPhotoBytes";
 
 describe("buildPlateGenerationRequest", () => {
+  /**
+   * Real reported bug (2026-09-19), with a screenshot: a band member's
+   * own photo was attached and the render came back a *blend* — the shot
+   * prompt's described woman (afro, hoop earrings, olive tank top) fused
+   * with the photo's man (dreadlocks, purple sunglasses) into a person
+   * who was neither.
+   *
+   * Cause was the prompt's shape, not any one string: the user's
+   * paragraph led and was by far the longest, most specific text in the
+   * request, and the identity photo was introduced afterwards as a
+   * "likeness reference". Ported the original Skidmarks repo's
+   * `buildPlatePrompt` order instead (`src/lib/plateCast.ts`) — identity
+   * locks first, the director's text last as `Staging / tweak:`.
+   */
+  describe("holding one artist against a contradicting shot prompt (2026-09-19)", () => {
+    const soulRebel = member({
+      id: "solar-rebel-vocalist",
+      name: "Soul Rebel",
+      role: "Vocals",
+      avatarImage: "data:image/jpeg;base64,soulRebelPhoto",
+    });
+    const CONTRADICTING =
+      "Over-the-shoulder view looking past a soulful female vocalist with a large, beautiful afro adorned " +
+      "with wooden beads. She wears a simple olive green tank top and silver hoop earrings.";
+
+    it("leads with the identity lock, not the shot prompt, when a photo is attached", () => {
+      const { prompt } = buildPlateGenerationRequest({
+        shotPrompt: CONTRADICTING,
+        vocal: true,
+        model: "ltx-lipsync",
+        bandName: "Solar Rebel",
+        vocalist: soulRebel,
+      });
+      expect(prompt.startsWith(CONTRADICTING)).toBe(false);
+      expect(prompt.startsWith("the provided reference photo is the person")).toBe(true);
+    });
+
+    it("demotes the contradicting description to a trailing staging tweak, verbatim", () => {
+      const { prompt, shotPrompt } = buildPlateGenerationRequest({
+        shotPrompt: CONTRADICTING,
+        vocal: true,
+        model: "ltx-lipsync",
+        bandName: "Solar Rebel",
+        vocalist: soulRebel,
+      });
+      // Never dropped or reworded — it is still the director's text.
+      expect(prompt).toContain(`Staging / tweak: ${CONTRADICTING}`);
+      // And it must come after every lock, not before any of them.
+      expect(prompt.indexOf("Staging / tweak:")).toBeGreaterThan(
+        prompt.indexOf("Do not turn them into a different person")
+      );
+      // `shotPrompt` stays the raw user text for MAX_PROMPT_LENGTH.
+      expect(shotPrompt).toBe(CONTRADICTING);
+    });
+
+    it("carries the three anti-blend locks the old shape had none of", () => {
+      const { prompt } = buildPlateGenerationRequest({
+        shotPrompt: CONTRADICTING,
+        vocal: true,
+        model: "ltx-lipsync",
+        bandName: "Solar Rebel",
+        vocalist: soulRebel,
+      });
+      expect(prompt).toContain("Do not turn them into a different person.");
+      expect(prompt).toContain("do not change their gender");
+      expect(prompt).toContain("Never merge two people into one face.");
+      expect(prompt).toContain("One person only.");
+    });
+
+    it("leaves a person-less B-roll plate exactly as it was — nothing to hold, nothing to invert", () => {
+      const withoutArtist = buildPlateGenerationRequest({
+        shotPrompt: "an empty tropical beach at golden hour, no people",
+        vocal: false,
+        model: "grok",
+        bandName: "Solar Rebel",
+        vocalist: soulRebel,
+      });
+      // No identity reference on an Instrumental clip for an unlocked
+      // member, so the original shot-prompt-first shape must survive.
+      expect(withoutArtist.referenceImageDataUrls).toEqual([]);
+      expect(withoutArtist.prompt.startsWith("an empty tropical beach at golden hour, no people")).toBe(true);
+      expect(withoutArtist.prompt).not.toContain("Staging / tweak:");
+    });
+  });
+
   it("always leads with Stuart's own shot prompt, verbatim", () => {
     const { prompt } = buildPlateGenerationRequest({
       shotPrompt: "a door creaks open in an empty hallway",
@@ -208,7 +293,8 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt).toContain("Do not show:");
     expect(prompt.toLowerCase()).toContain("neon blue");
     expect(prompt.toLowerCase()).toContain("hidden in deep shadow at all times");
-    expect(prompt).toContain("exact likeness/identity reference for Jack Ash");
+    expect(prompt).toContain("is the person — same face identity");
+    expect(prompt).toContain("Do not turn them into a different person.");
   });
 
   it("live bug repro: the exact reported Instrumental prompt now carries Jack Ash's identity ref + strengthened lock", () => {
@@ -225,8 +311,12 @@ describe("buildPlateGenerationRequest", () => {
       vocalist: member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: JACK_ASH_AVATAR }),
     });
     expect(referenceImageDataUrls).toEqual([JACK_ASH_AVATAR]);
-    expect(prompt).toContain("exact likeness/identity reference for Jack Ash");
-    expect(prompt.toLowerCase()).toContain("not a generic stand-in");
+    expect(prompt).toContain("is the person — same face identity");
+    expect(prompt).toContain("Do not turn them into a different person.");
+    // The "not a generic stand-in" phrasing went with the old trailing
+    // likeness line; the replacement locks say it harder, up front.
+    expect(prompt.toLowerCase()).toContain("never merge two people into one face");
+    expect(prompt.toLowerCase()).toContain("one person only");
     expect(prompt.toLowerCase()).toContain("fedora");
     expect(prompt.toLowerCase()).toContain("hidden in deep shadow at all times");
     expect(prompt.toLowerCase()).toContain("neon blue");
@@ -365,7 +455,10 @@ describe("buildPlateGenerationRequest", () => {
     expect(referenceImageDataUrls).toEqual([previousPlate, JACK_ASH_AVATAR]);
     expect(prompt).toContain("<IMAGE_0>");
     expect(prompt).toContain("<IMAGE_1>");
-    expect(prompt).toContain("Use <IMAGE_1> as the exact likeness/identity reference for Jack Ash");
+    // 2026-09-19: the identity note is now a leading lock, not a trailing
+    // "likeness reference" line — see `buildPlateGenerationRequest`.
+    expect(prompt).toContain("<IMAGE_1> is the person — same face identity");
+    expect(prompt).toContain("Do not turn them into a different person.");
     expect(prompt.toLowerCase()).toContain("neon blue");
   });
 
@@ -458,7 +551,8 @@ describe("buildPlateGenerationRequest", () => {
     });
     expect(referenceImageDataUrls).toEqual([JACK_ASH_AVATAR]);
     expect(prompt).not.toContain("<IMAGE_0>");
-    expect(prompt).toContain("exact likeness/identity reference for Jack Ash");
+    expect(prompt).toContain("is the person — same face identity");
+    expect(prompt).toContain("Do not turn them into a different person.");
   });
 
   it("never sends an identity reference for a vocalist with no picked avatarImage", () => {
@@ -504,7 +598,10 @@ describe("buildPlateGenerationRequest", () => {
     expect(prompt).toContain("<IMAGE_0>");
     expect(prompt).toContain("<IMAGE_1>");
     expect(prompt).toContain("Continue directly from <IMAGE_0> the previous shot's plate");
-    expect(prompt).toContain("Use <IMAGE_1> as the exact likeness/identity reference for Jack Ash");
+    // 2026-09-19: the identity note is now a leading lock, not a trailing
+    // "likeness reference" line — see `buildPlateGenerationRequest`.
+    expect(prompt).toContain("<IMAGE_1> is the person — same face identity");
+    expect(prompt).toContain("Do not turn them into a different person.");
     // The character lock still applies on top of the continuity/identity notes.
     expect(prompt.toLowerCase()).toContain("neon blue");
   });

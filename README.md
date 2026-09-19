@@ -1481,6 +1481,32 @@ now (see "Explicitly out of scope" below).
        shot) can still omit the artist entirely, even for a band with an
        obvious single vocalist — this only fires when the clip itself
        is tagged Vocal.
+     - **Identity locks lead, the shot prompt trails (2026-09-19)** —
+       real reported bug, with a screenshot: a band member's own photo
+       was attached and the render came back a **blend**, the shot
+       prompt's described woman (afro, hoop earrings, olive tank top)
+       fused with the photo's man (dreadlocks, purple sunglasses) into a
+       person who was neither. No single string was wrong; it was the
+       prompt's shape. `buildPlateGenerationRequest` led with the whole
+       shot-prompt paragraph — by far the longest, most specific text in
+       the request — and introduced the identity photo afterwards as a
+       trailing "use this as the exact likeness reference" note, so the
+       model averaged the two. The original Skidmarks repo
+       (`src/lib/plateCast.ts`'s `buildPlatePrompt`) never gives it that
+       opening: it locks the person first ("same face identity, hair,
+       age and body from image 2. Do not turn them into a different
+       person"), forbids a second person, and puts the director's text
+       last as `Staging / tweak:` — an adjustment to a locked subject,
+       not the brief for a new one. Deck builds that order now, **only
+       when an identity reference is actually attached** (a person-less
+       B-roll plate keeps the original shape byte-for-byte). Three lock
+       lines the old shape had none of are ported: *do not turn them
+       into a different person* / *do not change their gender* / *never
+       merge two people into one face*. The remaining difference from
+       Skidmarks is that it composites into a **locked location image**
+       and Deck has none, so the backdrop is still invented from text
+       each plate — closing that means two still calls per plate instead
+       of one, a cost decision rather than a silent change.
      - **Jack's video-only notes belong to Jack, not to "has a lock"
        (2026-09-19)** — `vocalLipSyncLock`, `vocalVideoNote` and
        `instrumentalVideoNote` are fields on `SkidmarksCharacterLock`,
