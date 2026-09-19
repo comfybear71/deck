@@ -484,16 +484,78 @@ export function buildPlateGenerationRequest(
     references.push({ role: "identity", dataUrl: vocalist.avatarImage });
   }
 
-  const parts: string[] = [shotPrompt.trim(), routingFramingHint(vocal, model)];
-
   const tagPrefix = (index: number) => (references.length > 1 ? `<IMAGE_${index}> ` : "");
+  const identityIndex = references.findIndex((ref) => ref.role === "identity");
+  const identityRef =
+    identityIndex >= 0
+      ? references.length > 1
+        ? `<IMAGE_${identityIndex}>`
+        : "the provided reference photo"
+      : "";
+
+  /**
+   * **Identity locks lead; Stuart's own words become a trailing staging
+   * tweak** (2026-09-19) — the shape ported from the original Skidmarks
+   * repo's `buildPlatePrompt` (`src/lib/plateCast.ts`), which holds a
+   * character across a whole episode where this used to drift.
+   *
+   * Real reported bug, with a screenshot: a band member's own photo was
+   * attached, and the render came back as a *blend* — the shot prompt's
+   * described woman (afro, hoop earrings, olive tank top) fused with the
+   * photo's man (dreadlocks, purple sunglasses) into one person who was
+   * neither. Not a wrong string anywhere: it is what this prompt's
+   * **shape** asks for. The user's paragraph led, was by far the longest
+   * and most specific text in the request, and the identity photo was
+   * introduced afterwards as a "likeness reference" — so the model
+   * averaged the two, exactly as told.
+   *
+   * Skidmarks never gives it that opening. Its order is: lock the
+   * background, lock the person ("same face identity, hair, age and body
+   * from image 2. Do not turn them into a different person"), place that
+   * person, lock pose/clothes, forbid a second person — and only then,
+   * last, `Staging / tweak: <the director's text>`. The creative text is
+   * an adjustment to a locked subject, never the brief for a new one.
+   *
+   * So: when there is genuinely a person to hold (an identity reference
+   * is attached), this builds that order. With **no** identity reference
+   * there is nobody to drift, so the original shot-prompt-first shape is
+   * kept byte-for-byte — inverting a person-less B-roll plate would
+   * change every such plate for no reason.
+   *
+   * `shotPrompt` is still returned as its own untouched field, so
+   * `MAX_PROMPT_LENGTH` keeps validating Stuart's raw text and never
+   * this merge (see AGENTS.md's prompt-length lock).
+   */
+  const parts: string[] = [];
+  const holdsIdentity = identityIndex >= 0;
+
+  if (holdsIdentity) {
+    const who = vocalist?.name ?? "the vocalist";
+    parts.push(
+      `${identityRef} is the person — same face identity, hair, age, build and skin tone as ${who} in that ` +
+        "photo. Do not turn them into a different person."
+    );
+    parts.push(
+      `Keep the EXACT face, hair and wardrobe from ${identityRef}. Do not restyle their hair, do not change ` +
+        "their gender, do not blend them with anyone else described below."
+    );
+    parts.push(
+      "One person only. Only that person appears in frame — do not invent a second person, a backing singer, " +
+        "a passer-by, or an extra body in the distance. Never merge two people into one face."
+    );
+  } else {
+    parts.push(shotPrompt.trim());
+  }
+
+  parts.push(routingFramingHint(vocal, model));
+
   references.forEach((ref, index) => {
     if (ref.role === "continuity") {
       parts.push(
         `Continue directly from ${tagPrefix(index)}the previous shot's plate \u2014 keep the same scene, ` +
           "setting, and lighting continuity."
       );
-    } else {
+    } else if (!holdsIdentity) {
       parts.push(
         `Use ${tagPrefix(index)}as the exact likeness/identity reference for ${vocalist?.name ?? "the vocalist"} ` +
           "\u2014 match their appearance, build, and wardrobe precisely; this is a specific person, not a " +
@@ -516,6 +578,15 @@ export function buildPlateGenerationRequest(
       parts.push(lock.promptHallmarks);
       if (lock.negativeCues) parts.push(`Do not show: ${lock.negativeCues}.`);
     }
+  }
+
+  // Stuart's own words, last, as an adjustment to an already-locked
+  // subject — Skidmarks' `Staging / tweak:` line. Anything in here that
+  // describes a *different* person now reads as a staging note against a
+  // locked identity rather than as the brief for a new one. Verbatim and
+  // never dropped, same as when it led.
+  if (holdsIdentity && shotPrompt.trim()) {
+    parts.push(`Staging / tweak: ${shotPrompt.trim()}`);
   }
 
   parts.push(`Music video for ${bandName}. Photoreal cinematic still, one frame, no on-screen text, no watermark.`);

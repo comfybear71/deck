@@ -635,6 +635,52 @@ character in this build:
   hallmarks/negative-cues treatment — don't guess at a "look" for a
   character Stuart hasn't explicitly described.
 
+## Holding one artist: identity locks lead, the shot prompt trails
+
+**Real reported bug (2026-09-19), with a screenshot.** A band member's
+own photo was attached to a music-video plate and the render came back a
+**blend** — the shot prompt's described woman (afro, hoop earrings,
+olive tank top) fused with the photo's man (dreadlocks, purple
+sunglasses) into a person who was neither.
+
+No single string was wrong. It was the prompt's **shape**.
+`buildPlateGenerationRequest` led with Stuart's whole shot-prompt
+paragraph — by far the longest and most specific text in the request —
+and introduced the identity photo afterwards as a trailing *"use this as
+the exact likeness/identity reference"* note. Asked to paint a scene from
+a detailed description of one person while also matching a photo of
+another, the model averaged them. Exactly as told.
+
+The original Skidmarks repo never gives it that opening
+(`src/lib/plateCast.ts`'s `buildPlatePrompt`, studied 2026-09-19): lock
+the background, lock the person (*"same face identity, hair, age and
+body from image 2. Do not turn them into a different person"*), place
+that person, lock pose/clothes, forbid a second person — and only then,
+last, `Staging / tweak: <the director's text>`. The creative text is an
+**adjustment to a locked subject**, never the brief for a new one.
+
+Deck now builds that order too, but **only when there is genuinely a
+person to hold** (an identity reference is attached). With no identity
+reference there is nobody to drift, so the original shot-prompt-first
+shape is kept byte-for-byte — inverting a person-less B-roll plate would
+change every such plate for no reason. Three lock lines the old shape had
+none of are ported: *do not turn them into a different person* / *do not
+change their gender* / *never merge two people into one face, one person
+only, no passer-by*.
+
+`shotPrompt` is still returned as its own untouched field, so
+`MAX_PROMPT_LENGTH` keeps validating Stuart's raw text and never this
+merge (see the next section's lock).
+
+**Still not ported, and the remaining difference from Skidmarks**: it
+composites into a **locked location image** (image 1 = the place, image
+2 = the person). Deck's music-video flow has no location image at all,
+so the model still invents the backdrop from text on every plate. Doing
+it Skidmarks' way means generating the empty place first and compositing
+into it — two still calls per plate instead of one, which roughly
+doubles still spend and is a cost decision for Stuart, not a silent one
+to take on his behalf (see the cost rules above).
+
 ## Prompt-length validation: user text only, never the injected framing
 
 `MAX_PROMPT_LENGTH` (2000 chars — both `generate-still` and
@@ -831,12 +877,15 @@ the request, and validate length against `shotPrompt` only.
   ID LoRA that holds a face through motion, samplers, VAE chain) stays
   untouched. Two things the original repo does that were deliberately
   **not** ported, both cheap to add if the first live render shows
-  they're needed: it letterboxes the plate to 16:9 before upload
-  (`letterboxPlateForCloudIa2v` — port it if heads get cropped or the
-  shape is wrong), and it builds a specific Cloud IA2V prompt paragraph
+  they're needed: it builds a specific Cloud IA2V prompt paragraph
   with a lip-sync lead line and a style lock (`buildCloudIa2vPrompt` —
   port it if lip-sync is worse than Skidmarks'). Deck sends the shot
-  prompt as-is.
+  prompt as-is. **This bullet was stale on a second item until
+  2026-09-19**: it also claimed `letterboxPlateForCloudIa2v` was not
+  ported. It *was* — `letterboxImageForLtxIa2v` in `lib/comfyCloud.ts`,
+  used by both the music-video render route and the Sunny Banks
+  speak-beat route. Flagging the correction rather than silently
+  editing the claim away.
 - `SIRAY_API_KEY` — required for Auto-plate's master-still routing
   (`lib/sirayClient.ts`, `app/api/skidmarks/generate-still-siray/
   route.ts`) — a band with no `avatarImage` set on its resolved
