@@ -16,7 +16,6 @@ import {
 import { type SkidmarksTranscriptionProvider } from "@/lib/transcription";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 import { SkidmarksClipStub } from "./SkidmarksClipStub";
-import { SkidmarksAutoPlate } from "./SkidmarksAutoPlate";
 import { SkidmarksClipTimingHeaderEdit } from "./SkidmarksClipTimingHeaderEdit";
 
 interface SkidmarksClipTimelineProps {
@@ -32,9 +31,9 @@ interface SkidmarksClipTimelineProps {
    * (`resolveVocalistForPrompt` in `lib/plateGeneration.ts`) and to name
    * the band in a generated still's prompt. */
   band: SkidmarksBand;
-  /** The attached MP3's own filename — threaded down to
-   * `SkidmarksAutoPlate` as a fallback hint for the scripted
-   * concrete-opener trigger (see `lib/autoPlate.ts`). */
+  /** The attached MP3's own filename — retained on the props surface
+   * for callers; Auto-plate was removed from this music-video clip list
+   * (lib/autoPlate.ts + SkidmarksAutoPlate stay in the repo unused here). */
   mp3FileName?: string;
   /** The attached song's own durable Blob URL
    * (`SkidmarksMp3Attachment.audioUrl`) — threaded straight through to
@@ -350,10 +349,9 @@ function renderKey(segmentId: string, plateId: string): string {
  * render-at-a-time lock — it never fetches or downloads anything on its
  * own anymore.
  *
- * **Auto-plate**: the slim brief field + Auto-plate control
- * (`SkidmarksAutoPlate`) lives right under this section's own header,
- * above the per-clip rows — see that component's doc comment for the
- * "fill empties, then stop" contract.
+ * **Auto-plate**: removed from this music-video clip / segment list
+ * UI (button + calls). `lib/autoPlate.ts` and `SkidmarksAutoPlate.tsx`
+ * stay in the repo for other / future use — do not delete them from here.
  *
  * **Clip start/end edit** (2026-09-13, revised same day): each row's
  * own always-visible header — "0:00–0:32" next to the label pill —
@@ -381,7 +379,6 @@ export function SkidmarksClipTimeline({
   analysisStatus,
   transcriptionStatus,
   band,
-  mp3FileName,
   mp3AudioUrl,
   renders,
   onPersisted,
@@ -469,12 +466,6 @@ export function SkidmarksClipTimeline({
             </div>
           )}
 
-          <SkidmarksAutoPlate
-            segments={segments}
-            band={band}
-            songTitleHint={mp3FileName}
-            onSetClipPlateStill={onSetClipPlateStill}
-          />
 
           <div className="flex flex-col gap-2">
             {segments.map((segment, i) => {

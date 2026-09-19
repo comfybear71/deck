@@ -1,7 +1,13 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { parseScriptSequence } from "@/lib/scriptSequence";
+import { useMemo, useRef, useState, type RefObject } from "react";
+import {
+  buildScriptSequenceHighlightSegments,
+  formatScriptSequencePartTitles,
+  parseScriptSequence,
+  SCRIPT_SEQUENCE_COLOUR_TAGS,
+  SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES,
+} from "@/lib/scriptSequence";
 import {
   buildScriptSequenceSegments,
   flushSkidmarksSessionNow,
@@ -147,6 +153,131 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
  * 2+ stay identity-safe (fresh composite every time; no last-frame
  * chaining). Persisted on `scriptSequenceDraft.startingImageUrl`.
  */
+/** Highlight overlay behind the (transparent) script textarea — same
+ * chrome pattern as Sunny Banks' God Script box, but colours MV part
+ * header type words only. Display-only; never changes parsing. */
+function ScriptSequenceHighlightOverlay({
+  text,
+  overlayRef,
+}: {
+  text: string;
+  overlayRef: RefObject<HTMLDivElement | null>;
+}) {
+  const segments = buildScriptSequenceHighlightSegments(text);
+  return (
+    <div
+      ref={overlayRef}
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 text-sm leading-relaxed"
+    >
+      {segments.map((segment, index) => (
+        <span key={index} className={SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[segment.kind]}>
+          {segment.text}
+        </span>
+      ))}
+      {text.endsWith("\n") ? <span>{"\u200b"}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * Full-screen script editor — draft buffer, then Apply. Mirrors Sunny
+ * Banks' full-screen God Script flow: nothing touches the live draft
+ * until Apply, so mid-edit keystrokes don't remint the clip timeline.
+ * Format here only rewrites header type words on the local draft.
+ */
+function ScriptSequenceFullScreenEditor({
+  initialText,
+  onApply,
+  onClose,
+}: {
+  initialText: string;
+  onApply: (next: string) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(initialText);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const dirty = draft !== initialText;
+
+  const handleCancel = () => {
+    if (dirty && !confirmingDiscard) {
+      setConfirmingDiscard(true);
+      return;
+    }
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950">
+      <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
+        <button
+          type="button"
+          onClick={handleCancel}
+          className="min-h-[44px] shrink-0 px-1 text-[13px] font-medium text-white/60"
+        >
+          {confirmingDiscard ? "Discard?" : "Cancel"}
+        </button>
+        <span className="min-w-0 flex-1 truncate text-center text-[12px] font-semibold text-white/80">
+          {dirty ? "Editing — not saved yet" : "Script sequence"}
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            onApply(draft);
+            onClose();
+          }}
+          className="min-h-[44px] shrink-0 rounded-md bg-rose-400 px-4 text-[13px] font-semibold text-zinc-950"
+        >
+          Apply
+        </button>
+      </div>
+
+      {confirmingDiscard && (
+        <p role="alert" className="border-b border-white/10 px-3 py-2 text-[11px] leading-snug text-rose-300/90">
+          Tap Discard again to throw these edits away, or Apply to keep them.
+        </p>
+      )}
+
+      <div className="relative min-h-0 flex-1">
+        <ScriptSequenceHighlightOverlay text={draft} overlayRef={overlayRef} />
+        <textarea
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setConfirmingDiscard(false);
+          }}
+          onScroll={(e) => {
+            if (overlayRef.current) {
+              overlayRef.current.scrollTop = e.currentTarget.scrollTop;
+              overlayRef.current.scrollLeft = e.currentTarget.scrollLeft;
+            }
+          }}
+          autoFocus
+          spellCheck={false}
+          aria-label="Script sequence full screen editor"
+          className="relative z-10 h-full w-full resize-none bg-transparent px-3 py-2.5 text-sm leading-relaxed text-transparent caret-rose-300 focus:outline-none"
+        />
+      </div>
+
+      <div className="flex items-center gap-2 border-t border-white/10 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setDraft((prev) => formatScriptSequencePartTitles(prev))}
+          disabled={!draft.trim()}
+          className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+        >
+          {"\u21e5"} Format
+        </button>
+        <p className="min-w-0 flex-1 text-[10px] leading-snug text-white/40">
+          Nothing remints until you tap Apply. Format only fixes the part header type word —
+          shot prose stays as written.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function SkidmarksScriptSequencePanel({
   band,
   hasMp3,
@@ -176,6 +307,10 @@ export function SkidmarksScriptSequencePanel({
   const [startingImagePicking, setStartingImagePicking] = useState(false);
   const [startingImageError, setStartingImageError] = useState<string | null>(null);
   const startingImageInputRef = useRef<HTMLInputElement | null>(null);
+  /** One-level undo for the script box (Format / Full-screen Apply). */
+  const [scriptUndo, setScriptUndo] = useState<string | null>(null);
+  const [fullScreenScriptOpen, setFullScreenScriptOpen] = useState(false);
+  const scriptHighlightRef = useRef<HTMLDivElement | null>(null);
 
   const script = scriptSequenceDraft?.script ?? "";
   const startingImageUrl = scriptSequenceDraft?.startingImageUrl;
@@ -237,6 +372,32 @@ export function SkidmarksScriptSequencePanel({
   const handleRemoveStartingImage = () => {
     onSetScriptSequenceDraft({ script, startingImageUrl: undefined });
     flushSkidmarksSessionNow();
+  };
+
+  /** Script-text only — never calls ensureTimeline / onSetScriptSequence,
+   * so Format / Full-screen Apply cannot remint clips or wipe plates.
+   * Timeline rebuild stays on Timeline / Generate plates / Generate, which
+   * already use remint-safe `buildScriptSequenceSegments`. */
+  const applyScriptText = (next: string, captureUndo: boolean) => {
+    if (next === script) return;
+    if (captureUndo) setScriptUndo(script);
+    onSetScriptSequenceDraft({ script: next, startingImageUrl });
+  };
+
+  const handleFormatScript = () => {
+    if (running) return;
+    const formatted = formatScriptSequencePartTitles(script);
+    applyScriptText(formatted, true);
+  };
+
+  const handleUndoScript = () => {
+    if (scriptUndo === null || running) return;
+    onSetScriptSequenceDraft({ script: scriptUndo, startingImageUrl });
+    setScriptUndo(null);
+  };
+
+  const handleFullScreenApply = (next: string) => {
+    applyScriptText(next, true);
   };
 
   const buildPlatesDeps = (): GeneratePlatesDeps => ({
@@ -568,17 +729,76 @@ export function SkidmarksScriptSequencePanel({
         </div>
       )}
 
-      <textarea
-        value={script}
-        onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl })}
-        disabled={!!running}
-        placeholder={
-          'Paste your "Part 1 (0:00 - 0:15) — Vocal[Duration: ...]. ..." script here. ' +
-          "Title words: Vocal, Instrumental, Intro, Outro, Bridge, Lead, Break, or \"Other Singer: Name\"."
-        }
-        rows={4}
-        className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none disabled:opacity-60"
-      />
+      <div className="flex min-w-0 flex-row flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={handleFormatScript}
+          disabled={!!running || !script.trim()}
+          aria-label="Format part header type words"
+          className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+        >
+          {"\u21e5"} Format
+        </button>
+        <button
+          type="button"
+          onClick={() => setFullScreenScriptOpen(true)}
+          disabled={!!running}
+          aria-label="Edit script full screen"
+          className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+        >
+          {"\u2922"} Full screen
+        </button>
+        <button
+          type="button"
+          onClick={handleUndoScript}
+          disabled={scriptUndo === null || !!running}
+          aria-label="Undo script"
+          className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
+        >
+          {"\u21a9"} Undo
+        </button>
+      </div>
+
+      <div className="relative rounded-xl border border-white/10 bg-white/[0.03] focus-within:border-rose-400/40">
+        <ScriptSequenceHighlightOverlay text={script} overlayRef={scriptHighlightRef} />
+        <textarea
+          value={script}
+          onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl })}
+          onScroll={(e) => {
+            if (scriptHighlightRef.current) {
+              scriptHighlightRef.current.scrollTop = e.currentTarget.scrollTop;
+              scriptHighlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
+            }
+          }}
+          disabled={!!running}
+          placeholder={
+            'Paste your "Part 1 (0:00 - 0:15) — Vocal[Duration: ...]. ..." script here. ' +
+            "Title words: Vocal, Instrumental, Intro, Outro, Bridge, Lead, Break, or \"Other Singer: Name\"."
+          }
+          rows={4}
+          spellCheck={false}
+          className="relative z-10 min-h-[7.5rem] w-full resize-y bg-transparent px-3 py-2.5 text-sm leading-relaxed text-transparent caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60"
+        />
+      </div>
+
+      <p className="text-[10px] leading-snug text-white/40">
+        <span aria-hidden="true" className="inline-flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          {SCRIPT_SEQUENCE_COLOUR_TAGS.map((tag) => (
+            <span key={tag.label} className="inline-flex items-center gap-1">
+              <span className={["h-1.5 w-1.5 rounded-full", SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[tag.kind].replace("text-", "bg-")].join(" ")} />
+              <span className={SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[tag.kind]}>{tag.label}</span>
+            </span>
+          ))}
+        </span>
+      </p>
+
+      {fullScreenScriptOpen && (
+        <ScriptSequenceFullScreenEditor
+          initialText={script}
+          onApply={handleFullScreenApply}
+          onClose={() => setFullScreenScriptOpen(false)}
+        />
+      )}
 
       <div className="flex items-center gap-2.5">
         {startingImageUrl ? (

@@ -157,3 +157,166 @@ export function parseScriptSequence(script: string): ScriptSequencePart[] {
   }
   return parts;
 }
+
+/**
+ * Canonical part-header type words for music-video scripts — the same
+ * set `parseScriptPartKind` / `lib/scriptSequenceRunner.ts` recognizes.
+ * Display casing only; matching is case-insensitive.
+ */
+export const SCRIPT_SEQUENCE_TYPE_WORDS = [
+  "Vocal",
+  "Intro",
+  "Outro",
+  "Bridge",
+  "Lead",
+  "Break",
+  "Instrumental",
+] as const;
+
+export type ScriptSequenceTypeWord = (typeof SCRIPT_SEQUENCE_TYPE_WORDS)[number];
+
+const OTHER_SINGER_TITLE_RE = /^other[\s-]?singer\s*[:\-]?\s*\(?\s*([^)]*?)\s*\)?$/i;
+
+const CANONICAL_TYPE_BY_LOWER: Record<string, ScriptSequenceTypeWord> = {
+  vocal: "Vocal",
+  intro: "Intro",
+  outro: "Outro",
+  bridge: "Bridge",
+  lead: "Lead",
+  "break": "Break",
+  instrumental: "Instrumental",
+};
+
+/**
+ * Normalizes a part header's title field to the canonical type word
+ * (or `Other Singer: Name`) when it already names a known kind.
+ * Unrecognized titles (e.g. "The Liquid Horizon") are returned trimmed
+ * but otherwise unchanged — Format never invents a type word and never
+ * rewrites shot prose.
+ */
+export function canonicalizeScriptPartTitle(rawTitle: string): string {
+  const title = rawTitle.trim();
+  if (!title) return title;
+  const other = title.match(OTHER_SINGER_TITLE_RE);
+  if (other) {
+    const name = other[1]?.trim();
+    return name ? `Other Singer: ${name}` : "Other Singer";
+  }
+  return CANONICAL_TYPE_BY_LOWER[title.toLowerCase()] ?? title;
+}
+
+/**
+ * One-tap Format for music-video script sequences: rewrites **only**
+ * each part header's type-word title to canonical casing / `Other
+ * Singer: Name` shape. Shot prose, duration brackets, times, and part
+ * numbers are left byte-for-byte alone. Idempotent. Does not rebuild a
+ * clip timeline — callers update the draft text only; remint-safe
+ * rebuild happens later via `buildScriptSequenceSegments` when Timeline
+ * / Generate is tapped.
+ */
+export function formatScriptSequencePartTitles(script: string): string {
+  // Title sits between the em/en dash and the `[Duration…]` bracket —
+  // same span `PART_HEADER_RE` captures. Global, in-place replace so
+  // unrecognized titles and all body text stay untouched.
+  // No leading-newline requirement: real pastes often run parts
+  // back-to-back with no separator (Liquid Horizon).
+  const titleInHeaderRe =
+    /(#{0,6}\s*Part\s+\d+\s*\(\s*[\d:.]+\s*-\s*[\d:.]+\s*\)\s*[—-]\s*)([^[\n]*?)(?=\s*\[[^\]]*\])/gi;
+  return script.replace(titleInHeaderRe, (_full, prefix: string, title: string) => {
+    return `${prefix}${canonicalizeScriptPartTitle(title)}`;
+  });
+}
+
+export type ScriptSequenceHighlightKind =
+  | "plain"
+  | "vocal"
+  | "intro"
+  | "outro"
+  | "bridge"
+  | "lead"
+  | "break"
+  | "instrumental"
+  | "other-singer";
+
+export type ScriptSequenceHighlightSegment =
+  | { kind: "plain"; text: string }
+  | { kind: Exclude<ScriptSequenceHighlightKind, "plain">; text: string };
+
+function highlightKindForTitle(title: string): Exclude<ScriptSequenceHighlightKind, "plain"> | null {
+  const trimmed = title.trim();
+  if (!trimmed) return null;
+  if (OTHER_SINGER_TITLE_RE.exec(trimmed)) return "other-singer";
+  switch (CANONICAL_TYPE_BY_LOWER[trimmed.toLowerCase()]) {
+    case "Vocal":
+      return "vocal";
+    case "Intro":
+      return "intro";
+    case "Outro":
+      return "outro";
+    case "Bridge":
+      return "bridge";
+    case "Lead":
+      return "lead";
+    case "Break":
+      return "break";
+    case "Instrumental":
+      return "instrumental";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Splits raw script text into plain / type-word segments for the
+ * Script Sequence highlight overlay. Concatenating every segment's
+ * `text` reconstructs `raw` exactly. Only the part-header title span
+ * (between — and `[Duration…]`) is ever tagged; shot prose stays plain.
+ */
+export function buildScriptSequenceHighlightSegments(raw: string): ScriptSequenceHighlightSegment[] {
+  const segments: ScriptSequenceHighlightSegment[] = [];
+  const headerTitleRe =
+    /(#{0,6}\s*Part\s+\d+\s*\(\s*[\d:.]+\s*-\s*[\d:.]+\s*\)\s*[—-]\s*)([^[\n]*?)(?=\s*\[[^\]]*\])/gi;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = headerTitleRe.exec(raw)) !== null) {
+    const prefix = match[1] ?? "";
+    const title = match[2] ?? "";
+    const titleStart = match.index + prefix.length;
+    const titleEnd = titleStart + title.length;
+    if (titleStart > lastIndex) {
+      segments.push({ kind: "plain", text: raw.slice(lastIndex, titleStart) });
+    }
+    const kind = highlightKindForTitle(title);
+    segments.push(kind ? { kind, text: title } : { kind: "plain", text: title });
+    lastIndex = titleEnd;
+  }
+  if (lastIndex < raw.length) {
+    segments.push({ kind: "plain", text: raw.slice(lastIndex) });
+  }
+  return segments;
+}
+
+/** Opaque text colours for the overlay + colour-tag legend (script box only). */
+export const SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES: Record<ScriptSequenceHighlightKind, string> = {
+  plain: "text-white",
+  vocal: "text-rose-300",
+  intro: "text-sky-300",
+  outro: "text-violet-300",
+  bridge: "text-amber-300",
+  lead: "text-emerald-300",
+  "break": "text-orange-300",
+  instrumental: "text-zinc-300",
+  "other-singer": "text-fuchsia-300",
+};
+
+/** Colour-tag legend chips shown under the script box (display only). */
+export const SCRIPT_SEQUENCE_COLOUR_TAGS: { label: string; kind: ScriptSequenceHighlightKind }[] = [
+  { label: "[Vocal]", kind: "vocal" },
+  { label: "[Intro]", kind: "intro" },
+  { label: "[Outro]", kind: "outro" },
+  { label: "[Bridge]", kind: "bridge" },
+  { label: "[Lead]", kind: "lead" },
+  { label: "[Break]", kind: "break" },
+  { label: "[Instrumental]", kind: "instrumental" },
+  { label: "[Other Singer: Name]", kind: "other-singer" },
+];
