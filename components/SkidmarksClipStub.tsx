@@ -22,9 +22,11 @@ import {
 import {
   buildPlateGenerationRequest,
   generatePlateStill,
+  plateGenerationHoldsIdentity,
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
+import { resolveLocationStill } from "@/lib/plateLocation";
 import { computeLtxPlateDurationSec, computePlateDurationSec } from "@/lib/clipGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import { SkidmarksClipRender } from "./SkidmarksClipRender";
@@ -711,7 +713,7 @@ function SkidmarksPlateBox({
       // still saved before that change (still a literal `data:` URL).
       const continuityStillDataUrl =
         useLastPlate && previousStill ? await resolvePlateReferenceDataUrl(previousStill.dataUrl) : undefined;
-      const request = buildPlateGenerationRequest({
+      const requestParams = {
         shotPrompt: trimmedPrompt,
         vocal,
         model,
@@ -723,7 +725,40 @@ function SkidmarksPlateBox({
         // already featured him — see `lib/skidmarks.ts`'s
         // `SkidmarksPlateStill.featuresLockedCharacter` doc comment.
         continuityFeaturesLockedCharacter: continuityStillDataUrl ? previousStill?.featuresLockedCharacter : undefined,
-      });
+      };
+
+      // **Lock the place before locking the person** (2026-09-19) — the
+      // half of the original Skidmarks repo's plate call Deck never had.
+      // A plate with a real artist to hold is composited: image 1 is an
+      // empty still of the place, image 2 is the artist's own photo, and
+      // the model is told to put that person into that picture rather
+      // than to paint a scene from a paragraph describing one. See
+      // `lib/plateGeneration.ts`'s `buildPlateGenerationRequest` for why
+      // a paragraph always beat the photo before this, and
+      // `lib/plateLocation.ts` for the cost (one extra cheap still per
+      // scene, cached for the whole clip strip and every re-generate).
+      //
+      // Skipped entirely when there's a continuity plate to continue
+      // from (that *is* the locked place), and for a plate with nobody
+      // in it — person-less B-roll has nothing to drift, so it still
+      // costs exactly one call and its prompt is unchanged.
+      let locationStillDataUrl: string | undefined;
+      if (!continuityStillDataUrl && plateGenerationHoldsIdentity(requestParams)) {
+        setBusyLabel("Locking the place\u2026");
+        const location = await resolveLocationStill({ sceneText: trimmedPrompt, bandName });
+        if (!location.ok || !location.dataUrl) {
+          setError(
+            location.message
+              ? `Couldn't lock this shot's place, so the artist wasn't plated \u2014 ${location.message}`
+              : "Couldn't lock this shot's place, so the artist wasn't plated."
+          );
+          return;
+        }
+        locationStillDataUrl = location.dataUrl;
+        setBusyLabel("Generating\u2026");
+      }
+
+      const request = buildPlateGenerationRequest({ ...requestParams, locationStillDataUrl });
 
       const outcome = await generatePlateStill(request);
       if (outcome.ok) {

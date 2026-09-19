@@ -5,6 +5,7 @@ import {
   buildSirayCharacterPrompt,
   generatePlateStill,
   getSkidmarksCharacterLock,
+  plateGenerationHoldsIdentity,
   resolveVocalistForPrompt,
   shotPromptMentionsLockedCharacter,
 } from "./plateGeneration";
@@ -597,13 +598,158 @@ describe("buildPlateGenerationRequest", () => {
     expect(referenceImageDataUrls).toEqual([previousPlate, JACK_ASH_AVATAR]);
     expect(prompt).toContain("<IMAGE_0>");
     expect(prompt).toContain("<IMAGE_1>");
-    expect(prompt).toContain("Continue directly from <IMAGE_0> the previous shot's plate");
-    // 2026-09-19: the identity note is now a leading lock, not a trailing
+    // 2026-09-19, second pass: with an artist to hold, the continuity
+    // plate stops being a vague "continue from this" note and becomes
+    // the locked *place* the artist is composited into — image 1 of a
+    // two-image composite, exactly as the original Skidmarks repo sends
+    // it. The old "Continue directly from \u2026" line only survives for
+    // a plate with nobody in it, where there is nothing to composite.
+    expect(prompt).toContain("<IMAGE_0> is the LOCKED place");
+    expect(prompt).toContain("Place that same person from <IMAGE_1> into <IMAGE_0>.");
+    expect(prompt).not.toContain("Continue directly from");
+    // 2026-09-19: the identity note is a leading lock, not a trailing
     // "likeness reference" line — see `buildPlateGenerationRequest`.
     expect(prompt).toContain("<IMAGE_1> is the person — same face identity");
     expect(prompt).toContain("Do not turn them into a different person.");
     // The character lock still applies on top of the continuity/identity notes.
     expect(prompt.toLowerCase()).toContain("neon blue");
+  });
+
+  /**
+   * The regression this whole change exists for. Stuart's real report,
+   * three rounds deep: his own artist's photo is attached and the render
+   * comes back as somebody else \u2014 a woman with an afro against a
+   * photo of a man, then a blend, then "not one render was SOUL REBEL"
+   * even after the prompt was reordered.
+   *
+   * Reordering alone could not fix it because the *request* asked the
+   * model to paint a scene, which means inventing the person in it. The
+   * original Skidmarks repo never asks that: image 1 is the place, image
+   * 2 is the person, "place that same person from image 2 into image 1."
+   * These assert that request, not a wording preference.
+   */
+  describe("composites a locked artist into a locked place", () => {
+    const LOCATION = "data:image/jpeg;base64,emptyRoadsideMotelBytes";
+    const ARTIST = "data:image/jpeg;base64,soulRebelPhotoBytes";
+    const soulRebel = member({ id: "solar-rebel-vocals", name: "Soul Rebel", avatarImage: ARTIST });
+    // A shot prompt that describes a *different* person in detail \u2014
+    // the exact shape that used to win against the photo.
+    const DESCRIBES_SOMEONE_ELSE =
+      "a woman with a huge afro and gold hoop earrings, olive tank top, leaning on the bonnet of a rusted car outside a roadside motel at dusk";
+
+    it("sends the place first and the artist second, and says to put one into the other", () => {
+      const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
+        shotPrompt: DESCRIBES_SOMEONE_ELSE,
+        vocal: true,
+        model: "ltx-lipsync",
+        bandName: "Solar Rebel",
+        vocalist: soulRebel,
+        locationStillDataUrl: LOCATION,
+      });
+
+      // Place is image 0, artist is image 1 \u2014 the order
+      // `app/api/skidmarks/generate-still/route.ts` maps straight onto
+      // xAI's own `images` array.
+      expect(referenceImageDataUrls).toEqual([LOCATION, ARTIST]);
+      expect(prompt).toContain("<IMAGE_0> is the LOCKED place");
+      expect(prompt).toContain("<IMAGE_1> is the person");
+      expect(prompt).toContain("Place that same person from <IMAGE_1> into <IMAGE_0>.");
+      expect(prompt).toContain("One person only.");
+    });
+
+    it("keeps Stuart's own words, but last, as a staging tweak \u2014 never as the brief for who to draw", () => {
+      const { prompt, shotPrompt } = buildPlateGenerationRequest({
+        shotPrompt: DESCRIBES_SOMEONE_ELSE,
+        vocal: true,
+        model: "ltx-lipsync",
+        bandName: "Solar Rebel",
+        vocalist: soulRebel,
+        locationStillDataUrl: LOCATION,
+      });
+
+      // Verbatim and never dropped \u2026
+      expect(prompt).toContain(`Staging / tweak: ${DESCRIBES_SOMEONE_ELSE}`);
+      // \u2026 but the identity lock has to reach the model first, or the
+      // longest, most specific text in the request decides who gets
+      // drawn. This is the assertion that would have caught the bug.
+      expect(prompt.indexOf("<IMAGE_1> is the person")).toBeLessThan(prompt.indexOf("Staging / tweak:"));
+      expect(prompt.indexOf("<IMAGE_0> is the LOCKED place")).toBeLessThan(prompt.indexOf("Staging / tweak:"));
+      // Still validated on its own, never on the merge \u2014 see
+      // AGENTS.md's prompt-length lock.
+      expect(shotPrompt).toBe(DESCRIBES_SOMEONE_ELSE);
+    });
+
+    it("prefers a continuity plate over the place still \u2014 one background image, never both", () => {
+      const previousPlate = "data:image/jpeg;base64,previousPlateBytes";
+      const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
+        shotPrompt: DESCRIBES_SOMEONE_ELSE,
+        vocal: true,
+        model: "ltx-lipsync",
+        bandName: "Solar Rebel",
+        vocalist: soulRebel,
+        continuityStillDataUrl: previousPlate,
+        locationStillDataUrl: LOCATION,
+      });
+      expect(referenceImageDataUrls).toEqual([previousPlate, ARTIST]);
+      expect(referenceImageDataUrls).not.toContain(LOCATION);
+      expect(prompt).toContain("from the previous shot");
+    });
+
+    it("still locks the artist when no place still could be attached \u2014 degraded, not broken", () => {
+      const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest({
+        shotPrompt: DESCRIBES_SOMEONE_ELSE,
+        vocal: true,
+        model: "ltx-lipsync",
+        bandName: "Solar Rebel",
+        vocalist: soulRebel,
+      });
+      expect(referenceImageDataUrls).toEqual([ARTIST]);
+      expect(prompt).toContain("is the person");
+      expect(prompt).not.toContain("LOCKED place");
+      expect(prompt).not.toContain("Place that same person");
+    });
+
+    /**
+     * The other half of the lock: a person-less B-roll plate must be
+     * byte-for-byte what it was. There is nobody to drift, so inverting
+     * its prompt would change every door/keyhole plate for no reason \u2014
+     * and buying it a place still would be spending real money on an
+     * image nothing uses.
+     */
+    it("leaves a plate with nobody in it completely alone", () => {
+      const params = {
+        shotPrompt: "a brass keyhole, lit from behind, dust in the light",
+        vocal: false,
+        model: "grok" as const,
+        bandName: "Solar Rebel",
+        vocalist: member({ id: "solar-rebel-vocals", name: "Soul Rebel", avatarImage: ARTIST }),
+      };
+      expect(plateGenerationHoldsIdentity(params)).toBe(false);
+      const { prompt, referenceImageDataUrls } = buildPlateGenerationRequest(params);
+      expect(referenceImageDataUrls).toEqual([]);
+      // Stuart's own words lead, exactly as before.
+      expect(prompt.startsWith(params.shotPrompt)).toBe(true);
+      expect(prompt).not.toContain("LOCKED place");
+      expect(prompt).not.toContain("Staging / tweak:");
+    });
+
+    it("plateGenerationHoldsIdentity agrees with what the request actually does", () => {
+      const holding = {
+        shotPrompt: DESCRIBES_SOMEONE_ELSE,
+        vocal: true,
+        model: "ltx-lipsync" as const,
+        bandName: "Solar Rebel",
+        vocalist: soulRebel,
+      };
+      expect(plateGenerationHoldsIdentity(holding)).toBe(true);
+      // No photo yet \u2014 nothing to hold, so nothing to composite into.
+      expect(
+        plateGenerationHoldsIdentity({
+          ...holding,
+          vocalist: member({ id: "solar-rebel-vocals", name: "Soul Rebel" }),
+        })
+      ).toBe(false);
+    });
   });
 
   it("always names the band in the final prompt", () => {
