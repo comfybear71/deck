@@ -1141,6 +1141,38 @@ describe("POST /api/skidmarks/generate-clip — Vocal (Comfy Cloud LTX 2.3) rend
     return JSON.parse(fetchMock.mock.calls[i][1].body as string).prompt;
   }
 
+  it("accepts an https Blob plate still on the Vocal/LTX path (not only data:)", async () => {
+    const mp3Bytes = encodeTestMp3(6);
+    const videoBytes = new Uint8Array([9, 8, 7]);
+    const httpsStill = "https://blob.example/skidmarks/vocal-plate.jpg";
+    // Tiny valid-looking JPEG header bytes so letterbox/sharp has something to chew.
+    const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+
+    mockAudioFetch(mp3Bytes);
+    fetchMock.mockResolvedValueOnce(
+      new Response(jpegBytes, { status: 200, headers: { "content-type": "image/jpeg" } })
+    );
+    mockUploads("https-plate.jpg", "clip.mp3");
+    mockSubmit("job-https-plate");
+    mockJobPoll();
+    mockDownload(videoBytes);
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 })); // HEAD verify
+    putMock.mockResolvedValueOnce({
+      url: "https://abc.public.blob.vercel-storage.com/skidmarks/clip-renders/seg-1/plate-1/01_0000-0005_render.mp4",
+    });
+
+    const res = await POST(vocalRequest({ referenceImageDataUrls: [httpsStill] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.persisted).toBe(true);
+    // The https still was fetched (not rejected as "must be a data:image URL").
+    const fetchedStill = fetchMock.mock.calls.some(([url]) => String(url) === httpsStill);
+    expect(fetchedStill).toBe(true);
+    const graph = submittedGraph();
+    expect(graph["269"].inputs.image).toBe("https-plate.jpg");
+  });
+
   it("runs the full real pipeline end to end and persists the result to Vercel Blob", async () => {
     const mp3Bytes = encodeTestMp3(6);
     const videoBytes = new Uint8Array([1, 2, 3, 4, 5]);
