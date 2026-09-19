@@ -52,7 +52,7 @@
  */
 
 import { generatePlateStill, type PlateGenerationRequest } from "./plateGeneration";
-import { downscaleDataUrlImage } from "./skidmarks";
+import { downscaleDataUrlImage, registerSkidmarksIdentityWipeListener } from "./skidmarks";
 
 /** Normalised cache key — the same scene text typed with different
  * spacing or casing is the same place, and re-generating one plate of a
@@ -133,6 +133,19 @@ export function cacheLocationStill(sceneText: string, dataUrl: string): void {
 export function clearCachedLocationStills(): void {
   locationStills.clear();
 }
+
+// Registered once, at module load — a band/artist/song switch
+// (`lib/skidmarks.ts`'s `selectSkidmarksBand`/`createSkidmarksBand`/
+// `removeSkidmarksBand`/`attachSkidmarksMp3`) must never let a cached
+// place still from a *previous* identity context quietly ride along into
+// a new one. This cache never holds a person (see this file's doc
+// comment), so there is no face to leak — this is defense-in-depth, not
+// the fix for a reproduced identity bug. See
+// `registerSkidmarksIdentityWipeListener`'s doc comment for why this is a
+// listener registration rather than `lib/skidmarks.ts` importing this
+// module directly (that would be circular — this module already imports
+// from `./skidmarks`).
+registerSkidmarksIdentityWipeListener(clearCachedLocationStills);
 
 export interface LocationStillOutcome {
   ok: boolean;

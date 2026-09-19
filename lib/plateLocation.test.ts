@@ -7,6 +7,7 @@ import {
   locationStillCacheKey,
   resolveLocationStill,
 } from "./plateLocation";
+import { attachSkidmarksMp3, createMp3Attachment, selectSkidmarksBand } from "./skidmarks";
 
 const SCENE =
   "a woman with a huge afro and gold hoop earrings leaning on the bonnet of a rusted car outside a roadside motel at dusk";
@@ -138,5 +139,39 @@ describe("resolveLocationStill", () => {
     const outcome = await resolveLocationStill({ sceneText: SCENE, bandName: "Solar Rebel" });
     expect(outcome.dataUrl).toBe("data:image/jpeg;base64,alreadyHave");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Rule 2's "in-memory place-still cache" clause, verified as the real
+ * cross-module wire it actually is — `lib/skidmarks.ts` never imports
+ * this module directly (that would be circular; see
+ * `registerSkidmarksIdentityWipeListener`'s doc comment there), so this
+ * is the one test that actually exercises the registration this module
+ * performs at load time, not just the cache's own clear function in
+ * isolation.
+ */
+describe("identity wipe integration (lib/skidmarks.ts band/song switches)", () => {
+  afterEach(() => {
+    clearCachedLocationStills();
+    selectSkidmarksBand("jack-ash"); // leave a real seed band active for any other suite
+  });
+
+  it("a band switch clears a cached place still — a new artist must never inherit the previous one's cached scene", () => {
+    cacheLocationStill(SCENE, "data:image/jpeg;base64,cachedPlace");
+    expect(getCachedLocationStill(SCENE)).toBe("data:image/jpeg;base64,cachedPlace");
+
+    selectSkidmarksBand("solar-rebel");
+
+    expect(getCachedLocationStill(SCENE)).toBeUndefined();
+  });
+
+  it("attaching a new song clears a cached place still too", () => {
+    selectSkidmarksBand("solar-rebel");
+    cacheLocationStill(SCENE, "data:image/jpeg;base64,cachedPlace");
+
+    attachSkidmarksMp3(createMp3Attachment("a-new-song.mp3", 120));
+
+    expect(getCachedLocationStill(SCENE)).toBeUndefined();
   });
 });
