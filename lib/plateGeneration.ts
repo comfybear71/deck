@@ -417,6 +417,94 @@ export interface BuildPlateGenerationRequestParams {
    * never inject his identity/lock just because *some* continuity image
    * happens to be attached. */
   continuityFeaturesLockedCharacter?: boolean;
+  /** The empty **place** still this plate's artist is composited into
+   * \u2014 `lib/plateLocation.ts`'s `buildLocationStillRequest` output,
+   * already generated and resolved to a real `data:` URL by the caller.
+   *
+   * Only used when there is genuinely an identity to hold *and* there is
+   * no `continuityStillDataUrl` (which is the stronger background of the
+   * two, and takes its place) \u2014 see `buildPlateGenerationRequest`'s
+   * own doc comment for why compositing a locked person into a locked
+   * place is the thing that stops an artist drifting, and
+   * `lib/plateLocation.ts` for what the extra still costs. Omitting it
+   * is never an error: the prompt simply falls back to locking the
+   * person without locking the place, which is where this feature was
+   * before 2026-09-19. */
+  locationStillDataUrl?: string;
+}
+
+/**
+ * The one place "is a locked character actually in this frame, and do we
+ * have their photo?" is decided. `buildPlateGenerationRequest` and
+ * `plateGenerationHoldsIdentity` both read it, so the answer can never
+ * drift between what the caller prepares and what the prompt assumes
+ * \u2014 two copies of this decision going out of step is exactly how the
+ * door \u2192 keyhole plate once inherited Jack Ash's silhouette.
+ *
+ * "In frame" for identity/lock purposes: a Vocal clip's auto-included
+ * vocalist always counts. An Instrumental/B-roll clip only counts when a
+ * *locked* character (Jack Ash today) is genuinely part of this shot
+ * \u2014 two signals, either one is enough:
+ *  1. Stuart's own shot prompt names them directly (the "door \u2192
+ *     keyhole \u2192 Jack seated" case \u2014 see
+ *     `shotPromptMentionsLockedCharacter`'s doc comment).
+ *  2. This plate continues from a plate that *itself* already featured
+ *     them ("Use last plate" checked \u2014 `continuityStillDataUrl` set
+ *     \u2014 *and* `continuityFeaturesLockedCharacter` true) \u2014 a
+ *     later shot in the same story beat ("he stands, still in shadow")
+ *     that never re-says the name shouldn't silently drop the lock
+ *     either. Live-QA fix: signal 2 used to fire on *any* continuity
+ *     reference at all, regardless of what it showed \u2014 the door
+ *     \u2192 keyhole case (keyhole continues from door; neither names or
+ *     shows anyone) wrongly inherited the lock purely because "Use last
+ *     plate" happened to be checked. It's now gated on the *source*
+ *     still's own resolved fact instead, so continuing from a person-less
+ *     shot stays person-less.
+ *
+ * Both signals are gated on the character actually having a lock, so a
+ * generic Instrumental clip for an un-locked member/band still never
+ * auto-features/locks anyone \u2014 the lock text only *constrains* how
+ * that character looks if he's the subject, it never forces him into a
+ * shot that wasn't going to feature anyone, so applying it on signal 2
+ * alone (no literal name mention yet) costs nothing on a shot that truly
+ * has no one in it.
+ */
+function resolvePlateIdentity(params: BuildPlateGenerationRequestParams): {
+  characterInFrame: boolean;
+  /** The artist's own photo, when there is one to hold. Never a
+   * generated `look` (a colour swatch stand-in, not real image data
+   * \u2014 see `SkidmarksLook` in `lib/skidmarks.ts`). */
+  identityDataUrl?: string;
+} {
+  const { shotPrompt, vocal, vocalist, continuityStillDataUrl, continuityFeaturesLockedCharacter } = params;
+  const lockedVocalist = vocalist && getSkidmarksCharacterLock(vocalist) ? vocalist : undefined;
+  const instrumentalCastMention =
+    !vocal &&
+    !!lockedVocalist &&
+    (shotPromptMentionsLockedCharacter(shotPrompt, lockedVocalist) ||
+      (Boolean(continuityStillDataUrl) && Boolean(continuityFeaturesLockedCharacter)));
+  const characterInFrame = (vocal && !!vocalist) || instrumentalCastMention;
+  return {
+    characterInFrame,
+    identityDataUrl: characterInFrame && vocalist?.avatarImage ? vocalist.avatarImage : undefined,
+  };
+}
+
+/**
+ * Does a plate built from these params have a real person to hold \u2014
+ * i.e. will `buildPlateGenerationRequest` attach an identity reference
+ * and switch to its composite shape?
+ *
+ * Exported because the caller has to know this *before* building the
+ * request: a place still costs a real (cheap) API call, and generating
+ * one for a person-less B-roll plate would be spending money on an image
+ * nothing would use. Deliberately shares `buildPlateGenerationRequest`'s
+ * own logic rather than restating it \u2014 two copies of this decision
+ * drifting apart is exactly how the door \u2192 keyhole plate wrongly
+ * inherited Jack Ash's silhouette once already.
+ */
+export function plateGenerationHoldsIdentity(params: BuildPlateGenerationRequestParams): boolean {
+  return !!resolvePlateIdentity(params).identityDataUrl;
 }
 
 /**
@@ -435,53 +523,37 @@ export interface BuildPlateGenerationRequestParams {
 export function buildPlateGenerationRequest(
   params: BuildPlateGenerationRequestParams
 ): PlateGenerationRequest {
-  const { shotPrompt, vocal, model, bandName, vocalist, continuityStillDataUrl, continuityFeaturesLockedCharacter } =
-    params;
+  const { shotPrompt, vocal, model, bandName, vocalist, continuityStillDataUrl, locationStillDataUrl } = params;
 
-  // "In frame" for identity/lock purposes: a Vocal clip's auto-included
-  // vocalist always counts (unchanged). An Instrumental/B-roll clip only
-  // counts when a *locked* character (Jack Ash today) is genuinely part
-  // of this shot — two signals, either one is enough:
-  //  1. Stuart's own shot prompt names them directly (the "door \u2192
-  //     keyhole \u2192 Jack seated" case \u2014 see
-  //     `shotPromptMentionsLockedCharacter`'s doc comment).
-  //  2. This plate continues from a plate that *itself* already featured
-  //     them ("Use last plate" checked \u2014 `continuityStillDataUrl` set
-  //     \u2014 *and* `continuityFeaturesLockedCharacter` true) \u2014 a later
-  //     shot in the same story beat ("he stands, still in shadow") that
-  //     never re-says the name shouldn't silently drop the lock either.
-  //     Live-QA fix: signal 2 used to fire on *any* continuity reference
-  //     at all, regardless of what it showed \u2014 the door \u2192 keyhole
-  //     case (keyhole continues from door; neither names or shows
-  //     anyone) wrongly inherited the lock purely because "Use last
-  //     plate" happened to be checked. It's now gated on the *source*
-  //     still's own resolved fact instead, so continuing from a
-  //     person-less shot stays person-less.
-  // Both signals are gated on the character actually having a lock, so
-  // a generic Instrumental clip for an un-locked member/band still never
-  // auto-features/locks anyone \u2014 the lock text only *constrains* how
-  // that character looks if he's the subject, it never forces him into a
-  // shot that wasn't going to feature anyone, so applying it on signal 2
-  // alone (no literal name mention yet) costs nothing on a shot that
-  // truly has no one in it.
-  const lockedVocalist = vocalist && getSkidmarksCharacterLock(vocalist) ? vocalist : undefined;
-  const instrumentalCastMention =
-    !vocal &&
-    !!lockedVocalist &&
-    (shotPromptMentionsLockedCharacter(shotPrompt, lockedVocalist) ||
-      (Boolean(continuityStillDataUrl) && Boolean(continuityFeaturesLockedCharacter)));
-  const characterInFrame = (vocal && !!vocalist) || instrumentalCastMention;
+  // Shared with `plateGenerationHoldsIdentity` so the caller that
+  // prepares a place still and the prompt that assumes one can never
+  // disagree \u2014 see `resolvePlateIdentity`.
+  const { characterInFrame, identityDataUrl } = resolvePlateIdentity(params);
 
-  const references: { role: "continuity" | "identity"; dataUrl: string }[] = [];
-  if (continuityStillDataUrl) {
-    references.push({ role: "continuity", dataUrl: continuityStillDataUrl });
+  /**
+   * The **background plate** this still is composited into \u2014 the
+   * plate before it when "Use last plate" is checked, otherwise the
+   * empty place still `lib/plateLocation.ts` generated for this scene.
+   *
+   * Never both. The original Skidmarks repo's plate call carries
+   * exactly one image-1 background: its `chainPass` *swaps* the locked
+   * location for the current scene rather than sending a third image
+   * (`src/lib/plateCast.ts`), and continuing a shot already in progress
+   * is the stronger of the two continuity signals.
+   */
+  const backgroundRole: "continuity" | "location" | null = continuityStillDataUrl
+    ? "continuity"
+    : locationStillDataUrl
+      ? "location"
+      : null;
+  const backgroundDataUrl = continuityStillDataUrl ?? locationStillDataUrl;
+
+  const references: { role: "continuity" | "location" | "identity"; dataUrl: string }[] = [];
+  if (backgroundRole && backgroundDataUrl) {
+    references.push({ role: backgroundRole, dataUrl: backgroundDataUrl });
   }
-  // Identity reference for whichever member is "in frame" above, as long
-  // as they have a real picked photo (`avatarImage` \u2014 never a
-  // generated `look`, which is just a color swatch stand-in, not real
-  // image data \u2014 see `SkidmarksLook` in `lib/skidmarks.ts`).
-  if (characterInFrame && vocalist?.avatarImage) {
-    references.push({ role: "identity", dataUrl: vocalist.avatarImage });
+  if (identityDataUrl) {
+    references.push({ role: "identity", dataUrl: identityDataUrl });
   }
 
   const tagPrefix = (index: number) => (references.length > 1 ? `<IMAGE_${index}> ` : "");
@@ -492,35 +564,48 @@ export function buildPlateGenerationRequest(
         ? `<IMAGE_${identityIndex}>`
         : "the provided reference photo"
       : "";
+  const backgroundIndex = references.findIndex((ref) => ref.role !== "identity");
+  const backgroundRef =
+    backgroundIndex >= 0
+      ? references.length > 1
+        ? `<IMAGE_${backgroundIndex}>`
+        : "the provided reference image"
+      : "";
 
   /**
-   * **Identity locks lead; Stuart's own words become a trailing staging
-   * tweak** (2026-09-19) — the shape ported from the original Skidmarks
-   * repo's `buildPlatePrompt` (`src/lib/plateCast.ts`), which holds a
-   * character across a whole episode where this used to drift.
+   * **Composite a locked person into a locked place \u2014 never paint a
+   * scene from a description of one** (2026-09-19).
    *
-   * Real reported bug, with a screenshot: a band member's own photo was
-   * attached, and the render came back as a *blend* — the shot prompt's
-   * described woman (afro, hoop earrings, olive tank top) fused with the
-   * photo's man (dreadlocks, purple sunglasses) into one person who was
-   * neither. Not a wrong string anywhere: it is what this prompt's
-   * **shape** asks for. The user's paragraph led, was by far the longest
-   * and most specific text in the request, and the identity photo was
-   * introduced afterwards as a "likeness reference" — so the model
-   * averaged the two, exactly as told.
+   * Real reported bug, three rounds deep: Stuart attaches his artist's
+   * own photo and the render comes back as somebody else \u2014 a woman
+   * with an afro against a photo of a man with dreadlocks, then a blend
+   * of the two, then "not one render was SOUL REBEL" even after the
+   * prompt was reordered to put the identity locks first.
    *
-   * Skidmarks never gives it that opening. Its order is: lock the
-   * background, lock the person ("same face identity, hair, age and body
-   * from image 2. Do not turn them into a different person"), place that
-   * person, lock pose/clothes, forbid a second person — and only then,
-   * last, `Staging / tweak: <the director's text>`. The creative text is
-   * an adjustment to a locked subject, never the brief for a new one.
+   * Reordering was not enough because the *request* was still wrong.
+   * Asked for a finished scene, the model has to invent every pixel in
+   * it, the person included; the director's own paragraph is the
+   * longest and most concrete thing in the request, so it decides who
+   * that invented person is. The photo can only ever be a hint.
    *
-   * So: when there is genuinely a person to hold (an identity reference
-   * is attached), this builds that order. With **no** identity reference
-   * there is nobody to drift, so the original shot-prompt-first shape is
-   * kept byte-for-byte — inverting a person-less B-roll plate would
-   * change every such plate for no reason.
+   * The original Skidmarks repo never makes that request. Every plate
+   * call it sends carries two locked images \u2014 image 1 the place,
+   * image 2 the person \u2014 and the instruction is "place that same
+   * person from image 2 into image 1." It refuses outright when either
+   * is missing (`resolvePlateBackground` throws `Scene "\u2026" has no
+   * location still yet`; `resolvePlateCastPath` throws `Will not plate
+   * a partial cast`). Nothing is invented, so nothing can drift.
+   *
+   * So when there is genuinely a person to hold, this builds that
+   * request: lock the place, lock the person, place them, forbid a
+   * second body \u2014 and only then, last, `Staging / tweak:` with
+   * Stuart's own words, as an adjustment to an already-locked subject
+   * rather than the brief for a new one.
+   *
+   * With **no** identity reference there is nobody to drift, so the
+   * original shot-prompt-first shape is kept byte-for-byte \u2014
+   * inverting a person-less B-roll plate would change every such plate
+   * for no reason, and it would need a place still it has no use for.
    *
    * `shotPrompt` is still returned as its own untouched field, so
    * `MAX_PROMPT_LENGTH` keeps validating Stuart's raw text and never
@@ -531,16 +616,30 @@ export function buildPlateGenerationRequest(
 
   if (holdsIdentity) {
     const who = vocalist?.name ?? "the vocalist";
+    if (backgroundIndex >= 0) {
+      parts.push(
+        backgroundRole === "continuity"
+          ? `${backgroundRef} is the LOCKED place \u2014 keep that exact location, camera, lighting and materials ` +
+              `from the previous shot. Do not move to somewhere new. Remove anyone already standing in it; the ` +
+              `place is empty until ${who} is placed into it.`
+          : `${backgroundRef} is the LOCKED place \u2014 keep that exact location, camera, lighting and ` +
+              "materials. Do not replace it with somewhere else, and do not redraw the place from the staging " +
+              "notes below."
+      );
+    }
     parts.push(
-      `${identityRef} is the person — same face identity, hair, age, build and skin tone as ${who} in that ` +
+      `${identityRef} is the person \u2014 same face identity, hair, age, build and skin tone as ${who} in that ` +
         "photo. Do not turn them into a different person."
     );
+    if (backgroundIndex >= 0) {
+      parts.push(`Place that same person from ${identityRef} into ${backgroundRef}.`);
+    }
     parts.push(
       `Keep the EXACT face, hair and wardrobe from ${identityRef}. Do not restyle their hair, do not change ` +
         "their gender, do not blend them with anyone else described below."
     );
     parts.push(
-      "One person only. Only that person appears in frame — do not invent a second person, a backing singer, " +
+      "One person only. Only that person appears in frame \u2014 do not invent a second person, a backing singer, " +
         "a passer-by, or an extra body in the distance. Never merge two people into one face."
     );
   } else {
@@ -549,20 +648,16 @@ export function buildPlateGenerationRequest(
 
   parts.push(routingFramingHint(vocal, model));
 
-  references.forEach((ref, index) => {
-    if (ref.role === "continuity") {
-      parts.push(
-        `Continue directly from ${tagPrefix(index)}the previous shot's plate \u2014 keep the same scene, ` +
-          "setting, and lighting continuity."
-      );
-    } else if (!holdsIdentity) {
-      parts.push(
-        `Use ${tagPrefix(index)}as the exact likeness/identity reference for ${vocalist?.name ?? "the vocalist"} ` +
-          "\u2014 match their appearance, build, and wardrobe precisely; this is a specific person, not a " +
-          "generic stand-in."
-      );
-    }
-  });
+  // Only reachable without an identity to hold: the locked-place lines
+  // above already say everything this line said, and say it about a
+  // specific image. A location reference is only ever attached for an
+  // identity hold, so it never needs a line here.
+  if (!holdsIdentity && backgroundRole === "continuity") {
+    parts.push(
+      `Continue directly from ${tagPrefix(backgroundIndex)}the previous shot's plate \u2014 keep the same scene, ` +
+        "setting, and lighting continuity."
+    );
+  }
 
   if (vocal && vocalist) {
     parts.push(`Feature ${vocalist.name}, the vocalist, in the scene.`);
@@ -581,10 +676,11 @@ export function buildPlateGenerationRequest(
   }
 
   // Stuart's own words, last, as an adjustment to an already-locked
-  // subject — Skidmarks' `Staging / tweak:` line. Anything in here that
-  // describes a *different* person now reads as a staging note against a
-  // locked identity rather than as the brief for a new one. Verbatim and
-  // never dropped, same as when it led.
+  // subject \u2014 Skidmarks' `Staging / tweak:` line. Anything in here
+  // that describes a *different* person now reads as a staging note
+  // against a locked identity and a locked place rather than as the
+  // brief for a new one. Verbatim and never dropped, same as when it
+  // led.
   if (holdsIdentity && shotPrompt.trim()) {
     parts.push(`Staging / tweak: ${shotPrompt.trim()}`);
   }
