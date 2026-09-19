@@ -1200,6 +1200,54 @@ describe("runGeneratePlates", () => {
     expect(setCalls.every((c) => c[0] !== "seg-0")).toBe(true);
     expect(setCalls).toHaveLength(2);
   });
+
+  it("Instrumental/Intro/Outro person plates always pass artist photo + place to generateIdentityStill (vocal false)", async () => {
+    const deps = fakePlatesDeps();
+    const titled: IdentitySafeScriptPart[] = [
+      { shotPrompt: "singing", startSec: 0, endSec: 10, kind: "vocal" },
+      { shotPrompt: "leather jacket drive", startSec: 10, endSec: 20, kind: "intro" },
+      { shotPrompt: "chrome headphones walk", startSec: 20, endSec: 30, kind: "instrumental" },
+      { shotPrompt: "sit and smile", startSec: 30, endSec: 40, kind: "outro" },
+    ];
+    const plateTargets: GeneratePlatesTarget[] = titled.map((_, i) => ({
+      segmentId: `seg-${i}`,
+      plateId: `plate-${i}`,
+    }));
+
+    const outcome = await runGeneratePlates(titled, plateTargets, "Solar Rebel", nova, bandMembers, deps);
+    expect(outcome).toEqual({ ok: true, platedCount: 4, skippedCount: 0 });
+
+    const stillCalls = (deps.generateIdentityStill as ReturnType<typeof vi.fn>).mock.calls.map(([p]) => p);
+    expect(stillCalls).toHaveLength(4);
+    expect(stillCalls.map((c) => c.vocal)).toEqual([true, false, false, false]);
+    for (const call of stillCalls) {
+      expect(call.vocalist.avatarImage).toBe(nova.avatarImage);
+      expect(call.locationStillDataUrl).toMatch(/^data:image\/jpeg;base64,/);
+      expect(call.bandName).toBe("Solar Rebel");
+    }
+  });
+
+  it("refuses Intro/Instrumental when artist has no photo — never invents a face from costume words", async () => {
+    const noPhoto = member({ id: "nova", name: "Nova", avatarImage: undefined });
+    const deps = fakePlatesDeps();
+    const titled: IdentitySafeScriptPart[] = [
+      { shotPrompt: "leather jacket, chrome headphones", startSec: 0, endSec: 10, kind: "intro" },
+      { shotPrompt: "driving", startSec: 10, endSec: 20, kind: "instrumental" },
+    ];
+    const plateTargets: GeneratePlatesTarget[] = titled.map((_, i) => ({
+      segmentId: `seg-${i}`,
+      plateId: `plate-${i}`,
+    }));
+
+    const outcome = await runGeneratePlates(titled, plateTargets, "Solar Rebel", noPhoto, [noPhoto], deps);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(0);
+      expect(outcome.message.toLowerCase()).toMatch(/photo|face/);
+    }
+    expect(deps.generateIdentityStill).not.toHaveBeenCalled();
+    expect(deps.resolvePlaceStill).not.toHaveBeenCalled();
+  });
 });
 
 describe("plateStillCountsAsReady", () => {

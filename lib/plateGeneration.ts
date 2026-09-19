@@ -434,40 +434,40 @@ export interface BuildPlateGenerationRequestParams {
 }
 
 /**
- * The one place "is a locked character actually in this frame, and do we
- * have their photo?" is decided. `buildPlateGenerationRequest` and
+ * The one place "is a person actually in this frame, and do we have their
+ * photo?" is decided. `buildPlateGenerationRequest` and
  * `plateGenerationHoldsIdentity` both read it, so the answer can never
  * drift between what the caller prepares and what the prompt assumes
  * \u2014 two copies of this decision going out of step is exactly how the
  * door \u2192 keyhole plate once inherited Jack Ash's silhouette.
  *
- * "In frame" for identity/lock purposes: a Vocal clip's auto-included
- * vocalist always counts. An Instrumental/B-roll clip only counts when a
- * *locked* character (Jack Ash today) is genuinely part of this shot
- * \u2014 two signals, either one is enough:
- *  1. Stuart's own shot prompt names them directly (the "door \u2192
- *     keyhole \u2192 Jack seated" case \u2014 see
- *     `shotPromptMentionsLockedCharacter`'s doc comment).
- *  2. This plate continues from a plate that *itself* already featured
- *     them ("Use last plate" checked \u2014 `continuityStillDataUrl` set
- *     \u2014 *and* `continuityFeaturesLockedCharacter` true) \u2014 a
- *     later shot in the same story beat ("he stands, still in shadow")
- *     that never re-says the name shouldn't silently drop the lock
- *     either. Live-QA fix: signal 2 used to fire on *any* continuity
- *     reference at all, regardless of what it showed \u2014 the door
- *     \u2192 keyhole case (keyhole continues from door; neither names or
- *     shows anyone) wrongly inherited the lock purely because "Use last
- *     plate" happened to be checked. It's now gated on the *source*
- *     still's own resolved fact instead, so continuing from a person-less
- *     shot stays person-less.
+ * "In frame" for identity/lock purposes \u2014 three signals, any one is
+ * enough:
+ *  1. A Vocal clip's auto-included vocalist always counts.
+ *  2. An Instrumental/B-roll clip that features a *locked* character
+ *     (Jack Ash today) via either (a) Stuart's own shot prompt naming
+ *     them (see `shotPromptMentionsLockedCharacter`) or (b) continuing
+ *     from a plate that *itself* already featured them
+ *     (`continuityFeaturesLockedCharacter` true). Live-QA fix: signal
+ *     2b used to fire on *any* continuity reference; the door \u2192
+ *     keyhole case (neither names or shows anyone) wrongly inherited
+ *     the lock. Gated on the *source* still's own resolved fact, so
+ *     continuing from a person-less shot stays person-less.
+ *  3. **Place + person composite** (Generate plates / identity-safe
+ *     song path): when the caller already resolved an empty place still
+ *     (`locationStillDataUrl`) *and* the artist has a photo, the artist
+ *     is IN FRAME on every person plate \u2014 Vocal *and* Instrumental
+ *     / Intro / Outro / Bridge / Lead / Break. Photo is the lock. This
+ *     is the 2026-09-19 live bug fix: Generate plates used to drop the
+ *     identity photo on Intro/Instrumental (only signal 1 or the
+ *     Jack-locked path above attached it), so plate 2 invented a
+ *     stranger from costume words alone. Missing photo \u2192 no
+ *     identityDataUrl (callers such as `runGeneratePlates` must fail
+ *     that clip rather than invent a face).
  *
- * Both signals are gated on the character actually having a lock, so a
- * generic Instrumental clip for an un-locked member/band still never
- * auto-features/locks anyone \u2014 the lock text only *constrains* how
- * that character looks if he's the subject, it never forces him into a
- * shot that wasn't going to feature anyone, so applying it on signal 2
- * alone (no literal name mention yet) costs nothing on a shot that truly
- * has no one in it.
+ * Jack-lock *hallmark text* still only applies when the member actually
+ * has a lock (signal 2 / Vocal with Jack) \u2014 unlocked artists get
+ * the photo identity hold without any Soul Rebel / costume lock card.
  */
 function resolvePlateIdentity(params: BuildPlateGenerationRequestParams): {
   characterInFrame: boolean;
@@ -476,14 +476,26 @@ function resolvePlateIdentity(params: BuildPlateGenerationRequestParams): {
    * \u2014 see `SkidmarksLook` in `lib/skidmarks.ts`). */
   identityDataUrl?: string;
 } {
-  const { shotPrompt, vocal, vocalist, continuityStillDataUrl, continuityFeaturesLockedCharacter } = params;
+  const {
+    shotPrompt,
+    vocal,
+    vocalist,
+    continuityStillDataUrl,
+    continuityFeaturesLockedCharacter,
+    locationStillDataUrl,
+  } = params;
   const lockedVocalist = vocalist && getSkidmarksCharacterLock(vocalist) ? vocalist : undefined;
   const instrumentalCastMention =
     !vocal &&
     !!lockedVocalist &&
     (shotPromptMentionsLockedCharacter(shotPrompt, lockedVocalist) ||
       (Boolean(continuityStillDataUrl) && Boolean(continuityFeaturesLockedCharacter)));
-  const characterInFrame = (vocal && !!vocalist) || instrumentalCastMention;
+  // Place+person composite: a resolved location still means this is a
+  // person plate (Generate plates always builds place first). Attach the
+  // artist's photo on Intro/Instrumental as well as Vocal — never invent
+  // a face from costume/prompt words alone when we have a photo to hold.
+  const placePersonComposite = Boolean(locationStillDataUrl) && !!vocalist?.avatarImage;
+  const characterInFrame = (vocal && !!vocalist) || instrumentalCastMention || placePersonComposite;
   return {
     characterInFrame,
     identityDataUrl: characterInFrame && vocalist?.avatarImage ? vocalist.avatarImage : undefined,
