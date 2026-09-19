@@ -899,33 +899,39 @@ export function buildDemoSegments(totalSec: number): SkidmarksClipSegment[] {
 }
 
 /**
- * Real reported gap (2026-09-14): the first version of this always
- * built every part as Instrumental/Grok, full stop — but the song this
- * runs against has **real singing**, already sectioned into real
- * Vocal/Instrumental spans by this feature's own transcription/energy
- * analysis (the exact thing `applySkidmarksTranscriptionResult`/
- * `applySkidmarksAnalysisResult` produce). Stuart's own correction:
- * "vocals always go to LTX and the instrumentals can go to either H3
- * or Grok" — a script part landing where the song is actually singing
- * has to route to LTX like every other Vocal clip in this feature does,
- * not get forced to Grok just because it came from a pasted script.
+ * Product rule (all songs, all bands): a pasted script part's **title**
+ * sets the clip label/engine when it already contains a type word.
+ * Audio midpoint / transcription / energy must NOT override a title that
+ * already names Vocal, Intro, Outro, Bridge, Lead, Break, Instrumental,
+ * or Other Singer — that was why "Part 3 — Vocal" showed Instrumental.
  *
- * Resolves each part's real vocal/instrumental fact off `realSegments`
- * (the song's segments *before* `setSkidmarksScriptSequence` replaces
- * them) by checking which real segment covers that part's own
- * midpoint, then reading that segment's own
- * `SKIDMARKS_SEGMENT_LABEL_META[...].vocal` — the same canonical
- * vocal/instrumental fact every other part of this feature already
- * trusts, not a second, independent guess. A part with no real segment
- * covering its midpoint (the script runs past the song's own known
- * length, or no real segments exist at all) defaults to Instrumental —
- * this only ever turns a part Vocal on a real, positive signal from the
- * song's own analysis, never assumes it.
+ * `null` means no type word → callers fall back to the song's real
+ * segment covering this part's midpoint (`resolveScriptPartVocal`).
+ */
+export function scriptPartTitleKind(
+  title: string
+): "vocal" | "instrumental" | "other-singer" | null {
+  const t = title.toLowerCase();
+  if (/\bother\s+singer\b/.test(t)) return "other-singer";
+  if (/\bvocal\b/.test(t)) return "vocal";
+  if (/\b(intro|outro|bridge|lead|break|instrumental)\b/.test(t)) return "instrumental";
+  return null;
+}
+
+/**
+ * Title-first vocal resolution for pasted scripts. Title wins when it
+ * carries a type word; otherwise the song's real segments at this part's
+ * midpoint decide (same canonical `SKIDMARKS_SEGMENT_LABEL_META` fact as
+ * before). Other-singer titles are **not** Vocal (Grok/H3) — identity
+ * photo for that named member is the runner's job.
  */
 export function resolveScriptPartVocal(
-  part: { startSec: number; endSec: number },
+  part: { startSec: number; endSec: number; title?: string },
   realSegments: SkidmarksClipSegment[]
 ): boolean {
+  const kind = scriptPartTitleKind(part.title ?? "");
+  if (kind === "vocal") return true;
+  if (kind === "instrumental" || kind === "other-singer") return false;
   const midpoint = (part.startSec + part.endSec) / 2;
   const covering = realSegments.find((s) => midpoint >= s.startSec && midpoint < s.endSec);
   if (!covering) return false;
