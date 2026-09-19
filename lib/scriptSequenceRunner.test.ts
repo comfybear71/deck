@@ -763,6 +763,44 @@ describe("runIdentitySafeSongRender", () => {
     for (const [, , still] of stills) expect(still.source).toBe("generated");
   });
 
+  it("uses an uploaded clip-1 starting image as image 1 and never rebuilds/overwrites it", async () => {
+    const deps = fakeIdentityDeps();
+    const uploaded = "https://blob.example/uploaded-clip1.jpg";
+
+    const outcome = await runIdentitySafeSongRender(
+      sixParts(),
+      sixTargets(),
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps,
+      0,
+      undefined,
+      uploaded
+    );
+
+    expect(outcome).toEqual({ ok: true, renderedCount: 6 });
+    // Clip 1 skips place + identity still generation entirely.
+    expect(deps.resolvePlaceStill).toHaveBeenCalledTimes(5); // clips 2-6 only
+    expect(deps.generateIdentityStill).toHaveBeenCalledTimes(5);
+    expect(deps.uploadStill).toHaveBeenCalledTimes(5); // no re-upload of the already-durable pick
+
+    const setStillCalls = (deps.setPlateStill as ReturnType<typeof vi.fn>).mock.calls as [
+      string,
+      string,
+      { dataUrl: string; source: string },
+    ][];
+    expect(setStillCalls[0][2]).toEqual(
+      expect.objectContaining({ dataUrl: uploaded, source: "upload" })
+    );
+
+    const firstRender = (deps.renderClip as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      referenceImageDataUrls: string[];
+    };
+    expect(firstRender.referenceImageDataUrls).toEqual([uploaded]);
+  });
+
   it("acceptance test B: a fresh run for a different artist never references the previous artist's photo", async () => {
     const depsForNova = fakeIdentityDeps();
     await runIdentitySafeSongRender(

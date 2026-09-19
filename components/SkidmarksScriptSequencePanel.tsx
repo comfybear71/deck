@@ -29,6 +29,10 @@ import {
 } from "@/lib/scriptSequenceRunner";
 import { persistedRenderKey, type PersistedClipRender } from "@/lib/clipRenders";
 
+/** Native file picker's accept list — jpg/png/webp only, matches every
+ * other photo picker in this feature. */
+const STARTING_IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp";
+
 interface SkidmarksScriptSequencePanelProps {
   band: SkidmarksBand;
   hasMp3: boolean;
@@ -118,19 +122,15 @@ function identitySafeProgressLabel(event: IdentitySafeRunEvent): string {
  * **"Build timeline" (2026-09-15)** is unchanged: build the whole
  * timeline and, for a *locked* character only, pre-fill every plate with
  * their reference photo so Stuart can scroll through before spending
- * anything. That pre-fill is a preview, not the final frame — the
- * identity-safe runner always (re)builds every clip's real starting
- * image itself, from a fresh place still + that clip's own resolved
- * identity, the moment Generate actually runs.
+ * anything. That pre-fill is a preview for clips 2+ — the identity-safe
+ * runner still (re)builds those clips' real starting images from a fresh
+ * place still + identity when Generate runs.
  *
- * **Removed in this pass**: the old "upload clip 1's own starting image"
- * control. It let a render start from an arbitrary photo with no place
- * still and no resolved identity behind it — exactly the kind of
- * un-composited start image rule 3's "missing either image → fail" is
- * meant to rule out — so keeping the button while the runner silently
- * overwrote whatever it uploaded would have been misleading rather than
- * useful. Not a feature Stuart asked to lose; a deliberate casualty of
- * making the safety guarantee unconditional rather than best-effort.
+ * **Clip 1 starting-image upload (restored)**: optional. When set, the
+ * identity-safe runner uses that durable Blob URL as clip 1's image 1
+ * and does **not** overwrite it with a place+identity composite. Clips
+ * 2+ stay identity-safe (fresh composite every time; no last-frame
+ * chaining). Persisted on `scriptSequenceDraft.startingImageUrl`.
  */
 export function SkidmarksScriptSequencePanel({
   band,
@@ -154,8 +154,16 @@ export function SkidmarksScriptSequencePanel({
    * synchronously via `shouldStop` between clips. Reset at the start of
    * each run. */
   const stopRequestedRef = useRef(false);
+  /** Whether a starting-image pick is mid-upload right now — purely a
+   * local spinner label, never needs to survive a reload the way the
+   * uploaded URL itself does (`scriptSequenceDraft.startingImageUrl`),
+   * so this stays plain `useState` unlike the draft fields above it. */
+  const [startingImagePicking, setStartingImagePicking] = useState(false);
+  const [startingImageError, setStartingImageError] = useState<string | null>(null);
+  const startingImageInputRef = useRef<HTMLInputElement | null>(null);
 
   const script = scriptSequenceDraft?.script ?? "";
+  const startingImageUrl = scriptSequenceDraft?.startingImageUrl;
   const parts = useMemo(() => parseScriptSequence(script), [script]);
   /** One parsed kind per part, positionally aligned with `parts` — see
    * `lib/scriptSequenceRunner.ts`'s `parseScriptPartKind` doc comment
@@ -179,6 +187,35 @@ export function SkidmarksScriptSequencePanel({
     if (resumeIndex <= 0) return undefined;
     return { resumeIndex, total: realSegments.length };
   }, [realSegments, renders]);
+
+  /** Uploads to durable Blob storage immediately on pick, not deferred
+   * until Generate — the whole point of persisting this draft at all is
+   * surviving a backgrounded phone/closed tab, which a `data:` URL only
+   * ever sitting in local component state can't do. `onSetScriptSequenceDraft`
+   * + `flushSkidmarksSessionNow` land it in Neon right away, same as
+   * every other real upload in this feature. */
+  const handlePickStartingImage = async (file: File) => {
+    setStartingImagePicking(true);
+    setStartingImageError(null);
+    try {
+      const uploadOutcome = await uploadSkidmarksPlateStill(file);
+      if (!uploadOutcome.ok) {
+        setStartingImageError("Couldn't save that image — try again.");
+        return;
+      }
+      onSetScriptSequenceDraft({ script, startingImageUrl: uploadOutcome.url });
+      flushSkidmarksSessionNow();
+    } catch {
+      setStartingImageError("Couldn't read that image — try a different file.");
+    } finally {
+      setStartingImagePicking(false);
+    }
+  };
+
+  const handleRemoveStartingImage = () => {
+    onSetScriptSequenceDraft({ script, startingImageUrl: undefined });
+    flushSkidmarksSessionNow();
+  };
 
   /** Shared by a fresh run and a resume — same real backends, same
    * progress reporting; only which segments/start index
@@ -262,7 +299,10 @@ export function SkidmarksScriptSequencePanel({
       mp3AudioUrl,
       buildIdentitySafeDeps(),
       startAtClipIndex,
-      () => stopRequestedRef.current
+      () => stopRequestedRef.current,
+      // Only clip 1 cares — a resume that starts later never re-touches
+      // clip 1's plate, so the uploaded still is irrelevant there.
+      startAtClipIndex === 0 ? startingImageUrl : undefined
     );
 
     flushSkidmarksSessionNow();
@@ -341,7 +381,28 @@ export function SkidmarksScriptSequencePanel({
       flushSkidmarksSessionNow();
     }
 
-    await runFrom(segments, 0);
+    // Already a durable Blob URL, uploaded the moment it was picked —
+    // nothing left to upload here. An explicit pick always wins over
+    // whatever "Build timeline" pre-filled clip 1 with. Also mirrors
+    // onto the plate so the timeline UI shows the same image the runner
+    // will use as image 1 (the runner itself will not overwrite it).
+    let segmentsForRun = segments;
+    if (startingImageUrl) {
+      const startingStill: SkidmarksPlateStill = {
+        dataUrl: startingImageUrl,
+        source: "upload",
+        createdAt: Date.now(),
+      };
+      segmentsForRun = segments.map((segment, i) =>
+        i === 0
+          ? { ...segment, plates: [{ ...segment.plates[0], still: startingStill }, ...segment.plates.slice(1)] }
+          : segment
+      );
+      onSetClipPlateStill(segmentsForRun[0].id, segmentsForRun[0].plates[0].id, startingStill);
+      flushSkidmarksSessionNow();
+    }
+
+    await runFrom(segmentsForRun, 0);
   };
 
   return (
@@ -382,7 +443,7 @@ export function SkidmarksScriptSequencePanel({
 
       <textarea
         value={script}
-        onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value })}
+        onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl })}
         disabled={running}
         placeholder={
           'Paste your "Part 1 (0:00 - 0:15) — Vocal[Duration: ...]. ..." script here. ' +
@@ -391,6 +452,56 @@ export function SkidmarksScriptSequencePanel({
         rows={4}
         className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none disabled:opacity-60"
       />
+
+      <div className="flex items-center gap-2.5">
+        {startingImageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- already-uploaded Blob URL, next/image can't optimize a runtime-picked one
+          <img
+            src={startingImageUrl}
+            alt=""
+            className="h-12 w-12 shrink-0 rounded-lg object-cover ring-1 ring-white/15"
+          />
+        ) : (
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-dashed border-white/15 text-[9px] text-white/25">
+            None
+          </span>
+        )}
+        <div className="flex flex-1 items-center gap-2">
+          <span className="text-[11px] text-white/40" title="Optional — sets clip 1's starting image (image 1). Clips 2+ still build fresh place+identity plates.">
+            {startingImageUrl ? "Clip 1 starts from your picture." : "Clip 1 image"}
+          </span>
+          <button
+            type="button"
+            onClick={() => startingImageInputRef.current?.click()}
+            disabled={running || startingImagePicking}
+            className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {startingImagePicking ? "Uploading…" : startingImageUrl ? "Change" : "Upload"}
+          </button>
+          {startingImageUrl && (
+            <button
+              type="button"
+              onClick={handleRemoveStartingImage}
+              disabled={running}
+              className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-white/50 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Remove
+            </button>
+          )}
+          {startingImageError && <span className="text-[11px] text-rose-300/90">{startingImageError}</span>}
+        </div>
+        <input
+          ref={startingImageInputRef}
+          type="file"
+          accept={STARTING_IMAGE_ACCEPT}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) handlePickStartingImage(file);
+          }}
+          className="hidden"
+        />
+      </div>
 
       <div className="flex items-center justify-between gap-2">
         <span

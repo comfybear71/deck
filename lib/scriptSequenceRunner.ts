@@ -309,9 +309,12 @@ export type IdentitySafeRunOutcome =
  * nothing here that reads a render's `lastFrameUrl`, and no code path
  * that ever treats a pre-existing plate still as "already done" — every
  * clip's plate is (re)built fresh, every run, from that clip's own place
- * still + identity photo. `startAtClipIndex` (default `0`) skips
- * already-rendered clips on a resume, exactly like `runScriptSequence`'s
- * own resume, without re-spending on them.
+ * still + identity photo, **except** clip 1 when the caller passes an
+ * explicit `clip1StartingImageUrl` (Stuart's restored upload control):
+ * that one still is used as image 1 as-is and never overwritten. 
+ * `startAtClipIndex` (default `0`) skips already-rendered clips on a
+ * resume, exactly like `runScriptSequence`'s own resume, without
+ * re-spending on them.
  */
 export async function runIdentitySafeSongRender(
   parts: IdentitySafeScriptPart[],
@@ -322,7 +325,15 @@ export async function runIdentitySafeSongRender(
   mp3AudioUrl: string | undefined,
   deps: IdentitySafeRunDeps,
   startAtClipIndex: number = 0,
-  shouldStop?: () => boolean
+  shouldStop?: () => boolean,
+  /** Optional durable URL for clip 1's own starting image (the panel's
+   * restored upload control — Blob `https://` preferred, or a `data:`
+   * URL). When set and this run actually reaches clip 1 (`i === 0`), the
+   * runner uses it as image 1 / the plate still and skips rebuilding a
+   * place+identity composite for that one clip — so Generate never
+   * silently overwrites Stuart's deliberate pick. Clips 2+ are unchanged
+   * (still built fresh every time; last-frame chaining stays banned). */
+  clip1StartingImageUrl?: string
 ): Promise<IdentitySafeRunOutcome> {
   const report = (event: IdentitySafeRunEvent) => deps.onProgress?.(event);
 
@@ -359,30 +370,43 @@ export async function runIdentitySafeSongRender(
       return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1} ${identity.message}`, renderedCount: i };
     }
 
-    report({ type: "resolving-place", clipIndex: i, clipCount: parts.length });
-    const place = await deps.resolvePlaceStill(part.shotPrompt, bandName);
-    if (!place.ok) {
-      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${place.message}`, renderedCount: i };
-    }
-
     const vocal = scriptPartUsesLtx(part.kind);
 
-    report({ type: "generating-plate", clipIndex: i, clipCount: parts.length });
-    const stillOutcome = await deps.generateIdentityStill({
-      shotPrompt: part.shotPrompt,
-      bandName,
-      vocal,
-      vocalist: identity.member,
-      locationStillDataUrl: place.dataUrl,
-    });
-    if (!stillOutcome.ok) {
-      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${stillOutcome.message}`, renderedCount: i };
-    }
+    let stillUrl: string;
+    let still: SkidmarksPlateStill;
 
-    const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
-    const stillUrl = uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl;
-    const still: SkidmarksPlateStill = { dataUrl: stillUrl, source: "generated", createdAt: Date.now() };
-    deps.setPlateStill(target.segmentId, target.plateId, still);
+    // Clip 1 only: an explicit uploaded starting image wins over the
+    // place+identity rebuild. Already durable (Blob https from the
+    // panel's upload helper, or a data: URL) — no re-upload, and never
+    // overwritten by a generated composite.
+    if (i === 0 && clip1StartingImageUrl) {
+      stillUrl = clip1StartingImageUrl;
+      still = { dataUrl: stillUrl, source: "upload", createdAt: Date.now() };
+      deps.setPlateStill(target.segmentId, target.plateId, still);
+    } else {
+      report({ type: "resolving-place", clipIndex: i, clipCount: parts.length });
+      const place = await deps.resolvePlaceStill(part.shotPrompt, bandName);
+      if (!place.ok) {
+        return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${place.message}`, renderedCount: i };
+      }
+
+      report({ type: "generating-plate", clipIndex: i, clipCount: parts.length });
+      const stillOutcome = await deps.generateIdentityStill({
+        shotPrompt: part.shotPrompt,
+        bandName,
+        vocal,
+        vocalist: identity.member,
+        locationStillDataUrl: place.dataUrl,
+      });
+      if (!stillOutcome.ok) {
+        return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${stillOutcome.message}`, renderedCount: i };
+      }
+
+      const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
+      stillUrl = uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl;
+      still = { dataUrl: stillUrl, source: "generated", createdAt: Date.now() };
+      deps.setPlateStill(target.segmentId, target.plateId, still);
+    }
 
     if (vocal && !mp3AudioUrl) {
       return {
