@@ -1502,11 +1502,37 @@ now (see "Explicitly out of scope" below).
        B-roll plate keeps the original shape byte-for-byte). Three lock
        lines the old shape had none of are ported: *do not turn them
        into a different person* / *do not change their gender* / *never
-       merge two people into one face*. The remaining difference from
-       Skidmarks is that it composites into a **locked location image**
-       and Deck has none, so the backdrop is still invented from text
-       each plate — closing that means two still calls per plate instead
-       of one, a cost decision rather than a silent change.
+       merge two people into one face*.
+     - **Composite into a locked place, never paint a scene
+       (2026-09-19)** — the reorder above was not enough: *"not one
+       render was SOUL REBEL... nothing like how skidmarks make my
+       video."* The shape was right and the **request** was still wrong.
+       Asked for a finished scene, the model has to invent every pixel
+       in it, the person included, and the director's paragraph is the
+       most concrete thing in the request, so it decides who that
+       invented person is. No lock wording fixes a request that asks for
+       invention. Skidmarks never makes it: every plate call carries two
+       locked images — image 1 the place, image 2 the person — with
+       *"place that same person from image 2 into image 1"*, and it
+       refuses outright rather than proceed with either missing
+       (`Scene "…" has no location still yet`, `Will not plate a partial
+       cast`). Deck does the same now (`lib/plateLocation.ts`): a plate
+       with a real artist to hold first generates one **empty place
+       still** from that clip's own shot prompt — every person banned
+       from the frame, including the one the shot prompt describes — and
+       sends it as image 1 with the artist's photo as image 2. A
+       continuity plate ("Use last plate") *is* the locked place and
+       takes that slot instead, never both. **Cost is one extra cheap
+       still per scene, not per plate**: a clip's plates share its shot
+       prompt, so a door → keyhole → Jack strip generates the place once
+       and every re-generate reuses it (cached in memory per page load,
+       never `localStorage`). A failed place still fails the whole
+       plate on purpose — generating without it hands back exactly the
+       drifting plate this exists to stop, while looking like a success.
+       A person-less plate is untouched: nothing to drift, so no place
+       still is bought and its prompt is unchanged. Auto-plate's
+       Siray/master-still path still sends one image and is the known
+       remaining gap.
      - **Jack's video-only notes belong to Jack, not to "has a lock"
        (2026-09-19)** — `vocalLipSyncLock`, `vocalVideoNote` and
        `instrumentalVideoNote` are fields on `SkidmarksCharacterLock`,

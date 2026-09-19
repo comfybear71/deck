@@ -635,7 +635,7 @@ character in this build:
   hallmarks/negative-cues treatment — don't guess at a "look" for a
   character Stuart hasn't explicitly described.
 
-## Holding one artist: identity locks lead, the shot prompt trails
+## Holding one artist: composite into a locked place, never paint a scene
 
 **Real reported bug (2026-09-19), with a screenshot.** A band member's
 own photo was attached to a music-video plate and the render came back a
@@ -672,14 +672,63 @@ only, no passer-by*.
 `MAX_PROMPT_LENGTH` keeps validating Stuart's raw text and never this
 merge (see the next section's lock).
 
-**Still not ported, and the remaining difference from Skidmarks**: it
-composites into a **locked location image** (image 1 = the place, image
-2 = the person). Deck's music-video flow has no location image at all,
-so the model still invents the backdrop from text on every plate. Doing
-it Skidmarks' way means generating the empty place first and compositing
-into it — two still calls per plate instead of one, which roughly
-doubles still spend and is a cost decision for Stuart, not a silent one
-to take on his behalf (see the cost rules above).
+**Reordering alone was not enough — same bug, second report
+(2026-09-19).** After the reorder shipped: *"not one render was SOUL
+REBEL... nothing like how skidmarks make my video."* The prompt's shape
+was right and the **request** was still wrong. Asked for a finished
+scene, the model has to invent every pixel in it, the person included;
+the director's paragraph is the most concrete thing in the request, so
+it decides who that invented person is. The photo can only ever be a
+hint. No amount of lock wording fixes a request that asks for invention.
+
+The original Skidmarks repo never makes that request. **Every plate call
+it sends carries two locked images** — image 1 the place, image 2 the
+person — and the instruction is *"place that same person from image 2
+into image 1."* It refuses outright rather than proceed with either
+missing: `resolvePlateBackground` throws `Scene "…" has no location
+still yet`, `resolvePlateCastPath` throws `Will not plate a partial
+cast`. That refusal is the feature. Nothing is invented, so nothing can
+drift.
+
+**Deck now does the same** (`lib/plateLocation.ts`, new). A plate with a
+real artist to hold first generates one **empty place still** from that
+clip's own shot prompt — architecture, weather, materials and light,
+every person explicitly banned from the frame including the one the shot
+prompt describes — and sends it as image 1 with the artist's photo as
+image 2. `buildPlateGenerationRequest` builds Skidmarks' order on top:
+lock the place, lock the person, place them, forbid a second body, then
+`Staging / tweak: <Stuart's own words>` last.
+
+- **The background is one image, never two.** A continuity plate ("Use
+  last plate") *is* the locked place and takes the location still's
+  slot — Skidmarks' `chainPass` swaps the same way rather than sending a
+  third image.
+- **Cost: one extra cheap still per scene, not per plate.** A clip's
+  plates share its shot prompt, so a door → keyhole → Jack strip
+  generates the place once and reuses it, as does every re-generate.
+  Cached in memory per page load — deliberately not Neon and never
+  `localStorage`; the whole downside is one more ~2c still after a
+  refresh.
+- **A failed place still fails the whole plate, on purpose.** Shrugging
+  and generating without it hands back exactly the drifting plate this
+  exists to stop, while looking like a success.
+- **A person-less plate is untouched.** No identity to hold means
+  nothing to drift, so no place still is bought and the shot-prompt-first
+  prompt is kept byte-for-byte.
+- `plateGenerationHoldsIdentity` is the single shared answer to "is
+  there a person here?", read by both the caller (which decides whether
+  to buy a place still) and the prompt builder. Keep it that way — two
+  copies of that decision drifting apart is how the door → keyhole plate
+  once inherited Jack Ash's silhouette.
+
+**Still not ported**: Auto-plate's Siray/master-still path
+(`generatePlateStillViaSiray`) still sends one image. Skidmarks' own
+Siray wire is `[place, ...faces]` (`src/lib/sirayScratchPlate.ts`), so
+the same composite belongs there eventually — left out of this pass
+because that path's prompts are camera-position only
+(`SIRAY_17_POSITIONS`), never a paragraph describing a person, which is
+the thing that was winning. Flagging the gap rather than implying the
+whole app is ported.
 
 ## Prompt-length validation: user text only, never the injected framing
 
