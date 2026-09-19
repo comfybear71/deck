@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   addSkidmarksClipPlate,
   applySkidmarksAnalysisResult,
@@ -8,6 +8,8 @@ import {
   canNudgeSkidmarksSegmentBoundary,
   createMp3Attachment,
   createSkidmarksBand,
+  registerSkidmarksIdentityWipeListener,
+  removeSkidmarksBand,
   renameSkidmarksBand,
   resolveChainedPlateTarget,
   setSkidmarksScriptSequence,
@@ -2058,5 +2060,95 @@ describe("Sunny Banks Neon workspace persist", () => {
     expect(cards).toHaveLength(1);
     expect(cards[0].actIds).toEqual(["I", "II", "III"]);
     expect(cards[0].actScripts.II.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Identity-safe song-render rule 2: "switching band / member / song must
+ * clear chained stills, last-plate flags, and plate cache." Every
+ * session-changing entry point already replaces `session.mp3` wholesale
+ * (never merges it) — which is where every plate still, continuity flag,
+ * and chained frame actually lives — so the real thing left to verify is
+ * that each of these entry points also fires the
+ * `registerSkidmarksIdentityWipeListener` signal that state living
+ * *outside* `SkidmarksState` (`lib/plateLocation.ts`'s in-memory place-
+ * still cache) depends on. See `lib/plateLocation.test.ts` for the
+ * cross-module integration test that a real band/song switch actually
+ * clears that cache.
+ *
+ * Deliberately never removes a *seed* band here (`jack-ash`/`solar-rebel`)
+ * — `removeSkidmarksBand` on a seed band permanently records it in
+ * `removedSeedBandIds`, which would silently break this whole file's
+ * shared `beforeEach` (`selectSkidmarksBand("jack-ash")`) for every test
+ * that runs afterward. `createSkidmarksBand`'s own fresh "New" band is
+ * used instead, and every test restores the active band back to a seed
+ * before finishing.
+ */
+describe("identity-context wipe signal (rule 2: band/song switches clear identity-adjacent state)", () => {
+  afterEach(() => {
+    // Always leave the shared fixture band active for the rest of the file's `beforeEach`.
+    selectSkidmarksBand("jack-ash");
+  });
+
+  it("selectSkidmarksBand notifies every registered identity-wipe listener", () => {
+    let calls = 0;
+    registerSkidmarksIdentityWipeListener(() => {
+      calls += 1;
+    });
+    selectSkidmarksBand("solar-rebel");
+    expect(calls).toBe(1);
+  });
+
+  it("createSkidmarksBand (a fresh artist) notifies every registered identity-wipe listener", () => {
+    let calls = 0;
+    registerSkidmarksIdentityWipeListener(() => {
+      calls += 1;
+    });
+    createSkidmarksBand();
+    expect(calls).toBe(1);
+  });
+
+  it("attachSkidmarksMp3 (a new song) notifies every registered identity-wipe listener too", () => {
+    selectSkidmarksBand("solar-rebel");
+    let calls = 0;
+    registerSkidmarksIdentityWipeListener(() => {
+      calls += 1;
+    });
+    attachSkidmarksMp3(createMp3Attachment("a-new-song.mp3", 120));
+    expect(calls).toBe(1);
+  });
+
+  it("removeSkidmarksBand only notifies when the removed band was the active one", () => {
+    const created = createSkidmarksBand(); // becomes active; its own createSkidmarksBand notify already fired
+    let calls = 0;
+    registerSkidmarksIdentityWipeListener(() => {
+      calls += 1;
+    });
+
+    selectSkidmarksBand("jack-ash"); // switches away from `created` (+1)
+    expect(calls).toBe(1);
+    removeSkidmarksBand(created.id); // no longer active — nothing to wipe
+    expect(calls).toBe(1);
+
+    const activeOne = createSkidmarksBand(); // active again (+1)
+    expect(calls).toBe(2);
+    removeSkidmarksBand(activeOne.id); // this IS the active band — wipes (+1)
+    expect(calls).toBe(3);
+  });
+
+  it("a band switch really does delete every plate still — mp3/segments are replaced wholesale, not merged", () => {
+    addSkidmarksClipPlate(getSkidmarksSnapshot().session.mp3!.segments[0].id);
+    setSkidmarksClipPlateStill(
+      getSkidmarksSnapshot().session.mp3!.segments[0].id,
+      getSkidmarksSnapshot().session.mp3!.segments[0].plates[0].id,
+      { dataUrl: "data:image/jpeg;base64,someArtist", source: "generated", createdAt: 1 }
+    );
+    expect(getSkidmarksSnapshot().session.mp3!.segments[0].plates[0].still?.dataUrl).toBe(
+      "data:image/jpeg;base64,someArtist"
+    );
+
+    selectSkidmarksBand("solar-rebel");
+
+    expect(getSkidmarksSnapshot().session.mp3).toBeNull();
   });
 });

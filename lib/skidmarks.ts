@@ -2885,6 +2885,52 @@ function persist(next: SkidmarksState) {
   schedulePush();
 }
 
+/**
+ * A studio-wide "identity context changed" signal — fired whenever the
+ * active band/artist or its attached song switches (`selectSkidmarksBand`,
+ * `createSkidmarksBand`, `removeSkidmarksBand` when the removed band was
+ * active, `attachSkidmarksMp3`). Exists purely so state that legitimately
+ * lives *outside* this module's own persisted `SkidmarksState` — today:
+ * `lib/plateLocation.ts`'s in-memory empty-place-still cache — still gets
+ * cleared the moment a switch could otherwise let its stale output leak
+ * into a different artist's render (the identity-safe script-sequence
+ * runner's whole reason for existing: never show a new artist a frame
+ * that came from the last one).
+ *
+ * A plain listener registry, not a direct import of `lib/plateLocation.ts`
+ * from here — importing it here would create a circular module
+ * dependency (`plateLocation.ts` already imports `downscaleDataUrlImage`
+ * from this file). `plateLocation.ts` registers its own
+ * `clearCachedLocationStills` here instead, once, at module load.
+ *
+ * Every real plate still and render for the previous artist is already
+ * gone the instant this fires — `selectSkidmarksBand`/`createSkidmarksBand`/
+ * `attachSkidmarksMp3` all replace `session.mp3` wholesale (never merge),
+ * and `session.mp3.segments[].plates[].still` is where every upload/
+ * generated/chained still, and every "featuresLockedCharacter"/continuity
+ * flag, actually lives — so discarding the old `mp3` object *is* the
+ * delete, not just a UI hide. This registry only has to cover the one
+ * piece of state that survives a fresh `mp3` because it was never part of
+ * it in the first place.
+ */
+type SkidmarksIdentityWipeListener = () => void;
+const identityWipeListeners: SkidmarksIdentityWipeListener[] = [];
+
+export function registerSkidmarksIdentityWipeListener(listener: SkidmarksIdentityWipeListener): void {
+  identityWipeListeners.push(listener);
+}
+
+function notifySkidmarksIdentityWipe(): void {
+  for (const listener of identityWipeListeners) {
+    try {
+      listener();
+    } catch {
+      // Best-effort — a broken listener must never block the real band/
+      // song switch it's reacting to.
+    }
+  }
+}
+
 function resolvedSunnyBanks(state: SkidmarksState): SkidmarksSunnyBanksState {
   return (
     state.sunnyBanks ?? {
@@ -2996,6 +3042,10 @@ export function selectSkidmarksBand(bandId: string): void {
     ...current,
     session: { ...current.session, bandId, mp3: null, scriptSequenceDraft: null },
   });
+  // A band switch is an artist switch — see `notifySkidmarksIdentityWipe`'s
+  // doc comment for why this fires even though `mp3: null` above already
+  // deleted every plate still/render this session held.
+  notifySkidmarksIdentityWipe();
 }
 
 /** "New" tile tap — mints a fresh mock band, adds it to the roster, and
@@ -3016,6 +3066,7 @@ export function createSkidmarksBand(): SkidmarksBand {
     bands,
     session: { ...current.session, bandId: band.id, mp3: null, scriptSequenceDraft: null },
   });
+  notifySkidmarksIdentityWipe();
   return band;
 }
 
@@ -3043,6 +3094,7 @@ export function removeSkidmarksBand(bandId: string): void {
       ? { ...current.session, bandId: null, mp3: null }
       : current.session,
   });
+  if (wasActive) notifySkidmarksIdentityWipe();
 }
 
 /** Appends a blank member to a band (capped at `MAX_MEMBERS_PER_BAND`) — the "+ Add member" pill. */
@@ -3168,6 +3220,9 @@ export function setSkidmarksMemberAvatarImage(
 export function attachSkidmarksMp3(mp3: SkidmarksMp3Attachment): void {
   const current = getSkidmarksSnapshot();
   persist({ ...current, session: { ...current.session, mp3 } });
+  // A new song is a new identity context too — see
+  // `notifySkidmarksIdentityWipe`'s doc comment.
+  notifySkidmarksIdentityWipe();
 }
 
 /** Fills in the real duration once the browser's `<audio>` metadata probe
@@ -3960,6 +4015,11 @@ export function restoreSkidmarksArchivedSession(band: SkidmarksBand, mp3: Skidma
     bands,
     session: { projectKind: "music-video", bandId: band.id, mp3: restoredMp3, scriptSequenceDraft: null },
   });
+  // Restoring an archived song swaps in a (possibly different) band +
+  // mp3 wholesale, same identity-context-change shape as
+  // `selectSkidmarksBand`/`attachSkidmarksMp3` — see
+  // `notifySkidmarksIdentityWipe`'s doc comment.
+  notifySkidmarksIdentityWipe();
 }
 
 /**
@@ -4006,6 +4066,7 @@ export function markSkidmarksSessionArchived(attachId: string, fingerprint: stri
 export function resetSkidmarksSessionAfterArchive(): void {
   const current = getSkidmarksSnapshot();
   persist({ ...current, session: { projectKind: "music-video", bandId: null, mp3: null, scriptSequenceDraft: null } });
+  notifySkidmarksIdentityWipe();
 }
 
 export function getActiveSkidmarksBand(
