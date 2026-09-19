@@ -261,7 +261,8 @@ export type IdentitySafeRunEvent =
 export type GeneratePlatesEvent =
   | { type: "resolving-place"; clipIndex: number; clipCount: number }
   | { type: "generating-plate"; clipIndex: number; clipCount: number }
-  | { type: "plate-done"; clipIndex: number; clipCount: number };
+  | { type: "plate-done"; clipIndex: number; clipCount: number }
+  | { type: "plate-skipped"; clipIndex: number; clipCount: number; reason: "still" | "video" };
 
 /** Progress events for the animate-existing-plates pass — never rebuilds plates. */
 export type AnimateExistingPlatesEvent =
@@ -319,8 +320,57 @@ export interface GeneratePlatesDeps {
   onProgress?: (event: GeneratePlatesEvent) => void;
 }
 
+/**
+ * One clip's target for the plates-only pass. When `existingPlateStillUrl`
+ * is set (non-empty) or `hasFinishedVideo` is true, `runGeneratePlates`
+ * skips that clip — never rebuilds/overwrites a good still or a finished
+ * video's plate.
+ */
+export interface GeneratePlatesTarget extends IdentitySafeRunTarget {
+  existingPlateStillUrl?: string;
+  hasFinishedVideo?: boolean;
+}
+
+/**
+ * Whether a stored plate still counts as "already good" for Generate
+ * plates skip logic.
+ *
+ * Locked-character **Timeline** preview pastes the member's avatar URL
+ * onto every plate with `featuresLockedCharacter: true` — that is a
+ * free shape-check preview, not a real place+identity plate, so it does
+ * **not** count as ready (Generate plates should still build those).
+ */
+export function plateStillCountsAsReady(
+  still:
+    | {
+        dataUrl?: string;
+        featuresLockedCharacter?: boolean;
+      }
+    | null
+    | undefined,
+  memberAvatarUrls: Iterable<string | undefined>
+): boolean {
+  const url = still?.dataUrl?.trim();
+  if (!url) return false;
+  const avatars = new Set<string>();
+  for (const candidate of memberAvatarUrls) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) avatars.add(candidate);
+  }
+  if (still?.featuresLockedCharacter && avatars.has(url)) return false;
+  return true;
+}
+
+/** Generate plates stays enabled whenever a script is pasted and nothing
+ * is running — Resume / `incompleteRun` must not disable it. */
+export function isGeneratePlatesButtonDisabled(
+  running: "plates" | "render" | false | null | undefined,
+  scriptPartCount: number
+): boolean {
+  return !!running || scriptPartCount <= 0;
+}
+
 export type GeneratePlatesOutcome =
-  | { ok: true; platedCount: number }
+  | { ok: true; platedCount: number; skippedCount: number }
   | { ok: false; failedAtClipIndex: number; message: string; platedCount: number; stopped?: boolean };
 
 /** One clip's already-built plate still for the animate-only pass. Missing
@@ -523,18 +573,25 @@ export async function runIdentitySafeSongRender(
 
 
 /**
- * **Plate-first pass (stills only).** Builds every clip's plate still from
- * place + identity, then stops — never calls Grok/H3/LTX video, never
- * writes `lastFrameUrl`, never auto-renders, never chains frames.
+ * **Plate-first pass (stills only).** Builds every *missing* clip's plate
+ * still from place + identity, then stops — never calls Grok/H3/LTX
+ * video, never writes `lastFrameUrl`, never auto-renders, never chains
+ * frames.
+ *
+ * Skips a clip when it already has a good still (`existingPlateStillUrl`)
+ * or a finished video (`hasFinishedVideo`) — leaves those alone, never
+ * rebuilds/overwrites them. One tap fills every empty plate slot; no
+ * tap-to-add step required.
  *
  * Image 1 = that clip's place (clip-1 upload when `clip1StartingImageUrl`
- * is set for clip 1; otherwise an empty place still from the shot prompt).
- * Image 2 = the resolved member's `avatarImage`. Missing either fails that
- * clip and stops the batch.
+ * is set for clip 1 *and* that clip still needs a plate; otherwise an
+ * empty place still from the shot prompt). Image 2 = the resolved
+ * member's `avatarImage`. Missing either fails that clip and stops the
+ * batch.
  */
 export async function runGeneratePlates(
   parts: IdentitySafeScriptPart[],
-  targets: IdentitySafeRunTarget[],
+  targets: GeneratePlatesTarget[],
   bandName: string,
   currentMember: SkidmarksMember | undefined,
   bandMembers: SkidmarksMember[],
@@ -558,6 +615,8 @@ export async function runGeneratePlates(
   }
 
   const startIndex = Math.max(0, Math.min(startAtClipIndex, parts.length));
+  let platedCount = 0;
+  let skippedCount = 0;
 
   for (let i = startIndex; i < parts.length; i++) {
     if (shouldStop?.()) {
@@ -565,7 +624,7 @@ export async function runGeneratePlates(
         ok: false,
         failedAtClipIndex: i,
         message: `Stopped before clip ${i + 1} — no more plates will generate.`,
-        platedCount: i,
+        platedCount,
         stopped: true,
       };
     }
@@ -573,14 +632,27 @@ export async function runGeneratePlates(
     const part = parts[i];
     const target = targets[i];
 
+    // Leave good stills and finished videos alone — never rebuild/overwrite.
+    if (target.hasFinishedVideo) {
+      skippedCount += 1;
+      report({ type: "plate-skipped", clipIndex: i, clipCount: parts.length, reason: "video" });
+      continue;
+    }
+    if (target.existingPlateStillUrl?.trim()) {
+      skippedCount += 1;
+      report({ type: "plate-skipped", clipIndex: i, clipCount: parts.length, reason: "still" });
+      continue;
+    }
+
     const identity = resolveScriptPartIdentity(part.kind, part.otherSingerName, currentMember, bandMembers);
     if (!identity.ok) {
-      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1} ${identity.message}`, platedCount: i };
+      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1} ${identity.message}`, platedCount };
     }
 
     const vocal = scriptPartUsesLtx(part.kind);
 
-    // Clip 1 only: an explicit uploaded starting image wins as image 1.
+    // Clip 1 only: an explicit uploaded starting image wins as image 1
+    // when this clip still needs a plate (skipped above if already good).
     if (i === 0 && clip1StartingImageUrl) {
       const still: SkidmarksPlateStill = {
         dataUrl: clip1StartingImageUrl,
@@ -588,6 +660,7 @@ export async function runGeneratePlates(
         createdAt: Date.now(),
       };
       deps.setPlateStill(target.segmentId, target.plateId, still);
+      platedCount += 1;
       report({ type: "plate-done", clipIndex: i, clipCount: parts.length });
       continue;
     }
@@ -595,7 +668,7 @@ export async function runGeneratePlates(
     report({ type: "resolving-place", clipIndex: i, clipCount: parts.length });
     const place = await deps.resolvePlaceStill(part.shotPrompt, bandName);
     if (!place.ok) {
-      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${place.message}`, platedCount: i };
+      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${place.message}`, platedCount };
     }
 
     // Identity photo is required — resolveScriptPartIdentity already
@@ -605,7 +678,7 @@ export async function runGeneratePlates(
         ok: false,
         failedAtClipIndex: i,
         message: `Clip ${i + 1} needs ${identity.member.name || "the artist"}'s photo, but none is set — refusing to invent a face.`,
-        platedCount: i,
+        platedCount,
       };
     }
 
@@ -618,7 +691,7 @@ export async function runGeneratePlates(
       locationStillDataUrl: place.dataUrl,
     });
     if (!stillOutcome.ok) {
-      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${stillOutcome.message}`, platedCount: i };
+      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${stillOutcome.message}`, platedCount };
     }
 
     const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
@@ -626,10 +699,11 @@ export async function runGeneratePlates(
     const still: SkidmarksPlateStill = { dataUrl: stillUrl, source: "generated", createdAt: Date.now() };
     deps.setPlateStill(target.segmentId, target.plateId, still);
 
+    platedCount += 1;
     report({ type: "plate-done", clipIndex: i, clipCount: parts.length });
   }
 
-  return { ok: true, platedCount: parts.length };
+  return { ok: true, platedCount, skippedCount };
 }
 
 /**
