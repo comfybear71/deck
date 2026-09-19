@@ -20,7 +20,9 @@ import { resolveLocationStill } from "@/lib/plateLocation";
 import { generateSkidmarksClip } from "@/lib/clipGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import {
+  isGeneratePlatesButtonDisabled,
   parseScriptPartKind,
+  plateStillCountsAsReady,
   runAnimateExistingPlates,
   runGeneratePlates,
   type AnimateExistingPlatesDeps,
@@ -28,7 +30,7 @@ import {
   type AnimateExistingPlatesTarget,
   type GeneratePlatesDeps,
   type GeneratePlatesEvent,
-  type IdentitySafeRunTarget,
+  type GeneratePlatesTarget,
   type IdentitySafeScriptPart,
 } from "@/lib/scriptSequenceRunner";
 import { persistedRenderKey, type PersistedClipRender } from "@/lib/clipRenders";
@@ -78,6 +80,10 @@ function platesProgressLabel(event: GeneratePlatesEvent): string {
       return `Placing the artist into clip ${event.clipIndex + 1} of ${event.clipCount}'s scene…`;
     case "plate-done":
       return `Plate ${event.clipIndex + 1} of ${event.clipCount} ready.`;
+    case "plate-skipped":
+      return event.reason === "video"
+        ? `Clip ${event.clipIndex + 1} of ${event.clipCount} already has a finished video — left alone.`
+        : `Clip ${event.clipIndex + 1} of ${event.clipCount} already has a plate — left alone.`;
   }
 }
 
@@ -100,11 +106,14 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
  * (xAI stills, Comfy Cloud LTX, MiniMax H3/Grok) — no new AI provider.
  *
  * **Plate-first workflow (2026-09-19):** "Generate plates" builds every
- * clip's still only (`runGeneratePlates` — place + identity, no video).
- * "Generate" / Resume then animates plates that already exist
- * (`runAnimateExistingPlates`) — refuses a clip with no plate still.
- * Neither path chains last frames (identity-safe). `runScriptSequence`
- * and its Jack-Ash scene-block-chaining coverage stay untouched.
+ * *missing* clip's still only (`runGeneratePlates` — place + identity, no
+ * video). Skips clips that already have a good still or a finished video
+ * — never rebuilds/overwrites them. Stays enabled even when Resume shows
+ * for an incomplete animate run. "Generate" / Resume then animates plates
+ * that already exist (`runAnimateExistingPlates`) — refuses a clip with
+ * no plate still. Neither path chains last frames (identity-safe).
+ * `runScriptSequence` and its Jack-Ash scene-block-chaining coverage stay
+ * untouched.
  *
  * **Script labels pick the backend per clip, not the song's real
  * audio** — a title of `"Vocal"` is the only kind that ever reaches
@@ -127,9 +136,10 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
  * **"Build timeline" (2026-09-15)** is unchanged: build the whole
  * timeline and, for a *locked* character only, pre-fill every plate with
  * their reference photo so Stuart can scroll through before spending
- * anything. That pre-fill is a preview for clips 2+ — the identity-safe
- * runner still (re)builds those clips' real starting images from a fresh
- * place still + identity when Generate plates runs.
+ * anything. That pre-fill is a locked-character avatar preview only —
+ * `plateStillCountsAsReady` does not treat it as a finished plate, so
+ * Generate plates still builds a real place + identity composite for
+ * those slots. Real stills and finished videos are left alone.
  *
  * **Clip 1 starting-image upload (restored)**: optional. When set, the
  * identity-safe runner uses that durable Blob URL as clip 1's image 1
@@ -261,7 +271,15 @@ export function SkidmarksScriptSequencePanel({
   const reportPlatesOutcome = (outcome: Awaited<ReturnType<typeof runGeneratePlates>>) => {
     setResult(
       outcome.ok
-        ? { ok: true, message: `All ${outcome.platedCount} plates ready — review the thumbnails, then tap Generate to animate.` }
+        ? {
+            ok: true,
+            message:
+              outcome.platedCount === 0 && outcome.skippedCount > 0
+                ? `All ${outcome.skippedCount} plates already ready — nothing new to build. Tap Generate to animate.`
+                : outcome.skippedCount > 0
+                  ? `Built ${outcome.platedCount} missing plate${outcome.platedCount === 1 ? "" : "s"} (${outcome.skippedCount} already had a still or video) — review the thumbnails, then tap Generate to animate.`
+                  : `All ${outcome.platedCount} plates ready — review the thumbnails, then tap Generate to animate.`,
+          }
         : !outcome.ok && outcome.stopped
           ? { ok: true, message: `Stopped — ${outcome.platedCount} plate${outcome.platedCount === 1 ? "" : "s"} built before you stopped it. Nothing else was spent.` }
           : {
@@ -322,9 +340,19 @@ export function SkidmarksScriptSequencePanel({
 
     let segments = ensureTimeline();
 
-    // Mirror clip-1 upload onto the plate so the timeline shows the same
-    // image the plates runner will keep as image 1.
-    if (startingImageUrl) {
+    const memberAvatarUrls = band.members
+      .map((m) => m.avatarImage)
+      .filter((u): u is string => typeof u === "string" && u.trim().length > 0);
+
+    const clip0Plate = segments[0]?.plates[0];
+    const clip0Ready =
+      !!clip0Plate &&
+      (renders.has(persistedRenderKey(segments[0].id, clip0Plate.id)) ||
+        plateStillCountsAsReady(clip0Plate.still, memberAvatarUrls));
+
+    // Mirror clip-1 upload onto the plate only when clip 1 still needs a
+    // plate — never overwrite a good still or a finished video.
+    if (startingImageUrl && !clip0Ready && segments[0]?.plates[0]) {
       const startingStill: SkidmarksPlateStill = {
         dataUrl: startingImageUrl,
         source: "upload",
@@ -339,10 +367,16 @@ export function SkidmarksScriptSequencePanel({
       flushSkidmarksSessionNow();
     }
 
-    const targets: IdentitySafeRunTarget[] = segments.map((segment) => ({
-      segmentId: segment.id,
-      plateId: segment.plates[0]?.id ?? "",
-    }));
+    const targets: GeneratePlatesTarget[] = segments.map((segment) => {
+      const plate = segment.plates[0];
+      const plateId = plate?.id ?? "";
+      const hasFinishedVideo = !!(plate && renders.has(persistedRenderKey(segment.id, plateId)));
+      const existingPlateStillUrl =
+        !hasFinishedVideo && plateStillCountsAsReady(plate?.still, memberAvatarUrls)
+          ? plate?.still?.dataUrl
+          : undefined;
+      return { segmentId: segment.id, plateId, existingPlateStillUrl, hasFinishedVideo };
+    });
 
     const outcome = await runGeneratePlates(
       buildIdentityParts(),
@@ -353,7 +387,8 @@ export function SkidmarksScriptSequencePanel({
       buildPlatesDeps(),
       0,
       () => stopRequestedRef.current,
-      startingImageUrl
+      // Only pass clip-1 upload when clip 1 still needs a plate.
+      clip0Ready ? undefined : startingImageUrl
     );
 
     flushSkidmarksSessionNow();
@@ -403,8 +438,9 @@ export function SkidmarksScriptSequencePanel({
    * for a *locked* character only, pre-fill every plate with their fixed
    * reference photo — before any rendering or any money is spent — so
    * Stuart can scroll through and see the timeline shape first. Purely a
-   * preview: Generate plates still (re)builds every clip's real starting
-   * image from place + identity when it runs.
+   * preview (avatar URL + featuresLockedCharacter) — Generate plates does
+   * not treat those as finished plates and still builds real place +
+   * identity composites for empty / preview slots.
    */
   const handleBuildTimeline = () => {
     if (running || parts.length === 0) return;
@@ -552,7 +588,11 @@ export function SkidmarksScriptSequencePanel({
       <div className="flex items-center justify-between gap-2">
         <span
           className="text-[11px] text-white/40"
-          title={incompleteRun ? "Use Resume above — starting fresh would re-render and re-charge for clips already done." : undefined}
+          title={
+            incompleteRun
+              ? "Resume above continues animating remaining clips. Generate plates stays available to fill any missing stills without re-touching finished videos."
+              : undefined
+          }
         >
           {parts.length > 0 ? `${parts.length} part${parts.length === 1 ? "" : "s"}` : "No parts yet"}
         </span>
@@ -569,8 +609,12 @@ export function SkidmarksScriptSequencePanel({
           <button
             type="button"
             onClick={handleGeneratePlates}
-            disabled={!!running || parts.length === 0 || !!incompleteRun}
-            title={parts.length > 0 ? `Builds stills for all ${parts.length} clips — no video yet` : undefined}
+            disabled={isGeneratePlatesButtonDisabled(running, parts.length)}
+            title={
+              parts.length > 0
+                ? `Builds missing stills for up to ${parts.length} clips — skips good stills and finished videos; no video yet`
+                : undefined
+            }
             className="rounded-full border border-rose-400/40 bg-rose-400/15 px-3 py-1.5 text-[12px] font-medium text-rose-100 transition-colors hover:bg-rose-400/25 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {running === "plates" ? "Plating…" : "Generate plates"}
@@ -579,7 +623,13 @@ export function SkidmarksScriptSequencePanel({
             type="button"
             onClick={handleRun}
             disabled={!!running || parts.length === 0 || !!incompleteRun}
-            title={parts.length > 0 ? `Animates existing plates for all ${parts.length} clips — skips none that are missing a still` : undefined}
+            title={
+              incompleteRun
+                ? "Use Resume above — starting fresh would re-render and re-charge for clips already done."
+                : parts.length > 0
+                  ? `Animates existing plates for all ${parts.length} clips — skips none that are missing a still`
+                  : undefined
+            }
             className="rounded-full bg-rose-400 px-3 py-1.5 text-[12px] font-medium text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {running === "render" ? "Rendering…" : "Generate"}

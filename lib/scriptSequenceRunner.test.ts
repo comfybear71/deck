@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  isGeneratePlatesButtonDisabled,
   parseScriptPartKind,
+  plateStillCountsAsReady,
   resolveScriptPartIdentity,
   runAnimateExistingPlates,
   runGeneratePlates,
@@ -10,6 +12,7 @@ import {
   type AnimateExistingPlatesDeps,
   type AnimateExistingPlatesTarget,
   type GeneratePlatesDeps,
+  type GeneratePlatesTarget,
   type IdentitySafeRunDeps,
   type IdentitySafeScriptPart,
   type IdentitySafeRunTarget,
@@ -1064,8 +1067,12 @@ describe("runGeneratePlates", () => {
       { shotPrompt: "outro wide", startSec: 20, endSec: 30, kind: "outro" },
     ];
   }
-  function targets(): IdentitySafeRunTarget[] {
-    return parts().map((_, i) => ({ segmentId: `seg-${i}`, plateId: `plate-${i}` }));
+  function targets(overrides: Partial<GeneratePlatesTarget>[] = []): GeneratePlatesTarget[] {
+    return parts().map((_, i) => ({
+      segmentId: `seg-${i}`,
+      plateId: `plate-${i}`,
+      ...overrides[i],
+    }));
   }
 
   it("builds stills only — never calls video render, never writes lastFrameUrl", async () => {
@@ -1074,7 +1081,7 @@ describe("runGeneratePlates", () => {
     // Plates deps have no renderClip — asserting the type contract + setPlateStill only.
     const outcome = await runGeneratePlates(parts(), targets(), "Solar Rebel", nova, bandMembers, deps);
 
-    expect(outcome).toEqual({ ok: true, platedCount: 3 });
+    expect(outcome).toEqual({ ok: true, platedCount: 3, skippedCount: 0 });
     expect(deps.resolvePlaceStill).toHaveBeenCalledTimes(3);
     expect(deps.generateIdentityStill).toHaveBeenCalledTimes(3);
     expect(deps.setPlateStill).toHaveBeenCalledTimes(3);
@@ -1120,7 +1127,7 @@ describe("runGeneratePlates", () => {
     const uploaded = "https://blob.example/uploaded-clip1.jpg";
     const outcome = await runGeneratePlates(parts(), targets(), "Solar Rebel", nova, bandMembers, deps, 0, undefined, uploaded);
 
-    expect(outcome).toEqual({ ok: true, platedCount: 3 });
+    expect(outcome).toEqual({ ok: true, platedCount: 3, skippedCount: 0 });
     expect(deps.resolvePlaceStill).toHaveBeenCalledTimes(2);
     expect(deps.generateIdentityStill).toHaveBeenCalledTimes(2);
 
@@ -1129,6 +1136,106 @@ describe("runGeneratePlates", () => {
       source: string;
     };
     expect(firstStill).toEqual({ dataUrl: uploaded, source: "upload", createdAt: expect.any(Number) });
+  });
+
+  it("skips clips that already have a good still — never rebuilds or overwrites them", async () => {
+    const deps = fakePlatesDeps();
+    const withStill = targets([
+      { existingPlateStillUrl: "https://blob.example/existing-0.jpg" },
+      {},
+      { existingPlateStillUrl: "https://blob.example/existing-2.jpg" },
+    ]);
+
+    const outcome = await runGeneratePlates(parts(), withStill, "Solar Rebel", nova, bandMembers, deps);
+
+    expect(outcome).toEqual({ ok: true, platedCount: 1, skippedCount: 2 });
+    expect(deps.resolvePlaceStill).toHaveBeenCalledTimes(1);
+    expect(deps.generateIdentityStill).toHaveBeenCalledTimes(1);
+    expect(deps.setPlateStill).toHaveBeenCalledTimes(1);
+    expect((deps.setPlateStill as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("seg-1");
+
+    const events = (deps.onProgress as ReturnType<typeof vi.fn>).mock.calls.map(([e]) => e);
+    expect(events.filter((e) => e.type === "plate-skipped")).toHaveLength(2);
+    expect(events.filter((e) => e.type === "plate-done")).toHaveLength(1);
+  });
+
+  it("skips clips with a finished video even without a still URL", async () => {
+    const deps = fakePlatesDeps();
+    const withVideo = targets([
+      { hasFinishedVideo: true },
+      {},
+      { hasFinishedVideo: true, existingPlateStillUrl: "https://blob.example/would-skip-anyway.jpg" },
+    ]);
+
+    const outcome = await runGeneratePlates(parts(), withVideo, "Solar Rebel", nova, bandMembers, deps);
+
+    expect(outcome).toEqual({ ok: true, platedCount: 1, skippedCount: 2 });
+    expect(deps.setPlateStill).toHaveBeenCalledTimes(1);
+    const skipReasons = (deps.onProgress as ReturnType<typeof vi.fn>).mock.calls
+      .map(([e]) => e)
+      .filter((e) => e.type === "plate-skipped")
+      .map((e) => ("reason" in e ? e.reason : undefined));
+    expect(skipReasons).toEqual(["video", "video"]);
+  });
+
+  it("does not apply clip-1 upload when clip 1 already has a good still", async () => {
+    const deps = fakePlatesDeps();
+    const uploaded = "https://blob.example/uploaded-clip1.jpg";
+    const withStill = targets([{ existingPlateStillUrl: "https://blob.example/keep-me.jpg" }, {}, {}]);
+
+    const outcome = await runGeneratePlates(
+      parts(),
+      withStill,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      deps,
+      0,
+      undefined,
+      uploaded
+    );
+
+    expect(outcome).toEqual({ ok: true, platedCount: 2, skippedCount: 1 });
+    const setCalls = (deps.setPlateStill as ReturnType<typeof vi.fn>).mock.calls;
+    expect(setCalls.every((c) => c[0] !== "seg-0")).toBe(true);
+    expect(setCalls).toHaveLength(2);
+  });
+});
+
+describe("plateStillCountsAsReady", () => {
+  const avatars = ["https://blob.example/nova.jpg", "https://blob.example/jax.jpg"];
+
+  it("treats empty / missing stills as not ready", () => {
+    expect(plateStillCountsAsReady(undefined, avatars)).toBe(false);
+    expect(plateStillCountsAsReady({ dataUrl: "  " }, avatars)).toBe(false);
+  });
+
+  it("treats real upload/generated stills as ready", () => {
+    expect(
+      plateStillCountsAsReady({ dataUrl: "https://blob.example/real-plate.jpg", featuresLockedCharacter: true }, avatars)
+    ).toBe(true);
+    expect(plateStillCountsAsReady({ dataUrl: "https://blob.example/upload.jpg" }, avatars)).toBe(true);
+  });
+
+  it("does not treat locked-character Timeline avatar previews as ready", () => {
+    expect(
+      plateStillCountsAsReady(
+        { dataUrl: "https://blob.example/nova.jpg", featuresLockedCharacter: true },
+        avatars
+      )
+    ).toBe(false);
+  });
+});
+
+describe("isGeneratePlatesButtonDisabled", () => {
+  it("stays enabled when a script is pasted even if Resume would show (incompleteRun is ignored)", () => {
+    expect(isGeneratePlatesButtonDisabled(false, 4)).toBe(false);
+  });
+
+  it("disables only while a run is in progress or no script parts exist", () => {
+    expect(isGeneratePlatesButtonDisabled("plates", 4)).toBe(true);
+    expect(isGeneratePlatesButtonDisabled("render", 4)).toBe(true);
+    expect(isGeneratePlatesButtonDisabled(false, 0)).toBe(true);
   });
 });
 
