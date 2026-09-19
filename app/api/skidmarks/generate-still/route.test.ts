@@ -201,14 +201,30 @@ describe("POST /api/skidmarks/generate-still", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("rejects a reference image that isn't a data: URL", async () => {
+  it("rejects a reference image that isn't a data: or http(s) URL", async () => {
     const res = await POST(
-      postRequest({ prompt: "a desert highway at night", referenceImageDataUrls: ["https://example.com/a.jpg"] })
+      postRequest({ prompt: "a desert highway at night", referenceImageDataUrls: ["blob:https://example.com/a"] })
     );
     const body = await res.json();
     expect(res.status).toBe(400);
     expect(body.code).toBe("invalid_request");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts an https Blob photo URL as a reference image (avatar / place still path)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { data: [{ b64_json: "HHHH", mime_type: "image/jpeg" }] })
+    );
+    const httpsStill = "https://blob.example/skidmarks/avatar.jpg";
+    const res = await POST(
+      postRequest({ prompt: "place the artist in the scene", referenceImageDataUrls: [httpsStill] })
+    );
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.dataUrl).toBe("data:image/jpeg;base64,HHHH");
+    const [, init] = fetchMock.mock.calls[0];
+    const sentBody = JSON.parse(init.body as string);
+    expect(sentBody.image).toEqual({ url: httpsStill, type: "image_url" });
   });
 
   it("rejects more reference images than this route accepts", async () => {

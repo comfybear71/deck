@@ -21,9 +21,13 @@ import { generateSkidmarksClip } from "@/lib/clipGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import {
   parseScriptPartKind,
-  runIdentitySafeSongRender,
-  type IdentitySafeRunDeps,
-  type IdentitySafeRunEvent,
+  runAnimateExistingPlates,
+  runGeneratePlates,
+  type AnimateExistingPlatesDeps,
+  type AnimateExistingPlatesEvent,
+  type AnimateExistingPlatesTarget,
+  type GeneratePlatesDeps,
+  type GeneratePlatesEvent,
   type IdentitySafeRunTarget,
   type IdentitySafeScriptPart,
 } from "@/lib/scriptSequenceRunner";
@@ -66,12 +70,19 @@ interface SkidmarksScriptSequencePanelProps {
   onRecordRender: (render: PersistedClipRender) => void;
 }
 
-function identitySafeProgressLabel(event: IdentitySafeRunEvent): string {
+function platesProgressLabel(event: GeneratePlatesEvent): string {
   switch (event.type) {
     case "resolving-place":
       return `Building clip ${event.clipIndex + 1} of ${event.clipCount}'s scene…`;
     case "generating-plate":
       return `Placing the artist into clip ${event.clipIndex + 1} of ${event.clipCount}'s scene…`;
+    case "plate-done":
+      return `Plate ${event.clipIndex + 1} of ${event.clipCount} ready.`;
+  }
+}
+
+function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
+  switch (event.type) {
     case "rendering":
       return `Rendering clip ${event.clipIndex + 1} of ${event.clipCount}…`;
     case "clip-done":
@@ -85,21 +96,15 @@ function identitySafeProgressLabel(event: IdentitySafeRunEvent): string {
  * render** as of 2026-09-19. Ties `lib/scriptSequence.ts`'s parser,
  * `lib/skidmarks.ts`'s `buildScriptSequenceSegments`/
  * `setSkidmarksScriptSequence`, and `lib/scriptSequenceRunner.ts`'s
- * `runIdentitySafeSongRender` together with this feature's real backends
+ * `runGeneratePlates` / `runAnimateExistingPlates` together with this feature's real backends
  * (xAI stills, Comfy Cloud LTX, MiniMax H3/Grok) — no new AI provider.
  *
- * **Why this now calls `runIdentitySafeSongRender`, not
- * `runScriptSequence`**: the real, repeatedly-reported bug this fixes is
- * that runner's own last-frame chaining — a render's closing frame
- * becomes the next clip's starting image, compounding drift render over
- * render, which is exactly how an artist's face stopped being their own
- * partway through a run. `runIdentitySafeSongRender` never chains
- * anything: every clip's plate is built fresh, every time, from that
- * clip's own empty place still plus a real identity photo — see that
- * function's own module doc comment in `lib/scriptSequenceRunner.ts` for
- * the full rationale, including why `runScriptSequence` itself (and its
- * existing Jack-Ash scene-block-chaining test coverage) was left
- * untouched rather than rewritten in place.
+ * **Plate-first workflow (2026-09-19):** "Generate plates" builds every
+ * clip's still only (`runGeneratePlates` — place + identity, no video).
+ * "Generate" / Resume then animates plates that already exist
+ * (`runAnimateExistingPlates`) — refuses a clip with no plate still.
+ * Neither path chains last frames (identity-safe). `runScriptSequence`
+ * and its Jack-Ash scene-block-chaining coverage stay untouched.
  *
  * **Script labels pick the backend per clip, not the song's real
  * audio** — a title of `"Vocal"` is the only kind that ever reaches
@@ -124,7 +129,7 @@ function identitySafeProgressLabel(event: IdentitySafeRunEvent): string {
  * their reference photo so Stuart can scroll through before spending
  * anything. That pre-fill is a preview for clips 2+ — the identity-safe
  * runner still (re)builds those clips' real starting images from a fresh
- * place still + identity when Generate runs.
+ * place still + identity when Generate plates runs.
  *
  * **Clip 1 starting-image upload (restored)**: optional. When set, the
  * identity-safe runner uses that durable Blob URL as clip 1's image 1
@@ -144,7 +149,7 @@ export function SkidmarksScriptSequencePanel({
   onSetClipPlateStill,
   onRecordRender,
 }: SkidmarksScriptSequencePanelProps) {
-  const [running, setRunning] = useState(false);
+  const [running, setRunning] = useState<"plates" | "render" | false>(false);
   const [progressText, setProgressText] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   /** Real ask (2026-09-16): a way to interrupt a long "Generate & render
@@ -217,10 +222,7 @@ export function SkidmarksScriptSequencePanel({
     flushSkidmarksSessionNow();
   };
 
-  /** Shared by a fresh run and a resume — same real backends, same
-   * progress reporting; only which segments/start index
-   * `runIdentitySafeSongRender` itself is called with differs. */
-  const buildIdentitySafeDeps = (): IdentitySafeRunDeps => ({
+  const buildPlatesDeps = (): GeneratePlatesDeps => ({
     resolvePlaceStill: async (sceneText, bandName) => {
       const placeOutcome = await resolveLocationStill({ sceneText, bandName });
       return placeOutcome.ok
@@ -240,20 +242,36 @@ export function SkidmarksScriptSequencePanel({
       return stillOutcome.ok ? { ok: true, dataUrl: stillOutcome.dataUrl } : { ok: false, message: stillOutcome.message };
     },
     uploadStill: uploadSkidmarksPlateStill,
+    setPlateStill: onSetClipPlateStill,
+    onProgress: (event) => setProgressText(platesProgressLabel(event)),
+  });
+
+  const buildAnimateDeps = (): AnimateExistingPlatesDeps => ({
     renderClip: async (request) => {
       const clipOutcome = await generateSkidmarksClip(request);
       if (!clipOutcome.ok) return { ok: false, message: clipOutcome.message };
-      // Deliberately drops `clipOutcome.lastFrameUrl` — this runner
-      // never reads or writes a render's last frame (rule 5: last-frame
-      // chaining is banned for identity).
+      // Deliberately drops `clipOutcome.lastFrameUrl` — animate path
+      // never chains a render's last frame into the next plate.
       return { ok: true, videoUrl: clipOutcome.videoUrl, persisted: clipOutcome.persisted, persistError: clipOutcome.persistError };
     },
     recordRender: onRecordRender,
-    setPlateStill: onSetClipPlateStill,
-    onProgress: (event) => setProgressText(identitySafeProgressLabel(event)),
+    onProgress: (event) => setProgressText(animateProgressLabel(event)),
   });
 
-  const reportRunOutcome = (outcome: Awaited<ReturnType<typeof runIdentitySafeSongRender>>) => {
+  const reportPlatesOutcome = (outcome: Awaited<ReturnType<typeof runGeneratePlates>>) => {
+    setResult(
+      outcome.ok
+        ? { ok: true, message: `All ${outcome.platedCount} plates ready — review the thumbnails, then tap Generate to animate.` }
+        : !outcome.ok && outcome.stopped
+          ? { ok: true, message: `Stopped — ${outcome.platedCount} plate${outcome.platedCount === 1 ? "" : "s"} built before you stopped it. Nothing else was spent.` }
+          : {
+              ok: false,
+              message: `Stopped at clip ${outcome.failedAtClipIndex + 1} (${outcome.platedCount} plate${outcome.platedCount === 1 ? "" : "s"} so far): ${outcome.message}`,
+            }
+    );
+  };
+
+  const reportRenderOutcome = (outcome: Awaited<ReturnType<typeof runAnimateExistingPlates>>) => {
     setResult(
       outcome.ok
         ? { ok: true, message: `All ${outcome.renderedCount} clips rendered.` }
@@ -266,54 +284,118 @@ export function SkidmarksScriptSequencePanel({
     );
   };
 
-  /** `segments` is passed explicitly (never re-read off the `realSegments`
-   * prop mid-call) because `handleRun` may have *just* committed a brand
-   * new timeline via `onSetScriptSequence` — the store update that prop
-   * reflects hasn't necessarily re-rendered this component yet by the
-   * time the render loop needs real segment/plate ids to write to. */
-  const runFrom = async (segments: SkidmarksClipSegment[], startAtClipIndex: number) => {
-    stopRequestedRef.current = false;
-    setRunning(true);
-    setResult(null);
-    setProgressText(startAtClipIndex > 0 ? `Resuming at clip ${startAtClipIndex + 1} of ${segments.length}…` : "Starting…");
-
-    const currentMember = resolveVocalistForPrompt(band.members);
-    const identityParts: IdentitySafeScriptPart[] = parts.map((part, i) => ({
+  const buildIdentityParts = (): IdentitySafeScriptPart[] =>
+    parts.map((part, i) => ({
       shotPrompt: part.prompt,
       startSec: part.startSec,
       endSec: part.endSec,
       kind: partKinds[i].kind,
       otherSingerName: partKinds[i].otherSingerName,
     }));
+
+  const ensureTimeline = (): SkidmarksClipSegment[] => {
+    const alreadyBuilt = realSegments.length === parts.length;
+    const segments = alreadyBuilt ? realSegments : buildScriptSequenceSegments(parts, realSegments);
+    if (!alreadyBuilt) {
+      onSetScriptSequence(segments);
+      flushSkidmarksSessionNow();
+    }
+    return segments;
+  };
+
+  /** Plates-only pass — stills for every clip, no video. */
+  const handleGeneratePlates = async () => {
+    if (running) return;
+    if (parts.length === 0) {
+      setResult({ ok: false, message: "Couldn't find any “Part N (start - end) — Title[Duration: ...].” entries in that text." });
+      return;
+    }
+    if (!hasMp3) {
+      setResult({ ok: false, message: "Attach an MP3 to this band first — the clip timeline needs one to hold clips, even a placeholder track." });
+      return;
+    }
+
+    stopRequestedRef.current = false;
+    setRunning("plates");
+    setResult(null);
+    setProgressText("Starting plates…");
+
+    let segments = ensureTimeline();
+
+    // Mirror clip-1 upload onto the plate so the timeline shows the same
+    // image the plates runner will keep as image 1.
+    if (startingImageUrl) {
+      const startingStill: SkidmarksPlateStill = {
+        dataUrl: startingImageUrl,
+        source: "upload",
+        createdAt: Date.now(),
+      };
+      segments = segments.map((segment, i) =>
+        i === 0
+          ? { ...segment, plates: [{ ...segment.plates[0], still: startingStill }, ...segment.plates.slice(1)] }
+          : segment
+      );
+      onSetClipPlateStill(segments[0].id, segments[0].plates[0].id, startingStill);
+      flushSkidmarksSessionNow();
+    }
+
     const targets: IdentitySafeRunTarget[] = segments.map((segment) => ({
       segmentId: segment.id,
       plateId: segment.plates[0]?.id ?? "",
     }));
 
-    const outcome = await runIdentitySafeSongRender(
-      identityParts,
+    const outcome = await runGeneratePlates(
+      buildIdentityParts(),
       targets,
       band.name,
-      currentMember,
+      resolveVocalistForPrompt(band.members),
       band.members,
-      mp3AudioUrl,
-      buildIdentitySafeDeps(),
-      startAtClipIndex,
+      buildPlatesDeps(),
+      0,
       () => stopRequestedRef.current,
-      // Only clip 1 cares — a resume that starts later never re-touches
-      // clip 1's plate, so the uploaded still is irrelevant there.
-      startAtClipIndex === 0 ? startingImageUrl : undefined
+      startingImageUrl
     );
 
     flushSkidmarksSessionNow();
     setRunning(false);
     setProgressText(null);
-    reportRunOutcome(outcome);
+    reportPlatesOutcome(outcome);
+  };
+
+  /** Animate existing plates only — refuses a clip with no plate still. */
+  const runAnimateFrom = async (segments: SkidmarksClipSegment[], startAtClipIndex: number) => {
+    stopRequestedRef.current = false;
+    setRunning("render");
+    setResult(null);
+    setProgressText(startAtClipIndex > 0 ? `Resuming at clip ${startAtClipIndex + 1} of ${segments.length}…` : "Starting…");
+
+    const targets: AnimateExistingPlatesTarget[] = segments.map((segment) => ({
+      segmentId: segment.id,
+      plateId: segment.plates[0]?.id ?? "",
+      plateStillUrl: segment.plates[0]?.still?.dataUrl,
+    }));
+
+    const outcome = await runAnimateExistingPlates(
+      buildIdentityParts(),
+      targets,
+      band.name,
+      resolveVocalistForPrompt(band.members),
+      band.members,
+      mp3AudioUrl,
+      buildAnimateDeps(),
+      startAtClipIndex,
+      () => stopRequestedRef.current
+    );
+
+    flushSkidmarksSessionNow();
+    setRunning(false);
+    setProgressText(null);
+    reportRenderOutcome(outcome);
   };
 
   const handleResume = async () => {
     if (running || !incompleteRun) return;
-    await runFrom(realSegments, incompleteRun.resumeIndex);
+    await runAnimateFrom(realSegments, incompleteRun.resumeIndex);
   };
 
   /**
@@ -321,9 +403,8 @@ export function SkidmarksScriptSequencePanel({
    * for a *locked* character only, pre-fill every plate with their fixed
    * reference photo — before any rendering or any money is spent — so
    * Stuart can scroll through and see the timeline shape first. Purely a
-   * preview: the identity-safe runner always (re)builds every clip's
-   * real starting image itself when Generate actually runs, so this
-   * pre-fill is never treated as "already done."
+   * preview: Generate plates still (re)builds every clip's real starting
+   * image from place + identity when it runs.
    */
   const handleBuildTimeline = () => {
     if (running || parts.length === 0) return;
@@ -350,8 +431,8 @@ export function SkidmarksScriptSequencePanel({
     setResult({
       ok: true,
       message: lock
-        ? `Timeline built — all ${segments.length} plates start from the locked reference photo as a preview. Tap Generate when you're happy; each clip still gets its own fresh scene + identity composite at render time.`
-        : `Timeline built — ${segments.length} clips ready. Tap Generate to render — every clip builds its own scene + identity composite fresh.`,
+        ? `Timeline built — all ${segments.length} plates start from the locked reference photo as a preview. Tap Generate plates when you're happy; each clip still gets its own fresh scene + identity composite.`
+        : `Timeline built — ${segments.length} clips ready. Tap Generate plates for stills, then Generate to animate.`,
     });
   };
 
@@ -366,43 +447,8 @@ export function SkidmarksScriptSequencePanel({
       return;
     }
 
-    // Reuse the timeline "Build timeline" already committed for this
-    // exact script, instead of rebuilding from scratch and minting new
-    // segment/plate ids for no reason. Matching part counts is an
-    // imperfect but low-stakes signal — worst case a changed script with
-    // the same number of parts reuses stale segment shells, which is
-    // harmless since the identity-safe runner always regenerates every
-    // plate's actual still from scratch anyway.
-    const alreadyBuilt = realSegments.length === parts.length;
-    const segments = alreadyBuilt ? realSegments : buildScriptSequenceSegments(parts, realSegments);
-
-    if (!alreadyBuilt) {
-      onSetScriptSequence(segments);
-      flushSkidmarksSessionNow();
-    }
-
-    // Already a durable Blob URL, uploaded the moment it was picked —
-    // nothing left to upload here. An explicit pick always wins over
-    // whatever "Build timeline" pre-filled clip 1 with. Also mirrors
-    // onto the plate so the timeline UI shows the same image the runner
-    // will use as image 1 (the runner itself will not overwrite it).
-    let segmentsForRun = segments;
-    if (startingImageUrl) {
-      const startingStill: SkidmarksPlateStill = {
-        dataUrl: startingImageUrl,
-        source: "upload",
-        createdAt: Date.now(),
-      };
-      segmentsForRun = segments.map((segment, i) =>
-        i === 0
-          ? { ...segment, plates: [{ ...segment.plates[0], still: startingStill }, ...segment.plates.slice(1)] }
-          : segment
-      );
-      onSetClipPlateStill(segmentsForRun[0].id, segmentsForRun[0].plates[0].id, startingStill);
-      flushSkidmarksSessionNow();
-    }
-
-    await runFrom(segmentsForRun, 0);
+    const segments = ensureTimeline();
+    await runAnimateFrom(segments, 0);
   };
 
   return (
@@ -411,7 +457,7 @@ export function SkidmarksScriptSequencePanel({
 
       {running && (
         <div className="flex items-center justify-between gap-2 rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-1.5">
-          <span className="text-[11px] leading-relaxed text-rose-100">Rendering…</span>
+          <span className="text-[11px] leading-relaxed text-rose-100">{running === "plates" ? "Plating…" : "Rendering…"}</span>
           <button
             type="button"
             onClick={() => {
@@ -432,11 +478,11 @@ export function SkidmarksScriptSequencePanel({
           <button
             type="button"
             onClick={handleResume}
-            disabled={running}
+            disabled={!!running}
             title="Resumes from where it stopped — starting fresh instead would re-render and re-charge for clips already done."
             className="shrink-0 rounded-full bg-amber-300 px-2.5 py-1 text-[11px] font-medium text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {running ? "Rendering…" : `Resume · ${incompleteRun.total - incompleteRun.resumeIndex} left`}
+            {running ? (running === "plates" ? "Plating…" : "Rendering…") : `Resume · ${incompleteRun.total - incompleteRun.resumeIndex} left`}
           </button>
         </div>
       )}
@@ -444,7 +490,7 @@ export function SkidmarksScriptSequencePanel({
       <textarea
         value={script}
         onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl })}
-        disabled={running}
+        disabled={!!running}
         placeholder={
           'Paste your "Part 1 (0:00 - 0:15) — Vocal[Duration: ...]. ..." script here. ' +
           "Title words: Vocal, Instrumental, Intro, Outro, Bridge, Lead, Break, or \"Other Singer: Name\"."
@@ -473,7 +519,7 @@ export function SkidmarksScriptSequencePanel({
           <button
             type="button"
             onClick={() => startingImageInputRef.current?.click()}
-            disabled={running || startingImagePicking}
+            disabled={!!running || startingImagePicking}
             className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {startingImagePicking ? "Uploading…" : startingImageUrl ? "Change" : "Upload"}
@@ -482,7 +528,7 @@ export function SkidmarksScriptSequencePanel({
             <button
               type="button"
               onClick={handleRemoveStartingImage}
-              disabled={running}
+              disabled={!!running}
               className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-white/50 transition-colors hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
             >
               Remove
@@ -510,11 +556,11 @@ export function SkidmarksScriptSequencePanel({
         >
           {parts.length > 0 ? `${parts.length} part${parts.length === 1 ? "" : "s"}` : "No parts yet"}
         </span>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <button
             type="button"
             onClick={handleBuildTimeline}
-            disabled={running || parts.length === 0 || !!incompleteRun}
+            disabled={!!running || parts.length === 0 || !!incompleteRun}
             title="Pre-fills every plate with the locked reference photo (if any) — free, no rendering yet, so you can check the timeline shape first."
             className="rounded-full border border-white/15 bg-white/[0.03] px-3 py-1.5 text-[12px] font-medium text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -522,12 +568,21 @@ export function SkidmarksScriptSequencePanel({
           </button>
           <button
             type="button"
+            onClick={handleGeneratePlates}
+            disabled={!!running || parts.length === 0 || !!incompleteRun}
+            title={parts.length > 0 ? `Builds stills for all ${parts.length} clips — no video yet` : undefined}
+            className="rounded-full border border-rose-400/40 bg-rose-400/15 px-3 py-1.5 text-[12px] font-medium text-rose-100 transition-colors hover:bg-rose-400/25 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {running === "plates" ? "Plating…" : "Generate plates"}
+          </button>
+          <button
+            type="button"
             onClick={handleRun}
-            disabled={running || parts.length === 0 || !!incompleteRun}
-            title={parts.length > 0 ? `Renders all ${parts.length} clips` : undefined}
+            disabled={!!running || parts.length === 0 || !!incompleteRun}
+            title={parts.length > 0 ? `Animates existing plates for all ${parts.length} clips — skips none that are missing a still` : undefined}
             className="rounded-full bg-rose-400 px-3 py-1.5 text-[12px] font-medium text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {running ? "Rendering…" : "Generate"}
+            {running === "render" ? "Rendering…" : "Generate"}
           </button>
         </div>
       </div>

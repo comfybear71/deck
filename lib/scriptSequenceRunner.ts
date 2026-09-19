@@ -253,6 +253,18 @@ export interface IdentitySafeRunTarget {
 export type IdentitySafeRunEvent =
   | { type: "resolving-place"; clipIndex: number; clipCount: number }
   | { type: "generating-plate"; clipIndex: number; clipCount: number }
+  | { type: "plate-done"; clipIndex: number; clipCount: number }
+  | { type: "rendering"; clipIndex: number; clipCount: number }
+  | { type: "clip-done"; clipIndex: number; clipCount: number };
+
+/** Progress events for the plates-only pass — never includes `rendering`. */
+export type GeneratePlatesEvent =
+  | { type: "resolving-place"; clipIndex: number; clipCount: number }
+  | { type: "generating-plate"; clipIndex: number; clipCount: number }
+  | { type: "plate-done"; clipIndex: number; clipCount: number };
+
+/** Progress events for the animate-existing-plates pass — never rebuilds plates. */
+export type AnimateExistingPlatesEvent =
   | { type: "rendering"; clipIndex: number; clipCount: number }
   | { type: "clip-done"; clipIndex: number; clipCount: number };
 
@@ -296,6 +308,37 @@ export interface IdentitySafeRunDeps {
   setPlateStill: (segmentId: string, plateId: string, still: SkidmarksPlateStill) => void;
   onProgress?: (event: IdentitySafeRunEvent) => void;
 }
+
+/** Deps for the plates-only pass — deliberately has **no** `renderClip` /
+ * `recordRender`, so a plates run cannot accidentally spend on video. */
+export interface GeneratePlatesDeps {
+  resolvePlaceStill: IdentitySafeRunDeps["resolvePlaceStill"];
+  generateIdentityStill: IdentitySafeRunDeps["generateIdentityStill"];
+  uploadStill: IdentitySafeRunDeps["uploadStill"];
+  setPlateStill: IdentitySafeRunDeps["setPlateStill"];
+  onProgress?: (event: GeneratePlatesEvent) => void;
+}
+
+export type GeneratePlatesOutcome =
+  | { ok: true; platedCount: number }
+  | { ok: false; failedAtClipIndex: number; message: string; platedCount: number; stopped?: boolean };
+
+/** One clip's already-built plate still for the animate-only pass. Missing
+ * `plateStillUrl` fails that clip and stops — never invents a still and
+ * never falls back to last-frame chaining. */
+export interface AnimateExistingPlatesTarget extends IdentitySafeRunTarget {
+  plateStillUrl?: string;
+}
+
+export interface AnimateExistingPlatesDeps {
+  renderClip: IdentitySafeRunDeps["renderClip"];
+  recordRender: IdentitySafeRunDeps["recordRender"];
+  onProgress?: (event: AnimateExistingPlatesEvent) => void;
+}
+
+export type AnimateExistingPlatesOutcome =
+  | { ok: true; renderedCount: number }
+  | { ok: false; failedAtClipIndex: number; message: string; renderedCount: number; stopped?: boolean };
 
 export type IdentitySafeRunOutcome =
   | { ok: true; renderedCount: number }
@@ -478,6 +521,249 @@ export async function runIdentitySafeSongRender(
   return { ok: true, renderedCount: parts.length };
 }
 
+
+/**
+ * **Plate-first pass (stills only).** Builds every clip's plate still from
+ * place + identity, then stops — never calls Grok/H3/LTX video, never
+ * writes `lastFrameUrl`, never auto-renders, never chains frames.
+ *
+ * Image 1 = that clip's place (clip-1 upload when `clip1StartingImageUrl`
+ * is set for clip 1; otherwise an empty place still from the shot prompt).
+ * Image 2 = the resolved member's `avatarImage`. Missing either fails that
+ * clip and stops the batch.
+ */
+export async function runGeneratePlates(
+  parts: IdentitySafeScriptPart[],
+  targets: IdentitySafeRunTarget[],
+  bandName: string,
+  currentMember: SkidmarksMember | undefined,
+  bandMembers: SkidmarksMember[],
+  deps: GeneratePlatesDeps,
+  startAtClipIndex: number = 0,
+  shouldStop?: () => boolean,
+  clip1StartingImageUrl?: string
+): Promise<GeneratePlatesOutcome> {
+  const report = (event: GeneratePlatesEvent) => deps.onProgress?.(event);
+
+  if (parts.length === 0) {
+    return { ok: false, failedAtClipIndex: 0, message: "No clips to plate.", platedCount: 0 };
+  }
+  if (parts.length !== targets.length) {
+    return {
+      ok: false,
+      failedAtClipIndex: 0,
+      message: "Script parts and the clip timeline are out of sync — rebuild the timeline before plating.",
+      platedCount: 0,
+    };
+  }
+
+  const startIndex = Math.max(0, Math.min(startAtClipIndex, parts.length));
+
+  for (let i = startIndex; i < parts.length; i++) {
+    if (shouldStop?.()) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: `Stopped before clip ${i + 1} — no more plates will generate.`,
+        platedCount: i,
+        stopped: true,
+      };
+    }
+
+    const part = parts[i];
+    const target = targets[i];
+
+    const identity = resolveScriptPartIdentity(part.kind, part.otherSingerName, currentMember, bandMembers);
+    if (!identity.ok) {
+      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1} ${identity.message}`, platedCount: i };
+    }
+
+    const vocal = scriptPartUsesLtx(part.kind);
+
+    // Clip 1 only: an explicit uploaded starting image wins as image 1.
+    if (i === 0 && clip1StartingImageUrl) {
+      const still: SkidmarksPlateStill = {
+        dataUrl: clip1StartingImageUrl,
+        source: "upload",
+        createdAt: Date.now(),
+      };
+      deps.setPlateStill(target.segmentId, target.plateId, still);
+      report({ type: "plate-done", clipIndex: i, clipCount: parts.length });
+      continue;
+    }
+
+    report({ type: "resolving-place", clipIndex: i, clipCount: parts.length });
+    const place = await deps.resolvePlaceStill(part.shotPrompt, bandName);
+    if (!place.ok) {
+      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${place.message}`, platedCount: i };
+    }
+
+    // Identity photo is required — resolveScriptPartIdentity already
+    // refused a missing avatarImage, but guard the place half too.
+    if (!identity.member.avatarImage) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: `Clip ${i + 1} needs ${identity.member.name || "the artist"}'s photo, but none is set — refusing to invent a face.`,
+        platedCount: i,
+      };
+    }
+
+    report({ type: "generating-plate", clipIndex: i, clipCount: parts.length });
+    const stillOutcome = await deps.generateIdentityStill({
+      shotPrompt: part.shotPrompt,
+      bandName,
+      vocal,
+      vocalist: identity.member,
+      locationStillDataUrl: place.dataUrl,
+    });
+    if (!stillOutcome.ok) {
+      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${stillOutcome.message}`, platedCount: i };
+    }
+
+    const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
+    const stillUrl = uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl;
+    const still: SkidmarksPlateStill = { dataUrl: stillUrl, source: "generated", createdAt: Date.now() };
+    deps.setPlateStill(target.segmentId, target.plateId, still);
+
+    report({ type: "plate-done", clipIndex: i, clipCount: parts.length });
+  }
+
+  return { ok: true, platedCount: parts.length };
+}
+
+/**
+ * **Animate existing plates only.** Refuses (stops) when a clip has no
+ * plate still yet — never rebuilds plates, never chains last frames.
+ *
+ * Routing by script part title kind (`scriptPartUsesLtx`): Vocal → LTX
+ * with real song audio; Intro / Outro / Bridge / Lead / Break /
+ * Instrumental / other-singer → Grok. Title-first kinds come from
+ * `parseScriptPartKind` (aligned with `scriptPartTitleKind` /
+ * `resolveScriptPartVocal` in `lib/skidmarks.ts` for typed titles).
+ */
+export async function runAnimateExistingPlates(
+  parts: IdentitySafeScriptPart[],
+  targets: AnimateExistingPlatesTarget[],
+  bandName: string,
+  currentMember: SkidmarksMember | undefined,
+  bandMembers: SkidmarksMember[],
+  mp3AudioUrl: string | undefined,
+  deps: AnimateExistingPlatesDeps,
+  startAtClipIndex: number = 0,
+  shouldStop?: () => boolean
+): Promise<AnimateExistingPlatesOutcome> {
+  const report = (event: AnimateExistingPlatesEvent) => deps.onProgress?.(event);
+
+  if (parts.length === 0) {
+    return { ok: false, failedAtClipIndex: 0, message: "No clips to render.", renderedCount: 0 };
+  }
+  if (parts.length !== targets.length) {
+    return {
+      ok: false,
+      failedAtClipIndex: 0,
+      message: "Script parts and the clip timeline are out of sync — rebuild the timeline before rendering.",
+      renderedCount: 0,
+    };
+  }
+
+  const startIndex = Math.max(0, Math.min(startAtClipIndex, parts.length));
+
+  for (let i = startIndex; i < parts.length; i++) {
+    if (shouldStop?.()) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: `Stopped before clip ${i + 1} — no more clips will render.`,
+        renderedCount: i,
+        stopped: true,
+      };
+    }
+
+    const part = parts[i];
+    const target = targets[i];
+    const stillUrl = target.plateStillUrl?.trim();
+    if (!stillUrl) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: `Clip ${i + 1} has no plate still yet — run Generate plates first, then render.`,
+        renderedCount: i,
+      };
+    }
+
+    const identity = resolveScriptPartIdentity(part.kind, part.otherSingerName, currentMember, bandMembers);
+    if (!identity.ok) {
+      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1} ${identity.message}`, renderedCount: i };
+    }
+
+    const vocal = scriptPartUsesLtx(part.kind);
+
+    if (vocal && !mp3AudioUrl) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: `Clip ${i + 1} is Vocal, so it needs the song's real audio to drive lip sync — no attached MP3 audio is available yet.`,
+        renderedCount: i,
+      };
+    }
+
+    report({ type: "rendering", clipIndex: i, clipCount: parts.length });
+    const durationSec = computePlateDurationSec(
+      part.endSec - part.startSec,
+      1,
+      0,
+      vocal ? LTX_DURATION_BOUNDS : undefined
+    );
+
+    const request = buildClipGenerationRequest({
+      shotPrompt: part.shotPrompt,
+      bandName,
+      plateStillDataUrl: stillUrl,
+      durationSec,
+      vocal,
+      instrumentalVideoModel: vocal ? undefined : "grok",
+      vocalist: identity.member,
+      mp3AudioUrl: vocal ? mp3AudioUrl : undefined,
+      segmentId: target.segmentId,
+      plateId: target.plateId,
+      plateIndex: 0,
+      plateCount: 1,
+      clipIndex: i,
+      startSec: part.startSec,
+      endSec: part.endSec,
+    });
+
+    const outcome = await deps.renderClip(request);
+    if (!outcome.ok) {
+      return { ok: false, failedAtClipIndex: i, message: outcome.message, renderedCount: i };
+    }
+    if (!outcome.persisted) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: outcome.persistError
+          ? `Clip ${i + 1} rendered but couldn't be saved: ${outcome.persistError}`
+          : `Clip ${i + 1} rendered but couldn't be saved.`,
+        renderedCount: i,
+      };
+    }
+
+    deps.recordRender({
+      segmentId: target.segmentId,
+      plateId: target.plateId,
+      url: outcome.videoUrl,
+      filename: `${String(i + 1).padStart(2, "0")}_${part.startSec}-${part.endSec}.mp4`,
+      clipIndex: i,
+      startSec: part.startSec,
+      endSec: part.endSec,
+    });
+
+    report({ type: "clip-done", clipIndex: i, clipCount: parts.length });
+  }
+
+  return { ok: true, renderedCount: parts.length };
+}
 
 export interface ScriptSequenceRunnerDeps {
   /** Resolves any still's `dataUrl` (already-`data:`, or a real Blob

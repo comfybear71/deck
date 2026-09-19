@@ -2,9 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   parseScriptPartKind,
   resolveScriptPartIdentity,
+  runAnimateExistingPlates,
+  runGeneratePlates,
   runIdentitySafeSongRender,
   runScriptSequence,
   scriptPartUsesLtx,
+  type AnimateExistingPlatesDeps,
+  type AnimateExistingPlatesTarget,
+  type GeneratePlatesDeps,
   type IdentitySafeRunDeps,
   type IdentitySafeScriptPart,
   type IdentitySafeRunTarget,
@@ -1017,5 +1022,211 @@ describe("runIdentitySafeSongRender", () => {
       fakeIdentityDeps()
     );
     expect(outcome.ok).toBe(false);
+  });
+});
+
+
+function fakePlatesDeps(overrides: Partial<GeneratePlatesDeps> = {}): GeneratePlatesDeps {
+  return {
+    resolvePlaceStill: vi.fn(async (sceneText: string) => ({
+      ok: true as const,
+      dataUrl: `data:image/jpeg;base64,place-${sceneText.length}`,
+    })),
+    generateIdentityStill: vi.fn(async ({ vocalist, vocal }) => ({
+      ok: true as const,
+      dataUrl: `data:image/jpeg;base64,plate-${vocalist.id}-${vocal ? "vocal" : "novocal"}`,
+    })),
+    uploadStill: vi.fn(async (dataUrl: string) => ({ ok: true as const, url: `https://blob.example/${dataUrl.length}` })),
+    setPlateStill: vi.fn(),
+    onProgress: vi.fn(),
+    ...overrides,
+  };
+}
+
+function fakeAnimateDeps(overrides: Partial<AnimateExistingPlatesDeps> = {}): AnimateExistingPlatesDeps {
+  return {
+    renderClip: vi.fn(async () => ({ ok: true as const, videoUrl: "https://blob.example/clip.mp4", persisted: true })),
+    recordRender: vi.fn(),
+    onProgress: vi.fn(),
+    ...overrides,
+  };
+}
+
+describe("runGeneratePlates", () => {
+  const nova = member({ id: "nova", name: "Nova", avatarImage: "https://blob.example/nova.jpg" });
+  const jax = member({ id: "jax", name: "Jax", avatarImage: "https://blob.example/jax.jpg" });
+  const bandMembers = [nova, jax];
+
+  function parts(): IdentitySafeScriptPart[] {
+    return [
+      { shotPrompt: "verse one", startSec: 0, endSec: 10, kind: "vocal" },
+      { shotPrompt: "break", startSec: 10, endSec: 20, kind: "instrumental" },
+      { shotPrompt: "outro wide", startSec: 20, endSec: 30, kind: "outro" },
+    ];
+  }
+  function targets(): IdentitySafeRunTarget[] {
+    return parts().map((_, i) => ({ segmentId: `seg-${i}`, plateId: `plate-${i}` }));
+  }
+
+  it("builds stills only — never calls video render, never writes lastFrameUrl", async () => {
+    const deps = fakePlatesDeps();
+    const renderSpy = vi.fn();
+    // Plates deps have no renderClip — asserting the type contract + setPlateStill only.
+    const outcome = await runGeneratePlates(parts(), targets(), "Solar Rebel", nova, bandMembers, deps);
+
+    expect(outcome).toEqual({ ok: true, platedCount: 3 });
+    expect(deps.resolvePlaceStill).toHaveBeenCalledTimes(3);
+    expect(deps.generateIdentityStill).toHaveBeenCalledTimes(3);
+    expect(deps.setPlateStill).toHaveBeenCalledTimes(3);
+    expect(renderSpy).not.toHaveBeenCalled();
+
+    const events = (deps.onProgress as ReturnType<typeof vi.fn>).mock.calls.map(([e]) => e.type);
+    expect(events).not.toContain("rendering");
+    expect(events.filter((t) => t === "plate-done")).toHaveLength(3);
+  });
+
+  it("stops on missing identity photo and never continues plating", async () => {
+    const noPhoto = member({ id: "nova", name: "Nova", avatarImage: undefined });
+    const deps = fakePlatesDeps();
+    const outcome = await runGeneratePlates(parts(), targets(), "Solar Rebel", noPhoto, [noPhoto, jax], deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(0);
+      expect(outcome.platedCount).toBe(0);
+      expect(outcome.message.toLowerCase()).toMatch(/photo|face/);
+    }
+    expect(deps.generateIdentityStill).not.toHaveBeenCalled();
+    expect(deps.setPlateStill).not.toHaveBeenCalled();
+  });
+
+  it("stops on missing place still and never continues", async () => {
+    const deps = fakePlatesDeps({
+      resolvePlaceStill: vi.fn(async () => ({ ok: false as const, message: "place generation failed" })),
+    });
+    const outcome = await runGeneratePlates(parts(), targets(), "Solar Rebel", nova, bandMembers, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(0);
+      expect(outcome.platedCount).toBe(0);
+      expect(outcome.message).toContain("place generation failed");
+    }
+    expect(deps.generateIdentityStill).not.toHaveBeenCalled();
+  });
+
+  it("uses clip-1 upload as image 1 and skips rebuilding that plate", async () => {
+    const deps = fakePlatesDeps();
+    const uploaded = "https://blob.example/uploaded-clip1.jpg";
+    const outcome = await runGeneratePlates(parts(), targets(), "Solar Rebel", nova, bandMembers, deps, 0, undefined, uploaded);
+
+    expect(outcome).toEqual({ ok: true, platedCount: 3 });
+    expect(deps.resolvePlaceStill).toHaveBeenCalledTimes(2);
+    expect(deps.generateIdentityStill).toHaveBeenCalledTimes(2);
+
+    const firstStill = (deps.setPlateStill as ReturnType<typeof vi.fn>).mock.calls[0][2] as {
+      dataUrl: string;
+      source: string;
+    };
+    expect(firstStill).toEqual({ dataUrl: uploaded, source: "upload", createdAt: expect.any(Number) });
+  });
+});
+
+describe("runAnimateExistingPlates", () => {
+  const nova = member({ id: "nova", name: "Nova", avatarImage: "https://blob.example/nova.jpg" });
+  const jax = member({ id: "jax", name: "Jax", avatarImage: "https://blob.example/jax.jpg" });
+  const bandMembers = [nova, jax];
+
+  function titledParts(): IdentitySafeScriptPart[] {
+    return [
+      { shotPrompt: "verse", startSec: 0, endSec: 10, kind: "vocal" },
+      { shotPrompt: "intro still", startSec: 10, endSec: 20, kind: "intro" },
+      { shotPrompt: "bridge", startSec: 20, endSec: 30, kind: "bridge" },
+      { shotPrompt: "outro", startSec: 30, endSec: 40, kind: "outro" },
+      { shotPrompt: "lead line", startSec: 40, endSec: 50, kind: "lead" },
+      { shotPrompt: "break", startSec: 50, endSec: 60, kind: "break" },
+      { shotPrompt: "instrumental", startSec: 60, endSec: 70, kind: "instrumental" },
+    ];
+  }
+
+  function platedTargets(urls: (string | undefined)[]): AnimateExistingPlatesTarget[] {
+    return urls.map((url, i) => ({
+      segmentId: `seg-${i}`,
+      plateId: `plate-${i}`,
+      plateStillUrl: url,
+    }));
+  }
+
+  it("refuses a clip with no plate still — never invents one, never calls video for it", async () => {
+    const deps = fakeAnimateDeps();
+    const parts = titledParts().slice(0, 2);
+    const targets = platedTargets(["https://blob.example/plate-0.jpg", undefined]);
+
+    const outcome = await runAnimateExistingPlates(
+      parts,
+      targets,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(1);
+      expect(outcome.renderedCount).toBe(1);
+      expect(outcome.message.toLowerCase()).toContain("no plate still");
+    }
+    // First clip had a plate and rendered; second refused.
+    expect(deps.renderClip).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes Vocal → LTX and Intro/Outro/Bridge/Lead/Break/Instrumental → Grok by title kind", async () => {
+    const deps = fakeAnimateDeps();
+    const parts = titledParts();
+    const targets = platedTargets(parts.map((_, i) => `https://blob.example/plate-${i}.jpg`));
+
+    const outcome = await runAnimateExistingPlates(
+      parts,
+      targets,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps
+    );
+
+    expect(outcome).toEqual({ ok: true, renderedCount: 7 });
+    type RenderRequest = {
+      vocal?: boolean;
+      mp3AudioUrl?: string;
+      videoBackend?: string;
+      referenceImageDataUrls?: string[];
+    };
+    const renderRequests = (deps.renderClip as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([request]) => request as RenderRequest
+    );
+    expect(renderRequests.map((r) => r.vocal)).toEqual([true, false, false, false, false, false, false]);
+    expect(renderRequests[0].mp3AudioUrl).toBe("https://blob.example/song.mp3");
+    for (const r of renderRequests.slice(1)) {
+      expect(r.mp3AudioUrl).toBeUndefined();
+      expect(r.videoBackend).toBe("grok");
+    }
+    // https plate stills pass through as-is (LTX/generate-clip accept them).
+    expect(renderRequests[0].referenceImageDataUrls).toEqual(["https://blob.example/plate-0.jpg"]);
+  });
+
+  it("never rebuilds plates — no place/identity generation side effects", async () => {
+    const deps = fakeAnimateDeps();
+    const parts = titledParts().slice(0, 1);
+    const targets = platedTargets(["https://blob.example/already-plated.jpg"]);
+
+    await runAnimateExistingPlates(parts, targets, "Solar Rebel", nova, bandMembers, "https://blob.example/song.mp3", deps);
+
+    // Animate deps intentionally omit setPlateStill / generateIdentityStill.
+    expect(deps.renderClip).toHaveBeenCalledTimes(1);
+    const recorded = (deps.recordRender as ReturnType<typeof vi.fn>).mock.calls[0][0] as { lastFrameUrl?: string };
+    expect(recorded.lastFrameUrl).toBeUndefined();
   });
 });

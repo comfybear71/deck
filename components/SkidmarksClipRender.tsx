@@ -384,12 +384,14 @@ export function SkidmarksClipRender({
     setJustPersisted(false);
     onRenderStart(plateId);
     try {
-      // `plateStillDataUrl` is a real Blob URL as of 2026-09-14 (`lib/
-      // plateStillBlob.ts`) rather than a base64 `data:` URL — this
-      // route (like xAI's/Siray's) only accepts a real `data:` URL as a
-      // reference image, so resolve it first (a fast no-op for a still
-      // saved before that change, still a literal `data:` URL).
-      const resolvedStillDataUrl = await resolvePlateReferenceDataUrl(plateStillDataUrl);
+      // Plate stills are often durable Blob https URLs (upload /
+      // Generate plates). generate-clip accepts data: OR http(s) — pass
+      // those through as-is so Vocal/LTX never hits "must be a
+      // data:image URL". Relative/seeded paths still resolve to data:.
+      const resolvedStillDataUrl =
+        plateStillDataUrl.startsWith("data:") || /^https?:\/\//i.test(plateStillDataUrl)
+          ? plateStillDataUrl
+          : await resolvePlateReferenceDataUrl(plateStillDataUrl);
       const request = buildClipGenerationRequest({
         shotPrompt: trimmedPrompt,
         bandName,

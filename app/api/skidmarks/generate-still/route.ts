@@ -254,8 +254,18 @@ interface GenerateStillRequestBody {
   referenceImageDataUrls?: unknown;
 }
 
-function isReferenceDataUrl(value: unknown): value is string {
-  return typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,.+/.test(value);
+/** Accepts a reference as either an embedded `data:image/...;base64,...`
+ * URL **or** a durable http(s) URL (Vercel Blob avatar / place stills).
+ * Rejecting https here used to kill plate generation the moment a member's
+ * `avatarImage` (or a locked place still) was a Blob URL rather than an
+ * embedded data URL. `blob:` object URLs stay rejected — the server cannot
+ * fetch a client-only object URL. xAI's edits API accepts both shapes in
+ * its `image`/`images` `url` field. */
+function isReferenceImageUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0) return false;
+  if (/^data:image\/[a-zA-Z0-9.+-]+;base64,.+/.test(value)) return true;
+  if (/^https?:\/\//i.test(value)) return true;
+  return false;
 }
 
 export async function POST(request: Request) {
@@ -317,10 +327,10 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  if (!rawReferences.every(isReferenceDataUrl)) {
+  if (!rawReferences.every(isReferenceImageUrl)) {
     return NextResponse.json(
       {
-        error: "Each reference image must be a `data:image/...;base64,...` URL.",
+        error: "Each reference image must be a `data:image/...;base64,...` URL or an http(s) photo URL.",
         code: "invalid_request",
       },
       { status: 400 }
