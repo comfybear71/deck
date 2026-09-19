@@ -31,6 +31,429 @@ import type { PersistedClipRender } from "./clipRenders";
 import { buildClipGenerationRequest, computePlateDurationSec, LTX_DURATION_BOUNDS } from "./clipGeneration";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
 
+/**
+ * **The identity-safe one-button song render** (2026-09-19) — a second,
+ * deliberately independent runner in this file, sitting alongside
+ * `runScriptSequence`/`SCENE_BLOCK_CLIP_COUNT` above rather than
+ * replacing them.
+ *
+ * The reason for a second runner instead of changing the first: the
+ * real bug this exists to fix is `runScriptSequence`'s own last-frame
+ * chaining (`ChainedPlateTarget`/the "chaining" branch at the bottom of
+ * that function) — a render's closing frame becomes the *next* clip's
+ * starting image, over and over. That is precisely how an artist's
+ * likeness drifts across a run: each hop is a small, real re-generation
+ * by a video model, not a copy, and small drift compounds. Two real,
+ * reported failures came from exactly this shape (see
+ * `lib/plateGeneration.ts`'s "Holding one artist" doc comment — a shot
+ * described in prose blending with a photo; then, even once the prompt
+ * held the identity, a render chained from a drifted frame still wasn't
+ * the artist). `runScriptSequence`'s own existing test suite
+ * (`lib/scriptSequenceRunner.test.ts`) pins real, wanted behavior for
+ * Jack Ash's locked-character scene-block chaining that depends on this
+ * exact chaining mechanism working the way it already does — rewriting
+ * it in place would either break that suite or require silently
+ * deleting coverage for a real, working feature nobody asked to remove.
+ *
+ * `runIdentitySafeSongRender` below never chains anything. Every clip,
+ * every time, builds its own plate fresh from exactly two images — an
+ * empty **place** still generated from that clip's own shot prompt
+ * (`lib/plateLocation.ts`) and the **identity photo** of whoever this
+ * clip is actually about (`resolveScriptPartIdentity` below) — the same
+ * two-image composite `lib/plateGeneration.ts`'s `buildPlateGenerationRequest`
+ * already builds for a locked character, now used for *any* artist,
+ * locked or not ("Photo is the lock" — no new `SKIDMARKS_CHARACTER_LOCKS`
+ * entry is invented here for an unlocked artist; `getSkidmarksCharacterLock`
+ * simply returns nothing for one, and the composite still holds their
+ * identity purely off `avatarImage`). Missing either image — no place
+ * still (a real generation failure) or no identity photo — fails that
+ * one clip outright and stops the whole batch there, reporting which
+ * clip; it never falls back to a text-only, no-identity still, which
+ * would be exactly the "quietly drifting" failure mode this exists to
+ * close.
+ *
+ * **Script labels, not audio analysis, decide the backend per clip**
+ * (`SkidmarksScriptPartKind`/`parseScriptPartKind`) — a real, deliberate
+ * difference from `runScriptSequence`'s own `resolveScriptPartVocal`
+ * (which routes off the *song's* real measured singing). This runner's
+ * whole point is a script that says, part by part, who's on screen and
+ * whether they're singing: `"vocal"` is the one kind that ever reaches
+ * LTX/Comfy Cloud with the song's real vocal audio; every other kind
+ * (`instrumental`/`intro`/`outro`/`bridge`/`lead`/`break`/`other-singer`)
+ * always renders Grok/H3, and never sends vocal audio at all — even when
+ * the identity photo it holds is the same artist singing on an adjacent
+ * clip. A part naming a different singer (`"other-singer"`) still gets a
+ * real held identity — that named member's own `avatarImage` — never the
+ * current artist's photo and never a chained frame.
+ */
+export type SkidmarksScriptPartKind =
+  | "vocal"
+  | "instrumental"
+  | "intro"
+  | "outro"
+  | "bridge"
+  | "lead"
+  | "break"
+  | "other-singer";
+
+const SKIDMARKS_SCRIPT_PART_KIND_WORDS: SkidmarksScriptPartKind[] = [
+  "vocal",
+  "instrumental",
+  "intro",
+  "outro",
+  "bridge",
+  "lead",
+  "break",
+];
+
+export interface ParsedScriptPartKind {
+  kind: SkidmarksScriptPartKind;
+  /** Only set for `kind === "other-singer"` *and* only when the script
+   * actually named someone (`"Other Singer: Jax"` / `"Other Singer
+   * (Jax)"`) — `undefined` when the script just wrote `"Other Singer"`
+   * with no name, which `resolveScriptPartIdentity` below still
+   * resolves, but only when the band has exactly one unambiguous other
+   * member to mean. */
+  otherSingerName?: string;
+}
+
+const OTHER_SINGER_RE = /^other[\s-]?singer\s*[:\-]?\s*\(?\s*([^)]*?)\s*\)?$/i;
+
+/**
+ * Reads a script part's own label word — `parseScriptSequence`'s
+ * existing `title` field (the text between the header's em dash and its
+ * `[Duration: ...]` bracket), exactly as Stuart pastes it, e.g.
+ * `"Part 4 (0:45 - 0:55) — Other Singer: Jax [Duration: 10s]. ..."`.
+ * Case-insensitive, tolerant of surrounding whitespace. An unrecognized
+ * or blank title defaults to `"instrumental"` — the same safe default
+ * `resolveScriptPartIdentity`/`scriptPartUsesLtx` already give an
+ * ordinary B-roll clip: never LTX, never invented vocal audio, identity
+ * still held (the current artist), just never assumed to be singing.
+ * Pure — no parsing of the shot-prompt body itself, and no touching of
+ * `lib/scriptSequence.ts`'s own header/bracket regex.
+ */
+export function parseScriptPartKind(rawTitle: string): ParsedScriptPartKind {
+  const title = rawTitle.trim();
+  const otherSingerMatch = title.match(OTHER_SINGER_RE);
+  if (otherSingerMatch) {
+    const name = otherSingerMatch[1]?.trim();
+    return { kind: "other-singer", ...(name ? { otherSingerName: name } : {}) };
+  }
+  const lower = title.toLowerCase();
+  const matched = SKIDMARKS_SCRIPT_PART_KIND_WORDS.find((word) => lower === word);
+  return { kind: matched ?? "instrumental" };
+}
+
+/** Rule 3/4's whole routing decision, in one place: `"vocal"` is the
+ * only kind this runner ever sends to LTX/Comfy Cloud with real vocal
+ * audio. Every other kind — including `"other-singer"`, even when the
+ * script's own words describe someone singing — renders Grok/H3 with no
+ * vocal audio at all. Pure. */
+export function scriptPartUsesLtx(kind: SkidmarksScriptPartKind): boolean {
+  return kind === "vocal";
+}
+
+export type ScriptPartIdentityResolution =
+  | { ok: true; member: SkidmarksMember }
+  | { ok: false; message: string };
+
+/**
+ * Rule 1/"a different singer" resolution, in one place — the only
+ * function in this runner that decides *whose* photo a clip holds.
+ *
+ * - `"other-singer"`: looks up the named band member by name
+ *   (case-insensitive, exact match — a real reported-format script
+ *   names someone plainly, e.g. `"Other Singer: Jax"`). A script that
+ *   just wrote `"Other Singer"` with no name still resolves when the
+ *   band has exactly one *other* named member besides `currentMember` —
+ *   there's nobody else it could mean — and fails honestly (not a
+ *   guess) when that's ambiguous (more than one other member) or
+ *   impossible (no other member at all). Never falls back to
+ *   `currentMember`'s own photo — that would be exactly the identity
+ *   swap rule 1 exists to ban.
+ * - Every other kind: `currentMember` — "Photo is the lock," no
+ *   character-lock registry consulted here at all.
+ *
+ * Either branch fails the clip outright (never a generic placeholder,
+ * never a text-only still) the moment the resolved member has no
+ * `avatarImage` — "missing either image \u2192 fail that clip, stop
+ * honest" from rule 3/the plate contract, decided here so the caller
+ * never has to remember to check it separately.
+ */
+export function resolveScriptPartIdentity(
+  kind: SkidmarksScriptPartKind,
+  otherSingerName: string | undefined,
+  currentMember: SkidmarksMember | undefined,
+  bandMembers: SkidmarksMember[]
+): ScriptPartIdentityResolution {
+  if (kind === "other-singer") {
+    const named = otherSingerName?.trim().toLowerCase();
+    let target: SkidmarksMember | undefined;
+    if (named) {
+      target = bandMembers.find((m) => m.name.trim().toLowerCase() === named);
+      if (!target) {
+        return {
+          ok: false,
+          message: `names a different singer ("${otherSingerName}"), but no band member with that name was found.`,
+        };
+      }
+    } else {
+      const others = bandMembers.filter((m) => m.id !== currentMember?.id && m.name.trim().length > 0);
+      if (others.length !== 1) {
+        return {
+          ok: false,
+          message:
+            others.length === 0
+              ? "names a different singer, but this band has no other member to be them."
+              : "names a different singer but doesn't say who, and this band has more than one other member — add a name (e.g. \"Other Singer: Jax\").",
+        };
+      }
+      target = others[0];
+    }
+    if (!target.avatarImage) {
+      return { ok: false, message: `names ${target.name || "a different singer"}, who has no photo set — refusing to invent a face.` };
+    }
+    return { ok: true, member: target };
+  }
+
+  if (!currentMember) {
+    return { ok: false, message: "needs an artist, but none is selected for this band yet." };
+  }
+  if (!currentMember.avatarImage) {
+    return { ok: false, message: `needs ${currentMember.name || "the selected artist"}'s photo, but none is set — refusing to invent a face.` };
+  }
+  return { ok: true, member: currentMember };
+}
+
+/** One script part, already resolved into a real time range and a
+ * shot-prompt — the identity-safe runner's own input shape, deliberately
+ * independent of `SkidmarksClipSegment`/`SkidmarksSegmentLabel` (see
+ * this section's module doc comment for why: those already mean
+ * something else — real audio-derived vocal/instrumental — for
+ * `runScriptSequence`, and reusing them here would conflate two
+ * different "is this vocal?" questions). */
+export interface IdentitySafeScriptPart {
+  shotPrompt: string;
+  startSec: number;
+  endSec: number;
+  kind: SkidmarksScriptPartKind;
+  otherSingerName?: string;
+}
+
+/** Where one part's plate/render actually lands — a `SkidmarksClipSegment`
+ * id plus one of its plate slot ids, minted ahead of time by the caller
+ * (`lib/skidmarks.ts`'s `buildScriptSequenceSegments` mints exactly this
+ * shape) so this runner never has to know how segments/plates are
+ * constructed, only where to write. */
+export interface IdentitySafeRunTarget {
+  segmentId: string;
+  plateId: string;
+}
+
+export type IdentitySafeRunEvent =
+  | { type: "resolving-place"; clipIndex: number; clipCount: number }
+  | { type: "generating-plate"; clipIndex: number; clipCount: number }
+  | { type: "rendering"; clipIndex: number; clipCount: number }
+  | { type: "clip-done"; clipIndex: number; clipCount: number };
+
+export interface IdentitySafeRunDeps {
+  /** The empty place still for one clip's own scene — same contract as
+   * `lib/plateLocation.ts`'s `resolveLocationStill` (the real
+   * implementation the caller injects), including its own cache (a
+   * clip's shot prompt repeated across parts never re-bills the place). */
+  resolvePlaceStill: (
+    sceneText: string,
+    bandName: string
+  ) => Promise<{ ok: true; dataUrl: string } | { ok: false; message: string }>;
+  /** Builds and generates the two-image (place + identity) composite
+   * still for one clip — same real backend as every other still in this
+   * feature (`lib/plateGeneration.ts`'s `buildPlateGenerationRequest` +
+   * `generatePlateStill`); `vocal` only steers still-image framing
+   * phrasing (see `buildPlateGenerationRequest`'s `routingFramingHint`),
+   * it is a *different* flag from this clip's real LTX-vs-Grok/H3
+   * backend choice, decided separately by `scriptPartUsesLtx`. */
+  generateIdentityStill: (params: {
+    shotPrompt: string;
+    bandName: string;
+    vocal: boolean;
+    vocalist: SkidmarksMember;
+    locationStillDataUrl: string;
+  }) => Promise<{ ok: true; dataUrl: string } | { ok: false; message: string }>;
+  /** Uploads a still's bytes to durable storage — same contract as
+   * `lib/plateStillBlob.ts`'s `uploadSkidmarksPlateStill`. */
+  uploadStill: (dataUrl: string) => Promise<{ ok: true; url: string } | { ok: false; message: string }>;
+  /** Renders one clip — same contract as `lib/clipGeneration.ts`'s
+   * `generateSkidmarksClip`, called with an already-built request.
+   * Deliberately has **no** `lastFrameUrl` in its success shape — this
+   * runner never reads a render's last frame for anything (rule 5: last-
+   * frame chaining is banned for identity), so there is nothing here to
+   * accidentally wire back into the next clip's plate. */
+  renderClip: (request: ReturnType<typeof buildClipGenerationRequest>) => Promise<
+    | { ok: true; videoUrl: string; persisted: boolean; persistError?: string }
+    | { ok: false; message: string }
+  >;
+  recordRender: (render: PersistedClipRender) => void;
+  setPlateStill: (segmentId: string, plateId: string, still: SkidmarksPlateStill) => void;
+  onProgress?: (event: IdentitySafeRunEvent) => void;
+}
+
+export type IdentitySafeRunOutcome =
+  | { ok: true; renderedCount: number }
+  | { ok: false; failedAtClipIndex: number; message: string; renderedCount: number; stopped?: boolean };
+
+/**
+ * Runs a whole identity-safe song render, one clip at a time, stopping
+ * dead at the first real failure and reporting exactly which clip
+ * (index) it stopped at — same "fully automatic, never blind" contract
+ * as `runScriptSequence`, but with no chaining step at all: there is
+ * nothing here that reads a render's `lastFrameUrl`, and no code path
+ * that ever treats a pre-existing plate still as "already done" — every
+ * clip's plate is (re)built fresh, every run, from that clip's own place
+ * still + identity photo. `startAtClipIndex` (default `0`) skips
+ * already-rendered clips on a resume, exactly like `runScriptSequence`'s
+ * own resume, without re-spending on them.
+ */
+export async function runIdentitySafeSongRender(
+  parts: IdentitySafeScriptPart[],
+  targets: IdentitySafeRunTarget[],
+  bandName: string,
+  currentMember: SkidmarksMember | undefined,
+  bandMembers: SkidmarksMember[],
+  mp3AudioUrl: string | undefined,
+  deps: IdentitySafeRunDeps,
+  startAtClipIndex: number = 0,
+  shouldStop?: () => boolean
+): Promise<IdentitySafeRunOutcome> {
+  const report = (event: IdentitySafeRunEvent) => deps.onProgress?.(event);
+
+  if (parts.length === 0) {
+    return { ok: false, failedAtClipIndex: 0, message: "No clips to render.", renderedCount: 0 };
+  }
+  if (parts.length !== targets.length) {
+    return {
+      ok: false,
+      failedAtClipIndex: 0,
+      message: "Script parts and the clip timeline are out of sync — rebuild the timeline before rendering.",
+      renderedCount: 0,
+    };
+  }
+
+  const startIndex = Math.max(0, Math.min(startAtClipIndex, parts.length));
+
+  for (let i = startIndex; i < parts.length; i++) {
+    if (shouldStop?.()) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: `Stopped before clip ${i + 1} — no more clips will render.`,
+        renderedCount: i,
+        stopped: true,
+      };
+    }
+
+    const part = parts[i];
+    const target = targets[i];
+
+    const identity = resolveScriptPartIdentity(part.kind, part.otherSingerName, currentMember, bandMembers);
+    if (!identity.ok) {
+      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1} ${identity.message}`, renderedCount: i };
+    }
+
+    report({ type: "resolving-place", clipIndex: i, clipCount: parts.length });
+    const place = await deps.resolvePlaceStill(part.shotPrompt, bandName);
+    if (!place.ok) {
+      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${place.message}`, renderedCount: i };
+    }
+
+    const vocal = scriptPartUsesLtx(part.kind);
+
+    report({ type: "generating-plate", clipIndex: i, clipCount: parts.length });
+    const stillOutcome = await deps.generateIdentityStill({
+      shotPrompt: part.shotPrompt,
+      bandName,
+      vocal,
+      vocalist: identity.member,
+      locationStillDataUrl: place.dataUrl,
+    });
+    if (!stillOutcome.ok) {
+      return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${stillOutcome.message}`, renderedCount: i };
+    }
+
+    const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
+    const stillUrl = uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl;
+    const still: SkidmarksPlateStill = { dataUrl: stillUrl, source: "generated", createdAt: Date.now() };
+    deps.setPlateStill(target.segmentId, target.plateId, still);
+
+    if (vocal && !mp3AudioUrl) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: `Clip ${i + 1} is Vocal, so it needs the song's real audio to drive lip sync — no attached MP3 audio is available yet.`,
+        renderedCount: i,
+      };
+    }
+
+    report({ type: "rendering", clipIndex: i, clipCount: parts.length });
+    const durationSec = computePlateDurationSec(
+      part.endSec - part.startSec,
+      1,
+      0,
+      vocal ? LTX_DURATION_BOUNDS : undefined
+    );
+
+    const request = buildClipGenerationRequest({
+      shotPrompt: part.shotPrompt,
+      bandName,
+      plateStillDataUrl: stillUrl,
+      durationSec,
+      vocal,
+      instrumentalVideoModel: vocal ? undefined : "grok",
+      vocalist: identity.member,
+      mp3AudioUrl: vocal ? mp3AudioUrl : undefined,
+      segmentId: target.segmentId,
+      plateId: target.plateId,
+      plateIndex: 0,
+      plateCount: 1,
+      clipIndex: i,
+      startSec: part.startSec,
+      endSec: part.endSec,
+    });
+
+    const outcome = await deps.renderClip(request);
+    if (!outcome.ok) {
+      return { ok: false, failedAtClipIndex: i, message: outcome.message, renderedCount: i };
+    }
+    if (!outcome.persisted) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: outcome.persistError
+          ? `Clip ${i + 1} rendered but couldn't be saved: ${outcome.persistError}`
+          : `Clip ${i + 1} rendered but couldn't be saved.`,
+        renderedCount: i,
+      };
+    }
+
+    deps.recordRender({
+      segmentId: target.segmentId,
+      plateId: target.plateId,
+      url: outcome.videoUrl,
+      filename: `${String(i + 1).padStart(2, "0")}_${part.startSec}-${part.endSec}.mp4`,
+      clipIndex: i,
+      startSec: part.startSec,
+      endSec: part.endSec,
+      // Deliberately no `lastFrameUrl` — see `IdentitySafeRunDeps
+      // .renderClip`'s doc comment. Rule 5: last-frame chaining is
+      // banned for identity, so this runner never asks for one and
+      // never has one to write into the next clip's plate.
+    });
+
+    report({ type: "clip-done", clipIndex: i, clipCount: parts.length });
+  }
+
+  return { ok: true, renderedCount: parts.length };
+}
+
 
 export interface ScriptSequenceRunnerDeps {
   /** Resolves any still's `dataUrl` (already-`data:`, or a real Blob

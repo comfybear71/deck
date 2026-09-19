@@ -1,5 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { runScriptSequence, type ScriptSequenceRunnerDeps } from "./scriptSequenceRunner";
+import {
+  parseScriptPartKind,
+  resolveScriptPartIdentity,
+  runIdentitySafeSongRender,
+  runScriptSequence,
+  scriptPartUsesLtx,
+  type IdentitySafeRunDeps,
+  type IdentitySafeScriptPart,
+  type IdentitySafeRunTarget,
+  type ScriptSequenceRunnerDeps,
+} from "./scriptSequenceRunner";
 import { buildScriptSequenceSegments } from "./skidmarks";
 import type { SkidmarksClipSegment, SkidmarksMember } from "./skidmarks";
 
@@ -529,5 +539,445 @@ describe("runScriptSequence", () => {
       }
       expect(renderClip).toHaveBeenCalledTimes(1); // clip 1 (instrumental) still rendered fine
     });
+  });
+});
+
+describe("parseScriptPartKind", () => {
+  it.each([
+    ["Vocal", "vocal"],
+    ["vocal", "vocal"],
+    ["  VOCAL  ", "vocal"],
+    ["Instrumental", "instrumental"],
+    ["Intro", "intro"],
+    ["Outro", "outro"],
+    ["Bridge", "bridge"],
+    ["Lead", "lead"],
+    ["Break", "break"],
+  ] as const)("recognizes %s as %s", (title, kind) => {
+    expect(parseScriptPartKind(title)).toEqual({ kind });
+  });
+
+  it("defaults an unrecognized or blank title to instrumental — never assumes Vocal", () => {
+    expect(parseScriptPartKind("Chorus")).toEqual({ kind: "instrumental" });
+    expect(parseScriptPartKind("")).toEqual({ kind: "instrumental" });
+    expect(parseScriptPartKind("   ")).toEqual({ kind: "instrumental" });
+  });
+
+  it.each([
+    ["Other Singer: Jax", "Jax"],
+    ["Other Singer (Jax)", "Jax"],
+    ["other-singer: Jax", "Jax"],
+    ["OTHER SINGER - Jax", "Jax"],
+  ] as const)("parses %s as other-singer named %s", (title, name) => {
+    expect(parseScriptPartKind(title)).toEqual({ kind: "other-singer", otherSingerName: name });
+  });
+
+  it("parses a bare 'Other Singer' with no name, leaving otherSingerName unset", () => {
+    expect(parseScriptPartKind("Other Singer")).toEqual({ kind: "other-singer" });
+  });
+});
+
+describe("scriptPartUsesLtx", () => {
+  it("routes only 'vocal' to LTX — rule 3/4's whole backend decision", () => {
+    expect(scriptPartUsesLtx("vocal")).toBe(true);
+    for (const kind of ["instrumental", "intro", "outro", "bridge", "lead", "break", "other-singer"] as const) {
+      expect(scriptPartUsesLtx(kind)).toBe(false);
+    }
+  });
+});
+
+describe("resolveScriptPartIdentity", () => {
+  const nova = member({ id: "nova", name: "Nova", avatarImage: "https://blob.example/nova.jpg" });
+  const jax = member({ id: "jax", name: "Jax", avatarImage: "https://blob.example/jax.jpg" });
+  const jaxNoPhoto = member({ id: "jax-no-photo", name: "Jax" });
+
+  it("rule 1: holds the current member's photo for every ordinary kind", () => {
+    for (const kind of ["vocal", "instrumental", "intro", "outro", "bridge", "lead", "break"] as const) {
+      const result = resolveScriptPartIdentity(kind, undefined, nova, [nova]);
+      expect(result).toEqual({ ok: true, member: nova });
+    }
+  });
+
+  it("rule 3: fails honestly, never inventing a face, when the current member has no photo", () => {
+    const novaNoPhoto = member({ id: "nova", name: "Nova" });
+    const result = resolveScriptPartIdentity("vocal", undefined, novaNoPhoto, [novaNoPhoto]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message.toLowerCase()).toContain("photo");
+  });
+
+  it("fails honestly when no artist is selected at all", () => {
+    const result = resolveScriptPartIdentity("vocal", undefined, undefined, []);
+    expect(result.ok).toBe(false);
+  });
+
+  it("resolves a named other-singer to that band member, never the current artist", () => {
+    const result = resolveScriptPartIdentity("other-singer", "Jax", nova, [nova, jax]);
+    expect(result).toEqual({ ok: true, member: jax });
+  });
+
+  it("resolves an unnamed other-singer when exactly one other member exists", () => {
+    const result = resolveScriptPartIdentity("other-singer", undefined, nova, [nova, jax]);
+    expect(result).toEqual({ ok: true, member: jax });
+  });
+
+  it("fails an unnamed other-singer when the band has more than one other member — never guesses", () => {
+    const ghost = member({ id: "ghost", name: "Ghost", avatarImage: "https://blob.example/ghost.jpg" });
+    const result = resolveScriptPartIdentity("other-singer", undefined, nova, [nova, jax, ghost]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("fails an unnamed other-singer when there's no other member at all", () => {
+    const result = resolveScriptPartIdentity("other-singer", undefined, nova, [nova]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("fails when the named other-singer isn't a real band member — never falls back to the current artist's photo", () => {
+    const result = resolveScriptPartIdentity("other-singer", "Ghost", nova, [nova, jax]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain("Ghost");
+  });
+
+  it("fails when the named other-singer is real but has no photo — never invents a face, never substitutes the current artist", () => {
+    const result = resolveScriptPartIdentity("other-singer", "Jax", nova, [nova, jaxNoPhoto]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message.toLowerCase()).toContain("photo");
+  });
+});
+
+/** Fully successful fake identity-safe pipeline — every dep resolves as
+ * if the real network calls behind it worked. `generateIdentityStill`
+ * echoes back which member/vocal flag it was actually called with, baked
+ * into the still's own data URL, so a test can assert on it without
+ * separately inspecting every mock call. */
+function fakeIdentityDeps(overrides: Partial<IdentitySafeRunDeps> = {}): IdentitySafeRunDeps {
+  return {
+    resolvePlaceStill: vi.fn(async (sceneText: string) => ({
+      ok: true as const,
+      dataUrl: `data:image/jpeg;base64,place-${sceneText.length}`,
+    })),
+    generateIdentityStill: vi.fn(async ({ vocalist, vocal }) => ({
+      ok: true as const,
+      dataUrl: `data:image/jpeg;base64,plate-${vocalist.id}-${vocal ? "vocal" : "novocal"}`,
+    })),
+    uploadStill: vi.fn(async (dataUrl: string) => ({ ok: true as const, url: `https://blob.example/${dataUrl.length}` })),
+    renderClip: vi.fn(async () => ({ ok: true as const, videoUrl: "https://blob.example/clip.mp4", persisted: true })),
+    recordRender: vi.fn(),
+    setPlateStill: vi.fn(),
+    onProgress: vi.fn(),
+    ...overrides,
+  };
+}
+
+describe("runIdentitySafeSongRender", () => {
+  const nova = member({ id: "nova", name: "Nova", avatarImage: "https://blob.example/nova.jpg" });
+  const jax = member({ id: "jax", name: "Jax", avatarImage: "https://blob.example/jax.jpg" });
+  const bandMembers = [nova, jax];
+
+  /** Test A's own 6-part script, spelled out as real parts: vocal, vocal,
+   * instrumental, other-singer, vocal, outro. */
+  function sixParts(): IdentitySafeScriptPart[] {
+    return [
+      { shotPrompt: "verse one, desert highway at dusk", startSec: 0, endSec: 15, kind: "vocal" },
+      { shotPrompt: "verse two, same highway", startSec: 15, endSec: 30, kind: "vocal" },
+      { shotPrompt: "instrumental break over the dashboard lights", startSec: 30, endSec: 40, kind: "instrumental" },
+      { shotPrompt: "Jax takes the mic at the roadside bar", startSec: 40, endSec: 50, kind: "other-singer", otherSingerName: "Jax" },
+      { shotPrompt: "final verse, back on the road", startSec: 50, endSec: 65, kind: "vocal" },
+      { shotPrompt: "closing wide shot of the highway at night", startSec: 65, endSec: 75, kind: "outro" },
+    ];
+  }
+
+  function sixTargets(): IdentitySafeRunTarget[] {
+    return sixParts().map((_, i) => ({ segmentId: `seg-${i}`, plateId: `plate-${i}` }));
+  }
+
+  it("acceptance test A: vocal/instrumental/outro clips hold the current artist (LTX only for the vocal ones), the other-singer clip holds the named member instead", async () => {
+    const deps = fakeIdentityDeps();
+
+    const outcome = await runIdentitySafeSongRender(
+      sixParts(),
+      sixTargets(),
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps
+    );
+
+    expect(outcome).toEqual({ ok: true, renderedCount: 6 });
+    expect(deps.renderClip).toHaveBeenCalledTimes(6);
+
+    type GenerateCall = { vocalist: SkidmarksMember; vocal: boolean };
+    const generateCalls = (deps.generateIdentityStill as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([params]) => params as GenerateCall
+    );
+    // Clips 1, 2, 5 (indices 0, 1, 4) — Vocal, current artist, LTX-framed still.
+    expect(generateCalls[0]).toMatchObject({ vocal: true });
+    expect(generateCalls[0].vocalist.id).toBe("nova");
+    expect(generateCalls[1]).toMatchObject({ vocal: true });
+    expect(generateCalls[1].vocalist.id).toBe("nova");
+    expect(generateCalls[4]).toMatchObject({ vocal: true });
+    expect(generateCalls[4].vocalist.id).toBe("nova");
+    // Clip 3 (index 2, Instrumental) — still the current artist, but not LTX-framed.
+    expect(generateCalls[2]).toMatchObject({ vocal: false });
+    expect(generateCalls[2].vocalist.id).toBe("nova");
+    // Clip 4 (index 3, other-singer) — the named member, never the current artist.
+    expect(generateCalls[3]).toMatchObject({ vocal: false });
+    expect(generateCalls[3].vocalist.id).toBe("jax");
+    // Clip 6 (index 5, Outro) — the current artist again, not LTX-framed.
+    expect(generateCalls[5]).toMatchObject({ vocal: false });
+    expect(generateCalls[5].vocalist.id).toBe("nova");
+
+    type RenderRequest = { vocal?: boolean; mp3AudioUrl?: string; videoBackend?: string };
+    const renderRequests = (deps.renderClip as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([request]) => request as RenderRequest
+    );
+    // Rule 3/4: only the real Vocal clips ever route to LTX or carry the
+    // song's real vocal audio — never the other-singer clip, even though
+    // its own shot prompt is about someone singing.
+    expect(renderRequests.map((r) => r.vocal)).toEqual([true, true, false, false, true, false]);
+    expect(renderRequests.map((r) => r.mp3AudioUrl)).toEqual([
+      "https://blob.example/song.mp3",
+      "https://blob.example/song.mp3",
+      undefined,
+      undefined,
+      "https://blob.example/song.mp3",
+      undefined,
+    ]);
+    for (const r of renderRequests.filter((r) => !r.vocal)) {
+      expect(r.videoBackend).toBe("grok");
+    }
+
+    // Rule 5: last-frame chaining is banned for identity — nothing this
+    // runner records ever carries a lastFrameUrl, and every plate still
+    // is freshly generated, never a chained frame.
+    type RecordedRender = { lastFrameUrl?: string };
+    const recordedRenders = (deps.recordRender as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([render]) => render as RecordedRender
+    );
+    expect(recordedRenders).toHaveLength(6);
+    for (const render of recordedRenders) expect(render.lastFrameUrl).toBeUndefined();
+
+    type SetStillCall = [string, string, { source: string }];
+    const stills = (deps.setPlateStill as ReturnType<typeof vi.fn>).mock.calls as SetStillCall[];
+    expect(stills).toHaveLength(6);
+    for (const [, , still] of stills) expect(still.source).toBe("generated");
+  });
+
+  it("acceptance test B: a fresh run for a different artist never references the previous artist's photo", async () => {
+    const depsForNova = fakeIdentityDeps();
+    await runIdentitySafeSongRender(
+      sixParts().slice(0, 1),
+      sixTargets().slice(0, 1),
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      depsForNova
+    );
+    expect((depsForNova.generateIdentityStill as ReturnType<typeof vi.fn>).mock.calls[0][0].vocalist.id).toBe("nova");
+
+    const ziggy = member({ id: "ziggy", name: "Ziggy", avatarImage: "https://blob.example/ziggy.jpg" });
+    const depsForZiggy = fakeIdentityDeps();
+    await runIdentitySafeSongRender(
+      sixParts(),
+      sixTargets(),
+      "Ziggy & the Static",
+      ziggy,
+      [ziggy],
+      "https://blob.example/song2.mp3",
+      depsForZiggy
+    );
+
+    const secondRunVocalistIds = (depsForZiggy.generateIdentityStill as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([params]) => (params as { vocalist: SkidmarksMember }).vocalist.id
+    );
+    expect(secondRunVocalistIds.every((id) => id === "ziggy")).toBe(true);
+    expect(secondRunVocalistIds).not.toContain("nova");
+    // The "other-singer" part in this second script has no second member
+    // to resolve to at all — it must fail honestly, never silently
+    // falling back to Ziggy or reusing Nova/Jax from the earlier run.
+    const outcome = await runIdentitySafeSongRender(
+      sixParts(),
+      sixTargets(),
+      "Ziggy & the Static",
+      ziggy,
+      [ziggy],
+      "https://blob.example/song2.mp3",
+      fakeIdentityDeps()
+    );
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("rule 1/3: fails the clip honestly (never a text-only fallback still) when the current artist has no photo, and stops the whole batch there", async () => {
+    const novaNoPhoto = member({ id: "nova", name: "Nova" });
+    const deps = fakeIdentityDeps();
+
+    const outcome = await runIdentitySafeSongRender(
+      sixParts(),
+      sixTargets(),
+      "Solar Rebel",
+      novaNoPhoto,
+      [novaNoPhoto, jax],
+      "https://blob.example/song.mp3",
+      deps
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(0);
+      expect(outcome.message.toLowerCase()).toContain("photo");
+      expect(outcome.renderedCount).toBe(0);
+    }
+    expect(deps.resolvePlaceStill).not.toHaveBeenCalled();
+    expect(deps.generateIdentityStill).not.toHaveBeenCalled();
+    expect(deps.renderClip).not.toHaveBeenCalled();
+  });
+
+  it("an other-singer clip naming someone with no photo fails only that clip, keeping every earlier clip already rendered", async () => {
+    const jaxNoPhoto = member({ id: "jax", name: "Jax" });
+    const deps = fakeIdentityDeps();
+
+    const outcome = await runIdentitySafeSongRender(
+      sixParts(),
+      sixTargets(),
+      "Solar Rebel",
+      nova,
+      [nova, jaxNoPhoto],
+      "https://blob.example/song.mp3",
+      deps
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(3);
+      expect(outcome.renderedCount).toBe(3);
+      expect(outcome.message.toLowerCase()).toContain("photo");
+    }
+    expect(deps.renderClip).toHaveBeenCalledTimes(3);
+  });
+
+  it("an other-singer clip naming someone outside the band fails that clip rather than falling back to the current artist", async () => {
+    const parts: IdentitySafeScriptPart[] = [
+      { shotPrompt: "a stranger grabs the mic", startSec: 0, endSec: 10, kind: "other-singer", otherSingerName: "Ghost" },
+    ];
+    const targets: IdentitySafeRunTarget[] = [{ segmentId: "seg-0", plateId: "plate-0" }];
+    const deps = fakeIdentityDeps();
+
+    const outcome = await runIdentitySafeSongRender(parts, targets, "Solar Rebel", nova, bandMembers, undefined, deps);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(0);
+      expect(outcome.message).toContain("Ghost");
+    }
+    expect(deps.generateIdentityStill).not.toHaveBeenCalled();
+  });
+
+  it("rule 3: a failed place still fails the whole plate, never falling back to a text-only still", async () => {
+    const deps = fakeIdentityDeps({
+      resolvePlaceStill: vi.fn(async () => ({ ok: false as const, message: "xAI rate limit reached." })),
+    });
+
+    const outcome = await runIdentitySafeSongRender(
+      sixParts().slice(0, 1),
+      sixTargets().slice(0, 1),
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(0);
+      expect(outcome.message).toContain("rate limit");
+    }
+    expect(deps.generateIdentityStill).not.toHaveBeenCalled();
+    expect(deps.renderClip).not.toHaveBeenCalled();
+  });
+
+  it("fails a Vocal clip honestly when no song audio is attached, rather than sending an unfulfillable LTX request", async () => {
+    const deps = fakeIdentityDeps();
+
+    const outcome = await runIdentitySafeSongRender(
+      sixParts().slice(0, 1),
+      sixTargets().slice(0, 1),
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      undefined,
+      deps
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.message).toContain("Vocal");
+    expect(deps.renderClip).not.toHaveBeenCalled();
+  });
+
+  it("resumes at startAtClipIndex, never touching earlier clips", async () => {
+    const deps = fakeIdentityDeps();
+
+    const outcome = await runIdentitySafeSongRender(
+      sixParts(),
+      sixTargets(),
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps,
+      4
+    );
+
+    expect(outcome).toEqual({ ok: true, renderedCount: 6 });
+    expect(deps.renderClip).toHaveBeenCalledTimes(2); // clips 5 and 6 only
+  });
+
+  it("stops before the next clip once shouldStop returns true, never mid-render", async () => {
+    const deps = fakeIdentityDeps();
+    let stopNow = false;
+    deps.renderClip = vi.fn(async () => {
+      stopNow = true;
+      return { ok: true as const, videoUrl: "https://blob.example/clip.mp4", persisted: true };
+    });
+
+    const outcome = await runIdentitySafeSongRender(
+      sixParts().slice(0, 3),
+      sixTargets().slice(0, 3),
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps,
+      0,
+      () => stopNow
+    );
+
+    expect(outcome).toEqual({
+      ok: false,
+      stopped: true,
+      failedAtClipIndex: 1,
+      message: "Stopped before clip 2 — no more clips will render.",
+      renderedCount: 1,
+    });
+    expect(deps.renderClip).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns an honest failure for an empty part list rather than silently succeeding", async () => {
+    const outcome = await runIdentitySafeSongRender([], [], "Solar Rebel", nova, bandMembers, undefined, fakeIdentityDeps());
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("returns an honest failure when parts and targets are out of sync", async () => {
+    const outcome = await runIdentitySafeSongRender(
+      sixParts(),
+      sixTargets().slice(0, 3),
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      undefined,
+      fakeIdentityDeps()
+    );
+    expect(outcome.ok).toBe(false);
   });
 });
