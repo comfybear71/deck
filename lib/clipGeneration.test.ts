@@ -420,6 +420,66 @@ describe("buildClipGenerationRequest", () => {
       expect(request.audioEndSec).toBeUndefined();
     });
 
+    /**
+     * Real reported bug (2026-09-19): a second band's singer was given a
+     * lock card in the app — the supported way to lock a new artist —
+     * and his rendered clips came back in a wide-brim fedora with
+     * glowing neon-blue lips. Jack Ash's look, on a completely
+     * different person. Three Jack-specific strings were module
+     * constants applied to *any* locked character, so writing any lock
+     * card silently opted that member into Jack's shadow-face treatment.
+     */
+    it("does not put Jack Ash's fedora, shadow face or neon lips on a different artist's lock card", () => {
+      const soulRebel = member({
+        id: "solar-rebel-vocalist",
+        name: "Soul Rebel",
+        role: "Vocals",
+        lock: {
+          lookRules: "Long sandy dreadlocks, full beard, round purple sunglasses, beaded necklaces.",
+          neverShow: "a woman, a second person",
+        },
+      });
+      const request = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "singing at a vintage microphone",
+        bandName: "Solar Rebel",
+        plateStillDataUrl: "data:image/jpeg;base64,soul",
+        durationSec: 10,
+        vocalist: soulRebel,
+      });
+      const prompt = request.prompt.toLowerCase();
+
+      // The reported symptoms, each pinned.
+      expect(prompt).not.toContain("neon");
+      expect(prompt).not.toContain("fedora");
+      expect(prompt).not.toContain("shadow-face");
+      expect(prompt).not.toContain("watchable stare");
+      expect(prompt).not.toContain("hat-brim");
+      expect(prompt).not.toContain("silhouette");
+      expect(request.negativePrompt ?? "").not.toMatch(/neon|fedora/i);
+
+      // He still gets his own lock text and the standard Vocal wrap —
+      // this must not fix the leak by dropping his lock entirely.
+      expect(prompt).toContain("dreadlocks");
+      expect(prompt).toContain("perfect lip sync");
+      expect(request.negativePrompt ?? "").toContain("a woman");
+    });
+
+    it("still gives an unlocked vocalist the plain Vocal wrap, with no locked-character text at all", () => {
+      const plain = member({ id: "nova", name: "Nova", role: "Vocals" });
+      const request = buildClipGenerationRequest({
+        vocal: true,
+        shotPrompt: "singing at a vintage microphone",
+        bandName: "Solar Rebel",
+        plateStillDataUrl: "data:image/jpeg;base64,nova",
+        durationSec: 10,
+        vocalist: plain,
+      });
+      expect(request.prompt).toContain("perfect lip sync");
+      expect(request.prompt.toLowerCase()).not.toContain("neon");
+      expect(request.prompt.toLowerCase()).not.toContain("fedora");
+    });
+
     it("injects Jack Ash's video-specific hallmarks plus the 'mouth in frame' note when he's the vocalist, and sends his negative cues on a real, separate channel instead of inline", () => {
       const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
       const request = buildClipGenerationRequest({
