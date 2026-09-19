@@ -1248,6 +1248,104 @@ describe("runGeneratePlates", () => {
     expect(deps.generateIdentityStill).not.toHaveBeenCalled();
     expect(deps.resolvePlaceStill).not.toHaveBeenCalled();
   });
+  it("after remint (new ids, same start/end): skips plated ranges and only builds new parts", async () => {
+    const deps = fakePlatesDeps();
+    const plated = buildScriptSequenceSegments(
+      [
+        { index: 1, title: "Intro", startSec: 0, endSec: 10, prompt: "old-1" },
+        { index: 2, title: "Vocal", startSec: 10, endSec: 20, prompt: "old-2" },
+        { index: 3, title: "Outro", startSec: 20, endSec: 30, prompt: "old-3" },
+      ],
+      []
+    );
+    for (let i = 0; i < plated.length; i++) {
+      plated[i] = {
+        ...plated[i],
+        plates: [
+          {
+            id: plated[i].plates[0].id,
+            still: {
+              dataUrl: `https://blob.example/keep-${i}.jpg`,
+              source: "generated",
+              createdAt: 1,
+            },
+          },
+        ],
+      };
+    }
+
+    const grown = buildScriptSequenceSegments(
+      [
+        { index: 1, title: "Intro", startSec: 0, endSec: 10, prompt: "new-1" },
+        { index: 2, title: "Vocal", startSec: 10, endSec: 20, prompt: "new-2" },
+        { index: 3, title: "Outro", startSec: 20, endSec: 30, prompt: "new-3" },
+        { index: 4, title: "Instrumental", startSec: 30, endSec: 40, prompt: "new-4" },
+        { index: 5, title: "Vocal", startSec: 40, endSec: 50, prompt: "new-5" },
+      ],
+      plated
+    );
+
+    const identityParts: IdentitySafeScriptPart[] = grown.map((seg, i) => ({
+      shotPrompt: seg.shotPrompt,
+      startSec: seg.startSec,
+      endSec: seg.endSec,
+      kind: i === 1 || i === 4 ? "vocal" : i === 3 ? "instrumental" : i === 0 ? "intro" : "outro",
+    }));
+
+    const avatars = [nova.avatarImage, jax.avatarImage];
+    const plateTargets: GeneratePlatesTarget[] = grown.map((seg) => {
+      const plate = seg.plates[0];
+      const hasFinishedVideo = false;
+      const existingPlateStillUrl =
+        !hasFinishedVideo && plateStillCountsAsReady(plate?.still, avatars)
+          ? plate?.still?.dataUrl
+          : undefined;
+      return {
+        segmentId: seg.id,
+        plateId: plate.id,
+        existingPlateStillUrl,
+        hasFinishedVideo,
+      };
+    });
+
+    const outcome = await runGeneratePlates(
+      identityParts,
+      plateTargets,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      deps
+    );
+
+    expect(outcome).toEqual({ ok: true, platedCount: 2, skippedCount: 3 });
+    expect(deps.setPlateStill).toHaveBeenCalledTimes(2);
+    const setIds = (deps.setPlateStill as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(setIds).toEqual([grown[3].id, grown[4].id]);
+    // Carried stills must not have been overwritten
+    expect(setIds.includes(grown[0].id)).toBe(false);
+    expect(setIds.includes(grown[1].id)).toBe(false);
+    expect(setIds.includes(grown[2].id)).toBe(false);
+  });
+
+  it("never overwrites finished video or existing still when times match", async () => {
+    const deps = fakePlatesDeps();
+    const identityParts = parts();
+    const plateTargets = targets([
+      { hasFinishedVideo: true },
+      { existingPlateStillUrl: "https://blob.example/keep.jpg" },
+      {},
+    ]);
+    const outcome = await runGeneratePlates(
+      identityParts,
+      plateTargets,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      deps
+    );
+    expect(outcome).toEqual({ ok: true, platedCount: 1, skippedCount: 2 });
+    expect((deps.setPlateStill as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toEqual(["seg-2"]);
+  });
 });
 
 describe("plateStillCountsAsReady", () => {

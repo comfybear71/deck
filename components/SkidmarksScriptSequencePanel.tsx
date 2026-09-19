@@ -33,7 +33,7 @@ import {
   type GeneratePlatesTarget,
   type IdentitySafeScriptPart,
 } from "@/lib/scriptSequenceRunner";
-import { persistedRenderKey, type PersistedClipRender } from "@/lib/clipRenders";
+import { findPersistedRenderForClip, type PersistedClipRender } from "@/lib/clipRenders";
 
 /** Native file picker's accept list — jpg/png/webp only, matches every
  * other photo picker in this feature. */
@@ -58,7 +58,7 @@ interface SkidmarksScriptSequencePanelProps {
    * yet, or if the run has no Vocal parts at all. */
   mp3AudioUrl?: string;
   /** Every persisted render across the whole song, keyed by
-   * `persistedRenderKey(segmentId, plateId)` — the same map
+   * `(segmentId, plateId)` (and time-range fallback) — the same map
    * `SkidmarksClipTimeline` already reads (`useSkidmarksClipRenders`).
    * This is the durable, reload-proof way of finding "where a partial
    * run stopped" (see `incompleteRun` below), rather than relying on
@@ -197,7 +197,14 @@ export function SkidmarksScriptSequencePanel({
     if (realSegments.length === 0) return undefined;
     const resumeIndex = realSegments.findIndex((segment) => {
       const plate = segment.plates[0];
-      return !plate || !renders.has(persistedRenderKey(segment.id, plate.id));
+      if (!plate) return true;
+      return !findPersistedRenderForClip(
+        renders,
+        segment.id,
+        plate.id,
+        segment.startSec,
+        segment.endSec
+      );
     });
     if (resumeIndex <= 0) return undefined;
     return { resumeIndex, total: realSegments.length };
@@ -362,7 +369,13 @@ export function SkidmarksScriptSequencePanel({
     const clip0Plate = segments[0]?.plates[0];
     const clip0Ready =
       !!clip0Plate &&
-      (renders.has(persistedRenderKey(segments[0].id, clip0Plate.id)) ||
+      (!!findPersistedRenderForClip(
+        renders,
+        segments[0].id,
+        clip0Plate.id,
+        segments[0].startSec,
+        segments[0].endSec
+      ) ||
         plateStillCountsAsReady(clip0Plate.still, memberAvatarUrls));
 
     // Mirror clip-1 upload onto the plate only when clip 1 still needs a
@@ -382,10 +395,16 @@ export function SkidmarksScriptSequencePanel({
       flushSkidmarksSessionNow();
     }
 
+    // Skip detection must not rely on reminted segment ids alone — match
+    // finished videos by startSec/endSec too (see findPersistedRenderForClip).
+    // Stills ride on the segment after buildScriptSequenceSegments re-attach.
     const targets: GeneratePlatesTarget[] = segments.map((segment) => {
       const plate = segment.plates[0];
       const plateId = plate?.id ?? "";
-      const hasFinishedVideo = !!(plate && renders.has(persistedRenderKey(segment.id, plateId)));
+      const hasFinishedVideo = !!(
+        plate &&
+        findPersistedRenderForClip(renders, segment.id, plateId, segment.startSec, segment.endSec)
+      );
       const existingPlateStillUrl =
         !hasFinishedVideo && plateStillCountsAsReady(plate?.still, memberAvatarUrls)
           ? plate?.still?.dataUrl
@@ -460,8 +479,14 @@ export function SkidmarksScriptSequencePanel({
   const handleBuildTimeline = () => {
     if (running || parts.length === 0) return;
 
+    // Re-attach existing stills/videos by time via buildScriptSequenceSegments —
+    // never wipe plated ranges when the script grows or Build timeline re-runs.
     const segments = buildScriptSequenceSegments(parts, realSegments);
     onSetScriptSequence(segments);
+
+    const memberAvatarUrls = band.members
+      .map((m) => m.avatarImage)
+      .filter((u): u is string => typeof u === "string" && u.trim().length > 0);
 
     const vocalist = resolveVocalistForPrompt(band.members);
     const lock = vocalist ? getSkidmarksCharacterLock(vocalist) : undefined;
@@ -469,6 +494,11 @@ export function SkidmarksScriptSequencePanel({
       for (const segment of segments) {
         const plate = segment.plates[0];
         if (!plate) continue;
+        // Leave real stills and finished videos alone — preview is only for empty slots.
+        if (plateStillCountsAsReady(plate.still, memberAvatarUrls)) continue;
+        if (findPersistedRenderForClip(renders, segment.id, plate.id, segment.startSec, segment.endSec)) {
+          continue;
+        }
         onSetClipPlateStill(segment.id, plate.id, {
           dataUrl: vocalist.avatarImage,
           source: "generated",
