@@ -730,6 +730,123 @@ because that path's prompts are camera-position only
 the thing that was winning. Flagging the gap rather than implying the
 whole app is ported.
 
+## The identity-safe one-button song render (`runIdentitySafeSongRender`, 2026-09-19)
+
+**Real reported bug, same day as the "Holding one artist" fix above,
+worse:** even with the two-image place+identity composite in place, a
+render chained from a *previous render's own last frame* could still
+drift off the artist — each hop is a real re-generation by a video
+model, not a copy, and small drift compounds across a run. The
+script-sequence "Generate" button (`components/
+SkidmarksScriptSequencePanel.tsx`, `lib/scriptSequenceRunner.ts`'s
+`runScriptSequence`) chained exactly that way, on purpose, per Stuart's
+own 2026-09-16 "keep chaining, the camera-motion fixes were the real
+problem" call — right call for a *locked* character with a shadow-face
+lock holding the shot steady, wrong call the moment the same button
+renders an ordinary artist with no lock at all.
+
+**`lib/scriptSequenceRunner.ts` now has two runners, not one, and
+`runScriptSequence` was deliberately left untouched** rather than
+rewritten in place — its own existing test suite
+(`lib/scriptSequenceRunner.test.ts`) pins real, wanted Jack-Ash
+scene-block-chaining behavior that depends on exactly the chaining
+mechanism this fix needs to stop using elsewhere. `runIdentitySafeSongRender`
+is the new, second runner; `SkidmarksScriptSequencePanel`'s "Generate"
+and "Resume" buttons now call it exclusively (for every band, Jack Ash
+included — see below), while `runScriptSequence` itself stays real,
+tested, working code that nothing in the UI calls anymore.
+
+**What it does differently, concretely:**
+- **Never chains a last frame into the next clip's plate.** Every
+  clip, every run, builds its own plate fresh from exactly two images —
+  an empty place still generated from that clip's own shot prompt
+  (`lib/plateLocation.ts`) and a real identity photo — never a
+  previous render's closing frame. `IdentitySafeRunDeps.renderClip`'s
+  own contract has no `lastFrameUrl` field at all, structurally, so
+  there is nothing to accidentally wire back in.
+- **Script labels, not the song's real measured audio, pick the
+  backend per clip** (`SkidmarksScriptPartKind`/`parseScriptPartKind`,
+  reading the existing `Part N (start - end) — Title[Duration: ...]`
+  format's own `Title` word: `Vocal`, `Instrumental`, `Intro`, `Outro`,
+  `Bridge`, `Lead`, `Break`, or `Other Singer: <name>`). Only a
+  `"Vocal"`-titled part ever renders LTX/Comfy Cloud with the song's
+  real vocal audio; every other kind renders Grok/H3 with no vocal
+  audio at all — a real, deliberate difference from `runScriptSequence`'s
+  own `resolveScriptPartVocal`, which routes off the song's actually
+  measured singing instead. An unrecognized/blank title defaults to
+  `instrumental` (never assumes Vocal).
+- **"Photo is the lock" — no new `SKIDMARKS_CHARACTER_LOCKS` entry for
+  an unlocked artist.** `resolveScriptPartIdentity` decides whose photo
+  a clip holds purely off `SkidmarksMember.avatarImage`: the current
+  artist (`resolveVocalistForPrompt(band.members)`) for every ordinary
+  kind, or — for an `"Other Singer: <name>"` part — that *named* band
+  member's own photo, resolved by name (case-insensitive), falling back
+  to "the one other named member" only when the band has exactly one
+  and the script didn't name anyone. Never falls back to the current
+  artist's photo for a named-other-singer part, and never invents a
+  face: either resolved member missing `avatarImage`, or a failed place
+  still, fails that one clip outright and stops the whole batch there
+  (reporting the real clip index and reason) — no text-only,
+  no-identity fallback still, ever.
+- **Jack Ash's own lock (`SKIDMARKS_CHARACTER_LOCKS`) is untouched and
+  still applies** whenever he's the resolved identity for a clip
+  (`buildPlateGenerationRequest`/`buildClipGenerationRequest` already
+  merge a member's registered lock in whenever they're the `vocalist`
+  param, regardless of which runner called them) — this fix changes
+  *which photo/frame a clip starts from and which backend it uses*,
+  never the lock text itself.
+- **Removed**: the old "upload clip 1's own starting image" control on
+  this panel. It let a render start from an arbitrary photo with no
+  place still and no resolved identity behind it — exactly the kind of
+  un-composited start image this fix makes structurally impossible
+  elsewhere — so keeping the button while the new runner silently
+  overwrote whatever it uploaded would have been misleading. "Build
+  timeline"'s existing locked-character photo pre-fill stays (still
+  free, still just a preview) — the runner always rebuilds every
+  clip's real starting image at render time regardless of what a
+  preview left on the plate.
+- **Session-level defense in depth** (`lib/skidmarks.ts`): every
+  function that swaps the active band and/or attached song wholesale
+  (`selectSkidmarksBand`, `createSkidmarksBand`, `removeSkidmarksBand`
+  when the removed band was active, `attachSkidmarksMp3`,
+  `restoreSkidmarksArchivedSession`, `resetSkidmarksSessionAfterArchive`)
+  now also fires a small listener registry
+  (`registerSkidmarksIdentityWipeListener`/a private
+  `notifySkidmarksIdentityWipe`) that `lib/plateLocation.ts` registers
+  itself against at module load to clear its in-memory empty-place-still
+  cache. Every real plate still/render for the previous artist was
+  already gone the instant one of those functions ran — they replace
+  `session.mp3` wholesale, never merge it, and that's where every
+  still/continuity flag/chained frame actually lived — so this listener
+  only covers the one piece of state that survives a fresh `mp3`
+  because it was never part of it: a cached place still keyed only by
+  scene text, which itself never contains a person, so this is
+  defense-in-depth, not the fix for a reproduced leak. A plain listener
+  registry rather than `lib/skidmarks.ts` importing `lib/plateLocation.ts`
+  directly, since that would be circular (`plateLocation.ts` already
+  imports from `lib/skidmarks.ts`).
+- **A cosmetic gap, not a correctness one**: the timeline segments this
+  panel still mints via the unchanged `buildScriptSequenceSegments`
+  keep their own `label`/`model` fields computed off the song's real
+  audio (unchanged, since other tests depend on that function's
+  existing behavior) — `SkidmarksClipTimeline`'s Vocal/Instrumental
+  chip can therefore show a label that doesn't match what this runner
+  actually rendered that clip as. The identity-safe runner never reads
+  those fields; it decides everything itself from the script's own
+  title words. Not fixed in this pass because it's cosmetic display
+  only, not a wiring bug — flagging it rather than leaving it
+  undiscoverable.
+- **Honesty note**: not live-verified against a real xAI/Comfy Cloud
+  call in this sandbox — same caveat as every other real-but-unverified
+  backend call in this file. Covered instead by unit tests
+  (`lib/scriptSequenceRunner.test.ts`) that inject fakes for every real
+  network call and assert the routing/identity/no-chaining invariants
+  directly, including the two acceptance scenarios this fix was built
+  against (an artist's own Vocal/Instrumental/Outro clips holding their
+  photo with LTX reserved for Vocal only, a named other-singer clip
+  holding a different member's photo, and a second, independent run for
+  a different artist never referencing the first artist's photo at all).
+
 ## Prompt-length validation: user text only, never the injected framing
 
 `MAX_PROMPT_LENGTH` (2000 chars — both `generate-still` and
