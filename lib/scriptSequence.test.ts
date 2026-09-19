@@ -296,13 +296,28 @@ describe("buildScriptSequenceHighlightSegments", () => {
     const segments = buildScriptSequenceHighlightSegments(raw);
     expect(segments.map((s) => s.text).join("")).toBe(raw);
     expect(segments.some((s) => s.kind === "instrumental" && s.text.trim() === "Instrumental")).toBe(true);
-    expect(segments.some((s) => s.kind === "prompt-label" && /Positive\s*Prompt/i.test(s.text))).toBe(true);
-    expect(segments.some((s) => s.kind === "prompt-label" && /Negative\s*Prompt/i.test(s.text))).toBe(true);
+    expect(segments.some((s) => s.kind === "positive-prompt" && /Positive\s*Prompt/i.test(s.text))).toBe(true);
+    expect(segments.some((s) => s.kind === "negative-prompt" && /Negative\s*Prompt/i.test(s.text))).toBe(true);
     expect(segments.some((s) => s.kind === "plain" && s.text.includes("Wide shot"))).toBe(true);
   });
 
-  it("legend is Vocal | Instrumental only — no Intro/Outro/Bridge chips", () => {
-    expect(SCRIPT_SEQUENCE_COLOUR_TAGS.map((t) => t.label)).toEqual(["Vocal", "Instrumental"]);
+  it("legend is Part 24 field keys only — no Intro/Outro/Bridge/Other Singer chips", () => {
+    expect(SCRIPT_SEQUENCE_COLOUR_TAGS.map((t) => t.label)).toEqual([
+      "Part",
+      "Vocal",
+      "Instrumental",
+      "Duration",
+      "Positive Prompt",
+      "Negative Prompt",
+    ]);
+    expect(SCRIPT_SEQUENCE_COLOUR_TAGS.map((t) => t.kind)).toEqual([
+      "part",
+      "vocal",
+      "instrumental",
+      "duration",
+      "positive-prompt",
+      "negative-prompt",
+    ]);
     for (const tag of SCRIPT_SEQUENCE_COLOUR_TAGS) {
       const className = SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[tag.kind];
       expect(className).toBeTruthy();
@@ -310,6 +325,11 @@ describe("buildScriptSequenceHighlightSegments", () => {
     }
     for (const className of Object.values(SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES)) {
       expect(className).not.toMatch(/\/0$/);
+    }
+    // Section aliases / Other Singer must not appear as legend chips.
+    const labels = SCRIPT_SEQUENCE_COLOUR_TAGS.map((t) => t.label.toLowerCase());
+    for (const banned of ["intro", "outro", "bridge", "lead", "break", "other singer"]) {
+      expect(labels).not.toContain(banned);
     }
   });
 });

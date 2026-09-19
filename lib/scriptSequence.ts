@@ -242,7 +242,8 @@ export type ScriptSequenceHighlightKind =
   | "vocal"
   | "instrumental"
   | "duration"
-  | "prompt-label"
+  | "positive-prompt"
+  | "negative-prompt"
   | "other-singer";
 
 export type ScriptSequenceHighlightSegment =
@@ -275,7 +276,8 @@ function pushPlain(segments: ScriptSequenceHighlightSegment[], text: string) {
  *   Part N (m:ss - m:ss) — …   → part
  *   Vocal | Instrumental       → vocal / instrumental
  *   [Duration: Xs]             → duration
- *   Positive Prompt: / Negative Prompt: → prompt-label
+ *   Positive Prompt:               → positive-prompt
+ *   Negative Prompt:               → negative-prompt
  * Shot prose stays plain. Concatenating every segment's `text`
  * reconstructs `raw` exactly.
  */
@@ -307,7 +309,7 @@ export function buildScriptSequenceHighlightSegments(raw: string): ScriptSequenc
   return segments;
 }
 
-/** Colour Positive/Negative Prompt labels inside [start, end). */
+/** Colour Positive/Negative Prompt labels inside [start, end) as separate kinds. */
 function colourPromptLabelsInRange(
   raw: string,
   start: number,
@@ -322,7 +324,11 @@ function colourPromptLabelsInRange(
     if (m.index > localLast) {
       pushPlain(segments, slice.slice(localLast, m.index));
     }
-    segments.push({ kind: "prompt-label", text: m[0] });
+    const label = m[0];
+    const kind: Exclude<ScriptSequenceHighlightKind, "plain"> = /negative/i.test(label)
+      ? "negative-prompt"
+      : "positive-prompt";
+    segments.push({ kind, text: label });
     localLast = m.index + m[0].length;
   }
   if (localLast < slice.length) {
@@ -337,12 +343,21 @@ export const SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES: Record<ScriptSequenceHighlightKi
   vocal: "text-rose-300",
   instrumental: "text-zinc-300",
   duration: "text-amber-300",
-  "prompt-label": "text-emerald-300",
+  "positive-prompt": "text-emerald-300",
+  "negative-prompt": "text-violet-300",
   "other-singer": "text-fuchsia-300",
 };
 
-/** Colour-tag legend chips — Vocal | Instrumental only (display). */
+/**
+ * Colour-tag legend chips for real Part 24 script fields only.
+ * Intro/Outro/Bridge/Lead/Break/Other Singer are not legend keys
+ * (Format maps the section aliases → Instrumental).
+ */
 export const SCRIPT_SEQUENCE_COLOUR_TAGS: { label: string; kind: ScriptSequenceHighlightKind }[] = [
+  { label: "Part", kind: "part" },
   { label: "Vocal", kind: "vocal" },
   { label: "Instrumental", kind: "instrumental" },
+  { label: "Duration", kind: "duration" },
+  { label: "Positive Prompt", kind: "positive-prompt" },
+  { label: "Negative Prompt", kind: "negative-prompt" },
 ];
