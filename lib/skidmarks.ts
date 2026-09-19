@@ -168,6 +168,13 @@ import {
   type SkidmarksTranscriptionProvider,
 } from "./transcription";
 import { uploadSkidmarksMemberPhoto } from "./memberPhotoBlob";
+import {
+  appendKeptStillToSleeve,
+  buildLibraryPlateStill,
+  normalizeMemberStillSleeve,
+  type SkidmarksMemberSleeveEntry,
+} from "./memberStillSleeve";
+export type { SkidmarksMemberSleeveEntry } from "./memberStillSleeve";
 import { uploadSkidmarksPlateStill } from "./plateStillBlob";
 import type { ScriptSequencePart } from "./scriptSequence";
 import {
@@ -250,6 +257,16 @@ export interface SkidmarksMember {
    * lock for that member). Blank/absent means "no lock" for a new
    * artist, or the built-in one for Jack. */
   lock?: SkidmarksMemberLockCard;
+  /**
+   * Artist still sleeve — plate stills Stuart marked **Keep** for this
+   * member (Blob https URLs). Lives on the member, not the song, so
+   * switching MP3s never clears it. Avatar is resolved into the visible
+   * sleeve at read time (`resolveMemberStillSleeve`) and is not stored
+   * twice here. Prefer `keepSkidmarksMemberSleeveStill` /
+   * `applySkidmarksMemberSleeveStillToPlate` over writing this field
+   * directly.
+   */
+  stillSleeve?: SkidmarksMemberSleeveEntry[];
 }
 
 /**
@@ -732,7 +749,7 @@ export interface SkidmarksPlateStill {
    * through a whole song instead of every clip starting from an
    * unrelated fresh still. Only ever auto-set onto a plate slot that was
    * still empty; never overwrites a still Stuart already has there. */
-  source: "upload" | "generated" | "chained";
+  source: "upload" | "generated" | "chained" | "library";
   createdAt: number;
   /** Whether *this* still is already known to feature a locked character
    * (Jack Ash today — `lib/plateGeneration.ts`'s `SKIDMARKS_CHARACTER_LOCKS`)
@@ -1531,7 +1548,7 @@ function normalizeSkidmarksStill(value: unknown): SkidmarksPlateStill | undefine
     v.dataUrl.startsWith("http://") ||
     v.dataUrl.startsWith("/");
   if (!hasKnownPrefix) return undefined;
-  if (v.source !== "upload" && v.source !== "generated" && v.source !== "chained") return undefined;
+  if (v.source !== "upload" && v.source !== "generated" && v.source !== "chained" && v.source !== "library") return undefined;
   if (typeof v.createdAt !== "number") return undefined;
   const still: SkidmarksPlateStill = { dataUrl: v.dataUrl, source: v.source, createdAt: v.createdAt };
   if (v.featuresLockedCharacter === true) still.featuresLockedCharacter = true;
@@ -1615,12 +1632,27 @@ function normalizeState(parsed: unknown): SkidmarksState {
   const seedIds = new Set(SEED_BANDS.map((b) => b.id));
   const storedBands = Array.isArray(p.bands) ? (p.bands as SkidmarksBand[]) : [];
   const extraBands = storedBands.filter((b) => b && !seedIds.has(b.id));
-  const bands = [
+  const bandsRaw = [
     ...SEED_BANDS.filter((seed) => !removedSeedSet.has(seed.id)).map(
       (seed) => storedBands.find((b) => b?.id === seed.id) ?? seed
     ),
     ...extraBands,
   ];
+  const bands = bandsRaw.map((band) => {
+    if (!band || !Array.isArray(band.members)) return band;
+    const members = band.members.map((member) => {
+      if (!member || typeof member !== "object") return member;
+      const m = member as SkidmarksMember;
+      if (m.stillSleeve === undefined) return m;
+      const stillSleeve = normalizeMemberStillSleeve(m.stillSleeve);
+      if (!stillSleeve) {
+        const { stillSleeve: _drop, ...rest } = m;
+        return rest;
+      }
+      return { ...m, stillSleeve };
+    });
+    return { ...band, members };
+  });
   const session: Partial<SkidmarksSession> = p.session ?? {};
   const bandId = typeof session.bandId === "string" ? session.bandId : null;
   const stillHasBand = bandId !== null && bands.some((b) => b.id === bandId);
@@ -2268,11 +2300,32 @@ async function migrateInlineSessionImagesToBlob(
       }
       const members = await Promise.all(
         band.members.map(async (member) => {
-          if (!member.avatarImage?.startsWith("data:")) return member;
-          const outcome = await uploadSkidmarksMemberPhoto(member.avatarImage);
-          if (!outcome.ok) return member;
-          changed = true;
-          return { ...member, avatarImage: outcome.url };
+          let next = member;
+          if (member.avatarImage?.startsWith("data:")) {
+            const outcome = await uploadSkidmarksMemberPhoto(member.avatarImage);
+            if (outcome.ok) {
+              changed = true;
+              next = { ...next, avatarImage: outcome.url };
+            }
+          }
+          const sleeve = next.stillSleeve;
+          if (sleeve && sleeve.some((e) => e.dataUrl.startsWith("data:"))) {
+            const migratedSleeve = [];
+            for (const entry of sleeve) {
+              if (!entry.dataUrl.startsWith("data:")) {
+                migratedSleeve.push(entry);
+                continue;
+              }
+              const outcome = await uploadSkidmarksMemberPhoto(entry.dataUrl);
+              if (outcome.ok) {
+                changed = true;
+                migratedSleeve.push({ ...entry, dataUrl: outcome.url });
+              }
+              // Drop unsyncable inline bytes rather than re-embedding them.
+            }
+            next = { ...next, stillSleeve: migratedSleeve.length > 0 ? migratedSleeve : undefined };
+          }
+          return next;
         })
       );
       return { ...band, coverImage: nextCoverImage, members };
@@ -2328,9 +2381,18 @@ export function stripUnsyncableImageBytesForWire(state: SkidmarksState): Skidmar
   const bands = state.bands.map((band) => {
     const coverChanged = band.coverImage?.startsWith("data:") ?? false;
     const members = band.members.map((member) => {
-      if (!member.avatarImage?.startsWith("data:")) return member;
-      changed = true;
-      return { ...member, avatarImage: undefined };
+      let next = member;
+      if (member.avatarImage?.startsWith("data:")) {
+        changed = true;
+        next = { ...next, avatarImage: undefined };
+      }
+      const sleeve = next.stillSleeve;
+      if (sleeve && sleeve.some((e) => e.dataUrl.startsWith("data:"))) {
+        changed = true;
+        const cleaned = sleeve.filter((e) => !e.dataUrl.startsWith("data:"));
+        next = { ...next, stillSleeve: cleaned.length > 0 ? cleaned : undefined };
+      }
+      return next;
     });
     if (!coverChanged && members === band.members) return band;
     changed = changed || coverChanged;
@@ -3293,6 +3355,50 @@ export function setSkidmarksMemberAvatarImage(
     };
   });
   persist({ ...current, bands });
+}
+
+/**
+ * **Keep** — adds a plate still's Blob URL into this member's sleeve.
+ * No generate-still call. No-ops when the URL is blank, already the
+ * avatar, or already kept. Sleeve survives song switches (lives on the
+ * member, not `session.mp3`).
+ */
+export function keepSkidmarksMemberSleeveStill(
+  bandId: string,
+  memberId: string,
+  dataUrl: string
+): void {
+  const current = getSkidmarksSnapshot();
+  const bands = current.bands.map((b) => {
+    if (b.id !== bandId) return b;
+    return {
+      ...b,
+      members: b.members.map((m) => {
+        if (m.id !== memberId) return m;
+        const stillSleeve = appendKeptStillToSleeve(m, dataUrl, () => generateId("sleeve"));
+        const prevUrls = (m.stillSleeve ?? []).map((e) => e.dataUrl).join("|");
+        const nextUrls = stillSleeve.map((e) => e.dataUrl).join("|");
+        if (prevUrls === nextUrls) return m;
+        return { ...m, stillSleeve };
+      }),
+    };
+  });
+  persist({ ...current, bands });
+}
+
+/**
+ * Pick a sleeve still onto a plate slot — free apply (`source:
+ * "library"`), never a generate-still API call. Generate plates then
+ * skips that row like an approved still.
+ */
+export function applySkidmarksMemberSleeveStillToPlate(
+  segmentId: string,
+  plateId: string,
+  dataUrl: string
+): void {
+  const url = typeof dataUrl === "string" ? dataUrl.trim() : "";
+  if (!url) return;
+  setSkidmarksClipPlateStill(segmentId, plateId, buildLibraryPlateStill(url));
 }
 
 export function attachSkidmarksMp3(mp3: SkidmarksMp3Attachment): void {

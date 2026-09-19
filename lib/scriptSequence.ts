@@ -163,36 +163,35 @@ export function parseScriptSequence(script: string): ScriptSequencePart[] {
  * set `parseScriptPartKind` / `lib/scriptSequenceRunner.ts` recognizes.
  * Display casing only; matching is case-insensitive.
  */
-export const SCRIPT_SEQUENCE_TYPE_WORDS = [
-  "Vocal",
-  "Intro",
-  "Outro",
-  "Bridge",
-  "Lead",
-  "Break",
-  "Instrumental",
-] as const;
+/**
+ * Types Stuart actually uses for music-video scripts: **Vocal** (singing
+ * → LTX) and **Instrumental** (not singing → Grok, mouth closed).
+ * Intro / Outro / Bridge / Lead / Break still parse if pasted, but Format
+ * maps them to Instrumental and the colour legend does not show them.
+ */
+export const SCRIPT_SEQUENCE_TYPE_WORDS = ["Vocal", "Instrumental"] as const;
 
 export type ScriptSequenceTypeWord = (typeof SCRIPT_SEQUENCE_TYPE_WORDS)[number];
 
 const OTHER_SINGER_TITLE_RE = /^other[\s-]?singer\s*[:\-]?\s*\(?\s*([^)]*?)\s*\)?$/i;
 
-const CANONICAL_TYPE_BY_LOWER: Record<string, ScriptSequenceTypeWord> = {
-  vocal: "Vocal",
-  intro: "Intro",
-  outro: "Outro",
-  bridge: "Bridge",
-  lead: "Lead",
-  "break": "Break",
-  instrumental: "Instrumental",
-};
+/** Alias titles Format folds into Instrumental (case-insensitive). */
+const INSTRUMENTAL_ALIASES = new Set([
+  "instrumental",
+  "intro",
+  "outro",
+  "bridge",
+  "lead",
+  "break",
+]);
 
 /**
- * Normalizes a part header's title field to the canonical type word
- * (or `Other Singer: Name`) when it already names a known kind.
- * Unrecognized titles (e.g. "The Liquid Horizon") are returned trimmed
- * but otherwise unchanged — Format never invents a type word and never
- * rewrites shot prose.
+ * Normalizes a part header's title field to Vocal / Instrumental (or
+ * `Other Singer: Name`) when it already names a known kind. Intro /
+ * Outro / Bridge / Lead / Break → Instrumental. Unrecognized titles
+ * (e.g. "The Liquid Horizon") are returned trimmed but otherwise
+ * unchanged — Format never invents a type word and never rewrites shot
+ * prose.
  */
 export function canonicalizeScriptPartTitle(rawTitle: string): string {
   const title = rawTitle.trim();
@@ -202,40 +201,48 @@ export function canonicalizeScriptPartTitle(rawTitle: string): string {
     const name = other[1]?.trim();
     return name ? `Other Singer: ${name}` : "Other Singer";
   }
-  return CANONICAL_TYPE_BY_LOWER[title.toLowerCase()] ?? title;
+  const lower = title.toLowerCase();
+  if (lower === "vocal") return "Vocal";
+  if (INSTRUMENTAL_ALIASES.has(lower)) return "Instrumental";
+  return title;
 }
 
 /**
  * One-tap Format for music-video script sequences: rewrites **only**
- * each part header's type-word title to canonical casing / `Other
- * Singer: Name` shape. Shot prose, duration brackets, times, and part
- * numbers are left byte-for-byte alone. Idempotent. Does not rebuild a
- * clip timeline — callers update the draft text only; remint-safe
- * rebuild happens later via `buildScriptSequenceSegments` when Timeline
- * / Generate is tapped.
+ * each part header's type-word title to Vocal / Instrumental (mapping
+ * Intro/Outro/Bridge/Lead/Break → Instrumental) and canonicalizes
+ * `Positive Prompt:` / `Negative Prompt:` labels. Shot prose, times,
+ * and part numbers are left alone. Idempotent. Does not rebuild a clip
+ * timeline — callers update the draft text only.
  */
 export function formatScriptSequencePartTitles(script: string): string {
   // Title sits between the em/en dash and the `[Duration…]` bracket —
   // same span `PART_HEADER_RE` captures. Global, in-place replace so
   // unrecognized titles and all body text stay untouched.
-  // No leading-newline requirement: real pastes often run parts
-  // back-to-back with no separator (Liquid Horizon).
   const titleInHeaderRe =
     /(#{0,6}\s*Part\s+\d+\s*\(\s*[\d:.]+\s*-\s*[\d:.]+\s*\)\s*[—-]\s*)([^[\n]*?)(?=\s*\[[^\]]*\])/gi;
-  return script.replace(titleInHeaderRe, (_full, prefix: string, title: string) => {
+  let next = script.replace(titleInHeaderRe, (_full, prefix: string, title: string) => {
     return `${prefix}${canonicalizeScriptPartTitle(title)}`;
   });
+  // Label-only normalize (line-start). Never touches shot prose mid-line.
+  next = next.replace(
+    /^(\*{0,2}\s*)Positive\s*Prompt(\s*:?\s*\*{0,2})/gim,
+    "Positive Prompt:"
+  );
+  next = next.replace(
+    /^(\*{0,2}\s*)Negative\s*Prompt(\s*:?\s*\*{0,2})/gim,
+    "Negative Prompt:"
+  );
+  return next;
 }
 
 export type ScriptSequenceHighlightKind =
   | "plain"
+  | "part"
   | "vocal"
-  | "intro"
-  | "outro"
-  | "bridge"
-  | "lead"
-  | "break"
   | "instrumental"
+  | "duration"
+  | "prompt-label"
   | "other-singer";
 
 export type ScriptSequenceHighlightSegment =
@@ -246,77 +253,96 @@ function highlightKindForTitle(title: string): Exclude<ScriptSequenceHighlightKi
   const trimmed = title.trim();
   if (!trimmed) return null;
   if (OTHER_SINGER_TITLE_RE.exec(trimmed)) return "other-singer";
-  switch (CANONICAL_TYPE_BY_LOWER[trimmed.toLowerCase()]) {
-    case "Vocal":
-      return "vocal";
-    case "Intro":
-      return "intro";
-    case "Outro":
-      return "outro";
-    case "Bridge":
-      return "bridge";
-    case "Lead":
-      return "lead";
-    case "Break":
-      return "break";
-    case "Instrumental":
-      return "instrumental";
-    default:
-      return null;
-  }
+  const canonical = canonicalizeScriptPartTitle(trimmed);
+  if (canonical === "Vocal") return "vocal";
+  if (canonical === "Instrumental") return "instrumental";
+  return null;
+}
+
+const HEADER_CHUNK_RE =
+  /(#{0,6}\s*Part\s+\d+\s*\(\s*[\d:.]+\s*-\s*[\d:.]+\s*\)\s*[—-]\s*)([^[\n]*?)(\s*\[[^\]]*\])/gi;
+
+const PROMPT_LABEL_RE = /^(\*{0,2}\s*Positive\s*Prompt\s*:?\s*\*{0,2}|\*{0,2}\s*Negative\s*Prompt\s*:?\s*\*{0,2})/gim;
+
+function pushPlain(segments: ScriptSequenceHighlightSegment[], text: string) {
+  if (!text) return;
+  segments.push({ kind: "plain", text });
 }
 
 /**
- * Splits raw script text into plain / type-word segments for the
- * Script Sequence highlight overlay. Concatenating every segment's
- * `text` reconstructs `raw` exactly. Only the part-header title span
- * (between — and `[Duration…]`) is ever tagged; shot prose stays plain.
+ * Splits raw script text into coloured segments for the Script Sequence
+ * highlight overlay. Colours the Part 24 structural fields:
+ *   Part N (m:ss - m:ss) — …   → part
+ *   Vocal | Instrumental       → vocal / instrumental
+ *   [Duration: Xs]             → duration
+ *   Positive Prompt: / Negative Prompt: → prompt-label
+ * Shot prose stays plain. Concatenating every segment's `text`
+ * reconstructs `raw` exactly.
  */
 export function buildScriptSequenceHighlightSegments(raw: string): ScriptSequenceHighlightSegment[] {
   const segments: ScriptSequenceHighlightSegment[] = [];
-  const headerTitleRe =
-    /(#{0,6}\s*Part\s+\d+\s*\(\s*[\d:.]+\s*-\s*[\d:.]+\s*\)\s*[—-]\s*)([^[\n]*?)(?=\s*\[[^\]]*\])/gi;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = headerTitleRe.exec(raw)) !== null) {
+  HEADER_CHUNK_RE.lastIndex = 0;
+  while ((match = HEADER_CHUNK_RE.exec(raw)) !== null) {
     const prefix = match[1] ?? "";
     const title = match[2] ?? "";
-    const titleStart = match.index + prefix.length;
-    const titleEnd = titleStart + title.length;
-    if (titleStart > lastIndex) {
-      segments.push({ kind: "plain", text: raw.slice(lastIndex, titleStart) });
+    const duration = match[3] ?? "";
+    const chunkStart = match.index;
+    if (chunkStart > lastIndex) {
+      colourPromptLabelsInRange(raw, lastIndex, chunkStart, segments);
     }
+    segments.push({ kind: "part", text: prefix });
     const kind = highlightKindForTitle(title);
     segments.push(kind ? { kind, text: title } : { kind: "plain", text: title });
-    lastIndex = titleEnd;
+    segments.push({ kind: "duration", text: duration });
+    lastIndex = chunkStart + prefix.length + title.length + duration.length;
   }
   if (lastIndex < raw.length) {
-    segments.push({ kind: "plain", text: raw.slice(lastIndex) });
+    colourPromptLabelsInRange(raw, lastIndex, raw.length, segments);
+  }
+  if (segments.length === 0 && raw.length > 0) {
+    pushPlain(segments, raw);
   }
   return segments;
+}
+
+/** Colour Positive/Negative Prompt labels inside [start, end). */
+function colourPromptLabelsInRange(
+  raw: string,
+  start: number,
+  end: number,
+  segments: ScriptSequenceHighlightSegment[]
+) {
+  const slice = raw.slice(start, end);
+  PROMPT_LABEL_RE.lastIndex = 0;
+  let localLast = 0;
+  let m: RegExpExecArray | null;
+  while ((m = PROMPT_LABEL_RE.exec(slice)) !== null) {
+    if (m.index > localLast) {
+      pushPlain(segments, slice.slice(localLast, m.index));
+    }
+    segments.push({ kind: "prompt-label", text: m[0] });
+    localLast = m.index + m[0].length;
+  }
+  if (localLast < slice.length) {
+    pushPlain(segments, slice.slice(localLast));
+  }
 }
 
 /** Opaque text colours for the overlay + colour-tag legend (script box only). */
 export const SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES: Record<ScriptSequenceHighlightKind, string> = {
   plain: "text-white",
+  part: "text-sky-300",
   vocal: "text-rose-300",
-  intro: "text-sky-300",
-  outro: "text-violet-300",
-  bridge: "text-amber-300",
-  lead: "text-emerald-300",
-  "break": "text-orange-300",
   instrumental: "text-zinc-300",
+  duration: "text-amber-300",
+  "prompt-label": "text-emerald-300",
   "other-singer": "text-fuchsia-300",
 };
 
-/** Colour-tag legend chips shown under the script box (display only). */
+/** Colour-tag legend chips — Vocal | Instrumental only (display). */
 export const SCRIPT_SEQUENCE_COLOUR_TAGS: { label: string; kind: ScriptSequenceHighlightKind }[] = [
-  { label: "[Vocal]", kind: "vocal" },
-  { label: "[Intro]", kind: "intro" },
-  { label: "[Outro]", kind: "outro" },
-  { label: "[Bridge]", kind: "bridge" },
-  { label: "[Lead]", kind: "lead" },
-  { label: "[Break]", kind: "break" },
-  { label: "[Instrumental]", kind: "instrumental" },
-  { label: "[Other Singer: Name]", kind: "other-singer" },
+  { label: "Vocal", kind: "vocal" },
+  { label: "Instrumental", kind: "instrumental" },
 ];

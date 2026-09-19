@@ -155,7 +155,7 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
  */
 /** Highlight overlay behind the (transparent) script textarea — same
  * chrome pattern as Sunny Banks' God Script box, but colours MV part
- * header type words only. Display-only; never changes parsing. */
+ * Part / type / Duration / Prompt-label fields. Display-only; never changes parsing. */
 function ScriptSequenceHighlightOverlay({
   text,
   overlayRef,
@@ -270,7 +270,7 @@ function ScriptSequenceFullScreenEditor({
           {"\u21e5"} Format
         </button>
         <p className="min-w-0 flex-1 text-[10px] leading-snug text-white/40">
-          Nothing remints until you tap Apply. Format only fixes the part header type word —
+          Nothing remints until you tap Apply. Format only fixes Vocal/Instrumental headers and Prompt labels —
           shot prose stays as written.
         </p>
       </div>
@@ -773,7 +773,7 @@ export function SkidmarksScriptSequencePanel({
           disabled={!!running}
           placeholder={
             'Paste your "Part 1 (0:00 - 0:15) — Vocal[Duration: ...]. ..." script here. ' +
-            "Title words: Vocal, Instrumental, Intro, Outro, Bridge, Lead, Break, or \"Other Singer: Name\"."
+            "Types: Vocal (singing / LTX) or Instrumental (not singing / Grok). Format maps Intro/Outro/Bridge/Lead/Break → Instrumental."
           }
           rows={4}
           spellCheck={false}

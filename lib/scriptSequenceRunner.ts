@@ -345,6 +345,7 @@ export function plateStillCountsAsReady(
     | {
         dataUrl?: string;
         featuresLockedCharacter?: boolean;
+        source?: string;
       }
     | null
     | undefined,
@@ -352,6 +353,11 @@ export function plateStillCountsAsReady(
 ): boolean {
   const url = still?.dataUrl?.trim();
   if (!url) return false;
+  // Sleeve pick (`source: "library"`) is an explicit Keep/apply — always
+  // ready, even when the URL is the member's avatar (Timeline preview
+  // pastes that avatar with featuresLockedCharacter and must *not*
+  // count as ready; a deliberate library apply must).
+  if (still?.source === "library") return true;
   const avatars = new Set<string>();
   for (const candidate of memberAvatarUrls) {
     if (typeof candidate === "string" && candidate.trim().length > 0) avatars.add(candidate);

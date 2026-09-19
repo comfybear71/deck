@@ -1371,6 +1371,15 @@ describe("plateStillCountsAsReady", () => {
       )
     ).toBe(false);
   });
+
+  it("treats a sleeve/library pick as ready even when the URL is the avatar", () => {
+    expect(
+      plateStillCountsAsReady(
+        { dataUrl: "https://blob.example/nova.jpg", source: "library", featuresLockedCharacter: true },
+        avatars
+      )
+    ).toBe(true);
+  });
 });
 
 describe("isGeneratePlatesButtonDisabled", () => {

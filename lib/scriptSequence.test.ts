@@ -4,6 +4,8 @@ import {
   canonicalizeScriptPartTitle,
   formatScriptSequencePartTitles,
   parseScriptSequence,
+  SCRIPT_SEQUENCE_COLOUR_TAGS,
+  SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES,
 } from "./scriptSequence";
 
 /** Stuart's own real "Liquid Horizon" script, verbatim (2026-09-14) —
@@ -192,7 +194,12 @@ describe("parseScriptSequence — labelled Positive/Negative Prompt format", () 
 describe("canonicalizeScriptPartTitle / formatScriptSequencePartTitles", () => {
   it("canonicalizes known type words and Other Singer shapes", () => {
     expect(canonicalizeScriptPartTitle("vocal")).toBe("Vocal");
-    expect(canonicalizeScriptPartTitle("INTRO")).toBe("Intro");
+    expect(canonicalizeScriptPartTitle("INTRO")).toBe("Instrumental");
+    expect(canonicalizeScriptPartTitle("outro")).toBe("Instrumental");
+    expect(canonicalizeScriptPartTitle("Bridge")).toBe("Instrumental");
+    expect(canonicalizeScriptPartTitle("LEAD")).toBe("Instrumental");
+    expect(canonicalizeScriptPartTitle("break")).toBe("Instrumental");
+    expect(canonicalizeScriptPartTitle("instrumental")).toBe("Instrumental");
     expect(canonicalizeScriptPartTitle("other singer: jax")).toBe("Other Singer: jax");
     expect(canonicalizeScriptPartTitle("Other Singer (Nova)")).toBe("Other Singer: Nova");
     expect(canonicalizeScriptPartTitle("Other Singer")).toBe("Other Singer");
@@ -233,7 +240,29 @@ describe("canonicalizeScriptPartTitle / formatScriptSequencePartTitles", () => {
       "Part 1 (0:00 - 0:15) — vocal[Duration: 15s]. Shot one." +
       "Part 2 (0:15 - 0:30) — Intro[Duration: 15s]. Shot two.";
     const once = formatScriptSequencePartTitles(raw);
+    expect(once).toContain("— Instrumental[Duration: 15s].");
+    expect(once).not.toContain("— Intro[");
     expect(formatScriptSequencePartTitles(once)).toBe(once);
+  });
+
+  it("Format maps Intro/Outro/Bridge/Lead/Break to Instrumental without touching prose", () => {
+    const prose = "Camera holds. Intro mentioned in prose stays.";
+    const raw =
+      `Part 1 (0:00 - 0:10) — Intro[Duration: 10s]. ${prose}` +
+      `Part 2 (0:10 - 0:20) — Outro[Duration: 10s]. ${prose}` +
+      `Part 3 (0:20 - 0:30) — Bridge[Duration: 10s]. ${prose}` +
+      `Part 4 (0:30 - 0:40) — Lead[Duration: 10s]. ${prose}` +
+      `Part 5 (0:40 - 0:50) — Break[Duration: 10s]. ${prose}`;
+    const formatted = formatScriptSequencePartTitles(raw);
+    const parts = parseScriptSequence(formatted);
+    expect(parts.map((p) => p.title)).toEqual([
+      "Instrumental",
+      "Instrumental",
+      "Instrumental",
+      "Instrumental",
+      "Instrumental",
+    ]);
+    expect(parts.every((p) => p.prompt === prose)).toBe(true);
   });
 
   it("Liquid Horizon unrecognized titles: Format is a no-op on titles and preserves parse", () => {
@@ -244,16 +273,43 @@ describe("canonicalizeScriptPartTitle / formatScriptSequencePartTitles", () => {
 });
 
 describe("buildScriptSequenceHighlightSegments", () => {
-  it("colours only known header type words; concatenating reconstructs raw", () => {
+  it("colours Part / type / Duration fields; concatenating reconstructs raw", () => {
     const raw =
       "Part 1 (0:00 - 0:15) — Vocal[Duration: 15s]. A vocal in prose." +
       "Part 2 (0:15 - 0:30) — Mystery Title[Duration: 15s]. More text.";
     const segments = buildScriptSequenceHighlightSegments(raw);
     expect(segments.map((s) => s.text).join("")).toBe(raw);
+    expect(segments.some((s) => s.kind === "part" && s.text.includes("Part 1"))).toBe(true);
     expect(segments.some((s) => s.kind === "vocal" && s.text === "Vocal")).toBe(true);
+    expect(segments.some((s) => s.kind === "duration" && s.text.includes("[Duration:"))).toBe(true);
     expect(segments.some((s) => s.kind === "plain" && s.text.includes("Mystery Title"))).toBe(true);
     // Prose "vocal" stays plain.
     const proseSeg = segments.find((s) => s.text.includes("A vocal in prose"));
     expect(proseSeg?.kind).toBe("plain");
+  });
+
+  it("colours Positive/Negative Prompt labels without rewriting shot prose", () => {
+    const raw =
+      "### Part 1 (0:00 - 0:15) — Instrumental [Duration: 15s]\n" +
+      "**Positive Prompt:** Wide shot of the road.\n" +
+      "**Negative Prompt:** crowds, warm light\n";
+    const segments = buildScriptSequenceHighlightSegments(raw);
+    expect(segments.map((s) => s.text).join("")).toBe(raw);
+    expect(segments.some((s) => s.kind === "instrumental" && s.text.trim() === "Instrumental")).toBe(true);
+    expect(segments.some((s) => s.kind === "prompt-label" && /Positive\s*Prompt/i.test(s.text))).toBe(true);
+    expect(segments.some((s) => s.kind === "prompt-label" && /Negative\s*Prompt/i.test(s.text))).toBe(true);
+    expect(segments.some((s) => s.kind === "plain" && s.text.includes("Wide shot"))).toBe(true);
+  });
+
+  it("legend is Vocal | Instrumental only — no Intro/Outro/Bridge chips", () => {
+    expect(SCRIPT_SEQUENCE_COLOUR_TAGS.map((t) => t.label)).toEqual(["Vocal", "Instrumental"]);
+    for (const tag of SCRIPT_SEQUENCE_COLOUR_TAGS) {
+      const className = SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[tag.kind];
+      expect(className).toBeTruthy();
+      expect(className).not.toMatch(/\/0$/);
+    }
+    for (const className of Object.values(SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES)) {
+      expect(className).not.toMatch(/\/0$/);
+    }
   });
 });

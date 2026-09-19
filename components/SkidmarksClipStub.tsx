@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import {
   downscaleDataUrlImage,
   flushSkidmarksSessionNow,
+  keepSkidmarksMemberSleeveStill,
   MAX_PLATES_PER_CLIP,
   resolveInstrumentalVideoModel,
   resolveSelectedPlateId,
@@ -19,6 +20,12 @@ import {
   type SkidmarksModelId,
   type SkidmarksPlateStill,
 } from "@/lib/skidmarks";
+import {
+  buildLibraryPlateStill,
+  resolveMemberStillSleeve,
+  urlIsInMemberSleeve,
+  type SkidmarksMemberSleeveEntry,
+} from "@/lib/memberStillSleeve";
 import {
   buildPlateGenerationRequest,
   generatePlateStill,
@@ -175,6 +182,10 @@ interface SkidmarksPlatePopoverProps {
   onUpload: () => void;
   onGenerate: () => void;
   onDismiss: () => void;
+  /** When set, show a free "From sleeve" action that opens the member's
+   * still library — never a generate-still call. */
+  onOpenSleeve?: () => void;
+  sleeveAvailable?: boolean;
 }
 
 /**
@@ -197,6 +208,8 @@ function SkidmarksPlatePopover({
   onUpload,
   onGenerate,
   onDismiss,
+  onOpenSleeve,
+  sleeveAvailable,
 }: SkidmarksPlatePopoverProps) {
   const dense = size === "sm";
   return (
@@ -250,6 +263,19 @@ function SkidmarksPlatePopover({
         </label>
       )}
 
+      {sleeveAvailable && onOpenSleeve && (
+        <button
+          type="button"
+          onClick={onOpenSleeve}
+          className={[
+            "mx-auto rounded-full border border-white/15 bg-white/[0.04] font-medium text-white/80 transition-colors hover:bg-white/[0.08] hover:text-white",
+            dense ? "px-4 py-1.5 text-[11px]" : "px-5 py-2 text-[12px]",
+          ].join(" ")}
+        >
+          From sleeve
+        </button>
+      )}
+
       <button
         type="button"
         onClick={onGenerate}
@@ -280,6 +306,15 @@ interface SkidmarksPlateLightboxProps {
   onGenerate: () => void;
   onClear: () => void;
   onClose: () => void;
+  statusNote?: string | null;
+  onKeep?: () => void;
+  keepLabel?: string;
+  onOpenSleeve?: () => void;
+  sleeveAvailable?: boolean;
+  sleeveOpen?: boolean;
+  sleeveEntries?: SkidmarksMemberSleeveEntry[];
+  onPickSleeve?: (entry: SkidmarksMemberSleeveEntry) => void;
+  onCloseSleeve?: () => void;
 }
 
 /**
@@ -316,6 +351,15 @@ function SkidmarksPlateLightbox({
   onGenerate,
   onClear,
   onClose,
+  statusNote,
+  onKeep,
+  keepLabel,
+  onOpenSleeve,
+  sleeveAvailable,
+  sleeveOpen,
+  sleeveEntries,
+  onPickSleeve,
+  onCloseSleeve,
 }: SkidmarksPlateLightboxProps) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -372,7 +416,42 @@ function SkidmarksPlateLightbox({
           )}
         </div>
 
+        {!generating && sleeveOpen && sleeveEntries && onPickSleeve && (
+          <div className="flex w-full flex-col gap-2 rounded-xl bg-zinc-950 p-2.5 ring-1 ring-white/10">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-medium text-white/70">Artist sleeve</p>
+              <button
+                type="button"
+                onClick={onCloseSleeve}
+                aria-label="Close sleeve"
+                className="flex h-6 w-6 items-center justify-center rounded-full text-white/50 hover:bg-white/10 hover:text-white"
+              >
+                <CloseIcon className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {sleeveEntries.length === 0 ? (
+              <p className="text-[11px] text-white/45">No stills kept yet — tap Keep on a plate still first.</p>
+            ) : (
+              <div className="flex gap-2 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch]">
+                {sleeveEntries.map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    onClick={() => onPickSleeve(entry)}
+                    aria-label="Apply sleeve still to this plate"
+                    className="h-16 w-20 shrink-0 overflow-hidden rounded-lg ring-1 ring-white/15 transition hover:ring-rose-300/50"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={entry.dataUrl} alt="" className="h-full w-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {!generating &&
+          !sleeveOpen &&
           (replaceOpen ? (
             <SkidmarksPlatePopover
               size="md"
@@ -382,6 +461,8 @@ function SkidmarksPlateLightbox({
               onUpload={onUpload}
               onGenerate={onGenerate}
               onDismiss={onToggleReplace}
+              onOpenSleeve={onOpenSleeve}
+              sleeveAvailable={sleeveAvailable}
             />
           ) : (
             <div className="flex w-full gap-2">
@@ -392,6 +473,15 @@ function SkidmarksPlateLightbox({
               >
                 Replace
               </button>
+              {onKeep && (
+                <button
+                  type="button"
+                  onClick={onKeep}
+                  className="flex-1 rounded-full border border-rose-400/35 bg-rose-400/10 px-3.5 py-2 text-sm font-medium text-rose-100 transition-colors hover:bg-rose-400/20"
+                >
+                  {keepLabel ?? "Keep"}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onClear}
@@ -403,6 +493,9 @@ function SkidmarksPlateLightbox({
           ))}
 
         {error && <p role="alert" className="text-[11px] leading-snug text-rose-300/90">{error}</p>}
+        {!error && statusNote && (
+          <p className="text-[11px] leading-snug text-emerald-300/90">{statusNote}</p>
+        )}
       </div>
     </div>,
     document.body
@@ -416,6 +509,7 @@ interface SkidmarksPlateBoxProps {
   vocal: boolean;
   model: SkidmarksModelId;
   bandName: string;
+  bandId: string;
   vocalist?: SkidmarksMember;
   /** Only true for an *empty* slot when the clip has more than one —
    * removing a slot that already holds a real still is a separate,
@@ -562,6 +656,7 @@ function SkidmarksPlateBox({
   vocal,
   model,
   bandName,
+  bandId,
   vocalist,
   canRemove,
   onSetStill,
@@ -572,10 +667,12 @@ function SkidmarksPlateBox({
 }: SkidmarksPlateBoxProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [sleeveOpen, setSleeveOpen] = useState(false);
   const [useLastPlate, setUseLastPlate] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [busyLabel, setBusyLabel] = useState("Generating…");
   const [error, setError] = useState<string | null>(null);
+  const [keepNote, setKeepNote] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -589,12 +686,48 @@ function SkidmarksPlateBox({
 
   const hasStill = !!plate.still;
 
-  const closeMenu = () => setMenuOpen(false);
+  const closeMenu = () => {
+    setMenuOpen(false);
+    setSleeveOpen(false);
+  };
 
   const closeLightbox = () => {
     setLightboxOpen(false);
     setMenuOpen(false);
+    setSleeveOpen(false);
     setError(null);
+    setKeepNote(null);
+  };
+
+  const sleeveEntries = resolveMemberStillSleeve(vocalist);
+  const sleeveAvailable = !!vocalist && sleeveEntries.length > 0;
+  const alreadyKept =
+    !!plate.still && !!vocalist && urlIsInMemberSleeve(vocalist, plate.still.dataUrl);
+
+  const handleOpenSleeve = () => {
+    setError(null);
+    setMenuOpen(false);
+    setSleeveOpen(true);
+  };
+
+  const handlePickSleeve = (entry: SkidmarksMemberSleeveEntry) => {
+    // Free apply — never calls generate-still.
+    onSetStill(buildLibraryPlateStill(entry.dataUrl));
+    flushSkidmarksSessionNow();
+    setSleeveOpen(false);
+    setMenuOpen(false);
+    setError(null);
+  };
+
+  const handleKeep = () => {
+    if (!vocalist || !plate.still) return;
+    if (urlIsInMemberSleeve(vocalist, plate.still.dataUrl)) {
+      setKeepNote("In sleeve");
+      return;
+    }
+    keepSkidmarksMemberSleeveStill(bandId, vocalist.id, plate.still.dataUrl);
+    flushSkidmarksSessionNow();
+    setKeepNote("Kept");
   };
 
   const handleBoxClick = () => {
@@ -933,7 +1066,39 @@ function SkidmarksPlateBox({
             popover. A filled plate's Upload/Generate now lives inside
             the lightbox instead (`menuOpen` doubles as that panel's
             open state there too — see the lightbox render below). */}
-        {!hasStill && menuOpen && !generating && (
+        {!hasStill && sleeveOpen && !generating && (
+          <div className="absolute inset-x-1.5 bottom-1.5 z-10 rounded-xl bg-zinc-950 p-1.5 ring-1 ring-white/10">
+            <div className="mb-1 flex items-center justify-between px-0.5">
+              <span className="text-[9px] font-medium text-white/60">Sleeve</span>
+              <button
+                type="button"
+                onClick={() => setSleeveOpen(false)}
+                aria-label="Close sleeve"
+                className="flex h-5 w-5 items-center justify-center rounded-full text-white/50 hover:bg-white/10"
+              >
+                <CloseIcon className="h-3 w-3" />
+              </button>
+            </div>
+            <div className="flex gap-1 overflow-x-auto">
+              {sleeveEntries.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlePickSleeve(entry);
+                  }}
+                  className="h-12 w-14 shrink-0 overflow-hidden rounded-md ring-1 ring-white/15"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={entry.dataUrl} alt="" className="h-full w-full object-cover" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!hasStill && menuOpen && !sleeveOpen && !generating && (
           <div className="absolute inset-x-1.5 bottom-1.5 z-10">
             <SkidmarksPlatePopover
               size="sm"
@@ -943,6 +1108,8 @@ function SkidmarksPlateBox({
               onUpload={handleUploadClick}
               onGenerate={handleGenerate}
               onDismiss={closeMenu}
+              onOpenSleeve={handleOpenSleeve}
+              sleeveAvailable={sleeveAvailable}
             />
           </div>
         )}
@@ -972,9 +1139,12 @@ function SkidmarksPlateBox({
           replaceOpen={menuOpen}
           generating={generating}
           error={error}
+          statusNote={keepNote}
           useLastPlate={useLastPlate}
           onToggleReplace={() => {
             setError(null);
+            setKeepNote(null);
+            setSleeveOpen(false);
             setMenuOpen((v) => !v);
           }}
           onSetUseLastPlate={setUseLastPlate}
@@ -982,6 +1152,14 @@ function SkidmarksPlateBox({
           onGenerate={handleGenerate}
           onClear={handleClear}
           onClose={closeLightbox}
+          onKeep={vocalist ? handleKeep : undefined}
+          keepLabel={alreadyKept ? "In sleeve" : "Keep"}
+          onOpenSleeve={handleOpenSleeve}
+          sleeveAvailable={sleeveAvailable}
+          sleeveOpen={sleeveOpen}
+          sleeveEntries={sleeveEntries}
+          onPickSleeve={handlePickSleeve}
+          onCloseSleeve={() => setSleeveOpen(false)}
         />
       )}
     </div>
@@ -1143,6 +1321,7 @@ export function SkidmarksClipStub({
             vocal={vocal}
             model={segment.model}
             bandName={band.name}
+            bandId={band.id}
             vocalist={vocalist}
             canRemove={segment.plates.length > 1}
             onSetStill={(still) => onSetPlateStill(plate.id, still)}
