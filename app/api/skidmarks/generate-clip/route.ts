@@ -959,8 +959,48 @@ export async function persistClipRenderToBlob(
   return persistRenderBytesToBlob(new Uint8Array(bytes), target);
 }
 
-function isReferenceDataUrl(value: unknown): value is string {
-  return typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,.+/.test(value);
+/** Accepts a plate still as either an embedded `data:image/...;base64,...`
+ * URL **or** a durable http(s) URL (Vercel Blob uploads from the clip-1
+ * starting-image picker and `uploadSkidmarksPlateStill`). Rejecting
+ * https here used to kill Generate with "must be a data:image URL" the
+ * moment Stuart's uploaded still landed as a Blob URL. `blob:` object
+ * URLs stay rejected — the server cannot fetch a client-only object URL. */
+function isReferenceImageUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0) return false;
+  if (/^data:image\/[a-zA-Z0-9.+-]+;base64,.+/.test(value)) return true;
+  if (/^https?:\/\//i.test(value)) return true;
+  return false;
+}
+
+/** Resolves a reference image (data: or http(s)) into raw bytes for the
+ * Vocal/LTX path, which must upload real file bytes to Comfy Cloud.
+ * Grok/H3 pass the URL string through as-is and never need this. */
+async function resolveReferenceImageBytes(
+  url: string
+): Promise<{ ok: true; bytes: Uint8Array; mimeType: string } | { ok: false; error: string }> {
+  if (url.startsWith("data:")) {
+    const decoded = decodeDataUrl(url);
+    if (!decoded) return { ok: false, error: "Could not decode the plate still's data URL." };
+    return { ok: true, bytes: decoded.bytes, mimeType: decoded.mimeType };
+  }
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(START_TIMEOUT_MS) });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Could not fetch the plate still: ${err instanceof Error ? err.message : "network error"}.`,
+    };
+  }
+  if (!res.ok) {
+    return { ok: false, error: `Fetching the plate still returned HTTP ${res.status}.` };
+  }
+  try {
+    const mimeType = (res.headers.get("content-type") ?? "image/jpeg").split(";")[0]!.trim() || "image/jpeg";
+    return { ok: true, bytes: new Uint8Array(await res.arrayBuffer()), mimeType };
+  } catch {
+    return { ok: false, error: "Could not read the plate still's bytes." };
+  }
 }
 
 /** Fetches the attached song's own durable Blob audio (never the
@@ -1105,10 +1145,10 @@ async function handleVocalComfyLtxRender(
     );
   }
 
-  const decodedImage = decodeDataUrl(referenceImageDataUrl);
-  if (!decodedImage) {
+  const resolvedImage = await resolveReferenceImageBytes(referenceImageDataUrl);
+  if (!resolvedImage.ok) {
     return NextResponse.json(
-      { error: "Could not decode the plate still's data URL.", code: "invalid_request" },
+      { error: resolvedImage.error, code: "invalid_request" },
       { status: 400 }
     );
   }
@@ -1117,7 +1157,7 @@ async function handleVocalComfyLtxRender(
   // center-cropped by Comfy's own IA2V resize otherwise, which can chop
   // straight through a locked character's hat/shadow framing before the
   // video model ever sees a frame to animate from.
-  const framedImage = await letterboxImageForLtxIa2v(decodedImage.bytes, decodedImage.mimeType);
+  const framedImage = await letterboxImageForLtxIa2v(resolvedImage.bytes, resolvedImage.mimeType);
   const imageUpload = await uploadComfyCloudInput(
     framedImage.bytes,
     framedImage.letterboxed ? `skidmarks-plate-${Date.now()}.jpg` : `skidmarks-plate-${Date.now()}.png`,
@@ -1425,10 +1465,10 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  if (!rawReferences.every(isReferenceDataUrl)) {
+  if (!rawReferences.every(isReferenceImageUrl)) {
     return NextResponse.json(
       {
-        error: "Each reference image must be a `data:image/...;base64,...` URL.",
+        error: "Each reference image must be a `data:image/...;base64,...` URL or an http(s) photo URL.",
         code: "invalid_request",
       },
       { status: 400 }

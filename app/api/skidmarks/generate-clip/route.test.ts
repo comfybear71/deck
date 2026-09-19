@@ -294,12 +294,34 @@ describe("POST /api/skidmarks/generate-clip", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("rejects a reference image that isn't a data: URL", async () => {
+  it("rejects a reference image that isn't a data: or http(s) URL", async () => {
     const res = await POST(
-      postRequest({ prompt: "slow zoom", referenceImageDataUrls: ["https://example.com/a.jpg"] })
+      postRequest({ prompt: "slow zoom", referenceImageDataUrls: ["blob:https://example.com/a"] })
     );
     expect(res.status).toBe(400);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts an https Blob photo URL as a reference image (clip-1 upload path)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { request_id: "req-https-ref" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          status: "done",
+          video: { url: "https://vidgen.x.ai/clip-https.mp4", duration: 5, respect_moderation: true },
+        })
+      );
+
+    const httpsStill = "https://blob.example/skidmarks/clip1-start.jpg";
+    const res = await POST(postRequest({ prompt: "slow zoom", referenceImageDataUrls: [httpsStill] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.videoUrl).toBe("https://vidgen.x.ai/clip-https.mp4");
+
+    const [, startInit] = fetchMock.mock.calls[0];
+    const sentBody = JSON.parse(startInit.body as string);
+    expect(sentBody.image).toEqual({ url: httpsStill });
   });
 
   it("starts with an `image` object (image-to-video) for exactly one reference, and returns the video on the first poll", async () => {
