@@ -191,6 +191,137 @@ describe("parseScriptSequence — labelled Positive/Negative Prompt format", () 
   });
 });
 
+
+/** Stuart's multiline Part 24 layout (live iPhone bug 2026-09-20):
+ * Part times on their own line, type word next, optional [Duration],
+ * optional Lyrics, then Positive / Negative Prompt. Highlight already
+ * coloured this (#163); parsing must find parts too or Generate plates
+ * stays greyed out. */
+const MULTILINE_PART24_SCRIPT =
+  "Part 1 (0:00 - 0:15)\n" +
+  "Instrumental\n" +
+  "[Duration: 15s]\n" +
+  "Positive Prompt:\n" +
+  "Wide establishing shot of an empty coastal road at dusk.\n" +
+  "Negative Prompt:\n" +
+  "crowds, warm daylight\n" +
+  "\n" +
+  "Part 2 (0:15 - 0:30)\n" +
+  "Vocal\n" +
+  "[Duration: 15s]\n" +
+  "Lyrics:\n" +
+  "Walking down the shore tonight\n" +
+  "Positive Prompt:\n" +
+  "Close-up of the singer under neon rain, mouth in sync.\n" +
+  "Negative Prompt:\n" +
+  "crowds, blur, extra fingers\n" +
+  "\n" +
+  "Part 3 (0:30 - 0:45)\n" +
+  "Instrumental\n" +
+  "[Duration: 15s]\n" +
+  "Positive Prompt: Tracking shot along wet asphalt at night.\n" +
+  "Negative Prompt: faces, daylight\n";
+
+describe("parseScriptSequence — multiline Part 24 format", () => {
+  it("parses all parts: titles are type words, times from header, Duration discarded", () => {
+    const parts = parseScriptSequence(MULTILINE_PART24_SCRIPT);
+    expect(parts).toHaveLength(3);
+    expect(parts.map((p) => p.index)).toEqual([1, 2, 3]);
+    expect(parts.map((p) => p.title)).toEqual(["Instrumental", "Vocal", "Instrumental"]);
+    expect(parts[0]).toMatchObject({ startSec: 0, endSec: 15 });
+    expect(parts[1]).toMatchObject({ startSec: 15, endSec: 30 });
+    expect(parts[2]).toMatchObject({ startSec: 30, endSec: 45 });
+    for (const part of parts) {
+      expect(part.prompt).not.toContain("[Duration");
+      expect(part.prompt).not.toContain("Positive Prompt");
+      expect(part.prompt).not.toContain("Negative Prompt");
+    }
+  });
+
+  it("keeps Lyrics lines in the shot prompt and strips Positive/Negative labels", () => {
+    const parts = parseScriptSequence(MULTILINE_PART24_SCRIPT);
+    expect(parts[1].prompt).toContain("Lyrics:");
+    expect(parts[1].prompt).toContain("Walking down the shore tonight");
+    expect(parts[1].prompt).toContain("Close-up of the singer under neon rain, mouth in sync.");
+    expect(parts[1].negativePrompt).toBe("crowds, blur, extra fingers");
+    expect(parts[0].prompt).toBe("Wide establishing shot of an empty coastal road at dusk.");
+    expect(parts[0].negativePrompt).toBe("crowds, warm daylight");
+    expect(parts[2].prompt).toBe("Tracking shot along wet asphalt at night.");
+    expect(parts[2].negativePrompt).toBe("faces, daylight");
+  });
+
+  it("accepts Format aliases as the multiline type line (title kept as written)", () => {
+    const raw =
+      "Part 1 (0:00 - 0:10)\n" +
+      "Intro\n" +
+      "[Duration: 10s]\n" +
+      "Positive Prompt: Soft fade in.\n" +
+      "\n" +
+      "Part 2 (0:10 - 0:20)\n" +
+      "Bridge\n" +
+      "Positive Prompt: Hold on the skyline.\n";
+    const parts = parseScriptSequence(raw);
+    expect(parts).toHaveLength(2);
+    expect(parts.map((p) => p.title)).toEqual(["Intro", "Bridge"]);
+    expect(parts[0].prompt).toBe("Soft fade in.");
+    expect(parts[1].prompt).toBe("Hold on the skyline.");
+    expect(parts[0].negativePrompt).toBeUndefined();
+  });
+
+  it("19-part style sample: Lyrics + Positive/Negative on every vocal part", () => {
+    const lines: string[] = [];
+    for (let n = 1; n <= 19; n++) {
+      const start = (n - 1) * 15;
+      const end = n * 15;
+      const startStr = `${Math.floor(start / 60)}:${String(start % 60).padStart(2, "0")}`;
+      const endStr = `${Math.floor(end / 60)}:${String(end % 60).padStart(2, "0")}`;
+      const kind = n % 2 === 0 ? "Vocal" : "Instrumental";
+      lines.push(`Part ${n} (${startStr} - ${endStr})`);
+      lines.push(kind);
+      lines.push("[Duration: 15s]");
+      if (kind === "Vocal") {
+        lines.push("Lyrics:");
+        lines.push(`Lyric line for part ${n}`);
+      }
+      lines.push("Positive Prompt:");
+      lines.push(`Shot description for part ${n}.`);
+      lines.push("Negative Prompt:");
+      lines.push("crowds, blur");
+      lines.push("");
+    }
+    const parts = parseScriptSequence(lines.join("\n"));
+    expect(parts).toHaveLength(19);
+    expect(parts.filter((p) => p.title === "Vocal")).toHaveLength(9);
+    expect(parts.filter((p) => p.title === "Instrumental")).toHaveLength(10);
+    expect(parts[1].prompt).toContain("Lyrics:");
+    expect(parts[1].prompt).toContain("Lyric line for part 2");
+    expect(parts[1].prompt).toContain("Shot description for part 2.");
+    expect(parts[1].negativePrompt).toBe("crowds, blur");
+    expect(parts[0].prompt).toBe("Shot description for part 1.");
+    expect(parts[18]).toMatchObject({ index: 19, title: "Instrumental", startSec: 270, endSec: 285 });
+  });
+
+  it("regression: old single-line Sunny / Liquid Horizon format still parses unchanged", () => {
+    const parts = parseScriptSequence(LIQUID_HORIZON_SCRIPT);
+    expect(parts).toHaveLength(16);
+    expect(parts[0].title).toBe("The Liquid Horizon");
+    expect(parts[0].prompt.startsWith("High-contrast monochrome")).toBe(true);
+    expect(parts.every((p) => p.negativePrompt === undefined)).toBe(true);
+  });
+
+  it("skips a Part-times line with no type word rather than inventing a title", () => {
+    const parts = parseScriptSequence(
+      "Part 1 (0:00 - 0:15)\n" +
+        "Just some prose with no type word.\n" +
+        "Part 2 (0:15 - 0:30)\n" +
+        "Vocal\n" +
+        "Positive Prompt: Real vocal part.\n"
+    );
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({ index: 2, title: "Vocal", prompt: "Real vocal part." });
+  });
+});
+
 describe("canonicalizeScriptPartTitle / formatScriptSequencePartTitles", () => {
   it("canonicalizes known type words and Other Singer shapes", () => {
     expect(canonicalizeScriptPartTitle("vocal")).toBe("Vocal");

@@ -1,36 +1,46 @@
 /**
- * Parses Stuart's own hand-written "script" format (2026-09-14, the
- * 16-part "Liquid Horizon" black-and-white trippy sequence) into
- * structured parts — the input half of the "paste a script, get a real
- * clip timeline" automation he asked for. Pure and synchronous, no
- * network/DOM — fully unit-testable independent of the render pipeline
- * that actually consumes its output (`buildScriptSequenceSegments` in
- * `lib/skidmarks.ts`).
+ * Parses Stuart's own hand-written "script" format into structured parts
+ * — the input half of the "paste a script, get a real clip timeline"
+ * automation. Pure and synchronous, no network/DOM — fully unit-testable
+ * independent of the render pipeline that consumes its output
+ * (`buildScriptSequenceSegments` in `lib/skidmarks.ts`).
  *
- * **Format matched, exactly as Stuart pasted it** (no line breaks
- * between parts — one continuous blob):
- *   `Part <N> (<start> - <end>) — <Title>[Duration: ...]. <description>`
- * repeated, each new `Part <N> (` immediately following the previous
- * part's description with no separator. `<start>`/`<end>` are `m:ss`
- * (or bare seconds). The `[Duration: ...]` bracket is intentionally
- * discarded, not trusted — see `ScriptSequencePart.startSec`/`endSec`'s
- * doc comment for why the *header's* own start/end times are the real
- * source of truth instead, per Stuart's explicit "don't trust the 15
- * seconds in the prompt" ask.
+ * **Three real shapes** (all matched; which one Stuart pasted needs no
+ * separate flag or mode):
  *
- * **Also accepts a second real shape** (2026-09-16, a script pasted from
- * a different AI, one Stuart asked to be able to just paste straight
- * in): a markdown `###` heading per part instead of a trailing period —
- * `### Part <N> (<start> - <end>) — <Title> [Duration: ...]` on its own
- * line — followed by a `**Positive Prompt:**` line and an optional
- * `**Negative Prompt:**` line. Both header shapes are matched by the
- * same relaxed header regex below (the trailing period after the
- * bracket is now optional, and a leading `#`/`##`/`###` is allowed and
- * discarded); which one Stuart pasted needs no separate flag or mode.
- * The `**Negative Prompt:**` split only ever fires when that literal
- * label is actually present in the text — a script with no negative
- * prompts (Liquid Horizon, or anything pasted before this) parses
- * exactly as it always has, `negativePrompt` simply absent.
+ * 1. **Sunny / Liquid-Horizon single-line** (2026-09-14) — no line breaks
+ *    between parts, one continuous blob:
+ *      `Part <N> (<start> - <end>) — <Title>[Duration: ...]. <description>`
+ *    `<start>`/`<end>` are `m:ss` (or bare seconds). The `[Duration: ...]`
+ *    bracket is intentionally discarded, not trusted — see
+ *    `ScriptSequencePart.startSec`/`endSec`'s doc comment.
+ *
+ * 2. **Markdown labelled** (2026-09-16) — `### Part <N> (<start> - <end>)
+ *    — <Title> [Duration: ...]` on its own line, then `**Positive
+ *    Prompt:**` / optional `**Negative Prompt:**`. Same single-line
+ *    header regex (trailing period optional; leading `#`/`##`/`###`
+ *    allowed and discarded).
+ *
+ * 3. **Multiline Part 24** (Stuart iPhone live layout — highlight fixed
+ *    in #163, parsing here):
+ *      Part <N> (<start> - <end>)
+ *      Vocal | Instrumental          # type word = part title (LTX/Grok)
+ *      [Duration: Xs]                # optional; discarded
+ *      Lyrics:                       # optional; kept in prompt body
+ *      ...
+ *      Positive Prompt:
+ *      ...
+ *      Negative Prompt:
+ *      ...
+ *    Type line also accepts Format aliases (Intro/Outro/Bridge/Lead/
+ *    Break → still stored as written; Format maps them later) and
+ *    `Other Singer: Name`. Lyrics stay in the shot prompt; Positive /
+ *    Negative Prompt labels are stripped into `prompt` /
+ *    `negativePrompt` the same way as the labelled shape.
+ *
+ * A script with no negative prompts (Liquid Horizon, or anything pasted
+ * before labelled format) parses exactly as it always has,
+ * `negativePrompt` simply absent.
  */
 
 export interface ScriptSequencePart {
@@ -109,24 +119,110 @@ const NEGATIVE_LABEL_RE = /(?:^|\n)\s*\*{0,2}\s*Negative\s*Prompt\s*:?\s*\*{0,2}
  * when the script actually labelled one, its negative prompt — see
  * `ScriptSequencePart.negativePrompt`'s doc comment. A body with no
  * `Negative Prompt:` label anywhere just becomes the whole prompt,
- * unchanged from this parser's original, single-block behavior. Pure. */
+ * unchanged from this parser's original, single-block behavior.
+ *
+ * `Positive Prompt:` is stripped whether it leads the body (labelled
+ * markdown / single-line) or sits after an optional `Lyrics:` block
+ * (multiline Part 24) — the Lyrics lines themselves stay in `prompt`.
+ * Pure. */
 function splitPositiveNegative(rawBody: string): { prompt: string; negativePrompt?: string } {
   const body = rawBody.trim();
   const negMatch = body.match(NEGATIVE_LABEL_RE);
   const hasNegIndex = negMatch && typeof negMatch.index === "number";
   const promptSection = hasNegIndex ? body.slice(0, negMatch!.index) : body;
-  const negativePrompt = hasNegIndex ? body.slice(negMatch!.index! + negMatch![0].length).trim() || undefined : undefined;
-  const prompt = promptSection.trim().replace(POSITIVE_LABEL_RE, "").trim();
+  const negativePrompt = hasNegIndex
+    ? body.slice(negMatch!.index! + negMatch![0].length).trim() || undefined
+    : undefined;
+  // Leading label (original labelled format)…
+  let prompt = promptSection.trim().replace(POSITIVE_LABEL_RE, "").trim();
+  // …or a mid-body line-start label after Lyrics / blank lines (Part 24).
+  prompt = prompt.replace(/(?:^|\n)\s*\*{0,2}\s*Positive\s*Prompt\s*:?\s*\*{0,2}\s*/gi, (m, offset) =>
+    offset === 0 ? "" : "\n"
+  ).trim();
   return negativePrompt ? { prompt, negativePrompt } : { prompt };
+}
+
+const OTHER_SINGER_TITLE_RE = /^other[\s-]?singer\s*[:\-]?\s*\(?\s*([^)]*?)\s*\)?$/i;
+
+/** Alias titles Format folds into Instrumental (case-insensitive). */
+const INSTRUMENTAL_ALIASES = new Set([
+  "instrumental",
+  "intro",
+  "outro",
+  "bridge",
+  "lead",
+  "break",
+]);
+
+/** `Part N (m:ss - m:ss)` alone on the first line — multiline Part 24. */
+const PART_TIMES_ONLY_RE =
+  /^#{0,6}\s*Part\s+(\d+)\s*\(\s*([\d:.]+)\s*-\s*([\d:.]+)\s*\)\s*$/;
+
+/** Optional `[Duration: …]` alone on a line (discarded; times come from the header). */
+const DURATION_LINE_ONLY_RE = /^\[[^\]]*Duration[^\]]*\]\s*$/i;
+
+/**
+ * True when a lone line is a Part 24 type word (Vocal / Instrumental),
+ * a Format alias (Intro/Outro/Bridge/Lead/Break), or Other Singer —
+ * the same set title-first LTX/Grok routing recognizes via
+ * `parseScriptPartKind`. Unrecognized creative titles are *not* type
+ * lines (Liquid Horizon stays on the single-line path).
+ */
+function isMultilineTypeLine(raw: string): boolean {
+  const title = raw.trim();
+  if (!title) return false;
+  if (OTHER_SINGER_TITLE_RE.test(title)) return true;
+  const lower = title.toLowerCase();
+  if (lower === "vocal") return true;
+  if (INSTRUMENTAL_ALIASES.has(lower)) return true;
+  return false;
+}
+
+/**
+ * Parses one chunk in Stuart's multiline Part 24 layout. Returns null
+ * when the chunk is not that shape (caller then tries / skips). Pure.
+ */
+function parseMultilinePartChunk(chunk: string): ScriptSequencePart | null {
+  const lines = chunk.split(/\r?\n/);
+  if (lines.length < 2) return null;
+  const headerMatch = lines[0]!.trim().match(PART_TIMES_ONLY_RE);
+  if (!headerMatch) return null;
+
+  let i = 1;
+  while (i < lines.length && lines[i]!.trim() === "") i++;
+  if (i >= lines.length) return null;
+  const typeLine = lines[i]!.trim();
+  if (!isMultilineTypeLine(typeLine)) return null;
+  i++;
+
+  while (i < lines.length && lines[i]!.trim() === "") i++;
+  if (i < lines.length && DURATION_LINE_ONLY_RE.test(lines[i]!.trim())) {
+    i++;
+  }
+
+  const body = lines.slice(i).join("\n");
+  const startSec = parseTimeToSec(headerMatch[2]!);
+  const endSec = parseTimeToSec(headerMatch[3]!);
+  if (endSec <= startSec) return null;
+  const { prompt, negativePrompt } = splitPositiveNegative(body);
+  return {
+    index: Number(headerMatch[1]),
+    title: typeLine,
+    startSec,
+    endSec,
+    prompt,
+    ...(negativePrompt ? { negativePrompt } : {}),
+  };
 }
 
 /**
  * Splits and parses a pasted script into ordered parts. Never throws —
- * a chunk that doesn't match the expected header shape is silently
- * skipped (not defaulted/guessed), so a caller can compare
- * `parts.length` against however many `Part N` markers it expects and
- * show an honest "only found X of Y" rather than trust a partial parse
- * blindly. Returns `[]` for blank/unparseable input.
+ * a chunk that doesn't match a known header shape (single-line Sunny /
+ * labelled markdown, or multiline Part 24) is silently skipped (not
+ * defaulted/guessed), so a caller can compare `parts.length` against
+ * however many `Part N` markers it expects and show an honest "only
+ * found X of Y" rather than trust a partial parse blindly. Returns `[]`
+ * for blank/unparseable input.
  */
 export function parseScriptSequence(script: string): ScriptSequencePart[] {
   const trimmed = script.trim();
@@ -140,20 +236,24 @@ export function parseScriptSequence(script: string): ScriptSequencePart[] {
   const parts: ScriptSequencePart[] = [];
   for (const chunk of chunks) {
     const match = chunk.match(PART_HEADER_RE);
-    if (!match) continue;
-    const [, indexStr, startStr, endStr, title, body] = match;
-    const startSec = parseTimeToSec(startStr);
-    const endSec = parseTimeToSec(endStr);
-    if (endSec <= startSec) continue; // a real, if malformed, header — never build a zero/negative-length clip
-    const { prompt, negativePrompt } = splitPositiveNegative(body);
-    parts.push({
-      index: Number(indexStr),
-      title: title.trim(),
-      startSec,
-      endSec,
-      prompt,
-      ...(negativePrompt ? { negativePrompt } : {}),
-    });
+    if (match) {
+      const [, indexStr, startStr, endStr, title, body] = match;
+      const startSec = parseTimeToSec(startStr);
+      const endSec = parseTimeToSec(endStr);
+      if (endSec <= startSec) continue; // a real, if malformed, header — never build a zero/negative-length clip
+      const { prompt, negativePrompt } = splitPositiveNegative(body);
+      parts.push({
+        index: Number(indexStr),
+        title: title.trim(),
+        startSec,
+        endSec,
+        prompt,
+        ...(negativePrompt ? { negativePrompt } : {}),
+      });
+      continue;
+    }
+    const multiline = parseMultilinePartChunk(chunk);
+    if (multiline) parts.push(multiline);
   }
   return parts;
 }
@@ -172,18 +272,6 @@ export function parseScriptSequence(script: string): ScriptSequencePart[] {
 export const SCRIPT_SEQUENCE_TYPE_WORDS = ["Vocal", "Instrumental"] as const;
 
 export type ScriptSequenceTypeWord = (typeof SCRIPT_SEQUENCE_TYPE_WORDS)[number];
-
-const OTHER_SINGER_TITLE_RE = /^other[\s-]?singer\s*[:\-]?\s*\(?\s*([^)]*?)\s*\)?$/i;
-
-/** Alias titles Format folds into Instrumental (case-insensitive). */
-const INSTRUMENTAL_ALIASES = new Set([
-  "instrumental",
-  "intro",
-  "outro",
-  "bridge",
-  "lead",
-  "break",
-]);
 
 /**
  * Normalizes a part header's title field to Vocal / Instrumental (or
