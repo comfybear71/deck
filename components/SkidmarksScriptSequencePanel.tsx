@@ -508,7 +508,7 @@ export function SkidmarksScriptSequencePanel({
   const handleGeneratePlates = async () => {
     if (running) return;
     if (parts.length === 0) {
-      setResult({ ok: false, message: "Couldn't find any “Part N (start - end) — Title[Duration: ...].” entries in that text." });
+      setResult({ ok: false, message: "Couldn't find any Part entries in that text. Use either `Part N (start - end) — Title[Duration: ...].` on one line, or the multiline shape: Part times, then Vocal/Instrumental, optional [Duration], then Lyrics / Positive Prompt / Negative Prompt." });
       return;
     }
     if (!hasMp3) {
@@ -681,7 +681,7 @@ export function SkidmarksScriptSequencePanel({
   const handleRun = async () => {
     if (running) return;
     if (parts.length === 0) {
-      setResult({ ok: false, message: "Couldn't find any “Part N (start - end) — Title[Duration: ...].” entries in that text." });
+      setResult({ ok: false, message: "Couldn't find any Part entries in that text. Use either `Part N (start - end) — Title[Duration: ...].` on one line, or the multiline shape: Part times, then Vocal/Instrumental, optional [Duration], then Lyrics / Positive Prompt / Negative Prompt." });
       return;
     }
     if (!hasMp3) {
