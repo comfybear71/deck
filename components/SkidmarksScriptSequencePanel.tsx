@@ -850,7 +850,10 @@ export function SkidmarksScriptSequencePanel({
         />
       </div>
 
-      <div className="flex items-center justify-between gap-2">
+      {/* Action chrome: Clip 1 upload is its own row above; status + actions
+          stack cleanly so iPhone doesn't stagger "No parts yet" beside wrapping
+          buttons. Behavior unchanged — Timeline / plates / Generate handlers. */}
+      <div className="flex flex-col gap-2">
         <span
           className="text-[11px] text-white/40"
           title={
@@ -861,13 +864,13 @@ export function SkidmarksScriptSequencePanel({
         >
           {parts.length > 0 ? `${parts.length} part${parts.length === 1 ? "" : "s"}` : "No parts yet"}
         </span>
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
             onClick={handleBuildTimeline}
             disabled={!!running || parts.length === 0 || !!incompleteRun}
             title="Pre-fills every plate with the locked reference photo (if any) — free, no rendering yet, so you can check the timeline shape first."
-            className="rounded-full border border-white/15 bg-white/[0.03] px-3 py-1.5 text-[12px] font-medium text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-w-0 rounded-full border border-white/15 bg-white/[0.03] px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
           >
             Timeline
           </button>
@@ -880,7 +883,7 @@ export function SkidmarksScriptSequencePanel({
                 ? `Builds missing stills for up to ${parts.length} clips — skips good stills and finished videos; no video yet`
                 : undefined
             }
-            className="rounded-full border border-rose-400/40 bg-rose-400/15 px-3 py-1.5 text-[12px] font-medium text-rose-100 transition-colors hover:bg-rose-400/25 disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-w-0 rounded-full border border-rose-400/40 bg-rose-400/15 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-rose-100 transition-colors hover:bg-rose-400/25 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
           >
             {running === "plates" ? "Plating…" : "Generate plates"}
           </button>
@@ -895,11 +898,12 @@ export function SkidmarksScriptSequencePanel({
                   ? `Animates existing plates for all ${parts.length} clips — skips none that are missing a still`
                   : undefined
             }
-            className="rounded-full bg-rose-400 px-3 py-1.5 text-[12px] font-medium text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-w-0 rounded-full bg-rose-400 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
           >
             {running === "render" ? "Rendering…" : "Generate"}
           </button>
         </div>
+        <p className="text-[10px] leading-snug text-white/30">Timeline builds clip rows from script · free preview</p>
       </div>
 
       {progressText && (
