@@ -260,80 +260,128 @@ function highlightKindForTitle(title: string): Exclude<ScriptSequenceHighlightKi
   return null;
 }
 
-const HEADER_CHUNK_RE =
-  /(#{0,6}\s*Part\s+\d+\s*\(\s*[\d:.]+\s*-\s*[\d:.]+\s*\)\s*[—-]\s*)([^[\n]*?)(\s*\[[^\]]*\])/gi;
+/** `Part N (m:ss - m:ss)` — times only; works on its own line (Stuart multiline) or leading a Sunny-style header. */
+const PART_FIELD_RE = /#{0,6}\s*Part\s+\d+\s*\(\s*[\d:.]+\s*-\s*[\d:.]+\s*\)/gi;
 
-const PROMPT_LABEL_RE = /^(\*{0,2}\s*Positive\s*Prompt\s*:?\s*\*{0,2}|\*{0,2}\s*Negative\s*Prompt\s*:?\s*\*{0,2})/gim;
+/** `[Duration: …]` brackets only — random `[refs]` in prose stay plain. */
+const DURATION_FIELD_RE = /\[[^\]]*Duration[^\]]*\]/gi;
+
+/**
+ * Positive/Negative Prompt labels at line start. Horizontal whitespace only
+ * after the colon so same-line prose stays plain and every later label is
+ * still found (a prior `\s*` that ate `\n` used to leave later labels white).
+ * Markdown `**` optional either side. Group 1 is leading indent (plain);
+ * group 2 is the coloured label; group 3 is Positive vs Negative.
+ */
+const PROMPT_LABEL_FIELD_RE =
+  /^([^\S\n]*)(\*{0,2}[^\S\n]*(Positive|Negative)[^\S\n]*Prompt[^\S\n]*:?[^\S\n]*\*{0,2})/gim;
+
+/**
+ * Vocal / Instrumental alone on a line (multiline Part 24). Never matches
+ * those words inside shot prose / lyric lines.
+ */
+const TYPE_LINE_RE = /^([^\S\n]*)(Vocal|Instrumental)([^\S\n]*)$/gim;
+
+/**
+ * Single-line header title between em/en dash and `[Duration…]` — the same
+ * span Format rewrites. Captures the title only (not the dash / bracket).
+ */
+const HEADER_TITLE_RE =
+  /#{0,6}\s*Part\s+\d+\s*\(\s*[\d:.]+\s*-\s*[\d:.]+\s*\)\s*[—-]\s*([^[\n]*?)(?=\s*\[[^\]]*\])/gi;
+
+type ColourRange = {
+  start: number;
+  end: number;
+  kind: Exclude<ScriptSequenceHighlightKind, "plain">;
+};
 
 function pushPlain(segments: ScriptSequenceHighlightSegment[], text: string) {
   if (!text) return;
   segments.push({ kind: "plain", text });
 }
 
+function addColourRange(ranges: ColourRange[], start: number, end: number, kind: ColourRange["kind"]) {
+  if (end <= start) return;
+  if (ranges.some((r) => start < r.end && end > r.start)) return;
+  ranges.push({ start, end, kind });
+}
+
+function collectScriptSequenceColourRanges(raw: string): ColourRange[] {
+  const ranges: ColourRange[] = [];
+
+  const partRe = new RegExp(PART_FIELD_RE.source, PART_FIELD_RE.flags);
+  for (const m of raw.matchAll(partRe)) {
+    if (typeof m.index !== "number") continue;
+    addColourRange(ranges, m.index, m.index + m[0].length, "part");
+  }
+
+  const durationRe = new RegExp(DURATION_FIELD_RE.source, DURATION_FIELD_RE.flags);
+  for (const m of raw.matchAll(durationRe)) {
+    if (typeof m.index !== "number") continue;
+    addColourRange(ranges, m.index, m.index + m[0].length, "duration");
+  }
+
+  const promptRe = new RegExp(PROMPT_LABEL_FIELD_RE.source, PROMPT_LABEL_FIELD_RE.flags);
+  for (const m of raw.matchAll(promptRe)) {
+    if (typeof m.index !== "number") continue;
+    const indent = m[1] ?? "";
+    const label = m[2] ?? "";
+    const which = m[3] ?? "";
+    const labelStart = m.index + indent.length;
+    const kind: ColourRange["kind"] = /^negative$/i.test(which) ? "negative-prompt" : "positive-prompt";
+    addColourRange(ranges, labelStart, labelStart + label.length, kind);
+  }
+
+  const typeLineRe = new RegExp(TYPE_LINE_RE.source, TYPE_LINE_RE.flags);
+  for (const m of raw.matchAll(typeLineRe)) {
+    if (typeof m.index !== "number") continue;
+    const indent = m[1] ?? "";
+    const word = m[2] ?? "";
+    const wordStart = m.index + indent.length;
+    const kind = highlightKindForTitle(word);
+    if (kind) addColourRange(ranges, wordStart, wordStart + word.length, kind);
+  }
+
+  const titleRe = new RegExp(HEADER_TITLE_RE.source, HEADER_TITLE_RE.flags);
+  for (const m of raw.matchAll(titleRe)) {
+    if (typeof m.index !== "number") continue;
+    const title = m[1] ?? "";
+    // Title starts after the full match prefix (everything before group 1).
+    const titleStart = m.index + m[0].length - title.length;
+    const kind = highlightKindForTitle(title);
+    if (kind) addColourRange(ranges, titleStart, titleStart + title.length, kind);
+  }
+
+  ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+  return ranges;
+}
+
 /**
  * Splits raw script text into coloured segments for the Script Sequence
- * highlight overlay. Colours the Part 24 structural fields:
- *   Part N (m:ss - m:ss) — …   → part
- *   Vocal | Instrumental       → vocal / instrumental
+ * highlight overlay. Colours the Part 24 structural fields on both the
+ * single-line Sunny-style header and Stuart's multiline layout:
+ *   Part N (m:ss - m:ss)       → part
+ *   Vocal | Instrumental       → vocal / instrumental (own line, or header type word)
  *   [Duration: Xs]             → duration
- *   Positive Prompt:               → positive-prompt
- *   Negative Prompt:               → negative-prompt
- * Shot prose stays plain. Concatenating every segment's `text`
+ *   Positive Prompt:           → positive-prompt (every occurrence; label only)
+ *   Negative Prompt:           → negative-prompt (every occurrence; label only)
+ * Shot prose / lyric lines stay plain. Concatenating every segment's `text`
  * reconstructs `raw` exactly.
  */
 export function buildScriptSequenceHighlightSegments(raw: string): ScriptSequenceHighlightSegment[] {
+  if (!raw) return [];
+  const ranges = collectScriptSequenceColourRanges(raw);
   const segments: ScriptSequenceHighlightSegment[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  HEADER_CHUNK_RE.lastIndex = 0;
-  while ((match = HEADER_CHUNK_RE.exec(raw)) !== null) {
-    const prefix = match[1] ?? "";
-    const title = match[2] ?? "";
-    const duration = match[3] ?? "";
-    const chunkStart = match.index;
-    if (chunkStart > lastIndex) {
-      colourPromptLabelsInRange(raw, lastIndex, chunkStart, segments);
-    }
-    segments.push({ kind: "part", text: prefix });
-    const kind = highlightKindForTitle(title);
-    segments.push(kind ? { kind, text: title } : { kind: "plain", text: title });
-    segments.push({ kind: "duration", text: duration });
-    lastIndex = chunkStart + prefix.length + title.length + duration.length;
+  let last = 0;
+  for (const range of ranges) {
+    if (range.start < last) continue;
+    if (range.start > last) pushPlain(segments, raw.slice(last, range.start));
+    segments.push({ kind: range.kind, text: raw.slice(range.start, range.end) });
+    last = range.end;
   }
-  if (lastIndex < raw.length) {
-    colourPromptLabelsInRange(raw, lastIndex, raw.length, segments);
-  }
-  if (segments.length === 0 && raw.length > 0) {
-    pushPlain(segments, raw);
-  }
+  if (last < raw.length) pushPlain(segments, raw.slice(last));
+  if (segments.length === 0 && raw.length > 0) pushPlain(segments, raw);
   return segments;
-}
-
-/** Colour Positive/Negative Prompt labels inside [start, end) as separate kinds. */
-function colourPromptLabelsInRange(
-  raw: string,
-  start: number,
-  end: number,
-  segments: ScriptSequenceHighlightSegment[]
-) {
-  const slice = raw.slice(start, end);
-  PROMPT_LABEL_RE.lastIndex = 0;
-  let localLast = 0;
-  let m: RegExpExecArray | null;
-  while ((m = PROMPT_LABEL_RE.exec(slice)) !== null) {
-    if (m.index > localLast) {
-      pushPlain(segments, slice.slice(localLast, m.index));
-    }
-    const label = m[0];
-    const kind: Exclude<ScriptSequenceHighlightKind, "plain"> = /negative/i.test(label)
-      ? "negative-prompt"
-      : "positive-prompt";
-    segments.push({ kind, text: label });
-    localLast = m.index + m[0].length;
-  }
-  if (localLast < slice.length) {
-    pushPlain(segments, slice.slice(localLast));
-  }
 }
 
 /** Opaque text colours for the overlay + colour-tag legend (script box only). */

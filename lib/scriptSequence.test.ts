@@ -301,7 +301,92 @@ describe("buildScriptSequenceHighlightSegments", () => {
     expect(segments.some((s) => s.kind === "plain" && s.text.includes("Wide shot"))).toBe(true);
   });
 
-  it("legend is Part 24 field keys only — no Intro/Outro/Bridge/Other Singer chips", () => {
+  it("multiline Part 24: colours Part / Vocal|Instrumental / Duration / Prompt labels; reconstructs raw", () => {
+    const raw =
+      "Part 18 (4:15 - 4:30)\n" +
+      "Vocal\n" +
+      "[Duration: 15s]\n" +
+      "Positive Prompt: Close-up of the singer under neon rain.\n" +
+      "Negative Prompt: crowds, blur\n" +
+      "\n" +
+      "Part 19 (4:30 - 4:45)\n" +
+      "Instrumental\n" +
+      "[Duration: 15s]\n" +
+      "Positive Prompt:\n" +
+      "Wide shot of empty street at night.\n" +
+      "Negative Prompt:\n" +
+      "warm light, faces\n";
+    const segments = buildScriptSequenceHighlightSegments(raw);
+    expect(segments.map((s) => s.text).join("")).toBe(raw);
+
+    expect(segments.filter((s) => s.kind === "part")).toHaveLength(2);
+    expect(segments.some((s) => s.kind === "part" && s.text.includes("Part 18"))).toBe(true);
+    expect(segments.some((s) => s.kind === "part" && s.text.includes("Part 19"))).toBe(true);
+
+    expect(segments.some((s) => s.kind === "vocal" && s.text === "Vocal")).toBe(true);
+    expect(segments.some((s) => s.kind === "instrumental" && s.text === "Instrumental")).toBe(true);
+
+    expect(segments.filter((s) => s.kind === "duration")).toHaveLength(2);
+    expect(segments.every((s) => s.kind !== "duration" || s.text.includes("[Duration:"))).toBe(true);
+
+    // White-regression case: same-line label+prose AND next-line label — every label colours.
+    const positives = segments.filter((s) => s.kind === "positive-prompt");
+    const negatives = segments.filter((s) => s.kind === "negative-prompt");
+    expect(positives).toHaveLength(2);
+    expect(negatives).toHaveLength(2);
+    expect(positives.every((s) => /Positive\s*Prompt/i.test(s.text))).toBe(true);
+    expect(negatives.every((s) => /Negative\s*Prompt/i.test(s.text))).toBe(true);
+    // Label only — same-line prose and next-line prose stay plain.
+    expect(positives.some((s) => s.text.includes("Close-up"))).toBe(false);
+    expect(positives.some((s) => s.text.includes("Wide shot"))).toBe(false);
+    expect(segments.some((s) => s.kind === "plain" && s.text.includes("Close-up of the singer"))).toBe(true);
+    expect(segments.some((s) => s.kind === "plain" && s.text.includes("Wide shot of empty street"))).toBe(true);
+    // Type words in prose stay plain.
+    expect(segments.some((s) => s.kind === "plain" && s.text.includes("singer under neon"))).toBe(true);
+  });
+
+  it("Positive Prompt white-regression: label+prose same line then next line still colours every label", () => {
+    const raw =
+      "Part 1 (0:00 - 0:15)\n" +
+      "Vocal\n" +
+      "[Duration: 15s]\n" +
+      "Positive Prompt: prose on the same line as the label.\n" +
+      "Negative Prompt: first neg\n" +
+      "Part 2 (0:15 - 0:30)\n" +
+      "Instrumental\n" +
+      "[Duration: 15s]\n" +
+      "Positive Prompt:\n" +
+      "prose on the next line after the label\n" +
+      "Negative Prompt:\n" +
+      "second neg\n";
+    const segments = buildScriptSequenceHighlightSegments(raw);
+    expect(segments.map((s) => s.text).join("")).toBe(raw);
+    expect(segments.filter((s) => s.kind === "positive-prompt")).toHaveLength(2);
+    expect(segments.filter((s) => s.kind === "negative-prompt")).toHaveLength(2);
+    // Neither prompt label segment swallows prose.
+    for (const s of segments) {
+      if (s.kind === "positive-prompt" || s.kind === "negative-prompt") {
+        expect(s.text).not.toMatch(/prose|first neg|second neg/i);
+      }
+    }
+  });
+
+  it("does not colour Vocal/Instrumental inside shot prose or lyric lines", () => {
+    const raw =
+      "Part 1 (0:00 - 0:15)\n" +
+      "Vocal\n" +
+      "[Duration: 15s]\n" +
+      "Positive Prompt: A vocal take; instrumental bed under the lyric.\n";
+    const segments = buildScriptSequenceHighlightSegments(raw);
+    expect(segments.map((s) => s.text).join("")).toBe(raw);
+    expect(segments.filter((s) => s.kind === "vocal")).toHaveLength(1);
+    expect(segments.filter((s) => s.kind === "vocal")[0]?.text).toBe("Vocal");
+    expect(segments.some((s) => s.kind === "instrumental")).toBe(false);
+    const prose = segments.find((s) => s.text.includes("vocal take"));
+    expect(prose?.kind).toBe("plain");
+  });
+
+    it("legend is Part 24 field keys only — no Intro/Outro/Bridge/Other Singer chips", () => {
     expect(SCRIPT_SEQUENCE_COLOUR_TAGS.map((t) => t.label)).toEqual([
       "Part",
       "Vocal",
