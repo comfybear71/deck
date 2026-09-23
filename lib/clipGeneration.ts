@@ -139,7 +139,7 @@
  * see `lib/minimaxH3.ts`'s module doc comment.
  */
 
-import { getSkidmarksCharacterLock } from "./plateGeneration";
+import { getSkidmarksCharacterLock, shotPromptMentionsLockedCharacter } from "./plateGeneration";
 import {
   resolveInstrumentalVideoModel,
   type SkidmarksClipSentPayload,
@@ -505,13 +505,15 @@ export interface BuildClipGenerationRequestParams {
   mp3AudioUrl?: string;
   /** The resolved vocalist for this clip's band
    * (`resolveVocalistForPrompt`, `lib/plateGeneration.ts`), if any —
-   * only used on the Vocal/Comfy-LTX path, to carry a **locked**
-   * character's (Jack Ash today) hallmarks/negative cues into the
-   * video prompt the same way `buildPlateGenerationRequest` already
-   * does for stills (see this function's body for the video-specific
-   * "neon-blue lips only if his mouth is actually in frame, never a
-   * readable stare" addendum). Has no effect when the vocalist has no
-   * registered lock, or on an Instrumental/Grok request. */
+   * used to carry a **locked** character's (Jack Ash today) hallmarks /
+   * negative cues into the video prompt the same way
+   * `buildPlateGenerationRequest` already does for stills. On Vocal, the
+   * lock always applies when the vocalist is locked. On Instrumental /
+   * Grok, the lock only applies when the shot prompt actually names them
+   * (`shotPromptMentionsLockedCharacter`) — so a Chain chaos / abstract
+   * Instrumental run can melt away from a person still without the
+   * hallmarks forcing "he is the only figure in frame" on every clip.
+   * Has no effect when the vocalist has no registered lock. */
   vocalist?: SkidmarksMember;
   /** Passed straight through to the built `ClipGenerationRequest` — see
    * that interface's doc comment. */
@@ -707,14 +709,18 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
 
   const lock = params.vocalist ? getSkidmarksCharacterLock(params.vocalist) : undefined;
   const lockedVocal = Boolean(params.vocal && lock);
-  // Real gap found 2026-09-16 (Stuart's "Jack Ghost" spec): a locked
-  // character's own look text used to be added only on a Vocal/Singing
-  // clip — an Instrumental/Mute clip got nothing but its own starting
-  // still and whatever Stuart typed that one time. The still is locked,
-  // but nothing kept the *clip* honest against drifting off it once
-  // motion started. `lockedInstrumental` mirrors `lockedVocal` for that
-  // other case so both clip types carry the same protection.
-  const lockedInstrumental = Boolean(!params.vocal && lock);
+  // Jack Ghost (2026-09-16) still wants Instrumental clips that *feature*
+  // a locked character to carry his look text — otherwise motion drifts
+  // off the still. But always-on Instrumental lock (any Jack Ash band
+  // clip, even abstract chaos) forced fedora / neon-blue-lips / "only
+  // figure in frame" into every Chain morph (live, 2026-09-23 STONED
+  // jazz). Match plates: Instrumental lock only when the shot names him.
+  const lockedInstrumental = Boolean(
+    !params.vocal &&
+      lock &&
+      params.vocalist &&
+      shotPromptMentionsLockedCharacter(params.shotPrompt, params.vocalist)
+  );
   const locked = lockedVocal || lockedInstrumental;
   // User text wins (audit Part 3). His motion note goes out exactly as
   // typed; the only line this app adds on its own is a camera hold
