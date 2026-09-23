@@ -1306,6 +1306,14 @@ export interface SkidmarksScriptSequenceDraft {
    * `SkidmarksPlateStill.dataUrl`'s doc comment). `undefined` means no
    * starting image picked (or it was removed). */
   startingImageUrl?: string;
+  /**
+   * Script Sequence "Chain last→first" toggle (default off). When true,
+   * Generate / Resume writes each render's server last frame onto the
+   * next clip's starting plate (`source: "chained"`) if that plate is
+   * empty or already chain-sourced — never clobbers upload / generated /
+   * library. Persist so a reload keeps Stuart's continuity choice.
+   */
+  chainLastFrameToNext?: boolean;
 }
 
 /** The Music-video wizard's progress — which project type, which band,
@@ -1666,6 +1674,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
       ? {
           script: storedDraft.script,
           ...(typeof storedDraft.startingImageUrl === "string" ? { startingImageUrl: storedDraft.startingImageUrl } : {}),
+          ...(storedDraft.chainLastFrameToNext === true ? { chainLastFrameToNext: true } : {}),
         }
       : null;
 

@@ -3,6 +3,7 @@ import {
   isGeneratePlatesButtonDisabled,
   parseScriptPartKind,
   plateStillCountsAsReady,
+  plateStillAllowsChainFill,
   resolveScriptPartIdentity,
   runAnimateExistingPlates,
   runGeneratePlates,
@@ -1050,6 +1051,7 @@ function fakeAnimateDeps(overrides: Partial<AnimateExistingPlatesDeps> = {}): An
   return {
     renderClip: vi.fn(async () => ({ ok: true as const, videoUrl: "https://blob.example/clip.mp4", persisted: true })),
     recordRender: vi.fn(),
+    setPlateStill: vi.fn(),
     onProgress: vi.fn(),
     ...overrides,
   };
@@ -1486,9 +1488,206 @@ describe("runAnimateExistingPlates", () => {
 
     await runAnimateExistingPlates(parts, targets, "Solar Rebel", nova, bandMembers, "https://blob.example/song.mp3", deps);
 
-    // Animate deps intentionally omit setPlateStill / generateIdentityStill.
+    // Chain off (default): never writes plate stills from last frames.
     expect(deps.renderClip).toHaveBeenCalledTimes(1);
+    expect(deps.setPlateStill).not.toHaveBeenCalled();
     const recorded = (deps.recordRender as ReturnType<typeof vi.fn>).mock.calls[0][0] as { lastFrameUrl?: string };
     expect(recorded.lastFrameUrl).toBeUndefined();
+  });
+
+  it("chain last→first OFF by default — even when lastFrameUrl is returned, no next-plate fill", async () => {
+    const deps = fakeAnimateDeps({
+      renderClip: vi.fn(async () => ({
+        ok: true as const,
+        videoUrl: "https://blob.example/clip.mp4",
+        persisted: true,
+        lastFrameUrl: "https://blob.example/last.jpg",
+      })),
+    });
+    const parts = titledParts().slice(0, 2);
+    const targets = platedTargets(["https://blob.example/plate-0.jpg", "https://blob.example/plate-1.jpg"]);
+
+    const outcome = await runAnimateExistingPlates(
+      parts,
+      targets,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps
+    );
+
+    expect(outcome).toEqual({ ok: true, renderedCount: 2 });
+    expect(deps.setPlateStill).not.toHaveBeenCalled();
+  });
+
+  it("chain last→first ON: fills empty next start from lastFrameUrl and renders it next", async () => {
+    const deps = fakeAnimateDeps({
+      renderClip: vi.fn(async () => ({
+        ok: true as const,
+        videoUrl: "https://blob.example/clip.mp4",
+        persisted: true,
+        lastFrameUrl: "https://blob.example/last-0.jpg",
+      })),
+    });
+    const parts = titledParts().slice(0, 2);
+    const targets: AnimateExistingPlatesTarget[] = [
+      { segmentId: "seg-0", plateId: "plate-0", plateStillUrl: "https://blob.example/plate-0.jpg", plateStillSource: "generated" },
+      { segmentId: "seg-1", plateId: "plate-1" }, // empty — chain should fill
+    ];
+
+    const outcome = await runAnimateExistingPlates(
+      parts,
+      targets,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps,
+      0,
+      undefined,
+      true
+    );
+
+    expect(outcome).toEqual({ ok: true, renderedCount: 2 });
+    expect(deps.setPlateStill).toHaveBeenCalledTimes(1);
+    expect(deps.setPlateStill).toHaveBeenCalledWith("seg-1", "plate-1", {
+      dataUrl: "https://blob.example/last-0.jpg",
+      source: "chained",
+      createdAt: expect.any(Number),
+    });
+    // Second render must use the chained URL, not invent a plate.
+    type RenderRequest = { referenceImageDataUrls?: string[] };
+    const renderRequests = (deps.renderClip as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([request]) => request as RenderRequest
+    );
+    expect(renderRequests[1].referenceImageDataUrls).toEqual(["https://blob.example/last-0.jpg"]);
+    const events = (deps.onProgress as ReturnType<typeof vi.fn>).mock.calls.map(([e]) => e.type);
+    expect(events).toContain("chaining");
+  });
+
+  it("chain last→first ON: never clobbers generated / upload / library next stills", async () => {
+    const deps = fakeAnimateDeps({
+      renderClip: vi.fn(async () => ({
+        ok: true as const,
+        videoUrl: "https://blob.example/clip.mp4",
+        persisted: true,
+        lastFrameUrl: "https://blob.example/last-0.jpg",
+      })),
+    });
+    const parts = titledParts().slice(0, 2);
+
+    for (const source of ["generated", "upload", "library"] as const) {
+      vi.clearAllMocks();
+      const targets: AnimateExistingPlatesTarget[] = [
+        { segmentId: "seg-0", plateId: "plate-0", plateStillUrl: "https://blob.example/plate-0.jpg", plateStillSource: "generated" },
+        {
+          segmentId: "seg-1",
+          plateId: "plate-1",
+          plateStillUrl: `https://blob.example/kept-${source}.jpg`,
+          plateStillSource: source,
+        },
+      ];
+      const outcome = await runAnimateExistingPlates(
+        parts,
+        targets,
+        "Solar Rebel",
+        nova,
+        bandMembers,
+        "https://blob.example/song.mp3",
+        deps,
+        0,
+        undefined,
+        true
+      );
+      expect(outcome).toEqual({ ok: true, renderedCount: 2 });
+      expect(deps.setPlateStill).not.toHaveBeenCalled();
+      type RenderRequest = { referenceImageDataUrls?: string[] };
+      const second = (deps.renderClip as ReturnType<typeof vi.fn>).mock.calls[1][0] as RenderRequest;
+      expect(second.referenceImageDataUrls).toEqual([`https://blob.example/kept-${source}.jpg`]);
+    }
+  });
+
+  it("chain last→first ON: may refresh a next still that was itself source:chained", async () => {
+    const deps = fakeAnimateDeps({
+      renderClip: vi.fn(async () => ({
+        ok: true as const,
+        videoUrl: "https://blob.example/clip.mp4",
+        persisted: true,
+        lastFrameUrl: "https://blob.example/fresh-last.jpg",
+      })),
+    });
+    const parts = titledParts().slice(0, 2);
+    const targets: AnimateExistingPlatesTarget[] = [
+      { segmentId: "seg-0", plateId: "plate-0", plateStillUrl: "https://blob.example/plate-0.jpg", plateStillSource: "generated" },
+      {
+        segmentId: "seg-1",
+        plateId: "plate-1",
+        plateStillUrl: "https://blob.example/old-chained.jpg",
+        plateStillSource: "chained",
+      },
+    ];
+
+    const outcome = await runAnimateExistingPlates(
+      parts,
+      targets,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps,
+      0,
+      undefined,
+      true
+    );
+
+    expect(outcome).toEqual({ ok: true, renderedCount: 2 });
+    expect(deps.setPlateStill).toHaveBeenCalledWith("seg-1", "plate-1", {
+      dataUrl: "https://blob.example/fresh-last.jpg",
+      source: "chained",
+      createdAt: expect.any(Number),
+    });
+  });
+
+  it("chain last→first ON: fails honestly when a fill is needed but lastFrameUrl is missing", async () => {
+    const deps = fakeAnimateDeps(); // no lastFrameUrl
+    const parts = titledParts().slice(0, 2);
+    const targets: AnimateExistingPlatesTarget[] = [
+      { segmentId: "seg-0", plateId: "plate-0", plateStillUrl: "https://blob.example/plate-0.jpg", plateStillSource: "generated" },
+      { segmentId: "seg-1", plateId: "plate-1" },
+    ];
+
+    const outcome = await runAnimateExistingPlates(
+      parts,
+      targets,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps,
+      0,
+      undefined,
+      true
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.failedAtClipIndex).toBe(0);
+      expect(outcome.renderedCount).toBe(1);
+      expect(outcome.message.toLowerCase()).toMatch(/last frame/);
+    }
+    expect(deps.setPlateStill).not.toHaveBeenCalled();
+  });
+});
+
+describe("plateStillAllowsChainFill", () => {
+  it("allows empty and chained; blocks upload / generated / library", () => {
+    expect(plateStillAllowsChainFill(undefined)).toBe(true);
+    expect(plateStillAllowsChainFill(null)).toBe(true);
+    expect(plateStillAllowsChainFill({})).toBe(true);
+    expect(plateStillAllowsChainFill({ source: "chained" })).toBe(true);
+    expect(plateStillAllowsChainFill({ source: "upload" })).toBe(false);
+    expect(plateStillAllowsChainFill({ source: "generated" })).toBe(false);
+    expect(plateStillAllowsChainFill({ source: "library" })).toBe(false);
   });
 });

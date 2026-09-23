@@ -19,7 +19,6 @@ import {
 import {
   buildPlateGenerationRequest,
   generatePlateStill,
-  getSkidmarksCharacterLock,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
 import { resolveLocationStill } from "@/lib/plateLocation";
@@ -97,6 +96,8 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
   switch (event.type) {
     case "rendering":
       return `Rendering clip ${event.clipIndex + 1} of ${event.clipCount}…`;
+    case "chaining":
+      return `Chaining clip ${event.clipIndex + 1}'s last frame → clip ${event.clipIndex + 2} start…`;
     case "clip-done":
       return `Clip ${event.clipIndex + 1} of ${event.clipCount} done.`;
   }
@@ -117,7 +118,10 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
  * — never rebuilds/overwrites them. Stays enabled even when Resume shows
  * for an incomplete animate run. "Generate" / Resume then animates plates
  * that already exist (`runAnimateExistingPlates`) — refuses a clip with
- * no plate still. Neither path chains last frames (identity-safe).
+ * no plate still. Default stays identity-safe (no last-frame chain).
+ * Optional UI toggle **Chain last→first** turns on render-time continuity:
+ * after each clip, the server last frame fills the next empty / already-
+ * chained start (never clobbers upload / Generate plates / sleeve Keep).
  * `runScriptSequence` and its Jack-Ash scene-block-chaining coverage stay
  * untouched.
  *
@@ -139,13 +143,10 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
  * real failure, reporting exactly which clip, rather than continuing to
  * spend on a broken or identity-less chain.
  *
- * **"Build timeline" (2026-09-15)** is unchanged: build the whole
- * timeline and, for a *locked* character only, pre-fill every plate with
- * their reference photo so Stuart can scroll through before spending
- * anything. That pre-fill is a locked-character avatar preview only —
- * `plateStillCountsAsReady` does not treat it as a finished plate, so
- * Generate plates still builds a real place + identity composite for
- * those slots. Real stills and finished videos are left alone.
+ * **Clip rows** are built by Generate plates / Generate via `ensureTimeline`
+ * (remint-safe `buildScriptSequenceSegments`). There is no separate Timeline
+ * preview button — that path stamped the same locked reference / avatar onto
+ * every plate as a starting image, which Stuart does not want.
  *
  * **Clip 1 starting-image upload (restored)**: optional. When set, the
  * identity-safe runner uses that durable Blob URL as clip 1's image 1
@@ -314,6 +315,8 @@ export function SkidmarksScriptSequencePanel({
 
   const script = scriptSequenceDraft?.script ?? "";
   const startingImageUrl = scriptSequenceDraft?.startingImageUrl;
+  /** Default OFF — plate-first Generate plates stays unchanged until Stuart flips this. */
+  const chainLastFrameToNext = scriptSequenceDraft?.chainLastFrameToNext === true;
   const parts = useMemo(() => parseScriptSequence(script), [script]);
   /** One parsed kind per part, positionally aligned with `parts` — see
    * `lib/scriptSequenceRunner.ts`'s `parseScriptPartKind` doc comment
@@ -360,7 +363,7 @@ export function SkidmarksScriptSequencePanel({
         setStartingImageError("Couldn't save that image — try again.");
         return;
       }
-      onSetScriptSequenceDraft({ script, startingImageUrl: uploadOutcome.url });
+      onSetScriptSequenceDraft({ script, startingImageUrl: uploadOutcome.url, chainLastFrameToNext });
       flushSkidmarksSessionNow();
     } catch {
       setStartingImageError("Couldn't read that image — try a different file.");
@@ -370,18 +373,18 @@ export function SkidmarksScriptSequencePanel({
   };
 
   const handleRemoveStartingImage = () => {
-    onSetScriptSequenceDraft({ script, startingImageUrl: undefined });
+    onSetScriptSequenceDraft({ script, startingImageUrl: undefined, chainLastFrameToNext });
     flushSkidmarksSessionNow();
   };
 
   /** Script-text only — never calls ensureTimeline / onSetScriptSequence,
    * so Format / Full-screen Apply cannot remint clips or wipe plates.
-   * Timeline rebuild stays on Timeline / Generate plates / Generate, which
+   * Timeline rebuild stays on Generate plates / Generate, which
    * already use remint-safe `buildScriptSequenceSegments`. */
   const applyScriptText = (next: string, captureUndo: boolean) => {
     if (next === script) return;
     if (captureUndo) setScriptUndo(script);
-    onSetScriptSequenceDraft({ script: next, startingImageUrl });
+    onSetScriptSequenceDraft({ script: next, startingImageUrl, chainLastFrameToNext });
   };
 
   const handleFormatScript = () => {
@@ -392,7 +395,7 @@ export function SkidmarksScriptSequencePanel({
 
   const handleUndoScript = () => {
     if (scriptUndo === null || running) return;
-    onSetScriptSequenceDraft({ script: scriptUndo, startingImageUrl });
+    onSetScriptSequenceDraft({ script: scriptUndo, startingImageUrl, chainLastFrameToNext });
     setScriptUndo(null);
   };
 
@@ -443,11 +446,20 @@ export function SkidmarksScriptSequencePanel({
     renderClip: async (request) => {
       const clipOutcome = await generateSkidmarksClip(request);
       if (!clipOutcome.ok) return { ok: false, message: clipOutcome.message };
-      // Deliberately drops `clipOutcome.lastFrameUrl` — animate path
-      // never chains a render's last frame into the next plate.
-      return { ok: true, videoUrl: clipOutcome.videoUrl, persisted: clipOutcome.persisted, persistError: clipOutcome.persistError };
+      // When Chain last→first is off, drop lastFrameUrl (plate-first /
+      // identity-safe). When on, pass it through for the runner's fill.
+      return {
+        ok: true,
+        videoUrl: clipOutcome.videoUrl,
+        persisted: clipOutcome.persisted,
+        persistError: clipOutcome.persistError,
+        ...(chainLastFrameToNext && clipOutcome.lastFrameUrl
+          ? { lastFrameUrl: clipOutcome.lastFrameUrl }
+          : {}),
+      };
     },
     recordRender: onRecordRender,
+    setPlateStill: onSetClipPlateStill,
     onProgress: (event) => setProgressText(animateProgressLabel(event)),
   });
 
@@ -603,6 +615,7 @@ export function SkidmarksScriptSequencePanel({
       segmentId: segment.id,
       plateId: segment.plates[0]?.id ?? "",
       plateStillUrl: segment.plates[0]?.still?.dataUrl,
+      plateStillSource: segment.plates[0]?.still?.source,
     }));
 
     const outcome = await runAnimateExistingPlates(
@@ -614,7 +627,8 @@ export function SkidmarksScriptSequencePanel({
       mp3AudioUrl,
       buildAnimateDeps(),
       startAtClipIndex,
-      () => stopRequestedRef.current
+      () => stopRequestedRef.current,
+      chainLastFrameToNext
     );
 
     flushSkidmarksSessionNow();
@@ -626,56 +640,6 @@ export function SkidmarksScriptSequencePanel({
   const handleResume = async () => {
     if (running || !incompleteRun) return;
     await runAnimateFrom(realSegments, incompleteRun.resumeIndex);
-  };
-
-  /**
-   * Real reported ask (2026-09-15): build the whole clip timeline and,
-   * for a *locked* character only, pre-fill every plate with their fixed
-   * reference photo — before any rendering or any money is spent — so
-   * Stuart can scroll through and see the timeline shape first. Purely a
-   * preview (avatar URL + featuresLockedCharacter) — Generate plates does
-   * not treat those as finished plates and still builds real place +
-   * identity composites for empty / preview slots.
-   */
-  const handleBuildTimeline = () => {
-    if (running || parts.length === 0) return;
-
-    // Re-attach existing stills/videos by time via buildScriptSequenceSegments —
-    // never wipe plated ranges when the script grows or Build timeline re-runs.
-    const segments = buildScriptSequenceSegments(parts, realSegments);
-    onSetScriptSequence(segments);
-
-    const memberAvatarUrls = band.members
-      .map((m) => m.avatarImage)
-      .filter((u): u is string => typeof u === "string" && u.trim().length > 0);
-
-    const vocalist = resolveVocalistForPrompt(band.members);
-    const lock = vocalist ? getSkidmarksCharacterLock(vocalist) : undefined;
-    if (lock && vocalist?.avatarImage) {
-      for (const segment of segments) {
-        const plate = segment.plates[0];
-        if (!plate) continue;
-        // Leave real stills and finished videos alone — preview is only for empty slots.
-        if (plateStillCountsAsReady(plate.still, memberAvatarUrls)) continue;
-        if (findPersistedRenderForClip(renders, segment.id, plate.id, segment.startSec, segment.endSec)) {
-          continue;
-        }
-        onSetClipPlateStill(segment.id, plate.id, {
-          dataUrl: vocalist.avatarImage,
-          source: "generated",
-          createdAt: Date.now(),
-          featuresLockedCharacter: true,
-        });
-      }
-    }
-
-    flushSkidmarksSessionNow();
-    setResult({
-      ok: true,
-      message: lock
-        ? `Timeline built — all ${segments.length} plates start from the locked reference photo as a preview. Tap Generate plates when you're happy; each clip still gets its own fresh scene + identity composite.`
-        : `Timeline built — ${segments.length} clips ready. Tap Generate plates for stills, then Generate to animate.`,
-    });
   };
 
   const handleRun = async () => {
@@ -763,7 +727,7 @@ export function SkidmarksScriptSequencePanel({
         <ScriptSequenceHighlightOverlay text={script} overlayRef={scriptHighlightRef} />
         <textarea
           value={script}
-          onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl })}
+          onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl, chainLastFrameToNext })}
           onScroll={(e) => {
             if (scriptHighlightRef.current) {
               scriptHighlightRef.current.scrollTop = e.currentTarget.scrollTop;
@@ -852,7 +816,7 @@ export function SkidmarksScriptSequencePanel({
 
       {/* Action chrome: Clip 1 upload is its own row above; status + actions
           stack cleanly so iPhone doesn't stagger "No parts yet" beside wrapping
-          buttons. Behavior unchanged — Timeline / plates / Generate handlers. */}
+          buttons. Behavior unchanged — plates / Generate handlers. */}
       <div className="flex flex-col gap-2">
         <span
           className="text-[11px] text-white/40"
@@ -865,15 +829,6 @@ export function SkidmarksScriptSequencePanel({
           {parts.length > 0 ? `${parts.length} part${parts.length === 1 ? "" : "s"}` : "No parts yet"}
         </span>
         <div className="grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            onClick={handleBuildTimeline}
-            disabled={!!running || parts.length === 0 || !!incompleteRun}
-            title="Pre-fills every plate with the locked reference photo (if any) — free, no rendering yet, so you can check the timeline shape first."
-            className="min-w-0 rounded-full border border-white/15 bg-white/[0.03] px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
-          >
-            Timeline
-          </button>
           <button
             type="button"
             onClick={handleGeneratePlates}
@@ -895,15 +850,45 @@ export function SkidmarksScriptSequencePanel({
               incompleteRun
                 ? "Use Resume above — starting fresh would re-render and re-charge for clips already done."
                 : parts.length > 0
-                  ? `Animates existing plates for all ${parts.length} clips — skips none that are missing a still`
+                  ? chainLastFrameToNext
+                    ? `Animates plates for all ${parts.length} clips; after each render, chains last frame → next start when empty or already chained`
+                    : `Animates existing plates for all ${parts.length} clips — skips none that are missing a still`
                   : undefined
             }
             className="min-w-0 rounded-full bg-rose-400 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
           >
             {running === "render" ? "Rendering…" : "Generate"}
           </button>
+          <button
+            type="button"
+            onClick={() =>
+              onSetScriptSequenceDraft({
+                script,
+                startingImageUrl,
+                chainLastFrameToNext: !chainLastFrameToNext,
+              })
+            }
+            disabled={!!running}
+            aria-pressed={chainLastFrameToNext}
+            title={
+              chainLastFrameToNext
+                ? "ON: after each clip renders, capture its last frame and set it as the next clip's starting image when that start is empty or was itself auto-chained. Never overwrites Generate plates, Clip 1 upload, or sleeve Keep."
+                : "OFF (default): plate-first — each clip keeps its own Generate plates / upload / sleeve still. Tap to enable Chain last→first continuity."
+            }
+            className={
+              chainLastFrameToNext
+                ? "min-w-0 rounded-full border border-emerald-400/50 bg-emerald-400/20 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-emerald-100 transition-colors hover:bg-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
+                : "min-w-0 rounded-full border border-white/15 bg-white/[0.03] px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
+            }
+          >
+            {chainLastFrameToNext ? "Chain last→first · ON" : "Chain last→first"}
+          </button>
         </div>
-        <p className="text-[10px] leading-snug text-white/30">Timeline builds clip rows from script · free preview</p>
+        <p className="text-[10px] leading-snug text-white/30">
+          {chainLastFrameToNext
+            ? "Chain ON: last frame of each render → next clip start (skips Keep / upload / plated stills)"
+            : "Generate plates builds unique stills per clip · sleeve Keep for your collection"}
+        </p>
       </div>
 
       {progressText && (
