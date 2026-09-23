@@ -96,6 +96,8 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
   switch (event.type) {
     case "rendering":
       return `Rendering clip ${event.clipIndex + 1} of ${event.clipCount}…`;
+    case "chaining":
+      return `Chaining clip ${event.clipIndex + 1}'s last frame → clip ${event.clipIndex + 2} start…`;
     case "clip-done":
       return `Clip ${event.clipIndex + 1} of ${event.clipCount} done.`;
   }
@@ -116,7 +118,10 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
  * — never rebuilds/overwrites them. Stays enabled even when Resume shows
  * for an incomplete animate run. "Generate" / Resume then animates plates
  * that already exist (`runAnimateExistingPlates`) — refuses a clip with
- * no plate still. Neither path chains last frames (identity-safe).
+ * no plate still. Default stays identity-safe (no last-frame chain).
+ * Optional UI toggle **Chain last→first** turns on render-time continuity:
+ * after each clip, the server last frame fills the next empty / already-
+ * chained start (never clobbers upload / Generate plates / sleeve Keep).
  * `runScriptSequence` and its Jack-Ash scene-block-chaining coverage stay
  * untouched.
  *
@@ -310,6 +315,8 @@ export function SkidmarksScriptSequencePanel({
 
   const script = scriptSequenceDraft?.script ?? "";
   const startingImageUrl = scriptSequenceDraft?.startingImageUrl;
+  /** Default OFF — plate-first Generate plates stays unchanged until Stuart flips this. */
+  const chainLastFrameToNext = scriptSequenceDraft?.chainLastFrameToNext === true;
   const parts = useMemo(() => parseScriptSequence(script), [script]);
   /** One parsed kind per part, positionally aligned with `parts` — see
    * `lib/scriptSequenceRunner.ts`'s `parseScriptPartKind` doc comment
@@ -356,7 +363,7 @@ export function SkidmarksScriptSequencePanel({
         setStartingImageError("Couldn't save that image — try again.");
         return;
       }
-      onSetScriptSequenceDraft({ script, startingImageUrl: uploadOutcome.url });
+      onSetScriptSequenceDraft({ script, startingImageUrl: uploadOutcome.url, chainLastFrameToNext });
       flushSkidmarksSessionNow();
     } catch {
       setStartingImageError("Couldn't read that image — try a different file.");
@@ -366,7 +373,7 @@ export function SkidmarksScriptSequencePanel({
   };
 
   const handleRemoveStartingImage = () => {
-    onSetScriptSequenceDraft({ script, startingImageUrl: undefined });
+    onSetScriptSequenceDraft({ script, startingImageUrl: undefined, chainLastFrameToNext });
     flushSkidmarksSessionNow();
   };
 
@@ -377,7 +384,7 @@ export function SkidmarksScriptSequencePanel({
   const applyScriptText = (next: string, captureUndo: boolean) => {
     if (next === script) return;
     if (captureUndo) setScriptUndo(script);
-    onSetScriptSequenceDraft({ script: next, startingImageUrl });
+    onSetScriptSequenceDraft({ script: next, startingImageUrl, chainLastFrameToNext });
   };
 
   const handleFormatScript = () => {
@@ -388,7 +395,7 @@ export function SkidmarksScriptSequencePanel({
 
   const handleUndoScript = () => {
     if (scriptUndo === null || running) return;
-    onSetScriptSequenceDraft({ script: scriptUndo, startingImageUrl });
+    onSetScriptSequenceDraft({ script: scriptUndo, startingImageUrl, chainLastFrameToNext });
     setScriptUndo(null);
   };
 
@@ -439,11 +446,20 @@ export function SkidmarksScriptSequencePanel({
     renderClip: async (request) => {
       const clipOutcome = await generateSkidmarksClip(request);
       if (!clipOutcome.ok) return { ok: false, message: clipOutcome.message };
-      // Deliberately drops `clipOutcome.lastFrameUrl` — animate path
-      // never chains a render's last frame into the next plate.
-      return { ok: true, videoUrl: clipOutcome.videoUrl, persisted: clipOutcome.persisted, persistError: clipOutcome.persistError };
+      // When Chain last→first is off, drop lastFrameUrl (plate-first /
+      // identity-safe). When on, pass it through for the runner's fill.
+      return {
+        ok: true,
+        videoUrl: clipOutcome.videoUrl,
+        persisted: clipOutcome.persisted,
+        persistError: clipOutcome.persistError,
+        ...(chainLastFrameToNext && clipOutcome.lastFrameUrl
+          ? { lastFrameUrl: clipOutcome.lastFrameUrl }
+          : {}),
+      };
     },
     recordRender: onRecordRender,
+    setPlateStill: onSetClipPlateStill,
     onProgress: (event) => setProgressText(animateProgressLabel(event)),
   });
 
@@ -599,6 +615,7 @@ export function SkidmarksScriptSequencePanel({
       segmentId: segment.id,
       plateId: segment.plates[0]?.id ?? "",
       plateStillUrl: segment.plates[0]?.still?.dataUrl,
+      plateStillSource: segment.plates[0]?.still?.source,
     }));
 
     const outcome = await runAnimateExistingPlates(
@@ -610,7 +627,8 @@ export function SkidmarksScriptSequencePanel({
       mp3AudioUrl,
       buildAnimateDeps(),
       startAtClipIndex,
-      () => stopRequestedRef.current
+      () => stopRequestedRef.current,
+      chainLastFrameToNext
     );
 
     flushSkidmarksSessionNow();
@@ -709,7 +727,7 @@ export function SkidmarksScriptSequencePanel({
         <ScriptSequenceHighlightOverlay text={script} overlayRef={scriptHighlightRef} />
         <textarea
           value={script}
-          onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl })}
+          onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl, chainLastFrameToNext })}
           onScroll={(e) => {
             if (scriptHighlightRef.current) {
               scriptHighlightRef.current.scrollTop = e.currentTarget.scrollTop;
@@ -810,7 +828,7 @@ export function SkidmarksScriptSequencePanel({
         >
           {parts.length > 0 ? `${parts.length} part${parts.length === 1 ? "" : "s"}` : "No parts yet"}
         </span>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
             onClick={handleGeneratePlates}
@@ -832,15 +850,45 @@ export function SkidmarksScriptSequencePanel({
               incompleteRun
                 ? "Use Resume above — starting fresh would re-render and re-charge for clips already done."
                 : parts.length > 0
-                  ? `Animates existing plates for all ${parts.length} clips — skips none that are missing a still`
+                  ? chainLastFrameToNext
+                    ? `Animates plates for all ${parts.length} clips; after each render, chains last frame → next start when empty or already chained`
+                    : `Animates existing plates for all ${parts.length} clips — skips none that are missing a still`
                   : undefined
             }
             className="min-w-0 rounded-full bg-rose-400 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
           >
             {running === "render" ? "Rendering…" : "Generate"}
           </button>
+          <button
+            type="button"
+            onClick={() =>
+              onSetScriptSequenceDraft({
+                script,
+                startingImageUrl,
+                chainLastFrameToNext: !chainLastFrameToNext,
+              })
+            }
+            disabled={!!running}
+            aria-pressed={chainLastFrameToNext}
+            title={
+              chainLastFrameToNext
+                ? "ON: after each clip renders, capture its last frame and set it as the next clip's starting image when that start is empty or was itself auto-chained. Never overwrites Generate plates, Clip 1 upload, or sleeve Keep."
+                : "OFF (default): plate-first — each clip keeps its own Generate plates / upload / sleeve still. Tap to enable Chain last→first continuity."
+            }
+            className={
+              chainLastFrameToNext
+                ? "min-w-0 rounded-full border border-emerald-400/50 bg-emerald-400/20 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-emerald-100 transition-colors hover:bg-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
+                : "min-w-0 rounded-full border border-white/15 bg-white/[0.03] px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
+            }
+          >
+            {chainLastFrameToNext ? "Chain last→first · ON" : "Chain last→first"}
+          </button>
         </div>
-        <p className="text-[10px] leading-snug text-white/30">Generate plates builds unique stills per clip · sleeve Keep for your collection</p>
+        <p className="text-[10px] leading-snug text-white/30">
+          {chainLastFrameToNext
+            ? "Chain ON: last frame of each render → next clip start (skips Keep / upload / plated stills)"
+            : "Generate plates builds unique stills per clip · sleeve Keep for your collection"}
+        </p>
       </div>
 
       {progressText && (

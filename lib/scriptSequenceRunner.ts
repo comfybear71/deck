@@ -267,6 +267,7 @@ export type GeneratePlatesEvent =
 /** Progress events for the animate-existing-plates pass — never rebuilds plates. */
 export type AnimateExistingPlatesEvent =
   | { type: "rendering"; clipIndex: number; clipCount: number }
+  | { type: "chaining"; clipIndex: number; clipCount: number }
   | { type: "clip-done"; clipIndex: number; clipCount: number };
 
 export interface IdentitySafeRunDeps {
@@ -380,15 +381,44 @@ export type GeneratePlatesOutcome =
   | { ok: false; failedAtClipIndex: number; message: string; platedCount: number; stopped?: boolean };
 
 /** One clip's already-built plate still for the animate-only pass. Missing
- * `plateStillUrl` fails that clip and stops — never invents a still and
- * never falls back to last-frame chaining. */
+ * `plateStillUrl` fails that clip and stops — never invents a still.
+ * With `chainLastFrameToNext` on, a prior clip may fill an empty (or
+ * previously chain-sourced) next start from its render's `lastFrameUrl`
+ * before this clip is reached. */
 export interface AnimateExistingPlatesTarget extends IdentitySafeRunTarget {
   plateStillUrl?: string;
+  /** Source of the still currently on this plate — used only when
+   * `chainLastFrameToNext` is on, so a chain fill never clobbers a
+   * Generate-plates / upload / sleeve Keep still. */
+  plateStillSource?: SkidmarksPlateStill["source"];
+}
+
+/**
+ * Whether chain mode may write a last-frame still onto this plate.
+ * Empty → yes. Already `source: "chained"` → yes (refresh the chain).
+ * `upload` / `generated` / `library` → never (sleeve Keep, Generate
+ * plates, Clip 1 upload stay locked).
+ */
+export function plateStillAllowsChainFill(
+  still: { source?: string } | null | undefined
+): boolean {
+  if (!still?.source) return true;
+  return still.source === "chained";
 }
 
 export interface AnimateExistingPlatesDeps {
-  renderClip: IdentitySafeRunDeps["renderClip"];
+  /** Same as identity-safe renderClip, plus optional `lastFrameUrl` when
+   * the generate-clip route captured the closing frame (needed for chain
+   * mode). Default plate-first animate ignores it when chaining is off. */
+  renderClip: (request: ReturnType<typeof buildClipGenerationRequest>) => Promise<
+    | { ok: true; videoUrl: string; persisted: boolean; persistError?: string; lastFrameUrl?: string }
+    | { ok: false; message: string }
+  >;
   recordRender: IdentitySafeRunDeps["recordRender"];
+  /** Required when `chainLastFrameToNext` is true — writes the chained
+   * still onto the next clip's plate (same path as Generate plates /
+   * From sleeve / Clip 1 upload). */
+  setPlateStill?: IdentitySafeRunDeps["setPlateStill"];
   onProgress?: (event: AnimateExistingPlatesEvent) => void;
 }
 
@@ -714,7 +744,15 @@ export async function runGeneratePlates(
 
 /**
  * **Animate existing plates only.** Refuses (stops) when a clip has no
- * plate still yet — never rebuilds plates, never chains last frames.
+ * plate still yet — never rebuilds plates via Generate plates.
+ *
+ * Optional **chain last→first** (`chainLastFrameToNext`, default off):
+ * after each successful render, if the next plate is empty or already
+ * `source: "chained"`, write this render's server `lastFrameUrl` as that
+ * next start (`source: "chained"`). Never overwrites upload / generated /
+ * library (Clip 1 upload, Generate plates, sleeve Keep). Missing
+ * `lastFrameUrl` when a fill is needed fails honestly — same rule as
+ * `runScriptSequence`. Plate-first BIG SEXY stays unchanged when off.
  *
  * Routing by script part title kind (`scriptPartUsesLtx`): Vocal → LTX
  * with real song audio; Intro / Outro / Bridge / Lead / Break /
@@ -731,7 +769,8 @@ export async function runAnimateExistingPlates(
   mp3AudioUrl: string | undefined,
   deps: AnimateExistingPlatesDeps,
   startAtClipIndex: number = 0,
-  shouldStop?: () => boolean
+  shouldStop?: () => boolean,
+  chainLastFrameToNext: boolean = false
 ): Promise<AnimateExistingPlatesOutcome> {
   const report = (event: AnimateExistingPlatesEvent) => deps.onProgress?.(event);
 
@@ -837,9 +876,55 @@ export async function runAnimateExistingPlates(
       clipIndex: i,
       startSec: part.startSec,
       endSec: part.endSec,
+      ...(outcome.lastFrameUrl ? { lastFrameUrl: outcome.lastFrameUrl } : {}),
     });
 
     report({ type: "clip-done", clipIndex: i, clipCount: parts.length });
+
+    if (!chainLastFrameToNext) continue;
+
+    const nextTarget = targets[i + 1];
+    if (!nextTarget) continue; // last clip — nothing to chain into
+
+    if (
+      !plateStillAllowsChainFill(
+        nextTarget.plateStillSource ? { source: nextTarget.plateStillSource } : nextTarget.plateStillUrl ? { source: "generated" } : undefined
+      )
+    ) {
+      // Next clip already has a user/plate still (upload, Generate plates,
+      // sleeve Keep) — leave it alone; still render it from that still.
+      continue;
+    }
+
+    if (!outcome.lastFrameUrl) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: `Couldn't carry clip ${i + 1}'s last frame into clip ${i + 2}: the server couldn't capture this render's last frame.`,
+        renderedCount: i + 1,
+      };
+    }
+
+    if (!deps.setPlateStill) {
+      return {
+        ok: false,
+        failedAtClipIndex: i,
+        message: `Couldn't carry clip ${i + 1}'s last frame into clip ${i + 2}: chain mode needs setPlateStill.`,
+        renderedCount: i + 1,
+      };
+    }
+
+    report({ type: "chaining", clipIndex: i, clipCount: parts.length });
+    const chainedStill: SkidmarksPlateStill = {
+      dataUrl: outcome.lastFrameUrl,
+      source: "chained",
+      createdAt: Date.now(),
+    };
+    deps.setPlateStill(nextTarget.segmentId, nextTarget.plateId, chainedStill);
+    // So the next loop iteration renders from the chained frame without a
+    // store re-read (targets were built once before the run).
+    nextTarget.plateStillUrl = outcome.lastFrameUrl;
+    nextTarget.plateStillSource = "chained";
   }
 
   return { ok: true, renderedCount: parts.length };
