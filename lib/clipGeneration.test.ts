@@ -578,33 +578,47 @@ describe("buildClipGenerationRequest", () => {
       expect(request.negativePrompt).toBeUndefined();
     });
 
-    it("real gap fixed 2026-09-16 (Jack Ghost spec): a locked vocalist's own look text now also lands on a Grok/Instrumental (Mute) request, not just Vocal — only the Vocal-only wrap and lip-sync fields stay Vocal-only", () => {
+    it("Jack Ghost (2026-09-16) + Chain chaos (2026-09-23): Instrumental lock hallmarks only when the shot names the locked character — not on every Jack Ash band Instrumental", () => {
       const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
-      const request = buildClipGenerationRequest({
+      const featuring = buildClipGenerationRequest({
         vocal: false,
-        shotPrompt: "a door creaks open",
+        shotPrompt: "Jack at a door as it creaks open",
         bandName: "Jack Ash",
         plateStillDataUrl: "data:image/jpeg;base64,door",
         durationSec: 5,
         vocalist: jackAsh,
       });
       // His own hallmarks (neon lips is his own look, not the generic note's).
-      expect(request.prompt.toLowerCase()).toContain("neon blue");
-      // The generic shadow-face lock now runs on a Mute clip too, in its
-      // own non-singing wording — never the Vocal note's "while he's singing".
-      expect(request.prompt.toLowerCase()).toContain("shadow-face lock holds");
-      expect(request.prompt.toLowerCase()).not.toContain("while he's singing");
-      expect(request.prompt.toLowerCase()).toContain("only figure in frame");
+      expect(featuring.prompt.toLowerCase()).toContain("neon blue");
+      // The generic shadow-face lock runs on a Mute clip that features him,
+      // in its own non-singing wording — never the Vocal note's "while he's singing".
+      expect(featuring.prompt.toLowerCase()).toContain("shadow-face lock holds");
+      expect(featuring.prompt.toLowerCase()).not.toContain("while he's singing");
+      expect(featuring.prompt.toLowerCase()).toContain("only figure in frame");
       // Still never the Vocal backend's own lip-sync wrap, or any lip-sync fields.
-      expect(request.prompt.toLowerCase()).not.toContain("perfect lip sync");
-      expect(request.mp3AudioUrl).toBeUndefined();
+      expect(featuring.prompt.toLowerCase()).not.toContain("perfect lip sync");
+      expect(featuring.mp3AudioUrl).toBeUndefined();
+
+      // Abstract / Chain chaos Instrumental: do NOT force Jack into every frame.
+      const chaos = buildClipGenerationRequest({
+        vocal: false,
+        shotPrompt: "scrap-metal jazz-funk morph, asphalt rain, no person in frame",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,chaos",
+        durationSec: 5,
+        vocalist: jackAsh,
+      });
+      expect(chaos.prompt.toLowerCase()).not.toContain("neon blue");
+      expect(chaos.prompt.toLowerCase()).not.toContain("only figure in frame");
+      expect(chaos.prompt.toLowerCase()).not.toContain("shadow-face lock holds");
+      expect(chaos.cameraWarnings).toBeUndefined();
     });
 
     it("gives a locked Instrumental clip the same static Camera holds default (with no false 'vocal' claim) when motion is blank", () => {
       const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
       const { prompt } = buildClipGenerationRequest({
         vocal: false,
-        shotPrompt: "a door creaks open",
+        shotPrompt: "Jack at a door as it creaks open",
         bandName: "Jack Ash",
         plateStillDataUrl: "data:image/jpeg;base64,door",
         durationSec: 5,
@@ -618,7 +632,7 @@ describe("buildClipGenerationRequest", () => {
       const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", role: "Frontman" });
       const { cameraWarnings } = buildClipGenerationRequest({
         vocal: false,
-        shotPrompt: "a door creaks open",
+        shotPrompt: "Jack at a door as it creaks open",
         bandName: "Jack Ash",
         plateStillDataUrl: "data:image/jpeg;base64,door",
         durationSec: 5,
