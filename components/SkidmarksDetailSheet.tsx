@@ -28,6 +28,10 @@ import { SkidmarksScriptSequencePanel } from "./SkidmarksScriptSequencePanel";
 import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksArchiveShelf } from "./SkidmarksArchiveShelf";
 import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
+import { useIsPcShell } from "@/hooks/useIsPcShell";
+import { DeckPcRail, type DeckPcRailId } from "./DeckPcRail";
+import { SkidmarksLibraryPage } from "./SkidmarksLibraryPage";
+import { SkidmarksPcHome } from "./SkidmarksPcHome";
 
 interface SkidmarksDetailSheetProps {
   onClose: () => void;
@@ -45,6 +49,11 @@ interface SkidmarksDetailSheetProps {
  * navigate to, and per AGENTS.md's "one live edit workspace on top"
  * lock, there is never a second, doubled MP3/plates UI: only the *top*
  * workspace is ever live-editable at once.
+ *
+ * **PC shell (≥1024px)**: same desk content in a left-rail layout
+ * (Home / Create / Library). Library lists Finished Songs via the same
+ * archive APIs as the bottom shelf. Below 1024px the phone sheet
+ * (`sm:max-w-md`) is unchanged.
  */
 export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const {
@@ -94,6 +103,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [archiveSuccessMessage, setArchiveSuccessMessage] = useState<string | null>(null);
   const [archiveRefreshToken, setArchiveRefreshToken] = useState(0);
+  const isPcShell = useIsPcShell();
+  const [pcRail, setPcRail] = useState<DeckPcRailId>("create");
 
   const bandSectionRef = useRef<HTMLDivElement | null>(null);
   const membersSectionRef = useRef<HTMLDivElement | null>(null);
@@ -395,68 +406,21 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     setArchiveRefreshToken((t) => t + 1);
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
-      <button
-        type="button"
-        aria-label="Close"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/90 backdrop-blur-md"
-      />
+  /** Library "Open in editor" — same restore path, then switch rail to Create. */
+  const handleOpenInEditorFromLibrary = async (song: SkidmarksArchivedSong) => {
+    await handleOpenInEditor(song);
+    setPcRail("create");
+  };
 
-      <div
-        className={[
-          "relative z-10 flex h-[92vh] w-full flex-col overflow-hidden rounded-t-3xl border border-white/10 bg-zinc-950 shadow-2xl",
-          "sm:h-auto sm:max-h-[85vh] sm:max-w-md sm:rounded-3xl",
-          "animate-[sheet-in_0.22s_ease-out]",
-        ].join(" ")}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Skidmarks — vibe director"
-      >
-        <div className="flex items-center justify-between gap-2 p-4 pb-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <span
-              aria-hidden
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-rose-400/15 text-sm font-semibold text-rose-300"
-            >
-              {"\u2665"}
-            </span>
-            <div className="min-w-0">
-              <h2 className="truncate text-sm font-semibold text-white">Skidmarks</h2>
-              <p className="truncate text-[11px] text-rose-300/80">Vibe director</p>
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="shrink-0 rounded-full p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
-              aria-label="Close"
-            >
-              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
-                <path
-                  d="M5 5l10 10M15 5L5 15"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </button>
-          </div>
-        </div>
-
+  const syncBanners = (
+    <>
         {sessionSync.status === "loading" && (
           <p role="status" className="mx-4 mb-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] leading-snug text-white/60">
-            Showing this phone\u2019s copy \u2014 checking the server for anything newer\u2026
+            Showing this phone{"\u2019"}s copy {"\u2014"} checking the server for anything newer{"\u2026"}
           </p>
         )}
 
         {showSavedBanner && (
-          // Audit test S1 starts with "wait until the UI says saved" —
-          // so the UI has to actually say it, not just go quiet. Still
-          // true here: this banner always shows first, the X only lets
-          // Stuart clear it away once he's actually read it.
           <p
             role="status"
             className="mx-4 mb-2 flex items-start justify-between gap-2 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1.5 text-[10px] leading-snug text-emerald-200/80"
@@ -480,31 +444,15 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
         )}
 
         {sessionSync.status === "saving" && (
-          // Real live bug (2026-09-14): this row used to show *nothing*
-          // while a save was actually in flight \u2014 only once it had
-          // already failed. A save can take a few real seconds (a
-          // still's own Blob upload, then the session PUT, now with up
-          // to ~30s of retry on a bad connection), and a refresh landing
-          // anywhere in that silent window looked identical to a
-          // perfectly safe one. This is the one moment it's genuinely
-          // not safe to refresh \u2014 say so plainly instead of staying
-          // quiet about it.
           <p
             role="status"
             className="mx-4 mb-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] leading-snug text-white/60"
           >
-            Saving\u2026 hold on before refreshing.
+            Saving{"\u2026"} hold on before refreshing.
           </p>
         )}
 
         {sessionSync.status === "conflict" && (
-          // A newer save exists somewhere else (2026-09-18, after a real
-          // report: a second device opened the app, showed an older
-          // copy, and would have pushed it back over the good one). The
-          // server refused the write — that refusal is the feature, so
-          // this says which copy is newer and what to do, instead of
-          // implying something broke. Deliberately not auto-retried:
-          // retrying IS the overwrite.
           <p
             role="alert"
             className="mx-4 mb-2 rounded-lg border border-amber-300/40 bg-amber-300/10 px-2.5 py-1.5 text-[10px] leading-snug text-amber-100/90"
@@ -526,12 +474,6 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
         )}
 
         {(sessionSync.status === "unconfigured" || sessionSync.status === "error") && (
-          // "Do not look fine" (2026-09-16 direct instruction): red, not
-          // amber, and leads with NOT SAVED in plain words rather than
-          // a reason that could scroll past unread. Your actual project
-          // is still safe on this phone (the local mirror) either way \u2014
-          // this is honestly reporting that Neon doesn't have it yet,
-          // not a warning that anything is about to be lost.
           <p
             role="status"
             className="mx-4 mb-2 rounded-lg border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-[10px] leading-snug text-rose-200/90"
@@ -541,8 +483,10 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
               : `NOT SAVED \u2014 ${sessionSync.error ?? "unknown reason"}. Your project is still safe on this phone. Retrying automatically \u2014 keep this tab open.`}
           </p>
         )}
+    </>
+  );
 
-        <div className="flex-1 overflow-y-auto px-5 pb-5">
+  const deskBody = (
           <div className="flex flex-col gap-8 pt-2">
             <SkidmarksLandingTiles
               activeKind={session.projectKind}
@@ -551,17 +495,6 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
             {session.projectKind === "sunnybank" && <SkidmarksSunnyBanksPanel />}
 
-            {/* Real live bug (2026-09-15, Stuart's own report): only the
-               band picker itself checked `projectKind === "music-video"`
-               \u2014 every section below it gated on `activeBand`/`session.mp3`
-               alone, which stay set from an earlier music-video session
-               even after switching the active tile to Sunnybank ("a
-               complete separate entity," Stuart's own words). Tapping
-               Sunnybank never cleared them, so all of it \u2014 members, MP3
-               card, script sequence, clip timeline, rendered clips, even
-               the archive shelf \u2014 kept rendering underneath the Sunny
-               Banks panel. The whole music-video section is one gate now,
-               not eight separate ones that can drift apart. */}
             {session.projectKind === "music-video" && (
               <>
                 <div ref={bandSectionRef}>
@@ -692,9 +625,10 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
               </>
             )}
           </div>
-        </div>
-      </div>
+  );
 
+  const memberPopupAndConfirm = (
+    <>
       {session.projectKind === "music-video" && activeBand && openMember && (
         <SkidmarksGeneratePopup
           member={openMember}
@@ -716,6 +650,123 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
           action?.run();
         }}
       />
+    </>
+  );
+
+  // PC shell (≥1024px): left rail + wide main. Phone/tablet keeps the sheet.
+  if (isPcShell) {
+    return (
+      <div className="fixed inset-0 z-50 flex bg-zinc-950" role="dialog" aria-modal="true" aria-label="Deck — Skidmarks">
+        <DeckPcRail active={pcRail} onSelect={setPcRail} onClose={onClose} />
+        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex items-center justify-between gap-2 border-b border-white/10 px-5 py-3">
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-white">
+                {pcRail === "home" ? "Home" : pcRail === "library" ? "Library" : "Create"}
+              </h2>
+              <p className="truncate text-[11px] text-white/40">
+                {pcRail === "create" ? "Skidmarks desk — full width" : "Deck PC shell"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-full p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+              aria-label="Close"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+                <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+
+          {pcRail === "create" && syncBanners}
+
+          <div className="flex-1 overflow-y-auto">
+            {pcRail === "home" && (
+              <SkidmarksPcHome
+                onGoCreate={() => setPcRail("create")}
+                onGoLibrary={() => setPcRail("library")}
+              />
+            )}
+            {pcRail === "create" && (
+              <div className="w-full px-8 pb-8">
+                {deskBody}
+              </div>
+            )}
+            {pcRail === "library" && (
+              <SkidmarksLibraryPage
+                onOpenInEditor={handleOpenInEditorFromLibrary}
+                refreshToken={archiveRefreshToken}
+                onArchiveMutated={() => setArchiveRefreshToken((n) => n + 1)}
+              />
+            )}
+          </div>
+        </div>
+        {memberPopupAndConfirm}
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/90 backdrop-blur-md"
+      />
+
+      <div
+        className={[
+          "relative z-10 flex h-[92vh] w-full flex-col overflow-hidden rounded-t-3xl border border-white/10 bg-zinc-950 shadow-2xl",
+          "sm:h-auto sm:max-h-[85vh] sm:max-w-md sm:rounded-3xl",
+          "animate-[sheet-in_0.22s_ease-out]",
+        ].join(" ")}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Skidmarks — vibe director"
+      >
+        <div className="flex items-center justify-between gap-2 p-4 pb-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              aria-hidden
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-rose-400/15 text-sm font-semibold text-rose-300"
+            >
+              {"\u2665"}
+            </span>
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-white">Skidmarks</h2>
+              <p className="truncate text-[11px] text-rose-300/80">Vibe director</p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-full p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+              aria-label="Close"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+                <path
+                  d="M5 5l10 10M15 5L5 15"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {syncBanners}
+
+        <div className="flex-1 overflow-y-auto px-5 pb-5">
+          {deskBody}
+        </div>
+      </div>
+
+      {memberPopupAndConfirm}
     </div>
   );
 }
