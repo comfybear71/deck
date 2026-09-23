@@ -404,6 +404,22 @@ type StartOutcome =
   | { ok: true; requestId: string }
   | { ok: false; status: number; code: string; error: string };
 
+
+/** Turns a plate still (data: or https Vercel Blob) into a data:image URL
+ * xAI can consume inline — Grok's video API fetches `image.url` from their
+ * own network, and a just-written Blob URL (esp. Chain last→first) can still
+ * 404 for them even when our HEAD eventually succeeds. Data URLs skip that
+ * fetch entirely. Never throws; returns the original string if conversion
+ * fails so the existing error path still fires. */
+async function ensureXaiInlineImageUrl(url: string): Promise<string> {
+  if (url.startsWith("data:")) return url;
+  const resolved = await resolveReferenceImageBytes(url);
+  if (!resolved.ok) return url;
+  const b64 = Buffer.from(resolved.bytes).toString("base64");
+  const mime = resolved.mimeType || "image/jpeg";
+  return `data:${mime};base64,${b64}`;
+}
+
 async function startXaiVideoJob(
   prompt: string,
   referenceImageDataUrls: string[],
@@ -422,10 +438,15 @@ async function startXaiVideoJob(
   // 2\u20133 plates \u2014 reference-to-video) per xAI's own "mutually
   // exclusive" rule; never both, and never neither (`MIN_REFERENCE_IMAGES`
   // guards that in `POST` below before this is ever called).
-  if (referenceImageDataUrls.length === 1) {
-    body.image = { url: referenceImageDataUrls[0] };
+  // Inline https Blob URLs as data: before xAI sees them — Chain last→first
+  // (and any plate still that lives on Vercel Blob) otherwise depends on xAI
+  // successfully GETting our Blob host; live failure was HTTP 404
+  // image_fetch_http_error on clip 2 (2026-09-23).
+  const inlineRefs = await Promise.all(referenceImageDataUrls.map((url) => ensureXaiInlineImageUrl(url)));
+  if (inlineRefs.length === 1) {
+    body.image = { url: inlineRefs[0] };
   } else {
-    body.reference_images = referenceImageDataUrls.map((url) => ({ url }));
+    body.reference_images = inlineRefs.map((url) => ({ url }));
   }
 
   let res: Response;
@@ -900,7 +921,43 @@ async function persistRenderBytesToBlob(bytes: Uint8Array, target: RenderPersist
           addRandomSuffix: false,
           allowOverwrite: true,
         });
-        lastFrameUrl = frameBlob.url;
+        // Same Vercel Blob propagation gap as the MP4 above — Chain last→first
+        // hands this URL to the next clip's Grok I2V call within milliseconds.
+        // Live QA (Jack Ash STONED, 2026-09-23): without a HEAD-verify here,
+        // xAI returned image_fetch_http_error HTTP 404 on clip 2 while the
+        // browser could still show the chained thumb later. Verify before we
+        // advertise lastFrameUrl; on clean-404-only lag, trust the put() the
+        // same way the video path does.
+        const FRAME_VERIFY_DELAYS_MS = [1000, 2000, 3000, 5000, 8000];
+        let frameVerified = false;
+        let frameSawRealFailure = false;
+        for (let attempt = 0; attempt <= FRAME_VERIFY_DELAYS_MS.length; attempt += 1) {
+          try {
+            const verifyRes = await fetch(frameBlob.url, {
+              method: "HEAD",
+              signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+            });
+            if (verifyRes.ok) {
+              frameVerified = true;
+              break;
+            }
+            if (verifyRes.status !== 404) frameSawRealFailure = true;
+          } catch {
+            frameSawRealFailure = true;
+          }
+          if (attempt < FRAME_VERIFY_DELAYS_MS.length) {
+            await new Promise((resolve) => setTimeout(resolve, FRAME_VERIFY_DELAYS_MS[attempt]));
+          }
+        }
+        if (!frameVerified && !frameSawRealFailure) {
+          frameVerified = true; // put() succeeded + only clean 404s → trust write
+        }
+        if (frameVerified) {
+          lastFrameUrl = frameBlob.url;
+        } else {
+          lastFramePathname = undefined;
+          lastFrameUrl = undefined;
+        }
       } catch {
         lastFramePathname = undefined; // nothing actually saved there — don't protect it from pruning below
       }
