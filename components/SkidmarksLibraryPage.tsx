@@ -1,7 +1,7 @@
 "use client";
 
 import { SkidmarksConfirmDialog } from "./SkidmarksConfirmDialog";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   buildArchiveZip,
   fetchArchiveSnapshot,
@@ -17,9 +17,11 @@ interface SkidmarksLibraryPageProps {
   onOpenInEditor: (song: SkidmarksArchivedSong) => Promise<void>;
   /** Bumped after Archive or Open so this list re-fetches. */
   refreshToken: number;
-  /** Notify parent after a successful Delete so Create's Finished Songs shelf stays in sync. */
+  /** Notify parent after a successful Delete so phone shelf stays in sync if remounted. */
   onArchiveMutated?: () => void;
 }
+
+type LibraryTab = "songs" | "stills" | "episodes";
 
 function formatArchivedAt(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, {
@@ -29,11 +31,14 @@ function formatArchivedAt(ms: number): string {
   });
 }
 
+function songTitle(fileName: string): string {
+  return fileName.replace(/\.[^./\\]+$/, "") || fileName;
+}
+
 /**
  * PC Library view — Suno-like Songs list backed by the same Finished
- * Songs archive APIs as `SkidmarksArchiveShelf` (index fetch, Open in
- * editor, Download zip, Delete). Phone keeps the bottom shelf; this
- * page only mounts inside the ≥1024px PC shell.
+ * Songs archive APIs as `SkidmarksArchiveShelf`. Songs tab is live;
+ * Stills / Episodes are stubs for later. Phone keeps the bottom shelf.
  */
 export function SkidmarksLibraryPage({ onOpenInEditor, refreshToken, onArchiveMutated }: SkidmarksLibraryPageProps) {
   const [songs, setSongs] = useState<SkidmarksArchivedSong[] | null>(null);
@@ -41,6 +46,8 @@ export function SkidmarksLibraryPage({ onOpenInEditor, refreshToken, onArchiveMu
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<SkidmarksArchivedSong | null>(null);
+  const [tab, setTab] = useState<LibraryTab>("songs");
+  const [query, setQuery] = useState("");
 
   const performDelete = async (song: SkidmarksArchivedSong) => {
     if (busyId) return;
@@ -75,6 +82,18 @@ export function SkidmarksLibraryPage({ onOpenInEditor, refreshToken, onArchiveMu
       cancelled = true;
     };
   }, [refreshToken]);
+
+  const filtered = useMemo(() => {
+    if (!songs) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return songs;
+    return songs.filter(
+      (s) =>
+        s.fileName.toLowerCase().includes(q) ||
+        s.bandName.toLowerCase().includes(q) ||
+        songTitle(s.fileName).toLowerCase().includes(q)
+    );
+  }, [songs, query]);
 
   const handleOpen = async (song: SkidmarksArchivedSong) => {
     if (busyId) return;
@@ -117,117 +136,167 @@ export function SkidmarksLibraryPage({ onOpenInEditor, refreshToken, onArchiveMu
     setBusyId(null);
   };
 
+  const tabs: { id: LibraryTab; label: string; live: boolean }[] = [
+    { id: "songs", label: "Songs", live: true },
+    { id: "stills", label: "Stills", live: false },
+    { id: "episodes", label: "Episodes", live: false },
+  ];
+
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-6 py-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-white">Library</h1>
-        <p className="text-sm text-white/45">
-          Finished Songs archive
-          {songs !== null && (
-            <span aria-hidden className="ml-1.5 text-white/30">
-              {"\u00b7"} {songs.length}
-            </span>
-          )}
-        </p>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-6 py-6">
+      <header className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold tracking-tight text-white">Library</h1>
+          <p className="text-sm text-white/45">Finished Songs and later stills / episodes</p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-b border-white/10 pb-0">
+          {tabs.map((t) => {
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                aria-current={active ? "page" : undefined}
+                className={[
+                  "-mb-px border-b-2 px-3 pb-2.5 text-sm font-medium transition-colors",
+                  active
+                    ? "border-white text-white"
+                    : "border-transparent text-white/45 hover:text-white/75",
+                ].join(" ")}
+              >
+                {t.label}
+                {!t.live && (
+                  <span className="ml-1.5 text-[10px] font-normal uppercase tracking-wide text-white/30">
+                    soon
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {tab === "songs" && (
+          <label className="relative block max-w-md">
+            <span className="sr-only">Search songs</span>
+            <svg
+              aria-hidden
+              viewBox="0 0 20 20"
+              fill="none"
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35"
+            >
+              <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M13.5 13.5 17 17" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search songs or bands"
+              className="w-full rounded-full border border-white/10 bg-white/[0.04] py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-white/35 outline-none transition-colors focus:border-white/25 focus:bg-white/[0.06]"
+            />
+          </label>
+        )}
       </header>
 
-      {songs === null && (
-        <p className="text-sm text-white/40">Loading songs…</p>
-      )}
-
-      {listError && <p className="text-sm leading-relaxed text-amber-200/70">{listError}</p>}
-
-      {songs && songs.length === 0 && !listError && (
+      {tab !== "songs" && (
         <p className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-5 py-10 text-center text-sm text-white/40">
-          Nothing archived yet. Archive a song from Create to see it here.
+          {tab === "stills"
+            ? "Stills library — coming later. Plate stills stay on the Create desk for now."
+            : "Episodes library — coming later. Sunnybank episode cards stay on the Create desk for now."}
         </p>
       )}
 
-      {songs && songs.length > 0 && (
-        <div className="flex flex-col">
-          <div
-            className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,0.7fr)_5.5rem_7rem_minmax(14rem,auto)] gap-3 border-b border-white/10 px-3 pb-2 text-[11px] font-medium uppercase tracking-wide text-white/35"
-            aria-hidden
-          >
-            <span>Title</span>
-            <span>Band</span>
-            <span>Duration</span>
-            <span>Archived</span>
-            <span className="text-right">Actions</span>
-          </div>
+      {tab === "songs" && (
+        <>
+          {songs === null && <p className="text-sm text-white/40">Loading songs…</p>}
 
-          <ul className="flex flex-col">
-            {songs.map((song) => (
-              <li
-                key={song.id}
-                className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,0.7fr)_5.5rem_7rem_minmax(14rem,auto)] items-center gap-3 border-b border-white/[0.06] px-3 py-3 transition-colors hover:bg-white/[0.03]"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  {song.coverImage ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- data-URL cover
-                    <img
-                      src={song.coverImage}
-                      alt=""
-                      className="h-11 w-11 shrink-0 rounded-lg object-cover"
-                    />
-                  ) : (
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] text-base text-white/40">
-                      {"\u266b"}
+          {listError && <p className="text-sm leading-relaxed text-amber-200/70">{listError}</p>}
+
+          {songs && songs.length === 0 && !listError && (
+            <p className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-5 py-10 text-center text-sm text-white/40">
+              Nothing archived yet. Archive a song from Create to see it here.
+            </p>
+          )}
+
+          {songs && songs.length > 0 && filtered.length === 0 && (
+            <p className="text-sm text-white/40">No songs match “{query.trim()}”.</p>
+          )}
+
+          {filtered.length > 0 && (
+            <ul className="flex flex-col">
+              {filtered.map((song) => (
+                <li
+                  key={song.id}
+                  className="group flex items-center gap-4 border-b border-white/[0.06] px-2 py-3 transition-colors hover:bg-white/[0.03]"
+                >
+                  <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-white/[0.06]">
+                    {song.coverImage ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- data-URL / blob cover
+                      <img src={song.coverImage} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <span className="flex h-full w-full items-center justify-center text-lg text-white/35">
+                        {"\u266b"}
+                      </span>
+                    )}
+                    <span className="absolute bottom-1 right-1 rounded bg-black/75 px-1 py-0.5 text-[10px] font-medium tabular-nums text-white/90">
+                      {formatDuration(song.durationSec)}
                     </span>
-                  )}
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-white/90">{song.fileName}</p>
-                    <p className="truncate text-[11px] text-white/35">
-                      {song.clipCount} clip{song.clipCount === 1 ? "" : "s"} · {song.renderedPlateCount}{" "}
-                      rendered
-                    </p>
                   </div>
-                </div>
 
-                <p className="truncate text-sm text-white/70">{song.bandName}</p>
-                <p className="text-sm text-white/55">{formatDuration(song.durationSec)}</p>
-                <p className="text-sm text-white/45">{formatArchivedAt(song.archivedAt)}</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-white/90">{songTitle(song.fileName)}</p>
+                    <p className="truncate text-[13px] text-white/50">
+                      {song.bandName}
+                      <span className="text-white/25"> · </span>
+                      {song.clipCount} clip{song.clipCount === 1 ? "" : "s"}
+                      <span className="text-white/25"> · </span>
+                      {song.renderedPlateCount} rendered
+                      <span className="text-white/25"> · </span>
+                      archived {formatArchivedAt(song.archivedAt)}
+                    </p>
+                    <p className="truncate text-[11px] text-white/30">{song.fileName}</p>
+                  </div>
 
-                <div className="flex flex-wrap justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleOpen(song)}
-                    disabled={busyId === song.id}
-                    className="rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-1.5 text-[12px] font-medium text-white/85 transition-colors hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {busyId === song.id ? "Working…" : "Open in editor"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleDownloadZip(song)}
-                    disabled={busyId === song.id}
-                    className="rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-[12px] font-medium text-white/70 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Download zip
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPendingDelete(song)}
-                    disabled={busyId === song.id}
-                    aria-label={`Delete ${song.fileName} (archived ${formatArchivedAt(song.archivedAt)}) from Library`}
-                    className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] font-medium text-white/45 transition-colors hover:border-rose-400/30 hover:text-rose-300/90 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Delete
-                  </button>
-                </div>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleOpen(song)}
+                      disabled={busyId === song.id}
+                      className="rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-1.5 text-[12px] font-medium text-white/85 transition-colors hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {busyId === song.id ? "Working…" : "Open in editor"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleDownloadZip(song)}
+                      disabled={busyId === song.id}
+                      className="rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-[12px] font-medium text-white/70 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Download zip
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingDelete(song)}
+                      disabled={busyId === song.id}
+                      aria-label={`Delete ${song.fileName} (archived ${formatArchivedAt(song.archivedAt)}) from Library`}
+                      className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] font-medium text-white/45 transition-colors hover:border-rose-400/30 hover:text-rose-300/90 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Delete
+                    </button>
+                  </div>
 
-                {rowError?.id === song.id && (
-                  <p
-                    role="alert"
-                    className="col-span-full text-[12px] leading-snug text-rose-300/90"
-                  >
-                    {rowError.message}
-                  </p>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
+                  {rowError?.id === song.id && (
+                    <p role="alert" className="basis-full text-[12px] leading-snug text-rose-300/90">
+                      {rowError.message}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
 
       <SkidmarksConfirmDialog
