@@ -50,10 +50,10 @@ interface SkidmarksDetailSheetProps {
  * lock, there is never a second, doubled MP3/plates UI: only the *top*
  * workspace is ever live-editable at once.
  *
- * **PC shell (≥1024px)**: same desk content in a left-rail layout
- * (Home / Create / Library). Library lists Finished Songs via the same
- * archive APIs as the bottom shelf. Below 1024px the phone sheet
- * (`sm:max-w-md`) is unchanged.
+ * **PC shell (≥1024px)**: left-rail layout (Home / Create / Library).
+ * Create is a 2-column desk (Artist+MP3 | Script Sequence + timeline);
+ * Finished Songs live in Library (shelf hidden on PC). Below 1024px the
+ * phone sheet (`sm:max-w-md`) and bottom Finished Songs shelf stay as today.
  */
 export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const {
@@ -486,145 +486,167 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     </>
   );
 
-  const deskBody = (
-          <div className="flex flex-col gap-8 pt-2">
-            <SkidmarksLandingTiles
-              activeKind={session.projectKind}
-              onSelect={selectProjectKind}
-            />
+  const artistBlock = (label: string) => (
+    <>
+      <div ref={bandSectionRef}>
+        <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-white/40">
+          {label}
+        </p>
+        <SkidmarksBandPicker
+          bands={bands}
+          activeBandId={session.bandId}
+          onSelectBand={handleSelectBand}
+          onCreateBand={handleCreateBand}
+          onSetCoverImage={setBandCoverImage}
+          onRemoveBand={handleRemoveBand}
+        />
+      </div>
 
-            {session.projectKind === "sunnybank" && <SkidmarksSunnyBanksPanel />}
+      {activeBand && (
+        <div ref={membersSectionRef}>
+          <SkidmarksMembersModule
+            band={activeBand}
+            onOpenMember={setOpenMemberId}
+            onAddMember={() => addMember(activeBand.id)}
+            onRemoveMember={(memberId) => {
+              const member = activeBand.members.find((m) => m.id === memberId);
+              setPendingConfirm({
+                title: `Remove ${member?.name?.trim() || "this member"}?`,
+                body: "Their photo, looks and lock card go with them. Clips already rendered stay on the shelf.",
+                confirmLabel: "Remove member",
+                run: () => removeMember(activeBand.id, memberId),
+              });
+            }}
+            onSetMemberLock={(memberId, lock) => setMemberLock(activeBand.id, memberId, lock)}
+            onSetMemberAvatarImage={(memberId, dataUrl) =>
+              setMemberAvatarImage(activeBand.id, memberId, dataUrl)
+            }
+            onRenameBand={(name) => renameBand(activeBand.id, name)}
+          />
+        </div>
+      )}
+    </>
+  );
 
-            {session.projectKind === "music-video" && (
-              <>
-                <div ref={bandSectionRef}>
-                  <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-white/40">
-                    Choose a band
-                  </p>
-                  <SkidmarksBandPicker
-                    bands={bands}
-                    activeBandId={session.bandId}
-                    onSelectBand={handleSelectBand}
-                    onCreateBand={handleCreateBand}
-                    onSetCoverImage={setBandCoverImage}
-                    onRemoveBand={handleRemoveBand}
-                  />
-                </div>
+  const mp3Block = activeBand ? (
+    <div ref={mp3SectionRef} className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">
+          MP3 audio
+        </p>
+        {session.mp3 && (
+          <button
+            type="button"
+            onClick={handleArchive}
+            disabled={archiving}
+            className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {archiving ? "Archiving\u2026" : "Archive"}
+          </button>
+        )}
+      </div>
+      <SkidmarksMp3Card
+        key={activeBand.id}
+        mp3={session.mp3}
+        onAttach={attachMp3}
+        onDurationResolved={setMp3Duration}
+        onRemove={removeMp3}
+      />
+      {archiveError && (
+        <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
+          {archiveError}
+        </p>
+      )}
+      {archiveSuccessMessage && (
+        <p role="status" className="text-[11px] leading-snug text-emerald-300/90">
+          {archiveSuccessMessage}
+        </p>
+      )}
+    </div>
+  ) : null;
 
-                {activeBand && (
-                  <div ref={membersSectionRef}>
-                    <SkidmarksMembersModule
-                      band={activeBand}
-                      onOpenMember={setOpenMemberId}
-                      onAddMember={() => addMember(activeBand.id)}
-                      onRemoveMember={(memberId) => {
-                        const member = activeBand.members.find((m) => m.id === memberId);
-                        setPendingConfirm({
-                          title: `Remove ${member?.name?.trim() || "this member"}?`,
-                          body: "Their photo, looks and lock card go with them. Clips already rendered stay on the shelf.",
-                          confirmLabel: "Remove member",
-                          run: () => removeMember(activeBand.id, memberId),
-                        });
-                      }}
-                      onSetMemberLock={(memberId, lock) => setMemberLock(activeBand.id, memberId, lock)}
-                      onSetMemberAvatarImage={(memberId, dataUrl) =>
-                        setMemberAvatarImage(activeBand.id, memberId, dataUrl)
-                      }
-                      onRenameBand={(name) => renameBand(activeBand.id, name)}
-                    />
-                  </div>
-                )}
+  const scriptBlock = activeBand ? (
+    <SkidmarksScriptSequencePanel
+      band={activeBand}
+      hasMp3={!!session.mp3}
+      realSegments={session.mp3?.segments ?? []}
+      mp3AudioUrl={session.mp3?.audioUrl}
+      renders={renders}
+      scriptSequenceDraft={session.scriptSequenceDraft}
+      onSetScriptSequenceDraft={setScriptSequenceDraft}
+      onSetScriptSequence={setScriptSequence}
+      onSetClipPlateStill={setClipPlateStill}
+      onRecordRender={addRender}
+    />
+  ) : null;
 
-                {activeBand && (
-                  <div ref={mp3SectionRef} className="flex flex-col gap-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">
-                        MP3 audio
-                      </p>
-                      {session.mp3 && (
-                        <button
-                          type="button"
-                          onClick={handleArchive}
-                          disabled={archiving}
-                          className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          {archiving ? "Archiving\u2026" : "Archive"}
-                        </button>
-                      )}
-                    </div>
-                    <SkidmarksMp3Card
-                      key={activeBand.id}
-                      mp3={session.mp3}
-                      onAttach={attachMp3}
-                      onDurationResolved={setMp3Duration}
-                      onRemove={removeMp3}
-                    />
-                    {archiveError && (
-                      <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
-                        {archiveError}
-                      </p>
-                    )}
-                    {archiveSuccessMessage && (
-                      <p role="status" className="text-[11px] leading-snug text-emerald-300/90">
-                        {archiveSuccessMessage}
-                      </p>
-                    )}
-                  </div>
-                )}
+  const timelineBlock =
+    session.mp3 && activeBand ? (
+      <SkidmarksClipTimeline
+        segments={session.mp3.segments}
+        segmentsSource={session.mp3.segmentsSource}
+        analysisStatus={session.mp3.analysisStatus}
+        analysisError={session.mp3.analysisError}
+        transcriptionStatus={session.mp3.transcriptionStatus}
+        transcriptionError={session.mp3.transcriptionError}
+        transcriptionProvider={session.mp3.transcriptionProvider}
+        band={activeBand}
+        mp3FileName={session.mp3.fileName}
+        mp3AudioUrl={session.mp3.audioUrl}
+        renders={renders}
+        onPersisted={handlePersisted}
+        onSetSegmentShotPrompt={setSegmentShotPrompt}
+        onSetSegmentNegativePrompt={setSegmentNegativePrompt}
+        onNudgeSegmentStart={nudgeSegmentStart}
+        onNudgeSegmentEnd={nudgeSegmentEnd}
+        onSetClipPlateStill={setClipPlateStill}
+        onAddClipPlate={addClipPlate}
+        onRemoveClipPlate={removeClipPlate}
+        onSelectClipPlate={selectClipPlate}
+        onSetClipPlateMotionPrompt={setClipPlateMotionPrompt}
+        onSetClipPlateLastSent={setClipPlateLastSent}
+        onSetClipInstrumentalModel={setClipInstrumentalModel}
+        chainNote={chainNote}
+        onDismissChainNote={() => setChainNote(null)}
+      />
+    ) : null;
 
-                {activeBand && (
-                  <SkidmarksScriptSequencePanel
-                    band={activeBand}
-                    hasMp3={!!session.mp3}
-                    realSegments={session.mp3?.segments ?? []}
-                    mp3AudioUrl={session.mp3?.audioUrl}
-                    renders={renders}
-                    scriptSequenceDraft={session.scriptSequenceDraft}
-                    onSetScriptSequenceDraft={setScriptSequenceDraft}
-                    onSetScriptSequence={setScriptSequence}
-                    onSetClipPlateStill={setClipPlateStill}
-                    onRecordRender={addRender}
-                  />
-                )}
+  const renderedBlock =
+    session.mp3 && activeBand ? (
+      <SkidmarksRenderedClipsShelf renders={renders} onRemoved={removeRender} />
+    ) : null;
 
-                {session.mp3 && activeBand && (
-                  <SkidmarksClipTimeline
-                    segments={session.mp3.segments}
-                    segmentsSource={session.mp3.segmentsSource}
-                    analysisStatus={session.mp3.analysisStatus}
-                    analysisError={session.mp3.analysisError}
-                    transcriptionStatus={session.mp3.transcriptionStatus}
-                    transcriptionError={session.mp3.transcriptionError}
-                    transcriptionProvider={session.mp3.transcriptionProvider}
-                    band={activeBand}
-                    mp3FileName={session.mp3.fileName}
-                    mp3AudioUrl={session.mp3.audioUrl}
-                    renders={renders}
-                    onPersisted={handlePersisted}
-                    onSetSegmentShotPrompt={setSegmentShotPrompt}
-                    onSetSegmentNegativePrompt={setSegmentNegativePrompt}
-                    onNudgeSegmentStart={nudgeSegmentStart}
-                    onNudgeSegmentEnd={nudgeSegmentEnd}
-                    onSetClipPlateStill={setClipPlateStill}
-                    onAddClipPlate={addClipPlate}
-                    onRemoveClipPlate={removeClipPlate}
-                    onSelectClipPlate={selectClipPlate}
-                    onSetClipPlateMotionPrompt={setClipPlateMotionPrompt}
-                    onSetClipPlateLastSent={setClipPlateLastSent}
-                    onSetClipInstrumentalModel={setClipInstrumentalModel}
-                    chainNote={chainNote}
-                    onDismissChainNote={() => setChainNote(null)}
-                  />
-                )}
+  /** Phone: single-column stack + Finished Songs shelf. PC: 2-col desk, no shelf. */
+  const renderDeskBody = (layout: "phone" | "pc") => (
+    <div className="flex flex-col gap-8 pt-2">
+      <SkidmarksLandingTiles activeKind={session.projectKind} onSelect={selectProjectKind} />
 
-                {session.mp3 && activeBand && (
-                  <SkidmarksRenderedClipsShelf renders={renders} onRemoved={removeRender} />
-                )}
+      {session.projectKind === "sunnybank" && <SkidmarksSunnyBanksPanel />}
 
-                <SkidmarksArchiveShelf onOpenInEditor={handleOpenInEditor} refreshToken={archiveRefreshToken} />
-              </>
-            )}
+      {session.projectKind === "music-video" &&
+        (layout === "pc" ? (
+          <div className="grid grid-cols-2 items-start gap-10">
+            <div className="flex min-w-0 flex-col gap-8">
+              {artistBlock("Artist")}
+              {mp3Block}
+            </div>
+            <div className="flex min-w-0 flex-col gap-8">
+              {scriptBlock}
+              {timelineBlock}
+              {renderedBlock}
+            </div>
           </div>
+        ) : (
+          <>
+            {artistBlock("Choose a band")}
+            {mp3Block}
+            {scriptBlock}
+            {timelineBlock}
+            {renderedBlock}
+            <SkidmarksArchiveShelf onOpenInEditor={handleOpenInEditor} refreshToken={archiveRefreshToken} />
+          </>
+        ))}
+    </div>
   );
 
   const memberPopupAndConfirm = (
@@ -691,7 +713,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             )}
             {pcRail === "create" && (
               <div className="w-full px-8 pb-8">
-                {deskBody}
+                {renderDeskBody("pc")}
               </div>
             )}
             {pcRail === "library" && (
@@ -762,7 +784,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
         {syncBanners}
 
         <div className="flex-1 overflow-y-auto px-5 pb-5">
-          {deskBody}
+          {renderDeskBody("phone")}
         </div>
       </div>
 
