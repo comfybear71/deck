@@ -976,15 +976,20 @@ the request, and validate length against `shotPrompt` only.
 
 ## Env vars this feature actually reads
 
-- `XAI_API_KEY` — required for plate-still generation
-  (`app/api/skidmarks/generate-still/route.ts`) and, on the
-  Instrumental/B-roll clip-video render path, whenever it's switched to
-  Grok (`app/api/skidmarks/generate-clip/route.ts`'s Grok branch). One
-  key, both uses — no separate key per feature. Missing it never
-  blocks a still-only session, and never blocks an Instrumental clip
-  left on H3 (the default, see `MINIMAX_API_KEY` below) or a Vocal
-  clip (Comfy LTX) — only an Instrumental render actually switched to
-  Grok gets this key's own honest `missing_api_key` outcome.
+- `XAI_API_KEY` — slot A (default) team key for plate-still generation
+  (`app/api/skidmarks/generate-still/route.ts`), Instrumental/B-roll
+  Grok video (`generate-clip`'s Grok branch), and Sunny Banks plating.
+  One key, those uses — no separate key per feature. Missing the
+  *active* slot's key never blocks a still-only session, and never
+  blocks an Instrumental clip left on H3 (the default, see
+  `MINIMAX_API_KEY` below) or a Vocal clip (Comfy LTX) — only an
+  Instrumental render actually switched to Grok gets this key's own
+  honest `missing_api_key` outcome.
+- `XAI_API_KEY_B` — slot B team key. Same uses as `XAI_API_KEY`. Only
+  read when `XAI_API_KEY_SLOT=B`. No auto-failover between A and B.
+- `XAI_API_KEY_SLOT` (optional) — `A` | `B` (case-insensitive; unset /
+  junk → A). Flip which team key is live, then redeploy. Resolved in
+  `lib/xaiApiKey.ts`.
 - `XAI_IMAGE_MODEL` (optional) — overrides the default
   `grok-imagine-image-2.0` still-image model.
 - `XAI_VIDEO_MODEL` (optional) — overrides the default

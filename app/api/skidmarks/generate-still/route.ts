@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
 
 /**
  * POST /api/skidmarks/generate-still — the server half of Skidmarks'
@@ -64,7 +65,6 @@ export const runtime = "nodejs";
 // asks for in case a slower model/resolution combination runs longer.
 export const maxDuration = 60;
 
-const XAI_API_KEY_ENV_VAR = "XAI_API_KEY";
 const XAI_IMAGE_MODEL_ENV_VAR = "XAI_IMAGE_MODEL";
 const XAI_GENERATIONS_URL = "https://api.x.ai/v1/images/generations";
 const XAI_EDITS_URL = "https://api.x.ai/v1/images/edits";
@@ -85,9 +85,6 @@ const MAX_PROMPT_LENGTH = 2000;
 const MAX_REFERENCE_IMAGES = 3;
 const UPSTREAM_TIMEOUT_MS = 55_000;
 
-function resolveXaiApiKey(): string | null {
-  return process.env[XAI_API_KEY_ENV_VAR] || null;
-}
 
 function resolveXaiImageModel(): string {
   return process.env[XAI_IMAGE_MODEL_ENV_VAR] || DEFAULT_XAI_IMAGE_MODEL;
@@ -269,20 +266,17 @@ function isReferenceImageUrl(value: unknown): value is string {
 }
 
 export async function POST(request: Request) {
-  const apiKey = resolveXaiApiKey();
-  if (!apiKey) {
+  const resolvedKey = resolveXaiApiKey();
+  if (!resolvedKey) {
     return NextResponse.json(
       {
-        error:
-          `${XAI_API_KEY_ENV_VAR} is not set on the server \u2014 plate-still generation is unavailable here. ` +
-          "This is xAI's own Grok Imagine API key (from console.x.ai), not an ElevenLabs or OpenAI key. If you " +
-          "just added it, Vercel only applies environment variable changes to new deployments \u2014 redeploy the " +
-          "project for this function to see it.",
+        error: missingXaiApiKeyMessage("plate-still generation"),
         code: "missing_api_key",
       },
       { status: 501 }
     );
   }
+  const apiKey = resolvedKey.key;
 
   let body: GenerateStillRequestBody;
   try {

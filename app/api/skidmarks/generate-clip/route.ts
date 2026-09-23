@@ -25,6 +25,7 @@ import {
   type MinimaxCredentials,
 } from "@/lib/minimaxH3";
 import { sliceMp3ToTimeRange } from "@/lib/mp3Slice";
+import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
 
 /**
  * POST /api/skidmarks/generate-clip — the first real (non-stub) slice of
@@ -224,7 +225,6 @@ export const runtime = "nodejs";
 // response overhead.
 export const maxDuration = 300;
 
-const XAI_API_KEY_ENV_VAR = "XAI_API_KEY";
 const XAI_VIDEO_MODEL_ENV_VAR = "XAI_VIDEO_MODEL";
 const XAI_VIDEO_GENERATIONS_URL = "https://api.x.ai/v1/videos/generations";
 const xaiVideoStatusUrl = (requestId: string) =>
@@ -334,9 +334,6 @@ export const MINIMAX_POLL_DEADLINE_MS = 240_000;
  * ceiling) \u2014 H3 has no third role to put an extra image in. */
 const MAX_H3_REFERENCE_IMAGES = 2;
 
-function resolveXaiApiKey(): string | null {
-  return process.env[XAI_API_KEY_ENV_VAR] || null;
-}
 
 function resolveXaiVideoModel(): string {
   return process.env[XAI_VIDEO_MODEL_ENV_VAR] || DEFAULT_XAI_VIDEO_MODEL;
@@ -1554,20 +1551,17 @@ export async function POST(request: Request) {
     return handleInstrumentalH3Render(body, prompt, rawReferences, requestedDurationSec);
   }
 
-  const apiKey = resolveXaiApiKey();
-  if (!apiKey) {
+  const resolvedKey = resolveXaiApiKey();
+  if (!resolvedKey) {
     return NextResponse.json(
       {
-        error:
-          `${XAI_API_KEY_ENV_VAR} is not set on the server \u2014 clip video rendering is unavailable here. ` +
-          "This is the same xAI Grok Imagine key plate-still generation already uses (from console.x.ai). If " +
-          "you just added it, Vercel only applies environment variable changes to new deployments \u2014 " +
-          "redeploy the project for this function to see it.",
+        error: missingXaiApiKeyMessage("clip video rendering (Grok)"),
         code: "missing_api_key",
       },
       { status: 501 }
     );
   }
+  const apiKey = resolvedKey.key;
 
   const startResult = await startXaiVideoJob(
     prompt,
