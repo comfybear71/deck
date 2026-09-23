@@ -17,9 +17,14 @@ export const XAI_API_KEY_SLOT_ENV_VAR = "XAI_API_KEY_SLOT";
 
 export type XaiApiKeySlot = "A" | "B";
 
+/** Partial env map — `process.env` or a test stub. Avoids requiring
+ * `NODE_ENV` the way `NodeJS.ProcessEnv` does (that broke `next build`
+ * typecheck on the unit tests in #171). */
+export type XaiEnv = Record<string, string | undefined>;
+
 /** Which team slot is selected. Unset / empty / junk → A so today's
  * single-key Vercel setup keeps working with no env change. */
-export function resolveXaiApiKeySlot(env: NodeJS.ProcessEnv = process.env): XaiApiKeySlot {
+export function resolveXaiApiKeySlot(env: XaiEnv = process.env): XaiApiKeySlot {
   const raw = (env[XAI_API_KEY_SLOT_ENV_VAR] ?? "").trim().toUpperCase();
   return raw === "B" ? "B" : "A";
 }
@@ -30,7 +35,7 @@ export function resolveXaiApiKeySlot(env: NodeJS.ProcessEnv = process.env): XaiA
  * slot — flipping is deliberate via `XAI_API_KEY_SLOT` + redeploy.
  */
 export function resolveXaiApiKey(
-  env: NodeJS.ProcessEnv = process.env
+  env: XaiEnv = process.env
 ): { key: string; envVarName: string; slot: XaiApiKeySlot } | null {
   const slot = resolveXaiApiKeySlot(env);
   const envVarName = slot === "B" ? XAI_API_KEY_B_ENV_VAR : XAI_API_KEY_ENV_VAR;
@@ -41,7 +46,7 @@ export function resolveXaiApiKey(
 
 /** Plain-language missing-key copy for 501 responses — names the active
  * slot and both env vars so a flip to B without setting KEY_B is obvious. */
-export function missingXaiApiKeyMessage(purpose: string, env: NodeJS.ProcessEnv = process.env): string {
+export function missingXaiApiKeyMessage(purpose: string, env: XaiEnv = process.env): string {
   const slot = resolveXaiApiKeySlot(env);
   const active = slot === "B" ? XAI_API_KEY_B_ENV_VAR : XAI_API_KEY_ENV_VAR;
   return (
