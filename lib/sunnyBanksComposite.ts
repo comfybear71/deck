@@ -23,8 +23,8 @@ import {
   type SunnyBanksCharacterLock,
   type SunnyBanksLocationLock,
 } from "@/lib/sunnyBanks";
+import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
 
-const XAI_API_KEY_ENV_VAR = "XAI_API_KEY";
 const XAI_IMAGE_MODEL_ENV_VAR = "XAI_IMAGE_MODEL";
 const XAI_EDITS_URL = "https://api.x.ai/v1/images/edits";
 const DEFAULT_XAI_IMAGE_MODEL = "grok-imagine-image-2.0";
@@ -35,9 +35,6 @@ export type SunnyBanksCompositeOutcome =
   | { ok: true; dataUrl: string }
   | { ok: false; status: number; code: string; error: string };
 
-function resolveXaiApiKey(): string | null {
-  return process.env[XAI_API_KEY_ENV_VAR] || null;
-}
 
 function resolveXaiImageModel(): string {
   return process.env[XAI_IMAGE_MODEL_ENV_VAR] || DEFAULT_XAI_IMAGE_MODEL;
@@ -120,17 +117,16 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
     return { ok: true, dataUrl: opts.locationDataUrl, skipped: true };
   }
 
-  const apiKey = resolveXaiApiKey();
-  if (!apiKey) {
+  const resolvedKey = resolveXaiApiKey();
+  if (!resolvedKey) {
     return {
       ok: false,
       status: 501,
       code: "missing_api_key",
-      error:
-        `${XAI_API_KEY_ENV_VAR} is not set on the server — Sunny Banks plating (xAI Grok Imagine) is ` +
-        "unavailable here. LTX will not run without a composed plate.",
+      error: missingXaiApiKeyMessage("Sunny Banks plating (xAI Grok Imagine)"),
     };
   }
+  const apiKey = resolvedKey.key;
 
   const heroDataUrl = await readSunnyBanksPublicImageDataUrl(heroPath);
   if (!heroDataUrl) {

@@ -303,7 +303,13 @@ describe("POST /api/skidmarks/generate-clip", () => {
   });
 
   it("accepts an https Blob photo URL as a reference image (clip-1 upload path)", async () => {
+    // https refs are downloaded and inlined as data: before xAI sees them
+    // (Chain last→first / Blob stills — avoid image_fetch_http_error 404).
+    const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
     fetchMock
+      .mockResolvedValueOnce(
+        new Response(jpegBytes, { status: 200, headers: { "content-type": "image/jpeg" } })
+      )
       .mockResolvedValueOnce(jsonResponse(200, { request_id: "req-https-ref" }))
       .mockResolvedValueOnce(
         jsonResponse(200, {
@@ -319,9 +325,10 @@ describe("POST /api/skidmarks/generate-clip", () => {
     expect(res.status).toBe(200);
     expect(body.videoUrl).toBe("https://vidgen.x.ai/clip-https.mp4");
 
-    const [, startInit] = fetchMock.mock.calls[0];
+    expect(String(fetchMock.mock.calls[0][0])).toBe(httpsStill);
+    const [, startInit] = fetchMock.mock.calls[1];
     const sentBody = JSON.parse(startInit.body as string);
-    expect(sentBody.image).toEqual({ url: httpsStill });
+    expect(sentBody.image.url).toMatch(/^data:image\/jpeg;base64,/);
   });
 
   it("starts with an `image` object (image-to-video) for exactly one reference, and returns the video on the first poll", async () => {
