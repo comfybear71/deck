@@ -19,7 +19,6 @@ import {
 import {
   buildPlateGenerationRequest,
   generatePlateStill,
-  getSkidmarksCharacterLock,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
 import { resolveLocationStill } from "@/lib/plateLocation";
@@ -139,13 +138,10 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
  * real failure, reporting exactly which clip, rather than continuing to
  * spend on a broken or identity-less chain.
  *
- * **"Build timeline" (2026-09-15)** is unchanged: build the whole
- * timeline and, for a *locked* character only, pre-fill every plate with
- * their reference photo so Stuart can scroll through before spending
- * anything. That pre-fill is a locked-character avatar preview only —
- * `plateStillCountsAsReady` does not treat it as a finished plate, so
- * Generate plates still builds a real place + identity composite for
- * those slots. Real stills and finished videos are left alone.
+ * **Clip rows** are built by Generate plates / Generate via `ensureTimeline`
+ * (remint-safe `buildScriptSequenceSegments`). There is no separate Timeline
+ * preview button — that path stamped the same locked reference / avatar onto
+ * every plate as a starting image, which Stuart does not want.
  *
  * **Clip 1 starting-image upload (restored)**: optional. When set, the
  * identity-safe runner uses that durable Blob URL as clip 1's image 1
@@ -376,7 +372,7 @@ export function SkidmarksScriptSequencePanel({
 
   /** Script-text only — never calls ensureTimeline / onSetScriptSequence,
    * so Format / Full-screen Apply cannot remint clips or wipe plates.
-   * Timeline rebuild stays on Timeline / Generate plates / Generate, which
+   * Timeline rebuild stays on Generate plates / Generate, which
    * already use remint-safe `buildScriptSequenceSegments`. */
   const applyScriptText = (next: string, captureUndo: boolean) => {
     if (next === script) return;
@@ -628,56 +624,6 @@ export function SkidmarksScriptSequencePanel({
     await runAnimateFrom(realSegments, incompleteRun.resumeIndex);
   };
 
-  /**
-   * Real reported ask (2026-09-15): build the whole clip timeline and,
-   * for a *locked* character only, pre-fill every plate with their fixed
-   * reference photo — before any rendering or any money is spent — so
-   * Stuart can scroll through and see the timeline shape first. Purely a
-   * preview (avatar URL + featuresLockedCharacter) — Generate plates does
-   * not treat those as finished plates and still builds real place +
-   * identity composites for empty / preview slots.
-   */
-  const handleBuildTimeline = () => {
-    if (running || parts.length === 0) return;
-
-    // Re-attach existing stills/videos by time via buildScriptSequenceSegments —
-    // never wipe plated ranges when the script grows or Build timeline re-runs.
-    const segments = buildScriptSequenceSegments(parts, realSegments);
-    onSetScriptSequence(segments);
-
-    const memberAvatarUrls = band.members
-      .map((m) => m.avatarImage)
-      .filter((u): u is string => typeof u === "string" && u.trim().length > 0);
-
-    const vocalist = resolveVocalistForPrompt(band.members);
-    const lock = vocalist ? getSkidmarksCharacterLock(vocalist) : undefined;
-    if (lock && vocalist?.avatarImage) {
-      for (const segment of segments) {
-        const plate = segment.plates[0];
-        if (!plate) continue;
-        // Leave real stills and finished videos alone — preview is only for empty slots.
-        if (plateStillCountsAsReady(plate.still, memberAvatarUrls)) continue;
-        if (findPersistedRenderForClip(renders, segment.id, plate.id, segment.startSec, segment.endSec)) {
-          continue;
-        }
-        onSetClipPlateStill(segment.id, plate.id, {
-          dataUrl: vocalist.avatarImage,
-          source: "generated",
-          createdAt: Date.now(),
-          featuresLockedCharacter: true,
-        });
-      }
-    }
-
-    flushSkidmarksSessionNow();
-    setResult({
-      ok: true,
-      message: lock
-        ? `Timeline built — all ${segments.length} plates start from the locked reference photo as a preview. Tap Generate plates when you're happy; each clip still gets its own fresh scene + identity composite.`
-        : `Timeline built — ${segments.length} clips ready. Tap Generate plates for stills, then Generate to animate.`,
-    });
-  };
-
   const handleRun = async () => {
     if (running) return;
     if (parts.length === 0) {
@@ -852,7 +798,7 @@ export function SkidmarksScriptSequencePanel({
 
       {/* Action chrome: Clip 1 upload is its own row above; status + actions
           stack cleanly so iPhone doesn't stagger "No parts yet" beside wrapping
-          buttons. Behavior unchanged — Timeline / plates / Generate handlers. */}
+          buttons. Behavior unchanged — plates / Generate handlers. */}
       <div className="flex flex-col gap-2">
         <span
           className="text-[11px] text-white/40"
@@ -864,16 +810,7 @@ export function SkidmarksScriptSequencePanel({
         >
           {parts.length > 0 ? `${parts.length} part${parts.length === 1 ? "" : "s"}` : "No parts yet"}
         </span>
-        <div className="grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            onClick={handleBuildTimeline}
-            disabled={!!running || parts.length === 0 || !!incompleteRun}
-            title="Pre-fills every plate with the locked reference photo (if any) — free, no rendering yet, so you can check the timeline shape first."
-            className="min-w-0 rounded-full border border-white/15 bg-white/[0.03] px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
-          >
-            Timeline
-          </button>
+        <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
             onClick={handleGeneratePlates}
@@ -903,7 +840,7 @@ export function SkidmarksScriptSequencePanel({
             {running === "render" ? "Rendering…" : "Generate"}
           </button>
         </div>
-        <p className="text-[10px] leading-snug text-white/30">Timeline builds clip rows from script · free preview</p>
+        <p className="text-[10px] leading-snug text-white/30">Generate plates builds unique stills per clip · sleeve Keep for your collection</p>
       </div>
 
       {progressText && (
