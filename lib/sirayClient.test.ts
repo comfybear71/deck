@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSirayCredentials,
   SIRAY_SEEDREAM_45_REF2I_SPICY,
+  SIRAY_SEEDREAM_45_T2I_SPICY,
   SIRAY_SEEDREAM_45_SIZE,
   siraySubmitStillImage,
   sirayPollStillImage,
@@ -52,6 +53,18 @@ describe("siraySubmitStillImage", () => {
       size: SIRAY_SEEDREAM_45_SIZE,
       images: ["data:image/jpeg;base64,AAAA"],
     });
+  });
+
+  it("with zero references submits the t2i spicy model and omits images", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { code: "Success", data: { task_id: "task-t2i" } }));
+
+    const outcome = await siraySubmitStillImage("party lights", [], CREDS);
+
+    expect(outcome).toEqual({ ok: true, taskId: "task-t2i" });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.model).toBe(SIRAY_SEEDREAM_45_T2I_SPICY);
+    expect(body.images).toBeUndefined();
+    expect(body.prompt).toBe("party lights");
   });
 
   it("parses a bare (non-nested) task_id too", async () => {

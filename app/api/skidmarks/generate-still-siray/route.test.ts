@@ -46,11 +46,42 @@ describe("POST /api/skidmarks/generate-still-siray", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("rejects zero reference images", async () => {
-    const res = await POST(postRequest({ prompt: "front wide", referenceImageDataUrls: [] }));
+  it("accepts zero reference images and submits the t2i spicy model (no images field)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { data: { task_id: "task-t2i" } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/t2i.png"] } })
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([9, 8, 7]), { status: 200, headers: { "content-type": "image/png" } })
+      );
+
+    const res = await POST(postRequest({ prompt: "adult party glitter rain", referenceImageDataUrls: [] }));
     const body = await res.json();
-    expect(res.status).toBe(400);
-    expect(body.error.toLowerCase()).toContain("exactly one reference image");
+    expect(res.status).toBe(200);
+    expect(body.dataUrl).toMatch(/^data:image\/png;base64,/);
+
+    const submittedBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(submittedBody.model).toBe("bytedance/seedream-4.5-t2i-spicy");
+    expect(submittedBody.images).toBeUndefined();
+    expect(submittedBody.prompt).toBe("adult party glitter rain");
+  });
+
+  it("also accepts a missing referenceImageDataUrls field as zero refs (t2i)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { data: { task_id: "task-t2i-2" } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/t2i2.png"] } })
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1]), { status: 200, headers: { "content-type": "image/png" } })
+      );
+
+    const res = await POST(postRequest({ prompt: "neon party" }));
+    expect(res.status).toBe(200);
+    const submittedBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(submittedBody.model).toBe("bytedance/seedream-4.5-t2i-spicy");
+    expect(submittedBody.images).toBeUndefined();
   });
 
   it("rejects more than one reference image", async () => {
@@ -83,6 +114,7 @@ describe("POST /api/skidmarks/generate-still-siray", () => {
     expect(submitUrl).toBe("https://api.siray.ai/v1/images/generations/async");
     const submittedBody = JSON.parse(submitInit.body as string);
     expect(submittedBody.prompt).toBe("front wide");
+    expect(submittedBody.model).toBe("bytedance/seedream-4.5-ref2i-spicy");
     expect(submittedBody.images).toEqual([REFERENCE]);
   });
 

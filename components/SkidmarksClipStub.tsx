@@ -28,11 +28,15 @@ import {
 } from "@/lib/memberStillSleeve";
 import {
   buildPlateGenerationRequest,
+  buildSirayClipStillPrompt,
   generatePlateStill,
+  generatePlateStillViaSiray,
   plateGenerationHoldsIdentity,
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
+  shotPromptMentionsLockedCharacter,
 } from "@/lib/plateGeneration";
+import { SIRAY_SEEDREAM_45_COST_USD } from "@/lib/sirayClient";
 import { resolveLocationStill } from "@/lib/plateLocation";
 import { computeLtxPlateDurationSec, computePlateDurationSec } from "@/lib/clipGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
@@ -181,6 +185,8 @@ interface SkidmarksPlatePopoverProps {
   onSetUseLastPlate: (value: boolean) => void;
   onUpload: () => void;
   onGenerate: () => void;
+  /** Optional Siray spicy still — same slot as Generate, ~$0.04. */
+  onSiray?: () => void;
   onDismiss: () => void;
   /** When set, show a free "From sleeve" action that opens the member's
    * still library — never a generate-still call. */
@@ -207,6 +213,7 @@ function SkidmarksPlatePopover({
   onSetUseLastPlate,
   onUpload,
   onGenerate,
+  onSiray,
   onDismiss,
   onOpenSleeve,
   sleeveAvailable,
@@ -286,6 +293,20 @@ function SkidmarksPlatePopover({
       >
         Generate
       </button>
+
+      {onSiray && (
+        <button
+          type="button"
+          onClick={onSiray}
+          title={`Siray spicy still · ~$${SIRAY_SEEDREAM_45_COST_USD.toFixed(2)}`}
+          className={[
+            "mx-auto rounded-full border border-rose-400/40 bg-rose-400/10 font-medium text-rose-200 transition-colors hover:bg-rose-400/20",
+            dense ? "px-4 py-1.5 text-[11px]" : "px-5 py-2 text-[12px]",
+          ].join(" ")}
+        >
+          {`Siray · $${SIRAY_SEEDREAM_45_COST_USD.toFixed(2)}`}
+        </button>
+      )}
     </div>
   );
 }
@@ -304,6 +325,7 @@ interface SkidmarksPlateLightboxProps {
   onSetUseLastPlate: (value: boolean) => void;
   onUpload: () => void;
   onGenerate: () => void;
+  onSiray?: () => void;
   onClear: () => void;
   onClose: () => void;
   statusNote?: string | null;
@@ -349,6 +371,7 @@ function SkidmarksPlateLightbox({
   onSetUseLastPlate,
   onUpload,
   onGenerate,
+  onSiray,
   onClear,
   onClose,
   statusNote,
@@ -460,6 +483,7 @@ function SkidmarksPlateLightbox({
               onSetUseLastPlate={onSetUseLastPlate}
               onUpload={onUpload}
               onGenerate={onGenerate}
+              onSiray={onSiray}
               onDismiss={onToggleReplace}
               onOpenSleeve={onOpenSleeve}
               sleeveAvailable={sleeveAvailable}
@@ -506,6 +530,7 @@ interface SkidmarksPlateBoxProps {
   plate: SkidmarksClipPlateSlot;
   previousStill?: SkidmarksPlateStill;
   shotPrompt: string;
+  negativePrompt: string;
   vocal: boolean;
   model: SkidmarksModelId;
   bandName: string;
@@ -653,6 +678,7 @@ function SkidmarksPlateBox({
   plate,
   previousStill,
   shotPrompt,
+  negativePrompt,
   vocal,
   model,
   bandName,
@@ -943,6 +969,83 @@ function SkidmarksPlateBox({
     }
   };
 
+  /** Per-clip Siray spicy still (~$0.04). Optional reference = "Use last
+   * plate" continuity or this plate's existing still; otherwise text-only
+   * t2i. Character lock only when the shot prompt names them (#170). */
+  const handleSiray = async () => {
+    const trimmedPrompt = shotPrompt.trim();
+    if (!trimmedPrompt) {
+      setError("Add a shot prompt first \u2014 Siray needs something to go on.");
+      return;
+    }
+    setGenerating(true);
+    setBusyLabel("Siray\u2026");
+    setError(null);
+    try {
+      let resolvedVocalist = vocalist;
+      if (vocalist?.avatarImage) {
+        try {
+          const identityDataUrl = await resolvePlateReferenceDataUrl(vocalist.avatarImage);
+          resolvedVocalist = { ...vocalist, avatarImage: identityDataUrl };
+        } catch {
+          resolvedVocalist = vocalist;
+        }
+      }
+
+      const prompt = buildSirayClipStillPrompt({
+        shotPrompt: trimmedPrompt,
+        negativePrompt,
+        vocalist: resolvedVocalist,
+      });
+
+      let referenceDataUrl: string | undefined;
+      const rawRef =
+        useLastPlate && previousStill
+          ? previousStill.dataUrl
+          : plate.still?.dataUrl;
+      if (rawRef) {
+        try {
+          referenceDataUrl = await resolvePlateReferenceDataUrl(rawRef);
+        } catch {
+          referenceDataUrl = undefined;
+        }
+      }
+
+      const outcome = await generatePlateStillViaSiray(prompt, referenceDataUrl);
+      if (!outcome.ok) {
+        setError(outcome.message);
+        return;
+      }
+
+      let dataUrl = outcome.dataUrl;
+      try {
+        dataUrl = await downscaleDataUrlImage(outcome.dataUrl);
+      } catch {
+        // Keep the original — same as Generate.
+      }
+      setBusyLabel("Saving\u2026");
+      const uploadOutcome = await uploadSkidmarksPlateStill(dataUrl);
+      onSetStill({
+        dataUrl: uploadOutcome.ok ? uploadOutcome.url : dataUrl,
+        source: "generated",
+        createdAt: Date.now(),
+        featuresLockedCharacter: Boolean(
+          resolvedVocalist && shotPromptMentionsLockedCharacter(trimmedPrompt, resolvedVocalist)
+        ),
+      });
+      if (!uploadOutcome.ok) {
+        setError(`Generated, but couldn't save it for persistence yet — ${uploadOutcome.message}`);
+      }
+      flushSkidmarksSessionNow();
+      closeMenu();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Siray still failed.");
+    } finally {
+      setGenerating(false);
+      setBusyLabel("Generating\u2026");
+    }
+  };
+
   return (
     <div className="flex w-32 shrink-0 flex-col gap-1">
       <div className="relative">
@@ -1107,6 +1210,7 @@ function SkidmarksPlateBox({
               onSetUseLastPlate={setUseLastPlate}
               onUpload={handleUploadClick}
               onGenerate={handleGenerate}
+              onSiray={handleSiray}
               onDismiss={closeMenu}
               onOpenSleeve={handleOpenSleeve}
               sleeveAvailable={sleeveAvailable}
@@ -1150,6 +1254,7 @@ function SkidmarksPlateBox({
           onSetUseLastPlate={setUseLastPlate}
           onUpload={handleUploadClick}
           onGenerate={handleGenerate}
+          onSiray={handleSiray}
           onClear={handleClear}
           onClose={closeLightbox}
           onKeep={vocalist ? handleKeep : undefined}
@@ -1318,6 +1423,7 @@ export function SkidmarksClipStub({
             plate={plate}
             previousStill={i > 0 ? segment.plates[i - 1].still : previousStill}
             shotPrompt={segment.shotPrompt}
+            negativePrompt={segment.negativePrompt}
             vocal={vocal}
             model={segment.model}
             bandName={band.name}

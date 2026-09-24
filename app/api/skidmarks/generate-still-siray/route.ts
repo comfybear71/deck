@@ -16,12 +16,12 @@ import {
  * `app/api/skidmarks/generate-still/route.ts`'s xAI path, so the two
  * are interchangeable to every caller above `lib/plateGeneration.ts`.
  *
- * **Exactly one reference image, always required.** Unlike the xAI
- * route (which accepts zero, one, or two references depending on what
- * it's generating), this route's one real use is "one clean master
- * still in, one new angle of the same character out" — Auto-plate never
- * calls this without a master still already resolved, so an empty or
- * multi-image request here is a caller bug, not a legitimate variant.
+ * **Zero or one reference image.** With one reference this calls Siray's
+ * Seedream 4.5 ref2i-spicy (same Auto-plate path as before). With zero
+ * references it calls Seedream 4.5 t2i-spicy — text-to-image, no
+ * reference — so a per-clip "Siray" still can run from the shot prompt
+ * alone. More than one reference is still rejected (this app only ever
+ * sends a single optional continuity/master still).
  *
  * Submit → poll → download → re-encode as a `data:` URL, same
  * submit/poll/download shape as `lib/comfyCloud.ts`'s LTX path, just
@@ -82,17 +82,18 @@ export async function POST(request: Request) {
     );
   }
 
+  // Missing / non-array → treat as no references (t2i). Cap at one.
   const rawReferences = Array.isArray(body.referenceImageDataUrls) ? body.referenceImageDataUrls : [];
-  if (rawReferences.length !== 1) {
+  if (rawReferences.length > 1) {
     return NextResponse.json(
       {
-        error: "This route needs exactly one reference image — the character's master still.",
+        error: "This route accepts at most one reference image (optional continuity / master still).",
         code: "invalid_request",
       },
       { status: 400 }
     );
   }
-  if (!rawReferences.every(isReferenceDataUrl)) {
+  if (rawReferences.length === 1 && !isReferenceDataUrl(rawReferences[0])) {
     return NextResponse.json(
       { error: "The reference image must be a `data:image/...;base64,...` URL.", code: "invalid_request" },
       { status: 400 }

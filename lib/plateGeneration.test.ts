@@ -3,6 +3,7 @@ import {
   buildMemberLookRequest,
   buildPlateGenerationRequest,
   buildSirayCharacterPrompt,
+  buildSirayClipStillPrompt,
   generatePlateStill,
   getSkidmarksCharacterLock,
   plateGenerationHoldsIdentity,
@@ -1062,6 +1063,57 @@ describe("generatePlateStill", () => {
       unconfigured: false,
       message: "Still generation succeeded but returned no image.",
     });
+  });
+});
+
+
+describe("buildSirayClipStillPrompt", () => {
+  const jackAsh = member({ id: "jack-ash-frontman", name: "Jack Ash", avatarImage: "data:image/jpeg;base64,jack" });
+
+  it("returns the shot prompt alone when there is no negative and no named lock", () => {
+    expect(buildSirayClipStillPrompt({ shotPrompt: "Adult party glitter rain, nude dancers" })).toBe(
+      "Adult party glitter rain, nude dancers"
+    );
+  });
+
+  it("appends Negative as an Avoid: line (Siray has no negative param)", () => {
+    expect(
+      buildSirayClipStillPrompt({
+        shotPrompt: "Adult party glitter rain",
+        negativePrompt: "minors, logos",
+      })
+    ).toBe("Adult party glitter rain\nAvoid: minors, logos");
+  });
+
+  it("does NOT inject Jack lock when the shot prompt never names him", () => {
+    const out = buildSirayClipStillPrompt({
+      shotPrompt: "Crowded adult party, glitter, nudity",
+      negativePrompt: "clothes",
+      vocalist: jackAsh,
+    });
+    expect(out.toLowerCase()).not.toContain("fedora");
+    expect(out.toLowerCase()).not.toContain("neon blue");
+    expect(out).toBe("Crowded adult party, glitter, nudity\nAvoid: clothes");
+  });
+
+  it("DOES merge Jack lock when the shot prompt names him", () => {
+    const out = buildSirayClipStillPrompt({
+      shotPrompt: "Jack Ash at an adult afterparty",
+      vocalist: jackAsh,
+    });
+    expect(out.toLowerCase()).toContain("fedora");
+    expect(out.toLowerCase()).toContain("neon blue");
+    expect(out.startsWith("Jack Ash at an adult afterparty")).toBe(true);
+  });
+
+  it("merges lock then Avoid when both apply", () => {
+    const out = buildSirayClipStillPrompt({
+      shotPrompt: "Jack Ash mid-song",
+      negativePrompt: "staring at camera",
+      vocalist: jackAsh,
+    });
+    expect(out.toLowerCase()).toContain("fedora");
+    expect(out.endsWith("Avoid: staring at camera")).toBe(true);
   });
 });
 
