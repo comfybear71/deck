@@ -1148,6 +1148,10 @@ describe("resolveInstrumentalVideoModel", () => {
     expect(resolveInstrumentalVideoModel("grok")).toBe("grok");
   });
 
+  it("returns siray for the literal stored value 'siray'", () => {
+    expect(resolveInstrumentalVideoModel("siray")).toBe("siray");
+  });
+
   it("falls back to h3 for any other stored value, including a stale/invalid one", () => {
     expect(resolveInstrumentalVideoModel("h3")).toBe("h3");
     expect(resolveInstrumentalVideoModel("seedance")).toBe("h3");

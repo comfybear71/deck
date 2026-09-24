@@ -482,7 +482,7 @@ export const SKIDMARKS_UNCENSORED_STILLS_LABEL = "SIRAY \u2014 Uncensored plate 
  * `resolveInstrumentalVideoModel` below is the one place that resolves
  * that into a real choice. Never read on a Vocal clip — that always
  * routes to Comfy Cloud LTX, unchanged, no switch. */
-export type SkidmarksInstrumentalVideoModel = "h3" | "grok";
+export type SkidmarksInstrumentalVideoModel = "h3" | "grok" | "siray";
 
 /** **Stuart lock (2026-09-13)**: MiniMax H3 (`MINIMAX_API_KEY`) is now
  * the *default* Instrumental/B-roll video-render backend — explicitly
@@ -502,7 +502,9 @@ export type SkidmarksInstrumentalVideoModel = "h3" | "grok";
 export function resolveInstrumentalVideoModel(
   value: SkidmarksInstrumentalVideoModel | string | null | undefined
 ): SkidmarksInstrumentalVideoModel {
-  return value === "grok" ? "grok" : "h3";
+  if (value === "grok") return "grok";
+  if (value === "siray") return "siray";
+  return "h3";
 }
 
 export function skidmarksModelLabel(id: SkidmarksModelId): string {
@@ -673,7 +675,7 @@ export interface SkidmarksClipSegment {
  * them, that is the bug, not the model (audit Part 4).
  */
 export interface SkidmarksClipSentPayload {
-  engine: "LTX" | "Grok" | "H3";
+  engine: "LTX" | "Grok" | "H3" | "Siray";
   /** The duration the engine was actually asked for, after clamping. */
   durationSec: number;
   /** The plate still's own URL at send time. */
@@ -1615,7 +1617,11 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
   // here, resolve the honest fallback there" split `selectedPlateId`
   // already uses above.
   const instrumentalVideoModel: SkidmarksInstrumentalVideoModel | undefined =
-    r.instrumentalVideoModel === "h3" || r.instrumentalVideoModel === "grok" ? r.instrumentalVideoModel : undefined;
+    r.instrumentalVideoModel === "h3" ||
+    r.instrumentalVideoModel === "grok" ||
+    r.instrumentalVideoModel === "siray"
+      ? r.instrumentalVideoModel
+      : undefined;
   return {
     id: raw.id,
     startSec: raw.startSec,
@@ -3995,7 +4001,7 @@ export function setSkidmarksSegmentModel(segmentId: string, model: SkidmarksMode
   updateSkidmarksSegment(segmentId, (s) => ({ ...s, model }));
 }
 
-/** The H3/Grok switch inside the Render confirm
+/** The H3/Grok/Siray switch inside the Render confirm
  * (`components/SkidmarksClipRender.tsx`) — the *only* way a clip's
  * Instrumental video-render backend choice ever changes; nothing in
  * this file flips it on its own initiative. Distinct from
