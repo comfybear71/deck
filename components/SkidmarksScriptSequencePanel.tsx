@@ -19,7 +19,10 @@ import {
 } from "@/lib/skidmarks";
 import {
   buildPlateGenerationRequest,
+  buildSirayClipStillPrompt,
   generatePlateStill,
+  generatePlateStillViaSiray,
+  resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
 import { resolveLocationStill } from "@/lib/plateLocation";
@@ -40,6 +43,8 @@ import {
   type IdentitySafeScriptPart,
 } from "@/lib/scriptSequenceRunner";
 import { findPersistedRenderForClip, type PersistedClipRender } from "@/lib/clipRenders";
+
+const SCRIPT_ENGINE_STORAGE_KEY = "deck.scriptEngine";
 
 /** Native file picker's accept list — jpg/png/webp only, matches every
  * other photo picker in this feature. */
@@ -318,6 +323,28 @@ export function SkidmarksScriptSequencePanel({
   const startingImageUrl = scriptSequenceDraft?.startingImageUrl;
   /** Default OFF — plate-first Generate plates stays unchanged until Stuart flips this. */
   const chainLastFrameToNext = scriptSequenceDraft?.chainLastFrameToNext === true;
+  /** Which engine the bulk buttons use: Siray (default — stills via
+   * Seedream 4.5 spicy, Instrumental videos via Wan 3.0 i2v spicy) or
+   * Grok (the old xAI stills + Grok Instrumental video). Vocal parts
+   * always render on LTX either way. Remembered per device. */
+  const [scriptEngine, setScriptEngine] = useState<"siray" | "grok">(() => {
+    try {
+      return typeof window !== "undefined" && window.localStorage.getItem(SCRIPT_ENGINE_STORAGE_KEY) === "grok"
+        ? "grok"
+        : "siray";
+    } catch {
+      return "siray";
+    }
+  });
+  const toggleScriptEngine = () => {
+    const next = scriptEngine === "siray" ? "grok" : "siray";
+    setScriptEngine(next);
+    try {
+      window.localStorage.setItem(SCRIPT_ENGINE_STORAGE_KEY, next);
+    } catch {
+      // Ignore — still applies for this session.
+    }
+  };
   const parts = useMemo(() => parseScriptSequence(script), [script]);
   /** One parsed kind per part, positionally aligned with `parts` — see
    * `lib/scriptSequenceRunner.ts`'s `parseScriptPartKind` doc comment
@@ -418,7 +445,42 @@ export function SkidmarksScriptSequencePanel({
     applyScriptText(next, true);
   };
 
-  const buildPlatesDeps = (): GeneratePlatesDeps => ({
+  const buildPlatesDeps = (): GeneratePlatesDeps =>
+    scriptEngine === "siray" ? buildSirayPlatesDeps() : buildGrokPlatesDeps();
+
+  /** Siray engine: one Seedream 4.5 spicy still per clip, with the
+   * artist's photo as the single reference (ref2i). No separate xAI
+   * "empty place" still — Siray gets the whole scene from the prompt,
+   * and xAI would refuse adult/party scenes anyway. */
+  const buildSirayPlatesDeps = (): GeneratePlatesDeps => ({
+    resolvePlaceStill: async () => ({ ok: true, dataUrl: "" }),
+    generateIdentityStill: async ({ shotPrompt, vocalist, negativePrompt }) => {
+      const photo = vocalist.avatarImage?.trim();
+      if (!photo) {
+        return {
+          ok: false,
+          message: `${vocalist.name || "The artist"}'s photo is missing — refusing to invent a face.`,
+        };
+      }
+      let referenceDataUrl: string;
+      try {
+        referenceDataUrl = photo.startsWith("data:") ? photo : await resolvePlateReferenceDataUrl(photo);
+      } catch (err) {
+        return {
+          ok: false,
+          message: `Couldn't load ${vocalist.name || "the artist"}'s photo for Siray: ${err instanceof Error ? err.message : "unknown error"}.`,
+        };
+      }
+      const prompt = buildSirayClipStillPrompt({ shotPrompt, negativePrompt, vocalist });
+      const stillOutcome = await generatePlateStillViaSiray(prompt, referenceDataUrl);
+      return stillOutcome.ok ? { ok: true, dataUrl: stillOutcome.dataUrl } : { ok: false, message: stillOutcome.message };
+    },
+    uploadStill: uploadSkidmarksPlateStill,
+    setPlateStill: onSetClipPlateStill,
+    onProgress: (event) => setProgressText(platesProgressLabel(event)),
+  });
+
+  const buildGrokPlatesDeps = (): GeneratePlatesDeps => ({
     resolvePlaceStill: async (sceneText, bandName) => {
       const placeOutcome = await resolveLocationStill({ sceneText, bandName });
       return placeOutcome.ok
@@ -519,6 +581,7 @@ export function SkidmarksScriptSequencePanel({
       endSec: part.endSec,
       kind: partKinds[i].kind,
       otherSingerName: partKinds[i].otherSingerName,
+      negativePrompt: part.negativePrompt,
     }));
 
   const ensureTimeline = (): SkidmarksClipSegment[] => {
@@ -648,7 +711,8 @@ export function SkidmarksScriptSequencePanel({
       buildAnimateDeps(),
       startAtClipIndex,
       () => stopRequestedRef.current,
-      chainLastFrameToNext
+      chainLastFrameToNext,
+      scriptEngine
     );
 
     flushSkidmarksSessionNow();
@@ -905,6 +969,20 @@ export function SkidmarksScriptSequencePanel({
             {chainLastFrameToNext ? "Chain last→first · ON" : "Chain last→first"}
           </button>
         </div>
+        <button
+          type="button"
+          onClick={toggleScriptEngine}
+          disabled={!!running}
+          aria-pressed={scriptEngine === "siray"}
+          title={
+            scriptEngine === "siray"
+              ? "Siray: Generate plates makes Seedream 4.5 spicy stills ($0.04 each); Generate renders Instrumental parts on Wan 3.0 i2v spicy (~$0.045/s). Vocal parts always use LTX. Tap for Grok."
+              : "Grok: Generate plates uses xAI stills; Generate renders Instrumental parts on Grok. Vocal parts always use LTX. Tap for Siray."
+          }
+          className="self-start rounded-full border border-white/15 bg-white/[0.03] px-3 py-1 text-[11px] font-medium text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Engine: {scriptEngine === "siray" ? "Siray" : "Grok"} · Vocal on LTX
+        </button>
         <p className="text-[10px] leading-snug text-white/30">
           {chainLastFrameToNext
             ? "Chain ON: last frame of each render → next clip start (skips Keep / upload / plated stills)"
