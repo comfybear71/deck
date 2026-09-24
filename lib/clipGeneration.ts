@@ -484,6 +484,10 @@ export interface ClipGenerationRequest {
    * never read by the route — on a Vocal request; that path always
    * means Comfy Cloud LTX regardless of this field. */
   videoBackend?: "h3" | "grok" | "siray";
+  /** Siray only: resume an already-submitted task instead of paying
+   * for a new one. Set by `generateSkidmarksClip` itself on a 202
+   * pending response; callers never set it. */
+  sirayTaskId?: string;
 }
 
 export interface BuildClipGenerationRequestParams {
@@ -898,9 +902,36 @@ interface GenerateClipRouteSuccessBody {
  * should show real "this can take a while" progress UI, not a
  * short-timeout spinner.
  */
+/** How many extra ~4-minute waits the client makes on the SAME Siray
+ * task after the server says it's still rendering (202 pending). Wan
+ * 3.0 at 720p regularly runs past one 240s server window; skidmarks'
+ * own client waits up to 480s. 3 resumes means ~16 min total, one paid
+ * render. */
+export const SIRAY_MAX_RESUMES = 3;
+
 export async function generateSkidmarksClip(
   request: ClipGenerationRequest
 ): Promise<ClipGenerationOutcome> {
+  let current = request;
+  for (let attempt = 0; ; attempt++) {
+    const outcome = await postGenerateClip(current);
+    if (!("pendingTaskId" in outcome)) return outcome;
+    if (attempt >= SIRAY_MAX_RESUMES) {
+      return {
+        ok: false,
+        unconfigured: false,
+        message:
+          `Siray is still rendering this video after ~${(attempt + 1) * 4} minutes (task ${outcome.pendingTaskId}). ` +
+          "It was only submitted once — check Siray's dashboard for the finished clip before rendering again.",
+      };
+    }
+    current = { ...request, sirayTaskId: outcome.pendingTaskId };
+  }
+}
+
+async function postGenerateClip(
+  request: ClipGenerationRequest
+): Promise<ClipGenerationOutcome | { pendingTaskId: string }> {
   let res: Response;
   try {
     res = await fetch(GENERATE_CLIP_ENDPOINT, {
@@ -922,6 +953,13 @@ export async function generateSkidmarksClip(
   } catch {
     // Non-JSON response (e.g. a platform-level error page) — the
     // status-code fallback below still gives Stuart a real message.
+  }
+
+  if (res.status === 202) {
+    const pending = (body ?? {}) as { sirayTaskId?: unknown };
+    if (typeof pending.sirayTaskId === "string" && pending.sirayTaskId) {
+      return { pendingTaskId: pending.sirayTaskId };
+    }
   }
 
   if (!res.ok) {
