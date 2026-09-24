@@ -630,6 +630,9 @@ export async function runIdentitySafeSongRender(
  * member's `avatarImage`. Missing either fails that clip and stops the
  * batch.
  */
+/** Largest data: URL we will ever keep inline in the saved session. */
+const MAX_INLINE_STILL_CHARS = 1_500_000;
+
 export async function runGeneratePlates(
   parts: IdentitySafeScriptPart[],
   targets: GeneratePlatesTarget[],
@@ -736,8 +739,25 @@ export async function runGeneratePlates(
       return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${stillOutcome.message}`, platedCount };
     }
 
-    const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
-    const stillUrl = uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl;
+    // Already hosted (Siray route saves to Blob server-side) — don't
+    // download and re-upload it.
+    let stillUrl: string;
+    if (/^https:\/\//i.test(stillOutcome.dataUrl)) {
+      stillUrl = stillOutcome.dataUrl;
+    } else {
+      const uploadOutcome = await deps.uploadStill(stillOutcome.dataUrl);
+      if (!uploadOutcome.ok && stillOutcome.dataUrl.length > MAX_INLINE_STILL_CHARS) {
+        // Never park a multi-MB data: URL in the session — that is what
+        // crashed the phone and lost every plate (2026-09-24).
+        return {
+          ok: false,
+          failedAtClipIndex: i,
+          message: `Clip ${i + 1}: the still was made but couldn't be saved (${uploadOutcome.message ?? "upload failed"}). Stopped so earlier plates stay safe.`,
+          platedCount,
+        };
+      }
+      stillUrl = uploadOutcome.ok ? uploadOutcome.url : stillOutcome.dataUrl;
+    }
     const still: SkidmarksPlateStill = { dataUrl: stillUrl, source: "generated", createdAt: Date.now() };
     deps.setPlateStill(target.segmentId, target.plateId, still);
 

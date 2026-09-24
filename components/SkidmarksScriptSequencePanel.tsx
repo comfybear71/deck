@@ -477,7 +477,12 @@ export function SkidmarksScriptSequencePanel({
     },
     uploadStill: uploadSkidmarksPlateStill,
     setPlateStill: onSetClipPlateStill,
-    onProgress: (event) => setProgressText(platesProgressLabel(event)),
+    onProgress: (event) => {
+      setProgressText(platesProgressLabel(event));
+      // Save each finished plate straight away, so a crash or refresh
+      // mid-run never loses plates that are already paid for.
+      if (event.type === "plate-done") flushSkidmarksSessionNow();
+    },
   });
 
   const buildGrokPlatesDeps = (): GeneratePlatesDeps => ({
@@ -516,7 +521,12 @@ export function SkidmarksScriptSequencePanel({
     },
     uploadStill: uploadSkidmarksPlateStill,
     setPlateStill: onSetClipPlateStill,
-    onProgress: (event) => setProgressText(platesProgressLabel(event)),
+    onProgress: (event) => {
+      setProgressText(platesProgressLabel(event));
+      // Save each finished plate straight away, so a crash or refresh
+      // mid-run never loses plates that are already paid for.
+      if (event.type === "plate-done") flushSkidmarksSessionNow();
+    },
   });
 
   const buildAnimateDeps = (): AnimateExistingPlatesDeps => ({

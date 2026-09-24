@@ -1,3 +1,4 @@
+import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
 import {
   resolveSirayCredentials,
@@ -115,6 +116,30 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: downloadResult.error, code: downloadResult.code }, { status: downloadResult.status });
   }
 
+  // 2026-09-24: a 2048² Seedream PNG as base64 is several MB. Shipping
+  // that to the phone and holding it in the session crashed Stuart's
+  // Generate plates run mid-way and lost every plate. Save it to Blob
+  // server-side and return the small https URL instead; fall back to the
+  // data: URL only when no Blob store is connected.
+  const saved = await saveStillToBlob(downloadResult.bytes, downloadResult.contentType);
+  if (saved) return NextResponse.json({ dataUrl: saved, url: saved });
+
   const dataUrl = `data:${downloadResult.contentType};base64,${Buffer.from(downloadResult.bytes).toString("base64")}`;
   return NextResponse.json({ dataUrl });
+}
+
+async function saveStillToBlob(bytes: ArrayBuffer | Uint8Array, contentType: string): Promise<string | null> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return null;
+  const ext = contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : contentType.includes("webp") ? "webp" : "png";
+  const pathname = `skidmarks/plate-stills/siray-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+  try {
+    const blob = await put(pathname, Buffer.from(bytes as ArrayBuffer), {
+      access: "public",
+      contentType,
+      addRandomSuffix: false,
+    });
+    return blob.url;
+  } catch {
+    return null;
+  }
 }
