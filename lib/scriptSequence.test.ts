@@ -549,3 +549,23 @@ describe("buildScriptSequenceHighlightSegments", () => {
     }
   });
 });
+
+describe("parseScriptSequence — phone QA multiline Instrumental (2026-09-24)", () => {
+  it("parses Part times + Instrumental + [Duration] + Positive/Negative Prompt into prompt fields", () => {
+    const script = `Part 1 (0:00 - 0:06)
+Instrumental
+[Duration: 6s]
+Positive Prompt:
+Adult party glitter rain, nude dancers on a rooftop at night
+Negative Prompt:
+minors, logos, text`;
+    const parts = parseScriptSequence(script);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].startSec).toBe(0);
+    expect(parts[0].endSec).toBe(6);
+    expect(parts[0].title.toLowerCase()).toContain("instrumental");
+    expect(parts[0].prompt).toContain("Adult party glitter rain");
+    expect(parts[0].prompt).not.toContain("Positive Prompt");
+    expect(parts[0].negativePrompt).toContain("minors");
+  });
+});

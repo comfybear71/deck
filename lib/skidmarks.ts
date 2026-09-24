@@ -176,7 +176,7 @@ import {
 } from "./memberStillSleeve";
 export type { SkidmarksMemberSleeveEntry } from "./memberStillSleeve";
 import { uploadSkidmarksPlateStill } from "./plateStillBlob";
-import type { ScriptSequencePart } from "./scriptSequence";
+import { parseScriptSequence, type ScriptSequencePart } from "./scriptSequence";
 import {
   buildDefaultSunnyBanksLive,
   buildSunnyBanksWorkspaceFromLive,
@@ -3410,9 +3410,63 @@ export function applySkidmarksMemberSleeveStillToPlate(
   setSkidmarksClipPlateStill(segmentId, plateId, buildLibraryPlateStill(url));
 }
 
+/**
+ * True when existing clip rows do not yet match the parsed script parts
+ * (count, timing, Positive/Negative prompts). Used so Format-then-attach
+ * and Generate plates re-apply a draft instead of treating "same number of
+ * empty seed clips" as already built (live phone QA 2026-09-24: 1 script
+ * part + 1 demo clip → empty shot prompt forever).
+ */
+export function scriptSequenceTimelineNeedsApply(
+  existing: SkidmarksClipSegment[],
+  parts: ScriptSequencePart[]
+): boolean {
+  if (parts.length === 0) return false;
+  if (existing.length !== parts.length) return true;
+  return parts.some((part, i) => {
+    const seg = existing[i]!;
+    return (
+      Math.abs(seg.startSec - part.startSec) > 0.05 ||
+      Math.abs(seg.endSec - part.endSec) > 0.05 ||
+      seg.shotPrompt.trim() !== part.prompt.trim() ||
+      (seg.negativePrompt ?? "").trim() !== (part.negativePrompt ?? "").trim()
+    );
+  });
+}
+
+/**
+ * If `draft.script` parses into parts, build remint-safe segments from
+ * them (re-attaching any stills already on `existing`). Returns `null`
+ * when there is nothing useful to apply.
+ */
+export function segmentsFromScriptSequenceDraft(
+  draft: SkidmarksScriptSequenceDraft | null | undefined,
+  existing: SkidmarksClipSegment[]
+): SkidmarksClipSegment[] | null {
+  const script = typeof draft?.script === "string" ? draft.script : "";
+  if (!script.trim()) return null;
+  const parts = parseScriptSequence(script);
+  if (parts.length === 0) return null;
+  return buildScriptSequenceSegments(parts, existing);
+}
+
 export function attachSkidmarksMp3(mp3: SkidmarksMp3Attachment): void {
   const current = getSkidmarksSnapshot();
-  persist({ ...current, session: { ...current.session, mp3 } });
+  // Live phone QA (2026-09-24): Stuart Formats a Script Sequence *before*
+  // attaching an MP3. Format only rewrites draft text (never remints clips
+  // — needs an mp3 to hold them). Attach used to seed `buildDemoSegments`
+  // and ignore the persisted draft, so the timeline showed one empty
+  // whole-track Instrumental and Siray said "Add a shot prompt first".
+  // When the draft parses into parts, apply them now (remint-safe against
+  // the fresh seed rows). Never invents an mp3; only reshapes this attach.
+  const fromDraft = segmentsFromScriptSequenceDraft(
+    current.session.scriptSequenceDraft,
+    mp3.segments
+  );
+  const nextMp3: SkidmarksMp3Attachment = fromDraft
+    ? { ...mp3, segments: fromDraft, segmentsSource: "seed-fallback" }
+    : mp3;
+  persist({ ...current, session: { ...current.session, mp3: nextMp3 } });
   // A new song is a new identity context too — see
   // `notifySkidmarksIdentityWipe`'s doc comment.
   notifySkidmarksIdentityWipe();
@@ -3465,7 +3519,13 @@ export function setSkidmarksMp3Duration(attachId: string, durationSec: number): 
   const alreadyTagged = hasSkidmarksUserContent(mp3.segments);
   const shouldRebuildSeed =
     mp3.durationSec === null && mp3.segmentsSource === "seed-fallback" && !alreadyTagged;
-  const segments = shouldRebuildSeed ? buildDemoSegments(durationSec) : mp3.segments;
+  // Prefer a parsed Script Sequence draft over a fresh demo cadence when
+  // the seed is still empty — same attach-time rule as `attachSkidmarksMp3`.
+  let segments = mp3.segments;
+  if (shouldRebuildSeed) {
+    const fromDraft = segmentsFromScriptSequenceDraft(current.session.scriptSequenceDraft, []);
+    segments = fromDraft ?? buildDemoSegments(durationSec);
+  }
   persist({
     ...current,
     session: {
