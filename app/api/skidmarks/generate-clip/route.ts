@@ -617,6 +617,10 @@ async function pollXaiVideoJob(requestId: string, apiKey: string, requestedDurat
 }
 
 interface GenerateClipRequestBody {
+  /** Siray only: resume polling this already-submitted task (returned
+   * as `sirayTaskId` on a 202 pending response) instead of submitting
+   * a new render. */
+  sirayTaskId?: unknown;
   prompt?: unknown;
   /** Stuart's own, unmodified shot-prompt text \u2014 see
    * `lib/clipGeneration.ts`'s `ClipGenerationRequest.shotPrompt` doc
@@ -1504,15 +1508,32 @@ async function handleInstrumentalSirayRender(
 
   const durationSec = clampSirayI2vDurationSec(requestedDurationSec);
 
-  const submitResult = await siraySubmitVideoAsync(
-    { prompt, image: referenceImageDataUrls[0], durationSec },
-    creds
-  );
-  if (!submitResult.ok) {
-    return NextResponse.json({ error: submitResult.error, code: submitResult.code }, { status: submitResult.status });
+  // Resume: a previous call already submitted (and paid for) this
+  // render but stopped waiting at SIRAY_POLL_DEADLINE_MS. Keep polling
+  // that same task instead of submitting — and paying for — a new one.
+  const resumeTaskId =
+    typeof body.sirayTaskId === "string" && body.sirayTaskId.trim() ? body.sirayTaskId.trim() : "";
+  let taskId = resumeTaskId;
+  if (!taskId) {
+    const submitResult = await siraySubmitVideoAsync(
+      { prompt, image: referenceImageDataUrls[0], durationSec },
+      creds
+    );
+    if (!submitResult.ok) {
+      return NextResponse.json({ error: submitResult.error, code: submitResult.code }, { status: submitResult.status });
+    }
+    taskId = submitResult.taskId;
   }
 
-  const pollResult = await sirayPollVideoAsync(submitResult.taskId, creds, SIRAY_POLL_DEADLINE_MS);
+  const pollResult = await sirayPollVideoAsync(taskId, creds, SIRAY_POLL_DEADLINE_MS);
+  if (!pollResult.ok && pollResult.code === "timeout") {
+    // Still rendering on Siray's side — hand the task id back so the
+    // client can call again and keep waiting on the SAME job.
+    return NextResponse.json(
+      { pending: true, sirayTaskId: taskId, error: pollResult.error, code: "siray_pending" },
+      { status: 202 }
+    );
+  }
   if (!pollResult.ok) {
     return NextResponse.json({ error: pollResult.error, code: pollResult.code }, { status: pollResult.status });
   }
