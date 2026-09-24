@@ -613,7 +613,7 @@ function TickIcon() {
  * press-and-hold-to-clear timer instead, deleting the still. Both of
  * Stuart's symptoms are explained by the one same root cause. The fix
  * is a real, `h-10 w-10` (~40px) invisible hit area anchored flush in
- * the tile's own corner — comfortably inside its `h-24 w-32` bounds, so
+ * the tile's own corner — comfortably inside its `h-32 w-40` bounds, so
  * it never spills into a neighboring plate tile in the horizontal strip
  * — wrapping the *same* small, unchanged-size visible dot/tick as an
  * inner `<span>`. `stopPropagation` stays on the click handler as
@@ -1051,7 +1051,7 @@ function SkidmarksPlateBox({
   };
 
   return (
-    <div className="flex w-32 shrink-0 flex-col gap-1">
+    <div className="flex w-40 shrink-0 flex-col gap-1">
       <div className="relative">
         <div
           role="button"
@@ -1079,7 +1079,7 @@ function SkidmarksPlateBox({
             // `touch-none` was blocking that scroll on iOS Safari
             // whenever a drag started on a tile (the whole strip's
             // touchable surface).
-            "relative flex h-24 w-32 touch-pan-x select-none items-center justify-center overflow-hidden rounded-2xl",
+            "relative flex h-32 w-40 touch-pan-x select-none items-center justify-center overflow-hidden rounded-2xl",
             hasStill
               ? "border border-white/10 bg-white/[0.02]"
               : "border border-dashed border-white/15 bg-white/[0.02] text-white/20",
@@ -1205,22 +1205,43 @@ function SkidmarksPlateBox({
           </div>
         )}
 
-        {!hasStill && menuOpen && !sleeveOpen && !generating && (
-          <div className="absolute inset-x-1.5 bottom-1.5 z-10">
-            <SkidmarksPlatePopover
-              size="sm"
-              previousStill={previousStill}
-              useLastPlate={useLastPlate}
-              onSetUseLastPlate={setUseLastPlate}
-              onUpload={handleUploadClick}
-              onGenerate={handleGenerate}
-              onSiray={handleSiray}
-              onDismiss={closeMenu}
-              onOpenSleeve={handleOpenSleeve}
-              sleeveAvailable={sleeveAvailable}
-            />
-          </div>
-        )}
+        {/* Portaled sheet — never nest the Upload/Generate/Siray menu
+            inside the tiny plate tile. Live phone QA (2026-09-24, ~390px):
+            From sleeve / Generate / Siray · $0.04 rendered inside the
+            tile and got clipped by the strip's overflow. Same
+            document.body portal pattern as the lightbox. */}
+        {!hasStill && menuOpen && !sleeveOpen && !generating &&
+          createPortal(
+            <div className="fixed inset-0 z-[999] flex items-end justify-center p-4 sm:items-center">
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={closeMenu}
+                className="absolute inset-0 bg-black/80"
+              />
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Add a plate still"
+                className="relative z-10 w-full max-w-sm"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <SkidmarksPlatePopover
+                  size="md"
+                  previousStill={previousStill}
+                  useLastPlate={useLastPlate}
+                  onSetUseLastPlate={setUseLastPlate}
+                  onUpload={handleUploadClick}
+                  onGenerate={handleGenerate}
+                  onSiray={handleSiray}
+                  onDismiss={closeMenu}
+                  onOpenSleeve={handleOpenSleeve}
+                  sleeveAvailable={sleeveAvailable}
+                />
+              </div>
+            </div>,
+            document.body
+          )}
       </div>
 
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />

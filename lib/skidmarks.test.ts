@@ -16,6 +16,8 @@ import {
   resolveChainedPlateTarget,
   setSkidmarksScriptSequence,
   setSkidmarksScriptSequenceDraft,
+  scriptSequenceTimelineNeedsApply,
+  segmentsFromScriptSequenceDraft,
   defaultSegmentModel,
   getSkidmarksSessionSyncSnapshot,
   getSkidmarksSnapshot,
@@ -2392,3 +2394,73 @@ describe("scriptPartTitleKind / resolveScriptPartVocal title override", () => {
     expect(scriptPartTitleKind("A thought comes to mind")).toBeNull();
   });
 });
+
+describe("script sequence draft → MP3 attach (phone QA 2026-09-24)", () => {
+  const DRAFT_SCRIPT = `Part 1 (0:00 - 0:06)
+Instrumental
+[Duration: 6s]
+Positive Prompt:
+Adult party glitter rain, nude dancers on a rooftop at night
+Negative Prompt:
+minors, logos, text`;
+
+  const PARTS = [
+    {
+      index: 1,
+      title: "Instrumental",
+      startSec: 0,
+      endSec: 6,
+      prompt: "Adult party glitter rain",
+      negativePrompt: "minors",
+    },
+  ];
+
+  it("scriptSequenceTimelineNeedsApply is true when seed clip is empty but script has a Positive Prompt", () => {
+    const seed = createMp3Attachment("silent-30s.mp3", 30).segments;
+    expect(scriptSequenceTimelineNeedsApply(seed, PARTS)).toBe(true);
+  });
+
+  it("scriptSequenceTimelineNeedsApply is false once segments already match the parts", () => {
+    const segments = buildScriptSequenceSegments(PARTS, []);
+    expect(scriptSequenceTimelineNeedsApply(segments, PARTS)).toBe(false);
+  });
+
+  it("attachSkidmarksMp3 applies a persisted scriptSequenceDraft onto the new timeline (times + prompts)", () => {
+    setSkidmarksScriptSequenceDraft({ script: DRAFT_SCRIPT });
+    attachSkidmarksMp3(createMp3Attachment("silent-30s.mp3", 30));
+    const mp3 = getSkidmarksSnapshot().session.mp3!;
+    expect(mp3.segments).toHaveLength(1);
+    expect(mp3.segments[0].startSec).toBe(0);
+    expect(mp3.segments[0].endSec).toBe(6);
+    expect(mp3.segments[0].shotPrompt).toContain("Adult party glitter rain");
+    expect(mp3.segments[0].negativePrompt).toContain("minors");
+    expect(mp3.segments[0].label).toBe("instrumental");
+  });
+
+  it("segmentsFromScriptSequenceDraft returns null for a blank draft (attach leaves seed alone)", () => {
+    const seed = createMp3Attachment("track.mp3", 30).segments;
+    expect(segmentsFromScriptSequenceDraft(null, seed)).toBeNull();
+    expect(segmentsFromScriptSequenceDraft({ script: "   " }, seed)).toBeNull();
+  });
+
+  it("remint keeps an existing still when re-applying the same draft parts", () => {
+    const first = buildScriptSequenceSegments(PARTS, []);
+    first[0] = {
+      ...first[0],
+      plates: [
+        {
+          ...first[0].plates[0],
+          still: {
+            dataUrl: "https://blob.example/keep-me.jpg",
+            source: "upload",
+            createdAt: 1,
+          },
+        },
+      ],
+    };
+    const reminted = buildScriptSequenceSegments(PARTS, first);
+    expect(reminted[0].plates[0].still?.dataUrl).toBe("https://blob.example/keep-me.jpg");
+    expect(reminted[0].shotPrompt).toContain("Adult party glitter rain");
+  });
+});
+

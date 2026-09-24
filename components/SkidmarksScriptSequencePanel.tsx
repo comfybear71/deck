@@ -11,6 +11,7 @@ import {
 import {
   buildScriptSequenceSegments,
   flushSkidmarksSessionNow,
+  scriptSequenceTimelineNeedsApply,
   type SkidmarksBand,
   type SkidmarksClipSegment,
   type SkidmarksPlateStill,
@@ -395,6 +396,16 @@ export function SkidmarksScriptSequencePanel({
     if (running) return;
     const formatted = formatScriptSequencePartTitles(script);
     applyScriptText(formatted, true);
+    // When an MP3 is already attached, also remint-safe-apply the
+    // formatted draft onto the clip timeline (times + Positive/Negative).
+    // Pre-MP3 Format still only rewrites draft text — attach applies it.
+    if (hasMp3) {
+      const nextParts = parseScriptSequence(formatted);
+      if (nextParts.length > 0 && scriptSequenceTimelineNeedsApply(realSegments, nextParts)) {
+        onSetScriptSequence(buildScriptSequenceSegments(nextParts, realSegments));
+        flushSkidmarksSessionNow();
+      }
+    }
   };
 
   const handleUndoScript = () => {
@@ -511,9 +522,14 @@ export function SkidmarksScriptSequencePanel({
     }));
 
   const ensureTimeline = (): SkidmarksClipSegment[] => {
-    const alreadyBuilt = realSegments.length === parts.length;
-    const segments = alreadyBuilt ? realSegments : buildScriptSequenceSegments(parts, realSegments);
-    if (!alreadyBuilt) {
+    // Length-only equality was wrong: one empty demo clip + one script
+    // part both have length 1, so prompts never landed (phone QA 2026-09-24).
+    // Compare times + Positive/Negative; remint-safe builder keeps stills.
+    const needsApply = scriptSequenceTimelineNeedsApply(realSegments, parts);
+    const segments = needsApply
+      ? buildScriptSequenceSegments(parts, realSegments)
+      : realSegments;
+    if (needsApply) {
       onSetScriptSequence(segments);
       flushSkidmarksSessionNow();
     }
