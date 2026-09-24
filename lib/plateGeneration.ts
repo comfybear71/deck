@@ -893,6 +893,37 @@ export function buildSirayCharacterPrompt(positionPrompt: string, vocalist?: Ski
 const GENERATE_STILL_SIRAY_ENDPOINT = "/api/skidmarks/generate-still-siray";
 
 /**
+ * Assembles the prompt string a per-clip Siray still sends.
+ *
+ * Siray's Seedream still endpoints have no separate negative-prompt
+ * field (see docs.siray.ai Seedream 4.5 t2i/ref2i Spicy OpenAPI — only
+ * `prompt` + optional `images`), so any clip Negative text is appended
+ * as an explicit "Avoid: …" line rather than dropped.
+ *
+ * Character-lock hallmarks are **only** merged when the shot prompt
+ * itself names the locked character (`shotPromptMentionsLockedCharacter`)
+ * — same rule as #170 / the xAI plate path. A party/nudity plate that
+ * never mentions Jack must not get his lock injected.
+ */
+export function buildSirayClipStillPrompt(args: {
+  shotPrompt: string;
+  negativePrompt?: string;
+  vocalist?: SkidmarksMember | null;
+}): string {
+  const shot = args.shotPrompt.trim();
+  const negative = (args.negativePrompt ?? "").trim();
+  let prompt = shot;
+  const vocalist = args.vocalist ?? undefined;
+  if (vocalist && shotPromptMentionsLockedCharacter(shot, vocalist)) {
+    prompt = buildSirayCharacterPrompt(prompt, vocalist);
+  }
+  if (negative) {
+    prompt = `${prompt}\nAvoid: ${negative}`;
+  }
+  return prompt.trim();
+}
+
+/**
  * POSTs to `/api/skidmarks/generate-still-siray` — the Seedance/"17
  * positions" sibling of `generatePlateStill` above, for the one case
  * `lib/autoPlate.ts` routes there: a real camera-position prompt
@@ -907,14 +938,21 @@ const GENERATE_STILL_SIRAY_ENDPOINT = "/api/skidmarks/generate-still-siray";
  */
 export async function generatePlateStillViaSiray(
   prompt: string,
-  referenceImageDataUrl: string
+  referenceImageDataUrl?: string | null
 ): Promise<PlateGenerationOutcome> {
   let res: Response;
   try {
+    // Empty / null / undefined → t2i (no images). Any non-empty string
+    // is forwarded as the single optional reference (ref2i). The route
+    // validates data:-URL shape.
+    const referenceImageDataUrls =
+      typeof referenceImageDataUrl === "string" && referenceImageDataUrl.trim()
+        ? [referenceImageDataUrl.trim()]
+        : [];
     res = await fetch(GENERATE_STILL_SIRAY_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, referenceImageDataUrls: [referenceImageDataUrl] }),
+      body: JSON.stringify({ prompt, referenceImageDataUrls }),
     });
   } catch (err) {
     return {

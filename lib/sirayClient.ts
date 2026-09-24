@@ -3,9 +3,9 @@
  * docs.siray.ai) — the backend for the Seedance/"17 positions" upgrade
  * to Auto-plate (`lib/sirayPositions.ts`, `lib/autoPlate.ts`): given one
  * character's locked master reference still, generates a new angle of
- * that same character via Siray's `bytedance/seedream-4.5-ref2i-spicy`
- * model (a reference-to-image model — one or more reference images plus
- * a prompt, returns a new image that keeps the reference subject).
+ * that same character via Siray's Seedream 4.5 spicy still models: `bytedance/seedream-4.5-ref2i-spicy`
+ * (reference-to-image — one reference + prompt) or `bytedance/seedream-4.5-t2i-spicy`
+ * (text-to-image — prompt only, no reference).
  *
  * **Ported from Stuart's own other repo's proven Siray client**
  * (`comfybear71/skidmarks`'s `src/lib/sirayClient.ts`), which has real
@@ -40,6 +40,15 @@ export const SIRAY_API_BASE = "https://api.siray.ai";
  * hardcoded" cost lock this app's other providers already use
  * (`DEFAULT_LTX_FILENAME_PREFIX` et al. in `lib/comfyCloud.ts`). */
 export const SIRAY_SEEDREAM_45_REF2I_SPICY = "bytedance/seedream-4.5-ref2i-spicy";
+/**
+ * Seedream 4.5 t2i Spicy — text-to-image (no reference). Same flat
+ * $0.04/image tier as ref2i. Model id confirmed against Siray docs
+ * (`docs.siray.ai` OpenAPI enum `bytedance/seedream-4.5-t2i-spicy`) and
+ * Stuart's own `comfybear71/skidmarks` `src/lib/sirayClient.ts`
+ * (`SIRAY_SEEDREAM_45_T2I_SPICY`). Used when a per-clip Siray still is
+ * requested with no reference image.
+ */
+export const SIRAY_SEEDREAM_45_T2I_SPICY = "bytedance/seedream-4.5-t2i-spicy";
 export const SIRAY_SEEDREAM_45_SIZE = "2048x2048";
 export const SIRAY_SEEDREAM_45_COST_USD = 0.04;
 
@@ -133,17 +142,23 @@ export async function siraySubmitStillImage(
   referenceImageDataUrls: string[],
   creds: SirayCredentials
 ): Promise<SubmitStillOutcome> {
+  // 0 refs → t2i spicy (text only). 1+ refs → ref2i spicy. Callers
+  // (the route) currently cap at 1 reference; the API allows more.
+  const hasRefs = referenceImageDataUrls.length > 0;
+  const model = hasRefs ? SIRAY_SEEDREAM_45_REF2I_SPICY : SIRAY_SEEDREAM_45_T2I_SPICY;
+  const body: Record<string, unknown> = {
+    model,
+    prompt,
+    size: SIRAY_SEEDREAM_45_SIZE,
+  };
+  if (hasRefs) body.images = referenceImageDataUrls;
+
   let res: Response;
   try {
     res = await fetch(`${SIRAY_API_BASE}/v1/images/generations/async`, {
       method: "POST",
       headers: { Authorization: `Bearer ${creds.apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: SIRAY_SEEDREAM_45_REF2I_SPICY,
-        prompt,
-        size: SIRAY_SEEDREAM_45_SIZE,
-        images: referenceImageDataUrls,
-      }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
     });
   } catch (err) {
