@@ -28,7 +28,7 @@
 
 import { SKIDMARKS_SEGMENT_LABEL_META, type SkidmarksClipSegment, type SkidmarksMember, type SkidmarksPlateStill } from "./skidmarks";
 import type { PersistedClipRender } from "./clipRenders";
-import { buildClipGenerationRequest, computePlateDurationSec, LTX_DURATION_BOUNDS } from "./clipGeneration";
+import { buildClipGenerationRequest, computePlateDurationSec, LTX_DURATION_BOUNDS, SIRAY_DURATION_BOUNDS } from "./clipGeneration";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
 
 /**
@@ -238,6 +238,9 @@ export interface IdentitySafeScriptPart {
   endSec: number;
   kind: SkidmarksScriptPartKind;
   otherSingerName?: string;
+  /** The part's own Negative Prompt text, when the script wrote one.
+   * Only the Siray still path reads it (appended as "Avoid: …"). */
+  negativePrompt?: string;
 }
 
 /** Where one part's plate/render actually lands — a `SkidmarksClipSegment`
@@ -292,6 +295,7 @@ export interface IdentitySafeRunDeps {
     vocal: boolean;
     vocalist: SkidmarksMember;
     locationStillDataUrl: string;
+    negativePrompt?: string;
   }) => Promise<{ ok: true; dataUrl: string } | { ok: false; message: string }>;
   /** Uploads a still's bytes to durable storage — same contract as
    * `lib/plateStillBlob.ts`'s `uploadSkidmarksPlateStill`. */
@@ -526,6 +530,7 @@ export async function runIdentitySafeSongRender(
         vocal,
         vocalist: identity.member,
         locationStillDataUrl: place.dataUrl,
+        negativePrompt: part.negativePrompt,
       });
       if (!stillOutcome.ok) {
         return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${stillOutcome.message}`, renderedCount: i };
@@ -725,6 +730,7 @@ export async function runGeneratePlates(
       vocal,
       vocalist: identity.member,
       locationStillDataUrl: place.dataUrl,
+      negativePrompt: part.negativePrompt,
     });
     if (!stillOutcome.ok) {
       return { ok: false, failedAtClipIndex: i, message: `Clip ${i + 1}: ${stillOutcome.message}`, platedCount };
@@ -770,7 +776,9 @@ export async function runAnimateExistingPlates(
   deps: AnimateExistingPlatesDeps,
   startAtClipIndex: number = 0,
   shouldStop?: () => boolean,
-  chainLastFrameToNext: boolean = false
+  chainLastFrameToNext: boolean = false,
+  /** Backend for Instrumental parts. Vocal parts always go to LTX. */
+  instrumentalVideoModel: "grok" | "siray" = "grok"
 ): Promise<AnimateExistingPlatesOutcome> {
   const report = (event: AnimateExistingPlatesEvent) => deps.onProgress?.(event);
 
@@ -832,7 +840,7 @@ export async function runAnimateExistingPlates(
       part.endSec - part.startSec,
       1,
       0,
-      vocal ? LTX_DURATION_BOUNDS : undefined
+      vocal ? LTX_DURATION_BOUNDS : instrumentalVideoModel === "siray" ? SIRAY_DURATION_BOUNDS : undefined
     );
 
     const request = buildClipGenerationRequest({
@@ -841,7 +849,7 @@ export async function runAnimateExistingPlates(
       plateStillDataUrl: stillUrl,
       durationSec,
       vocal,
-      instrumentalVideoModel: vocal ? undefined : "grok",
+      instrumentalVideoModel: vocal ? undefined : instrumentalVideoModel,
       vocalist: identity.member,
       mp3AudioUrl: vocal ? mp3AudioUrl : undefined,
       segmentId: target.segmentId,
