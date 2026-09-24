@@ -227,6 +227,31 @@ describe("archiveSkidmarksSession", () => {
     expect(posted.song.id).toBe(outcome.song.id);
   });
 
+  it("includes the Script Sequence draft in the uploaded snapshot so Open in editor can restore the textarea", async () => {
+    uploadMock.mockResolvedValueOnce({ url: "https://x/skidmarks/archive/some-id/snapshot.json" });
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { ok: true, songs: [] }));
+
+    const mp3 = createMp3Attachment("song.mp3", 60);
+    const draft = {
+      script:
+        "Part 15 (3:00 - 3:15) — Instrumental[Duration: 15s].\nPositive Prompt:\nSTONED finale glitter\nNegative Prompt:\nblurry",
+      startingImageUrl: "https://blob.example/start.jpg",
+      chainLastFrameToNext: true,
+    };
+    const outcome = await archiveSkidmarksSession(BAND, mp3, 1, draft);
+    expect(outcome.ok).toBe(true);
+
+    const uploadedBlob = uploadMock.mock.calls[0][1] as Blob;
+    const uploadedJson = JSON.parse(await uploadedBlob.text()) as {
+      scriptSequenceDraft?: typeof draft;
+      band: unknown;
+      mp3: { fileName: string };
+    };
+    expect(uploadedJson.scriptSequenceDraft).toEqual(draft);
+    expect(uploadedJson.band).toEqual(BAND);
+    expect(uploadedJson.mp3.fileName).toBe("song.mp3");
+  });
+
   it("reports an honest failure without ever calling the index route when the snapshot upload itself fails", async () => {
     uploadMock.mockRejectedValueOnce(new Error("No read-write token found."));
     const outcome = await archiveSkidmarksSession(BAND, createMp3Attachment("song.mp3", 60), 0);

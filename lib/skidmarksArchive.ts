@@ -45,7 +45,7 @@ import { upload } from "@vercel/blob/client";
 import { buildStoreZip } from "./zipDownload";
 import { fetchPersistedClipRenders } from "./clipRenders";
 import { getSkidmarksCharacterLock, resolvePlateReferenceDataUrl, resolveVocalistForPrompt } from "./plateGeneration";
-import { formatDuration, type SkidmarksBand, type SkidmarksMp3Attachment } from "./skidmarks";
+import { formatDuration, type SkidmarksBand, type SkidmarksMp3Attachment, type SkidmarksScriptSequenceDraft } from "./skidmarks";
 
 const ARCHIVE_PATH_PREFIX = "skidmarks/archive/";
 const HANDLE_UPLOAD_URL = "/api/skidmarks/blob-upload";
@@ -77,6 +77,14 @@ export interface SkidmarksArchivedSong {
 export interface SkidmarksArchiveSnapshot {
   band: SkidmarksBand;
   mp3: SkidmarksMp3Attachment;
+  /**
+   * Script Sequence textarea draft (raw pasted script + optional clip-1
+   * starting image / chain toggle). Optional for snapshots written before
+   * this field existed — restore then falls back to rebuilding text from
+   * segment prompts when present. Never stripped on purpose: Archive must
+   * round-trip the same Script Sequence text Stuart edited.
+   */
+  scriptSequenceDraft?: SkidmarksScriptSequenceDraft | null;
 }
 
 export function generateArchiveId(): string {
@@ -263,10 +271,16 @@ export type ArchiveSessionOutcome = { ok: true; song: SkidmarksArchivedSong } | 
 export async function archiveSkidmarksSession(
   band: SkidmarksBand,
   mp3: SkidmarksMp3Attachment,
-  renderedPlateCount: number
+  renderedPlateCount: number,
+  scriptSequenceDraft: SkidmarksScriptSequenceDraft | null = null
 ): Promise<ArchiveSessionOutcome> {
   const id = generateArchiveId();
-  const uploadOutcome = await uploadArchiveSnapshot(id, { band, mp3 });
+  const snapshot: SkidmarksArchiveSnapshot = {
+    band,
+    mp3,
+    ...(scriptSequenceDraft ? { scriptSequenceDraft } : {}),
+  };
+  const uploadOutcome = await uploadArchiveSnapshot(id, snapshot);
   if (!uploadOutcome.ok) {
     return { ok: false, message: `Could not save this song's project data \u2014 ${uploadOutcome.message}` };
   }

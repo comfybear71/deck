@@ -385,6 +385,10 @@ export function SkidmarksScriptSequencePanel({
     if (next === script) return;
     if (captureUndo) setScriptUndo(script);
     onSetScriptSequenceDraft({ script: next, startingImageUrl, chainLastFrameToNext });
+    // Format / Full-screen Apply are deliberate commits — flush Neon now
+    // so a hard refresh before the 600ms debounce can't drop the edit.
+    // Keystroke edits still ride the debounce + pagehide flush.
+    if (captureUndo) flushSkidmarksSessionNow();
   };
 
   const handleFormatScript = () => {
@@ -728,6 +732,7 @@ export function SkidmarksScriptSequencePanel({
         <textarea
           value={script}
           onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl, chainLastFrameToNext })}
+          onBlur={() => flushSkidmarksSessionNow()}
           onScroll={(e) => {
             if (scriptHighlightRef.current) {
               scriptHighlightRef.current.scrollTop = e.currentTarget.scrollTop;

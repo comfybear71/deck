@@ -369,10 +369,17 @@ export function useSkidmarksStudio() {
    * analysis/transcription/audio-upload for whatever was live before
    * (same "a late result can't land on a session that no longer
    * exists" guard `removeBand`/`removeMp3` already use). */
-  const restoreArchivedSession = useCallback((band: SkidmarksBand, mp3: SkidmarksMp3Attachment) => {
-    analysisTokenRef.current += 1;
-    restoreSkidmarksArchivedSession(band, mp3);
-  }, []);
+  const restoreArchivedSession = useCallback(
+    (
+      band: SkidmarksBand,
+      mp3: SkidmarksMp3Attachment,
+      scriptSequenceDraft: SkidmarksScriptSequenceDraft | null = null
+    ) => {
+      analysisTokenRef.current += 1;
+      restoreSkidmarksArchivedSession(band, mp3, scriptSequenceDraft);
+    },
+    []
+  );
 
   /** Right after a successful Archive — clears the live workspace back
    * to "choose a band," ready for a new/different song. Also

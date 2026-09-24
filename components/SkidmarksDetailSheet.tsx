@@ -283,7 +283,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
    */
   const archiveBeforeSwitch = async (): Promise<boolean> => {
     if (!activeBand || !session.mp3) return true;
-    if (isSkidmarksSessionAlreadyArchived(activeBand, session.mp3)) {
+    if (isSkidmarksSessionAlreadyArchived(activeBand, session.mp3, session.scriptSequenceDraft)) {
       // Byte-for-byte what's already on the Finished Songs shelf (a
       // checkpoint just saved, or a song opened from the shelf and not
       // touched since) — nothing to upload, and uploading anyway would
@@ -306,7 +306,10 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
         15000
       )
     );
-    const outcome = await Promise.race([archiveSkidmarksSession(activeBand, session.mp3, renders.size), timedOut]);
+    const outcome = await Promise.race([
+      archiveSkidmarksSession(activeBand, session.mp3, renders.size, session.scriptSequenceDraft),
+      timedOut,
+    ]);
     setArchiving(false);
     if (!outcome.ok) {
       setArchiveError(`${outcome.message} Your song is still here — nothing was cleared.`);
@@ -338,14 +341,14 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     if (archiving || !activeBand || !session.mp3) return;
     setArchiveError(null);
     setArchiveSuccessMessage(null);
-    if (isSkidmarksSessionAlreadyArchived(activeBand, session.mp3)) {
+    if (isSkidmarksSessionAlreadyArchived(activeBand, session.mp3, session.scriptSequenceDraft)) {
       setArchiveSuccessMessage("Already on Finished Songs — nothing has changed since that checkpoint. Your desk is untouched.");
       return;
     }
     const { attachId } = session.mp3;
-    const fingerprint = computeSkidmarksArchiveFingerprint(activeBand, session.mp3);
+    const fingerprint = computeSkidmarksArchiveFingerprint(activeBand, session.mp3, session.scriptSequenceDraft);
     setArchiving(true);
-    const outcome = await archiveSkidmarksSession(activeBand, session.mp3, renders.size);
+    const outcome = await archiveSkidmarksSession(activeBand, session.mp3, renders.size, session.scriptSequenceDraft);
     setArchiving(false);
     if (!outcome.ok) {
       setArchiveError(`Archive failed — ${outcome.message}. Nothing was cleared; still working on this same project.`);
@@ -390,8 +393,13 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     if (!snapshotOutcome.ok) {
       throw new Error(snapshotOutcome.message);
     }
-    if (activeBand && session.mp3 && !isSkidmarksSessionAlreadyArchived(activeBand, session.mp3)) {
-      const archiveOutcome = await archiveSkidmarksSession(activeBand, session.mp3, renders.size);
+    if (activeBand && session.mp3 && !isSkidmarksSessionAlreadyArchived(activeBand, session.mp3, session.scriptSequenceDraft)) {
+      const archiveOutcome = await archiveSkidmarksSession(
+        activeBand,
+        session.mp3,
+        renders.size,
+        session.scriptSequenceDraft
+      );
       if (!archiveOutcome.ok) {
         throw new Error(`Couldn't archive the current song first \u2014 ${archiveOutcome.message}. Your desk was not touched.`);
       }
@@ -402,7 +410,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     // session save after that point looked like the song was gone
     // entirely. A checkpoint is a checkpoint; opening it is not
     // deleting it (audit test L3: "Archive does not mean delete").
-    restoreArchivedSession(snapshotOutcome.snapshot.band, snapshotOutcome.snapshot.mp3);
+    restoreArchivedSession(
+      snapshotOutcome.snapshot.band,
+      snapshotOutcome.snapshot.mp3,
+      snapshotOutcome.snapshot.scriptSequenceDraft ?? null
+    );
     setArchiveRefreshToken((t) => t + 1);
   };
 
