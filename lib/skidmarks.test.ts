@@ -66,6 +66,8 @@ import {
   type SkidmarksState,
   resolveScriptPartVocal,
   scriptPartTitleKind,
+  buildScriptSequenceTextFromSegments,
+  resolveScriptSequenceDraftFromArchive
 } from "./skidmarks";
 import {
   buildDefaultSunnyBanksLive,
@@ -1248,6 +1250,66 @@ describe("restoreSkidmarksArchivedSession / resetSkidmarksSessionAfterArchive", 
     expect(state.bands.find((b) => b.id === "jack-ash")?.name).toBe("Jack Ash (archived copy)");
   });
 
+  it("restores the Script Sequence draft from the archive snapshot into the live session", () => {
+    const band: SkidmarksBand = {
+      id: "draft-band",
+      name: "Draft Band",
+      tagline: "",
+      coverSeed: 1,
+      editIcon: "pencil",
+      members: [],
+    };
+    const mp3 = createMp3Attachment("draft-song.mp3", 90);
+    const draft = {
+      script: "Part 15 (3:00 - 3:15) — Instrumental[Duration: 15s].\nPositive Prompt:\nSTONED\nNegative Prompt:\nblur",
+      startingImageUrl: "https://blob.example/p15.jpg",
+      chainLastFrameToNext: true,
+    };
+
+    restoreSkidmarksArchivedSession(band, mp3, draft);
+
+    const state = getSkidmarksSnapshot();
+    expect(state.session.scriptSequenceDraft).toEqual(draft);
+    // Fingerprint must include the draft so a Script Sequence-only edit is "changed"
+    expect(state.session.mp3?.lastArchivedFingerprint).toBe(
+      computeSkidmarksArchiveFingerprint(band, mp3, draft)
+    );
+  });
+
+  it("rebuilds Script Sequence text from segment prompts when the snapshot has no draft (older archives)", () => {
+    const band: SkidmarksBand = {
+      id: "legacy-band",
+      name: "Legacy Band",
+      tagline: "",
+      coverSeed: 2,
+      editIcon: "pencil",
+      members: [],
+    };
+    const base = createMp3Attachment("legacy.mp3", 30);
+    const mp3 = {
+      ...base,
+      segments: [
+        {
+          ...base.segments[0],
+          id: "seg-legacy-1",
+          startSec: 0,
+          endSec: 15,
+          label: "instrumental" as const,
+          shotPrompt: "STONED Part 15 finale glitter rain",
+          negativePrompt: "blurry, watermark",
+        },
+      ],
+    };
+
+    restoreSkidmarksArchivedSession(band, mp3, null);
+
+    const draft = getSkidmarksSnapshot().session.scriptSequenceDraft;
+    expect(draft).not.toBeNull();
+    expect(draft?.script).toContain("STONED Part 15 finale glitter rain");
+    expect(draft?.script).toContain("blurry, watermark");
+    expect(draft?.script).toContain("Instrumental");
+  });
+
   it("clears the session back to no band/mp3 after archiving, without touching the bands list", () => {
     const bandsBefore = getSkidmarksSnapshot().bands.length;
     resetSkidmarksSessionAfterArchive();
@@ -1939,6 +2001,19 @@ describe("buildScriptSequenceSegments / setSkidmarksScriptSequence", () => {
       const segments = buildScriptSequenceSegments([{ index: 1, title: "A", startSec: 0, endSec: 15, prompt: "x" }], []);
       expect(segments[0].label).toBe("instrumental");
     });
+  });
+});
+
+describe("buildScriptSequenceTextFromSegments / resolveScriptSequenceDraftFromArchive", () => {
+  it("returns empty string when no segment has prompts", () => {
+    const mp3 = createMp3Attachment("empty.mp3", 30);
+    expect(buildScriptSequenceTextFromSegments(mp3.segments)).toBe("");
+  });
+
+  it("prefers the snapshot draft over rebuilding from segments", () => {
+    const mp3 = createMp3Attachment("song.mp3", 30);
+    const snapshotDraft = { script: "from snapshot", startingImageUrl: "https://x/a.jpg" };
+    expect(resolveScriptSequenceDraftFromArchive(snapshotDraft, mp3)).toEqual(snapshotDraft);
   });
 });
 

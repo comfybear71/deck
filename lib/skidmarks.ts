@@ -4194,19 +4194,96 @@ export function setSkidmarksSegmentUncensoredPlateStills(
  * place if it is — either way, the restored band matches exactly what
  * was archived, not whatever's since changed under the same id.
  */
-export function restoreSkidmarksArchivedSession(band: SkidmarksBand, mp3: SkidmarksMp3Attachment): void {
+/**
+ * Rebuilds a pasteable Script Sequence string from persisted clip
+ * segments — fallback when an archive snapshot has no
+ * `scriptSequenceDraft` (snapshots written before that field shipped)
+ * but the segments still carry `shotPrompt` / `negativePrompt` from a
+ * prior Generate. Pure; empty string when nothing useful to show.
+ */
+export function buildScriptSequenceTextFromSegments(segments: SkidmarksClipSegment[]): string {
+  const useful = segments.filter(
+    (s) => s.shotPrompt.trim().length > 0 || s.negativePrompt.trim().length > 0
+  );
+  if (useful.length === 0) return "";
+
+  const formatClock = (sec: number): string => {
+    const whole = Math.max(0, Math.round(sec));
+    const m = Math.floor(whole / 60);
+    const s = whole % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
+  return segments
+    .map((seg, i) => {
+      const title = seg.label === "vocal" ? "Vocal" : "Instrumental";
+      const dur = Math.max(0, Math.round(seg.endSec - seg.startSec));
+      const lines: string[] = [
+        `Part ${i + 1} (${formatClock(seg.startSec)} - ${formatClock(seg.endSec)}) — ${title}[Duration: ${dur}s].`,
+      ];
+      const pos = seg.shotPrompt.trim();
+      const neg = seg.negativePrompt.trim();
+      if (pos) {
+        lines.push("Positive Prompt:");
+        lines.push(pos);
+      }
+      if (neg) {
+        lines.push("Negative Prompt:");
+        lines.push(neg);
+      }
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
+/** Picks the Script Sequence draft to restore from an archive snapshot:
+ * prefer the snapshot's own draft when present; otherwise rebuild from
+ * segment prompts so older archives still show what was generated. */
+export function resolveScriptSequenceDraftFromArchive(
+  snapshotDraft: SkidmarksScriptSequenceDraft | null | undefined,
+  mp3: SkidmarksMp3Attachment
+): SkidmarksScriptSequenceDraft | null {
+  if (snapshotDraft && typeof snapshotDraft.script === "string") {
+    return {
+      script: snapshotDraft.script,
+      ...(typeof snapshotDraft.startingImageUrl === "string"
+        ? { startingImageUrl: snapshotDraft.startingImageUrl }
+        : {}),
+      ...(snapshotDraft.chainLastFrameToNext === true ? { chainLastFrameToNext: true } : {}),
+    };
+  }
+  const rebuilt = buildScriptSequenceTextFromSegments(mp3.segments ?? []);
+  return rebuilt.trim() ? { script: rebuilt } : null;
+}
+
+export function restoreSkidmarksArchivedSession(
+  band: SkidmarksBand,
+  mp3: SkidmarksMp3Attachment,
+  scriptSequenceDraft: SkidmarksScriptSequenceDraft | null = null
+): void {
   const current = getSkidmarksSnapshot();
   const bands = current.bands.some((b) => b.id === band.id)
     ? current.bands.map((b) => (b.id === band.id ? band : b))
     : [band, ...current.bands];
+  const restoredDraft = resolveScriptSequenceDraftFromArchive(scriptSequenceDraft, mp3);
   // What's now live is byte-for-byte what's on the Finished Songs shelf
   // — record that, so leaving this song again doesn't upload a second
   // identical row (see `SkidmarksMp3Attachment.lastArchivedFingerprint`).
-  const restoredMp3: SkidmarksMp3Attachment = { ...mp3, lastArchivedFingerprint: computeSkidmarksArchiveFingerprint(band, mp3) };
+  // Fingerprint includes the script draft so a Script Sequence-only edit
+  // after Open still counts as "changed" for the next Archive.
+  const restoredMp3: SkidmarksMp3Attachment = {
+    ...mp3,
+    lastArchivedFingerprint: computeSkidmarksArchiveFingerprint(band, mp3, restoredDraft),
+  };
   persist({
     ...current,
     bands,
-    session: { projectKind: "music-video", bandId: band.id, mp3: restoredMp3, scriptSequenceDraft: null },
+    session: {
+      projectKind: "music-video",
+      bandId: band.id,
+      mp3: restoredMp3,
+      scriptSequenceDraft: restoredDraft,
+    },
   });
   // Restoring an archived song swaps in a (possibly different) band +
   // mp3 wholesale, same identity-context-change shape as
@@ -4221,10 +4298,23 @@ export function restoreSkidmarksArchivedSession(band: SkidmarksBand, mp3: Skidma
  * itself is excluded so recording the hash doesn't change the hash.
  * Pure; same inputs always give the same string.
  */
-export function computeSkidmarksArchiveFingerprint(band: SkidmarksBand, mp3: SkidmarksMp3Attachment): string {
+export function computeSkidmarksArchiveFingerprint(
+  band: SkidmarksBand,
+  mp3: SkidmarksMp3Attachment,
+  scriptSequenceDraft?: SkidmarksScriptSequenceDraft | null
+): string {
   const { lastArchivedFingerprint: _ignored, ...rest } = mp3;
   void _ignored;
-  const text = JSON.stringify({ band, mp3: rest });
+  // Omit a null/empty draft from the payload so fingerprints written
+  // before Script Sequence drafts were archived still match an open
+  // that has no draft. A real draft (script string present) is included
+  // so editing only the Script Sequence textarea invalidates "already
+  // archived" and a fresh Archive keeps the new prompts.
+  const payload =
+    scriptSequenceDraft && typeof scriptSequenceDraft.script === "string"
+      ? { band, mp3: rest, scriptSequenceDraft }
+      : { band, mp3: rest };
+  const text = JSON.stringify(payload);
   let hash = 0x811c9dc5;
   for (let i = 0; i < text.length; i += 1) {
     hash ^= text.charCodeAt(i);
@@ -4235,8 +4325,15 @@ export function computeSkidmarksArchiveFingerprint(band: SkidmarksBand, mp3: Ski
 
 /** Whether the live band+mp3 pair is already on the Finished Songs
  * shelf unchanged — i.e. a fresh Archive would only duplicate a row. */
-export function isSkidmarksSessionAlreadyArchived(band: SkidmarksBand, mp3: SkidmarksMp3Attachment): boolean {
-  return !!mp3.lastArchivedFingerprint && mp3.lastArchivedFingerprint === computeSkidmarksArchiveFingerprint(band, mp3);
+export function isSkidmarksSessionAlreadyArchived(
+  band: SkidmarksBand,
+  mp3: SkidmarksMp3Attachment,
+  scriptSequenceDraft?: SkidmarksScriptSequenceDraft | null
+): boolean {
+  return (
+    !!mp3.lastArchivedFingerprint &&
+    mp3.lastArchivedFingerprint === computeSkidmarksArchiveFingerprint(band, mp3, scriptSequenceDraft)
+  );
 }
 
 /** Records that the live band+mp3 pair was just saved to Finished
