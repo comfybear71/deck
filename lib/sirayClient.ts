@@ -13,9 +13,10 @@
  * don't invent" rule this app followed for the LTX 2.3 port
  * (`lib/comfyCloud.ts`). This module only carries the still-image half
  * (`siraySubmitImageAsync`/`sirayPollImageTask`) — that reference
- * client's video-generation calls (Seedance/Wan i2v) aren't used here;
- * Deck's own video backends stay LTX (Vocal) and H3/Grok (Instrumental),
- * per the existing product lock. Adapted to this app's own honest-
+ * client's video-generation calls (Seedance/Wan i2v) are now also
+ * ported below for the per-clip Instrumental **Siray** Render switch
+ * (`alibaba/wan-3.0-i2v-spicy`) — Vocal stays LTX; Instrumental stays
+ * H3/Grok/Siray opt-in. Adapted to this app's own honest-
  * outcome-object convention (`{ ok: false, status, code, error }`,
  * never throw) — same shape `lib/comfyCloud.ts`/`lib/minimaxH3.ts`
  * already use — rather than the reference client's own throw-on-failure
@@ -51,6 +52,25 @@ export const SIRAY_SEEDREAM_45_REF2I_SPICY = "bytedance/seedream-4.5-ref2i-spicy
 export const SIRAY_SEEDREAM_45_T2I_SPICY = "bytedance/seedream-4.5-t2i-spicy";
 export const SIRAY_SEEDREAM_45_SIZE = "2048x2048";
 export const SIRAY_SEEDREAM_45_COST_USD = 0.04;
+
+/**
+ * Wan 3.0 i2v Spicy — Instrumental plate→video for the per-clip Siray
+ * Render switch. Model id + request shape from docs.siray.ai OpenAPI
+ * (`alibaba/wan-3.0-i2v-spicy`) and Stuart's own
+ * `comfybear71/skidmarks` `src/lib/sirayI2v.ts` (`wan-30`). Chosen over
+ * Seedance 2.0 Spicy ($0.084/s, max 15s) because Stuart's music-video
+ * parts run 6–17s and Wan 3.0 covers up to 30s; list price from Siray's
+ * public model-verse API (`api-gateway.siray.ai/api/model-verse/models`,
+ * `out_price: "0.045"`, `billing_type: "video"` → $/s).
+ */
+export const SIRAY_WAN_30_I2V_SPICY = "alibaba/wan-3.0-i2v-spicy";
+export const SIRAY_WAN_30_I2V_SIZE = "720p";
+export const SIRAY_WAN_30_I2V_ASPECT_RATIO = "adaptive";
+/** Evidence: Siray model-verse `out_price` for this model id (USD per second). */
+export const SIRAY_WAN_30_I2V_COST_USD_PER_SEC = 0.045;
+export const SIRAY_I2V_MIN_DURATION_SEC = 2;
+export const SIRAY_I2V_MAX_DURATION_SEC = 30;
+
 
 export interface SirayCredentials {
   apiKey: string;
@@ -319,5 +339,199 @@ export async function sirayDownloadStill(url: string): Promise<DownloadStillOutc
     return { ok: true, bytes, contentType };
   } catch (err) {
     return networkFailure("downloading the still", err);
+  }
+}
+
+/** Snap a clip length into Wan 3.0 Spicy's documented integer-second enum. */
+export function clampSirayI2vDurationSec(durationSec: number): number {
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return 5;
+  return Math.max(SIRAY_I2V_MIN_DURATION_SEC, Math.min(SIRAY_I2V_MAX_DURATION_SEC, Math.round(durationSec)));
+}
+
+export type SubmitVideoOutcome = { ok: true; taskId: string } | SirayFailure;
+
+/**
+ * `POST /v1/video/generations` — async Wan 3.0 i2v Spicy submit.
+ * Body shape matches docs.siray.ai OpenAPI + skidmarks' proven client
+ * (`siraySubmitVideoAsync`): model, prompt, image (data URL or https),
+ * duration (int), size, aspect_ratio.
+ */
+export async function siraySubmitVideoAsync(
+  args: { prompt: string; image: string; durationSec: number },
+  creds: SirayCredentials
+): Promise<SubmitVideoOutcome> {
+  const duration = clampSirayI2vDurationSec(args.durationSec);
+  const body = {
+    model: SIRAY_WAN_30_I2V_SPICY,
+    prompt: args.prompt,
+    image: args.image,
+    duration,
+    size: SIRAY_WAN_30_I2V_SIZE,
+    aspect_ratio: SIRAY_WAN_30_I2V_ASPECT_RATIO,
+  };
+  let res: Response;
+  try {
+    res = await fetch(`${SIRAY_API_BASE}/v1/video/generations`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${creds.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
+    });
+  } catch (err) {
+    return networkFailure("submitting the video", err);
+  }
+
+  let payload: unknown = null;
+  try {
+    payload = await res.json();
+  } catch {
+    // Handled below.
+  }
+
+  if (!res.ok) {
+    const { code } = classifySirayHttpFailure(res.status);
+    const message = extractSirayErrorMessage(payload);
+    return {
+      ok: false,
+      status: res.status,
+      code,
+      error: `Siray returned HTTP ${res.status} submitting the video${message ? `: ${message}` : "."}`,
+    };
+  }
+
+  const message = extractSirayErrorMessage(payload);
+  const taskId = parseSirayTaskId(payload);
+  if (!taskId) {
+    return {
+      ok: false,
+      status: 502,
+      code: "no_task_id",
+      error: `Siray accepted the video request but returned no task_id${message ? `: ${message}` : "."}`,
+    };
+  }
+  return { ok: true, taskId };
+}
+
+export type PollVideoOutcome = { ok: true; outputUrl: string } | SirayFailure;
+
+function firstVideoOutputUrl(outputsRaw: unknown): string | null {
+  if (Array.isArray(outputsRaw)) {
+    for (const item of outputsRaw) {
+      if (typeof item === "string" && item.trim()) return item.trim();
+      if (item && typeof item === "object") {
+        const row = item as Record<string, unknown>;
+        const url = String(row.url ?? row.video_url ?? row.video ?? "").trim();
+        if (url) return url;
+      }
+    }
+    return null;
+  }
+  if (typeof outputsRaw === "string" && outputsRaw.trim()) return outputsRaw.trim();
+  return null;
+}
+
+/**
+ * Polls `GET /v1/video/generations/{taskId}` to SUCCESS/FAILURE — same
+ * status vocabulary as the still poller, plus skidmarks' defensive
+ * outputs shape reading. Surfaces Siray's fail_reason verbatim.
+ */
+export async function sirayPollVideoAsync(
+  taskId: string,
+  creds: SirayCredentials,
+  deadlineMs: number,
+  pollIntervalMs: number = SIRAY_POLL_INTERVAL_MS
+): Promise<PollVideoOutcome> {
+  const startedAt = Date.now();
+  for (;;) {
+    let res: Response;
+    try {
+      res = await fetch(`${SIRAY_API_BASE}/v1/video/generations/${encodeURIComponent(taskId)}`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${creds.apiKey}` },
+        signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
+      });
+    } catch (err) {
+      return networkFailure("polling the video", err);
+    }
+
+    let payload: unknown = null;
+    try {
+      payload = await res.json();
+    } catch {
+      // Handled below.
+    }
+
+    if (!res.ok) {
+      const { code } = classifySirayHttpFailure(res.status);
+      return {
+        ok: false,
+        status: res.status,
+        code,
+        error: `Siray returned HTTP ${res.status} checking the video task.`,
+      };
+    }
+
+    const raw = (payload ?? {}) as Record<string, unknown>;
+    const data = (raw.data && typeof raw.data === "object" ? raw.data : raw) as Record<string, unknown>;
+    const status = String(data.status ?? raw.status ?? "").toUpperCase();
+    const failReason = String(
+      data.fail_reason ?? data.failReason ?? data.error ?? raw.message ?? ""
+    ).trim();
+
+    if (status === "FAILURE" || status === "FAILED") {
+      return {
+        ok: false,
+        status: 502,
+        code: "upstream_error",
+        error: `Siray's video generation failed${failReason ? `: ${failReason}` : "."}`,
+      };
+    }
+
+    if (status === "SUCCESS") {
+      const outputUrl = firstVideoOutputUrl(data.outputs ?? data.output ?? data.videos ?? data.result);
+      if (!outputUrl) {
+        return {
+          ok: false,
+          status: 502,
+          code: "no_video",
+          error: "Siray reported success but returned no video output URL to download.",
+        };
+      }
+      return { ok: true, outputUrl };
+    }
+
+    if (Date.now() + pollIntervalMs - startedAt >= deadlineMs) {
+      return {
+        ok: false,
+        status: 504,
+        code: "timeout",
+        error:
+          `Siray's video was still ${status.toLowerCase() || "processing"} after ${Math.round(deadlineMs / 1000)}s — this route ` +
+          "stopped waiting. Try again in a bit.",
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
+export type DownloadVideoOutcome = { ok: true; bytes: Uint8Array; contentType: string } | SirayFailure;
+
+/** Downloads finished mp4 bytes from Siray's output URL — no auth header. */
+export async function sirayDownloadVideo(url: string): Promise<DownloadVideoOutcome> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: 502,
+        code: "upstream_error",
+        error: `Downloading the video from Siray returned HTTP ${res.status}.`,
+      };
+    }
+    const contentType = res.headers.get("content-type") || "video/mp4";
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return { ok: true, bytes, contentType };
+  } catch (err) {
+    return networkFailure("downloading the video", err);
   }
 }

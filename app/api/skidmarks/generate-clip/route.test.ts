@@ -1742,3 +1742,101 @@ describe("POST /api/skidmarks/generate-clip \u2014 Instrumental MiniMax H3 rende
     vi.useRealTimers();
   });
 });
+
+describe("POST /api/skidmarks/generate-clip — Instrumental Siray Wan 3.0 i2v Spicy", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("SIRAY_API_KEY", "test-siray-key");
+    putMock.mockReset();
+    listMock.mockReset();
+    delMock.mockReset();
+    listMock.mockResolvedValue({ blobs: [] });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  function sirayRequest(overrides: Record<string, unknown> = {}): Request {
+    return postRequest({
+      prompt: "party plate, camera holds",
+      shotPrompt: "party plate, camera holds",
+      referenceImageDataUrls: [TINY_DATA_URL],
+      videoBackend: "siray",
+      durationSec: 17,
+      ...overrides,
+    });
+  }
+
+  it("reports missing_api_key and never calls fetch when SIRAY_API_KEY is unset", async () => {
+    vi.stubEnv("SIRAY_API_KEY", "");
+    const res = await POST(sirayRequest());
+    const body = await res.json();
+    expect(res.status).toBe(501);
+    expect(body.code).toBe("missing_api_key");
+    expect(body.error).toContain("SIRAY_API_KEY");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("submits Wan 3.0 Spicy, polls SUCCESS, downloads mp4, returns data URL without persistence", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { code: "Success", data: { task_id: "siray-vid-1" } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/out.mp4"] } })
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array([9, 8, 7]), { status: 200, headers: { "Content-Type": "video/mp4" } }));
+
+    const res = await POST(sirayRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.durationSec).toBe(17);
+    expect(body.videoUrl).toBe(`data:video/mp4;base64,${Buffer.from([9, 8, 7]).toString("base64")}`);
+
+    const [submitUrl, submitInit] = fetchMock.mock.calls[0];
+    expect(submitUrl).toBe("https://api.siray.ai/v1/video/generations");
+    const sent = JSON.parse(submitInit.body as string);
+    expect(sent.model).toBe("alibaba/wan-3.0-i2v-spicy");
+    expect(sent.duration).toBe(17);
+    expect(sent.size).toBe("720p");
+    expect(sent.aspect_ratio).toBe("adaptive");
+    expect(sent.image).toBe(TINY_DATA_URL);
+    expect(sent.prompt).toBe("party plate, camera holds");
+
+    const [pollUrl] = fetchMock.mock.calls[1];
+    expect(pollUrl).toBe("https://api.siray.ai/v1/video/generations/siray-vid-1");
+  });
+
+  it("surfaces Siray fail_reason verbatim on FAILURE", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { data: { task_id: "siray-fail" } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { data: { status: "FAILURE", fail_reason: "input image sensitive" } })
+      );
+
+    const res = await POST(sirayRequest());
+    const body = await res.json();
+    expect(res.status).toBe(502);
+    expect(body.error).toContain("input image sensitive");
+  });
+
+  it("clamps duration into Siray's 2–30s range (not Grok/H3's 15s)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { data: { task_id: "siray-long" } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/long.mp4"] } })
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array([1]), { status: 200 }));
+
+    const res = await POST(sirayRequest({ durationSec: 40 }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.durationSec).toBe(30);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(sent.duration).toBe(30);
+  });
+});

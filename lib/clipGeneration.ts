@@ -226,6 +226,19 @@ export function estimateH3ClipRenderCostUsd(durationSec: number): number {
 }
 
 /**
+ * Wan 3.0 i2v Spicy ($0.045/s) — Siray model-verse `out_price` for
+ * `alibaba/wan-3.0-i2v-spicy` (`api-gateway.siray.ai/api/model-verse/models`,
+ * billing_type video). Same source as `lib/sirayClient.ts`'s
+ * `SIRAY_WAN_30_I2V_COST_USD_PER_SEC`. Duration is the plate's render
+ * length after Siray's 2–30s clamp.
+ */
+const SIRAY_SECOND_RATE_USD = 0.045;
+
+export function estimateSirayClipRenderCostUsd(durationSec: number): number {
+  return durationSec * SIRAY_SECOND_RATE_USD;
+}
+
+/**
  * Auto-splits a clip's real time span evenly across however many plates
  * are on its strip, clamped into `[MIN_CLIP_DURATION_SEC,
  * MAX_CLIP_DURATION_SEC]` per plate — Stuart's own "segment length ÷
@@ -252,6 +265,18 @@ export const LTX_DURATION_BOUNDS: PlateDurationBounds = {
   min: MIN_LTX_CLIP_DURATION_SEC,
   max: MAX_LTX_CLIP_DURATION_SEC,
 };
+/** Wan 3.0 i2v Spicy documented integer-second range (docs.siray.ai /
+ * skidmarks `sirayI2v.ts`). Used when the clip's Instrumental switch is
+ * on Siray so a 17s music-video part is not clamped to Grok/H3's 15s. */
+export const SIRAY_DURATION_BOUNDS: PlateDurationBounds = { min: 2, max: 30 };
+
+export function computeSirayPlateDurationSec(
+  segmentLengthSec: number,
+  plateCount: number,
+  plateIndex: number
+): number {
+  return computePlateDurationSec(segmentLengthSec, plateCount, plateIndex, SIRAY_DURATION_BOUNDS);
+}
 
 export function computePlateDurationSec(
   segmentLengthSec: number,
@@ -458,7 +483,7 @@ export interface ClipGenerationRequest {
    * `"grok"` (xAI Grok Imagine video, unchanged). Never set — and
    * never read by the route — on a Vocal request; that path always
    * means Comfy Cloud LTX regardless of this field. */
-  videoBackend?: "h3" | "grok";
+  videoBackend?: "h3" | "grok" | "siray";
 }
 
 export interface BuildClipGenerationRequestParams {
@@ -652,11 +677,14 @@ export function describeClipPayload(
   startImageUrl: string,
   motionPrompt: string | undefined
 ): SkidmarksClipSentPayload {
+  const instrumentalModel = resolveInstrumentalVideoModel(request.videoBackend);
   const engine: SkidmarksClipSentPayload["engine"] = request.vocal
     ? "LTX"
-    : resolveInstrumentalVideoModel(request.videoBackend) === "h3"
+    : instrumentalModel === "h3"
       ? "H3"
-      : "Grok";
+      : instrumentalModel === "siray"
+        ? "Siray"
+        : "Grok";
   const negativePrompt = request.vocal
     ? [LTX_DEFAULT_NEGATIVE_PROMPT, request.negativePrompt].filter((t) => !!t).join(", ")
     : "";

@@ -38,7 +38,11 @@ import {
 } from "@/lib/plateGeneration";
 import { SIRAY_SEEDREAM_45_COST_USD } from "@/lib/sirayClient";
 import { resolveLocationStill } from "@/lib/plateLocation";
-import { computeLtxPlateDurationSec, computePlateDurationSec } from "@/lib/clipGeneration";
+import {
+  computeLtxPlateDurationSec,
+  computePlateDurationSec,
+  computeSirayPlateDurationSec,
+} from "@/lib/clipGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import { SkidmarksClipRender } from "./SkidmarksClipRender";
 import type { PersistedClipRender } from "@/lib/clipRenders";
@@ -1410,7 +1414,13 @@ export function SkidmarksClipStub({
   // too — the two ranges are the same now.
   const durationSec = vocal
     ? computeLtxPlateDurationSec(segment.endSec - segment.startSec, plateCount, Math.max(0, selectedPlateIndex))
-    : computePlateDurationSec(segment.endSec - segment.startSec, plateCount, Math.max(0, selectedPlateIndex));
+    : instrumentalVideoModel === "siray"
+      ? computeSirayPlateDurationSec(
+          segment.endSec - segment.startSec,
+          plateCount,
+          Math.max(0, selectedPlateIndex)
+        )
+      : computePlateDurationSec(segment.endSec - segment.startSec, plateCount, Math.max(0, selectedPlateIndex));
 
   return (
     <div className="flex flex-col gap-2.5 border-t border-white/[0.06] pt-3">

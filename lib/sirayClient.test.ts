@@ -4,9 +4,16 @@ import {
   SIRAY_SEEDREAM_45_REF2I_SPICY,
   SIRAY_SEEDREAM_45_T2I_SPICY,
   SIRAY_SEEDREAM_45_SIZE,
+  SIRAY_WAN_30_I2V_SPICY,
+  SIRAY_WAN_30_I2V_SIZE,
+  SIRAY_WAN_30_I2V_ASPECT_RATIO,
+  clampSirayI2vDurationSec,
   siraySubmitStillImage,
   sirayPollStillImage,
   sirayDownloadStill,
+  siraySubmitVideoAsync,
+  sirayPollVideoAsync,
+  sirayDownloadVideo,
 } from "./sirayClient";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -180,5 +187,101 @@ describe("sirayDownloadStill", () => {
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     const outcome = await sirayDownloadStill("https://cdn.siray.ai/out.png");
     expect(outcome).toMatchObject({ ok: false, code: "network_error" });
+  });
+});
+
+describe("clampSirayI2vDurationSec", () => {
+  it("clamps into Wan 3.0 Spicy's documented 2–30s integer range", () => {
+    expect(clampSirayI2vDurationSec(1)).toBe(2);
+    expect(clampSirayI2vDurationSec(17)).toBe(17);
+    expect(clampSirayI2vDurationSec(40)).toBe(30);
+    expect(clampSirayI2vDurationSec(7.6)).toBe(8);
+  });
+});
+
+describe("siraySubmitVideoAsync", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("POSTs /v1/video/generations with Wan 3.0 Spicy body and returns task_id", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { code: "Success", data: { task_id: "vid-1" } }));
+    const outcome = await siraySubmitVideoAsync(
+      { prompt: "camera holds", image: "data:image/jpeg;base64,AAAA", durationSec: 12 },
+      CREDS
+    );
+    expect(outcome).toEqual({ ok: true, taskId: "vid-1" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.siray.ai/v1/video/generations");
+    const body = JSON.parse(init.body as string);
+    expect(body).toEqual({
+      model: SIRAY_WAN_30_I2V_SPICY,
+      prompt: "camera holds",
+      image: "data:image/jpeg;base64,AAAA",
+      duration: 12,
+      size: SIRAY_WAN_30_I2V_SIZE,
+      aspect_ratio: SIRAY_WAN_30_I2V_ASPECT_RATIO,
+    });
+  });
+
+  it("surfaces Siray HTTP error text verbatim", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(400, { message: "input new_sensitive" }));
+    const outcome = await siraySubmitVideoAsync(
+      { prompt: "x", image: "https://example.com/a.jpg", durationSec: 5 },
+      CREDS
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error).toContain("input new_sensitive");
+  });
+});
+
+describe("sirayPollVideoAsync", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("returns the output URL on SUCCESS", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.example/v.mp4"] } })
+    );
+    const outcome = await sirayPollVideoAsync("vid-1", CREDS, 60_000);
+    expect(outcome).toEqual({ ok: true, outputUrl: "https://cdn.example/v.mp4" });
+  });
+
+  it("surfaces fail_reason verbatim on FAILURE", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { data: { status: "FAILURE", fail_reason: "input image sensitive" } })
+    );
+    const outcome = await sirayPollVideoAsync("vid-1", CREDS, 60_000);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error).toContain("input image sensitive");
+  });
+});
+
+describe("sirayDownloadVideo", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("returns mp4 bytes", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "Content-Type": "video/mp4" } })
+    );
+    const outcome = await sirayDownloadVideo("https://cdn.example/v.mp4");
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(Array.from(outcome.bytes)).toEqual([1, 2, 3]);
+    expect(outcome.contentType).toContain("video/mp4");
   });
 });

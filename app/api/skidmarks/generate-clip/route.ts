@@ -24,6 +24,13 @@ import {
   submitMinimaxH3Video,
   type MinimaxCredentials,
 } from "@/lib/minimaxH3";
+import {
+  clampSirayI2vDurationSec,
+  resolveSirayCredentials,
+  sirayDownloadVideo,
+  sirayPollVideoAsync,
+  siraySubmitVideoAsync,
+} from "@/lib/sirayClient";
 import { sliceMp3ToTimeRange } from "@/lib/mp3Slice";
 import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
 
@@ -333,6 +340,11 @@ export const MINIMAX_POLL_DEADLINE_MS = 240_000;
  * from `MAX_REFERENCE_IMAGES` (3, the Grok path's own multi-reference
  * ceiling) \u2014 H3 has no third role to put an extra image in. */
 const MAX_H3_REFERENCE_IMAGES = 2;
+/** Same shape/reasoning as `MINIMAX_POLL_DEADLINE_MS`, for Siray Wan
+ * 3.0 i2v Spicy (`lib/sirayClient.ts`'s `sirayPollVideoAsync`). */
+export const SIRAY_POLL_DEADLINE_MS = 240_000;
+/** Siray i2v accepts one start image (optional end_image not used here). */
+const MAX_SIRAY_REFERENCE_IMAGES = 1;
 
 
 function resolveXaiVideoModel(): string {
@@ -1443,6 +1455,99 @@ async function handleInstrumentalH3Render(
   });
 }
 
+
+/**
+ * Instrumental/Siray Wan 3.0 i2v Spicy — animates the selected plate
+ * still via Siray's spicy image-to-video model (`alibaba/wan-3.0-i2v-spicy`).
+ * Submit → poll → download → same Blob persistence as H3/Grok. Surfaces
+ * Siray's fail_reason / HTTP error text verbatim. Character lock is
+ * already in `prompt` when the client assembled it (#170).
+ */
+async function handleInstrumentalSirayRender(
+  body: GenerateClipRequestBody,
+  prompt: string,
+  referenceImageDataUrls: string[],
+  requestedDurationSec: number
+): Promise<Response> {
+  const creds = resolveSirayCredentials();
+  if (!creds) {
+    return NextResponse.json(
+      {
+        error:
+          "SIRAY_API_KEY is not set on the server \u2014 Siray clip rendering is unavailable here. " +
+          "Set SIRAY_API_KEY on this Vercel project (redeploy after adding it). H3 and Grok still " +
+          "work for this clip \u2014 flip the Render switch.",
+        code: "missing_api_key",
+      },
+      { status: 501 }
+    );
+  }
+
+  if (referenceImageDataUrls.length < 1) {
+    return NextResponse.json(
+      {
+        error: "Siray's image-to-video needs the plate still as the start image.",
+        code: "invalid_request",
+      },
+      { status: 400 }
+    );
+  }
+  if (referenceImageDataUrls.length > MAX_SIRAY_REFERENCE_IMAGES) {
+    return NextResponse.json(
+      {
+        error: "Siray's Wan 3.0 i2v accepts one start image \u2014 use the selected plate still only.",
+        code: "invalid_request",
+      },
+      { status: 400 }
+    );
+  }
+
+  const durationSec = clampSirayI2vDurationSec(requestedDurationSec);
+
+  const submitResult = await siraySubmitVideoAsync(
+    { prompt, image: referenceImageDataUrls[0], durationSec },
+    creds
+  );
+  if (!submitResult.ok) {
+    return NextResponse.json({ error: submitResult.error, code: submitResult.code }, { status: submitResult.status });
+  }
+
+  const pollResult = await sirayPollVideoAsync(submitResult.taskId, creds, SIRAY_POLL_DEADLINE_MS);
+  if (!pollResult.ok) {
+    return NextResponse.json({ error: pollResult.error, code: pollResult.code }, { status: pollResult.status });
+  }
+
+  const downloadResult = await sirayDownloadVideo(pollResult.outputUrl);
+  if (!downloadResult.ok) {
+    return NextResponse.json({ error: downloadResult.error, code: downloadResult.code }, { status: downloadResult.status });
+  }
+
+  const persistenceTarget = resolvePersistenceTarget(body);
+  if (!persistenceTarget) {
+    return NextResponse.json({
+      videoUrl: bufferToDataUrl(downloadResult.bytes, "video/mp4"),
+      durationSec,
+    });
+  }
+
+  const persistOutcome = await persistRenderBytesToBlob(downloadResult.bytes, persistenceTarget);
+  if (persistOutcome.ok) {
+    return NextResponse.json({
+      videoUrl: persistOutcome.url,
+      durationSec,
+      persisted: true,
+      ...(persistOutcome.lastFrameUrl ? { lastFrameUrl: persistOutcome.lastFrameUrl } : {}),
+    });
+  }
+
+  return NextResponse.json({
+    videoUrl: bufferToDataUrl(downloadResult.bytes, "video/mp4"),
+    durationSec,
+    persisted: false,
+    persistError: persistOutcome.reason,
+  });
+}
+
 export async function POST(request: Request) {
   let body: GenerateClipRequestBody;
   try {
@@ -1465,7 +1570,13 @@ export async function POST(request: Request) {
   // route's original Grok behavior \u2014 the *server's* own default stays
   // Grok even though the *client's* new default is H3.
   const vocal = body.vocal === true;
-  const instrumentalBackend: "h3" | "grok" = !vocal && body.videoBackend === "h3" ? "h3" : "grok";
+  const instrumentalBackend: "h3" | "grok" | "siray" = !vocal
+    ? body.videoBackend === "h3"
+      ? "h3"
+      : body.videoBackend === "siray"
+        ? "siray"
+        : "grok"
+    : "grok";
 
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   if (!prompt) {
@@ -1542,13 +1653,20 @@ export async function POST(request: Request) {
     typeof body.durationSec === "number" && Number.isFinite(body.durationSec)
       ? body.durationSec
       : DEFAULT_CLIP_DURATION_SEC;
-  const requestedDurationSec = Math.min(
-    MAX_CLIP_DURATION_SEC,
-    Math.max(MIN_CLIP_DURATION_SEC, Math.round(requestedDurationSecRaw))
-  );
+  const requestedDurationSec =
+    instrumentalBackend === "siray"
+      ? clampSirayI2vDurationSec(requestedDurationSecRaw)
+      : Math.min(
+          MAX_CLIP_DURATION_SEC,
+          Math.max(MIN_CLIP_DURATION_SEC, Math.round(requestedDurationSecRaw))
+        );
 
   if (instrumentalBackend === "h3") {
     return handleInstrumentalH3Render(body, prompt, rawReferences, requestedDurationSec);
+  }
+
+  if (instrumentalBackend === "siray") {
+    return handleInstrumentalSirayRender(body, prompt, rawReferences, requestedDurationSec);
   }
 
   const resolvedKey = resolveXaiApiKey();

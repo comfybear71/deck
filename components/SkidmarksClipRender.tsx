@@ -7,6 +7,7 @@ import {
   describeClipPayload,
   estimateClipRenderCostUsd,
   estimateH3ClipRenderCostUsd,
+  estimateSirayClipRenderCostUsd,
   estimateLtxClipRenderCostUsd,
   generateSkidmarksClip,
   MAX_MOTION_PROMPT_LENGTH,
@@ -355,7 +356,9 @@ export function SkidmarksClipRender({
     ? estimateLtxClipRenderCostUsd(durationSec)
     : instrumentalVideoModel === "h3"
       ? estimateH3ClipRenderCostUsd(durationSec)
-      : estimateClipRenderCostUsd(durationSec, 1);
+      : instrumentalVideoModel === "siray"
+        ? estimateSirayClipRenderCostUsd(durationSec)
+        : estimateClipRenderCostUsd(durationSec, 1);
   // Carried-forward directive: never let Render fire (even the
   // confirm step) on a Vocal plate with no real durable audio to
   // slice \u2014 an honest, disabled state instead of a request the
@@ -555,20 +558,20 @@ export function SkidmarksClipRender({
               aria-label="Instrumental render backend"
               className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/[0.04] p-1 text-[11px] font-medium"
             >
-              {(["h3", "grok"] as const).map((option) => (
+              {(["h3", "grok", "siray"] as const).map((option) => (
                 <button
                   key={option}
                   type="button"
                   onClick={() => onSetInstrumentalVideoModel(option)}
                   aria-pressed={instrumentalVideoModel === option}
                   className={[
-                    "min-h-[32px] rounded-full px-3 py-1.5 transition-colors",
+                    "min-h-[32px] rounded-full px-2.5 py-1.5 transition-colors",
                     instrumentalVideoModel === option
                       ? "bg-rose-400 text-zinc-950"
                       : "text-white/50 hover:text-white/80",
                   ].join(" ")}
                 >
-                  {option === "h3" ? "H3" : "Grok"}
+                  {option === "h3" ? "H3" : option === "grok" ? "Grok" : "Siray"}
                 </button>
               ))}
             </div>

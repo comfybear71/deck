@@ -9,6 +9,8 @@ import {
   computePlateTimeRange,
   estimateClipRenderCostUsd,
   estimateH3ClipRenderCostUsd,
+  estimateSirayClipRenderCostUsd,
+  computeSirayPlateDurationSec,
   estimateLtxClipRenderCostUsd,
   generateSkidmarksClip,
   MAX_CLIP_DURATION_SEC,
@@ -303,6 +305,18 @@ describe("buildClipGenerationRequest", () => {
         instrumentalVideoModel: "h3",
       });
       expect(request.videoBackend).toBe("h3");
+    });
+
+    it("honors an explicit siray pick", () => {
+      const request = buildClipGenerationRequest({
+        vocal: false,
+        shotPrompt: "a door creaks open",
+        bandName: "Jack Ash",
+        plateStillDataUrl: "data:image/jpeg;base64,door",
+        durationSec: 17,
+        instrumentalVideoModel: "siray",
+      });
+      expect(request.videoBackend).toBe("siray");
     });
 
     it("never sets videoBackend on a Vocal (Comfy LTX) request", () => {
@@ -864,6 +878,21 @@ describe("estimateClipRenderCostUsd", () => {
   });
 });
 
+describe("estimateSirayClipRenderCostUsd", () => {
+  it("uses Siray model-verse Wan 3.0 Spicy $0.045/s", () => {
+    expect(estimateSirayClipRenderCostUsd(10)).toBeCloseTo(0.45, 5);
+    expect(estimateSirayClipRenderCostUsd(17)).toBeCloseTo(0.765, 5);
+  });
+});
+
+describe("computeSirayPlateDurationSec", () => {
+  it("allows up to 30s so a 17s part is not clamped to Grok/H3's 15s", () => {
+    expect(computeSirayPlateDurationSec(17, 1, 0)).toBe(17);
+    expect(computeSirayPlateDurationSec(40, 1, 0)).toBe(30);
+    expect(computeSirayPlateDurationSec(1, 1, 0)).toBe(2);
+  });
+});
+
 describe("estimateH3ClipRenderCostUsd", () => {
   it("scales with real duration at MiniMax H3's published 768P $0.08/s rate, no per-image surcharge", () => {
     expect(estimateH3ClipRenderCostUsd(5)).toBeCloseTo(0.4, 5);
@@ -1037,5 +1066,20 @@ describe("generateSkidmarksClip", () => {
       unconfigured: false,
       message: "Clip render succeeded but returned no video.",
     });
+  });
+});
+
+describe("describeClipPayload Siray engine", () => {
+  it("labels the engine Siray when videoBackend is siray", () => {
+    const request = buildClipGenerationRequest({
+      vocal: false,
+      shotPrompt: "party plate",
+      bandName: "Jack Ash",
+      plateStillDataUrl: "data:image/jpeg;base64,x",
+      durationSec: 8,
+      instrumentalVideoModel: "siray",
+    });
+    const payload = describeClipPayload(request, "data:image/jpeg;base64,x", undefined);
+    expect(payload.engine).toBe("Siray");
   });
 });
