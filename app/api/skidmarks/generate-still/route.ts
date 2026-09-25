@@ -1,3 +1,4 @@
+import { FORCED_VIDEO_ASPECT_RATIO } from "@/lib/videoAspect";
 import { NextResponse } from "next/server";
 import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
 
@@ -173,6 +174,11 @@ async function callXaiImageApi(
     body.images = references;
   } else {
     body.n = 1;
+    // FORCED 16:9 – do not change unless intentionally switching formats.
+    // Text-to-image only: on /images/edits xAI stretches the reference to
+    // the requested ratio, so edits keep the reference's shape and the
+    // video route pads that plate to 16:9 instead.
+    body.aspect_ratio = FORCED_VIDEO_ASPECT_RATIO;
   }
 
   let res: Response;

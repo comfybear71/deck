@@ -33,6 +33,7 @@ import {
 } from "@/lib/sirayClient";
 import { sliceMp3ToTimeRange } from "@/lib/mp3Slice";
 import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
+import { FORCED_VIDEO_ASPECT_RATIO, padFrameTo16x9 } from "@/lib/videoFrame16x9";
 
 /**
  * POST /api/skidmarks/generate-clip — the first real (non-stub) slice of
@@ -420,12 +421,33 @@ type StartOutcome =
  * 404 for them even when our HEAD eventually succeeds. Data URLs skip that
  * fetch entirely. Never throws; returns the original string if conversion
  * fails so the existing error path still fires. */
-async function ensureXaiInlineImageUrl(url: string): Promise<string> {
-  if (url.startsWith("data:")) return url;
+/** FORCED 16:9 – do not change unless intentionally switching formats.
+ * Pads any non-16:9 start frame (square Seedream/xAI-edit plates, portrait
+ * uploads) into a 1920x1080 black frame before Grok/H3/Siray see it, so no
+ * engine can copy a square shape or stretch it. Already-16:9 frames pass
+ * through unchanged (same string). Never throws: if the image can't be
+ * read the original string is returned and the engine's own error path
+ * still fires. Comfy LTX keeps its own 1280x720 letterbox
+ * (`letterboxImageForLtxIa2v`). */
+async function forceStartFrame16x9(url: string): Promise<string> {
+  if (!url) return url;
   const resolved = await resolveReferenceImageBytes(url);
   if (!resolved.ok) return url;
-  const b64 = Buffer.from(resolved.bytes).toString("base64");
-  const mime = resolved.mimeType || "image/jpeg";
+  const framed = await padFrameTo16x9(resolved.bytes, resolved.mimeType);
+  if (!framed.padded) return url;
+  return `data:${framed.mimeType};base64,${Buffer.from(framed.bytes).toString("base64")}`;
+}
+
+async function ensureXaiInlineImageUrl(url: string): Promise<string> {
+  const resolved = await resolveReferenceImageBytes(url);
+  if (!resolved.ok) return url;
+  // FORCED 16:9 – pad square/portrait plates before xAI sees them, since
+  // this request also sends `aspect_ratio: "16:9"` and xAI would otherwise
+  // stretch the image to fit.
+  const framed = await padFrameTo16x9(resolved.bytes, resolved.mimeType);
+  if (url.startsWith("data:") && !framed.padded) return url;
+  const b64 = Buffer.from(framed.bytes).toString("base64");
+  const mime = framed.mimeType || "image/jpeg";
   return `data:${mime};base64,${b64}`;
 }
 
@@ -441,6 +463,10 @@ async function startXaiVideoJob(
     prompt,
     duration: durationSec,
     resolution: CLIP_RESOLUTION,
+    // FORCED 16:9 – do not change unless intentionally switching formats.
+    // Safe to send because every start frame is padded to 16:9 first
+    // (forceStartFrame16x9), so xAI never has to stretch a square plate.
+    aspect_ratio: FORCED_VIDEO_ASPECT_RATIO,
   };
   // Exactly one of `image` (locks the first frame \u2014 xAI's
   // image-to-video mode) or `reference_images` (guided continuity across
@@ -1404,8 +1430,9 @@ async function handleInstrumentalH3Render(
   const submitResult = await submitMinimaxH3Video(
     {
       prompt,
-      firstImageUrl: referenceImageDataUrls[0],
-      lastImageUrl: referenceImageDataUrls[1],
+      // FORCED 16:9 – H3 has no aspect knob; it copies the first frame's shape.
+      firstImageUrl: await forceStartFrame16x9(referenceImageDataUrls[0]!),
+      lastImageUrl: referenceImageDataUrls[1] ? await forceStartFrame16x9(referenceImageDataUrls[1]) : undefined,
       durationSec: requestedDurationSec,
     },
     creds
@@ -1516,7 +1543,8 @@ async function handleInstrumentalSirayRender(
   let taskId = resumeTaskId;
   if (!taskId) {
     const submitResult = await siraySubmitVideoAsync(
-      { prompt, image: referenceImageDataUrls[0], durationSec },
+      // FORCED 16:9 – pad the plate too, so Wan never crops/reshapes a square still.
+      { prompt, image: await forceStartFrame16x9(referenceImageDataUrls[0]!), durationSec },
       creds
     );
     if (!submitResult.ok) {

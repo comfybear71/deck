@@ -41,6 +41,12 @@ vi.mock("sharp", () => ({
   }),
 }));
 
+vi.mock("@/lib/videoFrame16x9", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/videoFrame16x9")>();
+  return { ...actual, padFrameTo16x9: vi.fn(actual.padFrameTo16x9) };
+});
+
+import { padFrameTo16x9 } from "@/lib/videoFrame16x9";
 import {
   classifyXaiVideoHttpFailure,
   classifyXaiVideoJobError,
@@ -353,11 +359,32 @@ describe("POST /api/skidmarks/generate-clip", () => {
     expect(sentBody.model).toBe("grok-imagine-video-1.5");
     expect(sentBody.duration).toBe(5);
     expect(sentBody.resolution).toBe("480p");
+    expect(sentBody.aspect_ratio).toBe("16:9");
     expect(sentBody.image).toEqual({ url: TINY_DATA_URL });
     expect(sentBody.reference_images).toBeUndefined();
 
     const [pollUrl] = fetchMock.mock.calls[1];
     expect(pollUrl).toBe("https://api.x.ai/v1/videos/req-1");
+  });
+
+  it("FORCED 16:9: sends the padded 16:9 frame (not the square original) plus aspect_ratio 16:9", async () => {
+    // Real padding is covered in lib/videoFrame16x9.test.ts (sharp is faked here).
+    vi.mocked(padFrameTo16x9).mockResolvedValueOnce({
+      bytes: new Uint8Array([7, 7, 7]),
+      mimeType: "image/jpeg",
+      padded: true,
+    });
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { request_id: "req-sq" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { status: "done", video: { url: "https://vidgen.x.ai/sq.mp4", duration: 5, respect_moderation: true } })
+      );
+
+    const res = await POST(postRequest({ prompt: "slow zoom", referenceImageDataUrls: [TINY_DATA_URL] }));
+    expect(res.status).toBe(200);
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(sentBody.aspect_ratio).toBe("16:9");
+    expect(sentBody.image).toEqual({ url: `data:image/jpeg;base64,${Buffer.from([7, 7, 7]).toString("base64")}` });
   });
 
   it("starts with a `reference_images` array, in strip order, for two or more references", async () => {
@@ -1803,7 +1830,7 @@ describe("POST /api/skidmarks/generate-clip — Instrumental Siray Wan 3.0 i2v S
     expect(sent.model).toBe("alibaba/wan-3.0-i2v-spicy");
     expect(sent.duration).toBe(17);
     expect(sent.size).toBe("720p");
-    expect(sent.aspect_ratio).toBe("adaptive");
+    expect(sent.aspect_ratio).toBe("16:9");
     expect(sent.image).toBe(TINY_DATA_URL);
     expect(sent.prompt).toBe("party plate, camera holds");
 
