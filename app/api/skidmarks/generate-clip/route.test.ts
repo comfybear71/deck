@@ -358,7 +358,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
     const sentBody = JSON.parse(startInit.body as string);
     expect(sentBody.model).toBe("grok-imagine-video-1.5");
     expect(sentBody.duration).toBe(5);
-    expect(sentBody.resolution).toBe("480p");
+    expect(sentBody.resolution).toBe("1080p");
     expect(sentBody.aspect_ratio).toBe("16:9");
     expect(sentBody.image).toEqual({ url: TINY_DATA_URL });
     expect(sentBody.reference_images).toBeUndefined();
@@ -407,6 +407,7 @@ describe("POST /api/skidmarks/generate-clip", () => {
     const [, startInit] = fetchMock.mock.calls[0];
     const sentBody = JSON.parse(startInit.body as string);
     expect(sentBody.image).toBeUndefined();
+    expect(sentBody.resolution).toBe("720p"); // xAI caps reference-to-video at 720p
     expect(sentBody.reference_images).toEqual([
       { url: TINY_DATA_URL },
       { url: SECOND_DATA_URL },
@@ -1829,7 +1830,7 @@ describe("POST /api/skidmarks/generate-clip — Instrumental Siray Wan 3.0 i2v S
     const sent = JSON.parse(submitInit.body as string);
     expect(sent.model).toBe("alibaba/wan-3.0-i2v-spicy");
     expect(sent.duration).toBe(17);
-    expect(sent.size).toBe("720p");
+    expect(sent.size).toBe("1080p");
     expect(sent.aspect_ratio).toBe("16:9");
     expect(sent.image).toBe(TINY_DATA_URL);
     expect(sent.prompt).toBe("party plate, camera holds");

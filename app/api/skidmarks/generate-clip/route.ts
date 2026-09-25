@@ -257,7 +257,12 @@ const MIN_REFERENCE_IMAGES = 1;
 /** Cost-capped output resolution \u2014 see this file's module doc comment
  * for why this stays a code change, not an env knob: 480p keeps the
  * per-second rate at the cheapest documented tier ($0.08/s). */
-const CLIP_RESOLUTION = "480p";
+// FORCED 16:9 at 1080p – do not change unless intentionally switching formats.
+// Stuart asked for 1080p (2026-09-25): $0.25/s on grok-imagine-video-1.5
+// (xAI pricing page; 480p was $0.08/s). xAI caps reference-to-video
+// (2–3 `reference_images`) at 720p, so that mode falls back to 720p.
+const CLIP_RESOLUTION = "1080p";
+const CLIP_RESOLUTION_REFERENCE_TO_VIDEO = "720p";
 /** Default duration when a caller doesn't send `durationSec` (an older
  * caller, or a hand-rolled request) \u2014 matches this route's original
  * flat 5s behavior exactly, so nothing already calling this route
@@ -482,6 +487,7 @@ async function startXaiVideoJob(
     body.image = { url: inlineRefs[0] };
   } else {
     body.reference_images = inlineRefs.map((url) => ({ url }));
+    body.resolution = CLIP_RESOLUTION_REFERENCE_TO_VIDEO;
   }
 
   let res: Response;
