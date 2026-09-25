@@ -169,7 +169,7 @@ export const MIN_LTX_CLIP_DURATION_SEC = 5;
 export const MAX_LTX_CLIP_DURATION_SEC = 15;
 
 /** Mirrors `app/api/skidmarks/generate-clip/route.ts`'s hardcoded
- * `CLIP_RESOLUTION` ("480p", $0.08/sec per xAI's published Grok Imagine
+ * `CLIP_RESOLUTION` ("1080p", $0.25/sec per xAI's published Grok Imagine
  * Video pricing) plus its $0.01-per-input-image charge — duplicated
  * here (rather than fetched from the server) purely so
  * `components/SkidmarksClipRender.tsx` can show Stuart a real cost
@@ -177,7 +177,8 @@ export const MAX_LTX_CLIP_DURATION_SEC = 15;
  * trip. If either of those server-side constants ever changes, update
  * this to match — nothing enforces the two staying in sync
  * automatically. */
-const CLIP_SECOND_RATE_USD = 0.08;
+const CLIP_SECOND_RATE_USD = 0.25; // 1080p (single start frame), xAI pricing 2026-09-25
+const CLIP_SECOND_RATE_REFERENCE_TO_VIDEO_USD = 0.14; // 720p cap for 2–3 references
 const PER_REFERENCE_IMAGE_USD = 0.01;
 
 /** Estimated USD cost of one plate's render at a given duration — always
@@ -186,7 +187,8 @@ const PER_REFERENCE_IMAGE_USD = 0.01;
  * kept as a parameter rather than hardcoded so a test/future caller
  * doesn't have to special-case it. */
 export function estimateClipRenderCostUsd(durationSec: number, referenceImageCount: number = 1): number {
-  return durationSec * CLIP_SECOND_RATE_USD + referenceImageCount * PER_REFERENCE_IMAGE_USD;
+  const rate = referenceImageCount > 1 ? CLIP_SECOND_RATE_REFERENCE_TO_VIDEO_USD : CLIP_SECOND_RATE_USD;
+  return durationSec * rate + referenceImageCount * PER_REFERENCE_IMAGE_USD;
 }
 
 /** Per-second estimate shown in the Vocal render confirm, on

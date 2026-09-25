@@ -867,10 +867,14 @@ describe("Part 4: no stay-on-the-start-image lock, and an honest payload record"
 });
 
 describe("estimateClipRenderCostUsd", () => {
-  it("scales with real duration at 480p's $0.08/s rate, plus $0.01 per reference image", () => {
-    expect(estimateClipRenderCostUsd(5, 1)).toBeCloseTo(0.41, 5);
-    expect(estimateClipRenderCostUsd(13, 1)).toBeCloseTo(1.05, 5);
-    expect(estimateClipRenderCostUsd(15, 1)).toBeCloseTo(1.21, 5);
+  it("scales with real duration at 1080p's $0.25/s rate, plus $0.01 per reference image", () => {
+    expect(estimateClipRenderCostUsd(5, 1)).toBeCloseTo(1.26, 5);
+    expect(estimateClipRenderCostUsd(13, 1)).toBeCloseTo(3.26, 5);
+    expect(estimateClipRenderCostUsd(15, 1)).toBeCloseTo(3.76, 5);
+  });
+
+  it("uses the 720p $0.14/s rate when 2+ references force reference-to-video", () => {
+    expect(estimateClipRenderCostUsd(5, 2)).toBeCloseTo(0.72, 5);
   });
 
   it("defaults referenceImageCount to 1 \u2014 a render is always exactly one plate's still now", () => {

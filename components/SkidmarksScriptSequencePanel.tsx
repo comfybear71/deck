@@ -986,7 +986,7 @@ export function SkidmarksScriptSequencePanel({
           aria-pressed={scriptEngine === "siray"}
           title={
             scriptEngine === "siray"
-              ? "Siray: Generate plates makes Seedream 4.5 spicy stills ($0.04 each); Generate renders Instrumental parts on Wan 3.0 i2v spicy (~$0.045/s). Vocal parts always use LTX. Tap for Grok."
+              ? "Siray: Generate plates makes Seedream 4.5 spicy stills ($0.04 each); Generate renders Instrumental parts on Wan 3.0 i2v spicy at 1080p (~$0.045/s list price). Vocal parts always use LTX. Tap for Grok."
               : "Grok: Generate plates uses xAI stills; Generate renders Instrumental parts on Grok. Vocal parts always use LTX. Tap for Siray."
           }
           className="self-start rounded-full border border-white/15 bg-white/[0.03] px-3 py-1 text-[11px] font-medium text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"

@@ -31,6 +31,9 @@
  * test suite.
  */
 
+import { FORCED_VIDEO_ASPECT_RATIO } from "./videoAspect";
+
+
 const API_KEY_ENV_VAR = "SIRAY_API_KEY";
 export const SIRAY_API_BASE = "https://api.siray.ai";
 
@@ -50,7 +53,10 @@ export const SIRAY_SEEDREAM_45_REF2I_SPICY = "bytedance/seedream-4.5-ref2i-spicy
  * requested with no reference image.
  */
 export const SIRAY_SEEDREAM_45_T2I_SPICY = "bytedance/seedream-4.5-t2i-spicy";
-export const SIRAY_SEEDREAM_45_SIZE = "2048x2048";
+// FORCED 16:9 – do not change unless intentionally switching formats
+// (2560x1440 is in the documented Seedream 4.5 t2i/ref2i `size` enum;
+// same flat $0.04/image as 2048x2048).
+export const SIRAY_SEEDREAM_45_SIZE = "2560x1440";
 export const SIRAY_SEEDREAM_45_COST_USD = 0.04;
 
 /**
@@ -64,9 +70,15 @@ export const SIRAY_SEEDREAM_45_COST_USD = 0.04;
  * `out_price: "0.045"`, `billing_type: "video"` → $/s).
  */
 export const SIRAY_WAN_30_I2V_SPICY = "alibaba/wan-3.0-i2v-spicy";
-export const SIRAY_WAN_30_I2V_SIZE = "720p";
-export const SIRAY_WAN_30_I2V_ASPECT_RATIO = "adaptive";
-/** Evidence: Siray model-verse `out_price` for this model id (USD per second). */
+// FORCED 16:9 at 1080p – do not change unless intentionally switching formats.
+// "1080p" is in the documented Wan 3.0 i2v Spicy `size` enum (480p/720p/1080p).
+export const SIRAY_WAN_30_I2V_SIZE = "1080p";
+// FORCED 16:9 – do not change unless intentionally switching formats
+// ("adaptive" copied the plate's shape, so square plates became square clips).
+export const SIRAY_WAN_30_I2V_ASPECT_RATIO = FORCED_VIDEO_ASPECT_RATIO;
+/** Evidence: Siray model-verse `out_price` for this model id (USD per second).
+ * Siray publishes one flat price for the model and doesn't say whether
+ * 1080p bills higher, so treat this as a floor until a real 1080p invoice line confirms it. */
 export const SIRAY_WAN_30_I2V_COST_USD_PER_SEC = 0.045;
 export const SIRAY_I2V_MIN_DURATION_SEC = 2;
 export const SIRAY_I2V_MAX_DURATION_SEC = 30;
