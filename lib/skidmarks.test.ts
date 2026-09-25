@@ -2425,6 +2425,17 @@ minors, logos, text`;
     expect(scriptSequenceTimelineNeedsApply(segments, PARTS)).toBe(false);
   });
 
+  it("scriptSequenceTimelineNeedsApply is true when a part is retitled Instrumental to Vocal", () => {
+    const instrumental = PARTS.map((p) => ({ ...p, title: p.title.replace(/Vocal/i, "Instrumental") }));
+    const segments = buildScriptSequenceSegments(instrumental, []);
+    expect(scriptSequenceTimelineNeedsApply(segments, instrumental)).toBe(false);
+    const vocal = instrumental.map((p) => ({ ...p, title: `${p.title.replace(/\s*Instrumental/i, "")} Vocal` }));
+    expect(scriptSequenceTimelineNeedsApply(segments, vocal)).toBe(true);
+    const rebuilt = buildScriptSequenceSegments(vocal, segments);
+    expect(rebuilt[0].label).toBe("vocal");
+    expect(scriptSequenceTimelineNeedsApply(rebuilt, vocal)).toBe(false);
+  });
+
   it("attachSkidmarksMp3 applies a persisted scriptSequenceDraft onto the new timeline (times + prompts)", () => {
     setSkidmarksScriptSequenceDraft({ script: DRAFT_SCRIPT });
     attachSkidmarksMp3(createMp3Attachment("silent-30s.mp3", 30));
