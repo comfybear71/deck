@@ -32,10 +32,11 @@ import {
  */
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const MAX_PROMPT_LENGTH = 2000;
-const POLL_DEADLINE_MS = 45_000;
+// Seedream 4.5 at 2048² sometimes takes over a minute (live 2026-09-24: clip 10 still in_progress at 45s).
+const POLL_DEADLINE_MS = 240_000;
 
 function isReferenceDataUrl(value: unknown): value is string {
   return typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,.+/.test(value);
