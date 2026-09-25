@@ -3423,6 +3423,19 @@ export function applySkidmarksMemberSleeveStillToPlate(
  * empty seed clips" as already built (live phone QA 2026-09-24: 1 script
  * part + 1 demo clip → empty shot prompt forever).
  */
+/** A retitled part (Instrumental to Vocal or back) must rebuild its clip,
+ * or the clip list keeps the old chip (live report 2026-09-25). */
+function scriptPartKindDisagreesWithSegment(
+  part: { title?: string },
+  seg: SkidmarksClipSegment
+): boolean {
+  const kind = scriptPartTitleKind(part.title ?? "");
+  const segVocal = SKIDMARKS_SEGMENT_LABEL_META[seg.label]?.vocal ?? false;
+  if (kind === "vocal") return !segVocal;
+  if (kind === "instrumental" || kind === "other-singer") return segVocal;
+  return false;
+}
+
 export function scriptSequenceTimelineNeedsApply(
   existing: SkidmarksClipSegment[],
   parts: ScriptSequencePart[]
@@ -3435,7 +3448,8 @@ export function scriptSequenceTimelineNeedsApply(
       Math.abs(seg.startSec - part.startSec) > 0.05 ||
       Math.abs(seg.endSec - part.endSec) > 0.05 ||
       seg.shotPrompt.trim() !== part.prompt.trim() ||
-      (seg.negativePrompt ?? "").trim() !== (part.negativePrompt ?? "").trim()
+      (seg.negativePrompt ?? "").trim() !== (part.negativePrompt ?? "").trim() ||
+      scriptPartKindDisagreesWithSegment(part, seg)
     );
   });
 }
