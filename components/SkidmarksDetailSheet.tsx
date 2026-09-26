@@ -29,7 +29,10 @@ import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksArchiveShelf } from "./SkidmarksArchiveShelf";
 import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
 import { useIsPcShell } from "@/hooks/useIsPcShell";
-import { DeckPcRail, type DeckPcRailId } from "./DeckPcRail";
+import { DeckPcRail } from "./DeckPcRail";
+import { DeckMobileDrawer } from "./DeckMobileDrawer";
+import { useSkidmarksRail } from "@/hooks/useSkidmarksRail";
+import { useSkidmarksPlaylists } from "@/hooks/useSkidmarksPlaylists";
 import { SkidmarksLibraryPage } from "./SkidmarksLibraryPage";
 import { SkidmarksPcHome } from "./SkidmarksPcHome";
 
@@ -104,7 +107,12 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const [archiveSuccessMessage, setArchiveSuccessMessage] = useState<string | null>(null);
   const [archiveRefreshToken, setArchiveRefreshToken] = useState(0);
   const isPcShell = useIsPcShell();
-  const [pcRail, setPcRail] = useState<DeckPcRailId>("create");
+  // Home / Create / Library, shared by the PC rail and the phone menu,
+  // and remembered across a refresh.
+  const [pcRail, setPcRail] = useSkidmarksRail();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
+  const { playlists, playlistError, mutatePlaylists } = useSkidmarksPlaylists();
 
   const bandSectionRef = useRef<HTMLDivElement | null>(null);
   const membersSectionRef = useRef<HTMLDivElement | null>(null);
@@ -112,11 +120,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !openMemberId) onClose();
+      if (e.key === "Escape" && !openMemberId && !menuOpen) onClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose, openMemberId]);
+  }, [onClose, openMemberId, menuOpen]);
 
   // Each newly-appended step scrolls gently into view — same "the thread
   // grows, follow it down" feel the old chat build had, just for a
@@ -687,6 +695,10 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     </>
   );
 
+  // Phone has no Home page (the Deck map is home), so a remembered
+  // "home" from the PC opens Create on the phone.
+  const phoneRail = pcRail === "library" ? "library" : "create";
+
   // PC shell (≥1024px): left rail + wide main. Phone/tablet keeps the sheet.
   if (isPcShell) {
     return (
@@ -733,6 +745,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 onOpenInEditor={handleOpenInEditorFromLibrary}
                 refreshToken={archiveRefreshToken}
                 onArchiveMutated={() => setArchiveRefreshToken((n) => n + 1)}
+                playlists={playlists}
+                playlistError={playlistError}
+                onMutatePlaylists={mutatePlaylists}
+                activePlaylistId={activePlaylistId}
+                onSelectPlaylist={setActivePlaylistId}
               />
             )}
           </div>
@@ -763,6 +780,17 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       >
         <div className="flex items-center justify-between gap-2 p-4 pb-2">
           <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setMenuOpen(true)}
+              aria-label="Open menu"
+              aria-expanded={menuOpen}
+              className="-ml-1 shrink-0 rounded-full p-1.5 text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-5 w-5" aria-hidden>
+                <path d="M3.5 6h13M3.5 10h13M3.5 14h13" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+            </button>
             <span
               aria-hidden
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-rose-400/15 text-sm font-semibold text-rose-300"
@@ -771,7 +799,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             </span>
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold text-white">Skidmarks</h2>
-              <p className="truncate text-[11px] text-rose-300/80">Vibe director</p>
+              <p className="truncate text-[11px] text-rose-300/80">
+                {phoneRail === "library" ? "Library" : "Vibe director"}
+              </p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -793,11 +823,47 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
           </div>
         </div>
 
-        {syncBanners}
+        {phoneRail === "create" && syncBanners}
 
         <div className="flex-1 overflow-y-auto px-5 pb-5">
-          {renderDeskBody("phone")}
+          {/* Desk stays mounted while Library is showing so nothing in progress is lost. */}
+          <div className={phoneRail === "create" ? undefined : "hidden"}>{renderDeskBody("phone")}</div>
+          {phoneRail === "library" && (
+            <SkidmarksLibraryPage
+              compact
+              onOpenInEditor={handleOpenInEditorFromLibrary}
+              refreshToken={archiveRefreshToken}
+              onArchiveMutated={() => setArchiveRefreshToken((n) => n + 1)}
+              playlists={playlists}
+              playlistError={playlistError}
+              onMutatePlaylists={mutatePlaylists}
+              activePlaylistId={activePlaylistId}
+              onSelectPlaylist={setActivePlaylistId}
+            />
+          )}
         </div>
+
+        <DeckMobileDrawer
+          open={menuOpen}
+          active={phoneRail}
+          playlists={playlists}
+          activePlaylistId={activePlaylistId}
+          onSelect={(id) => {
+            setPcRail(id);
+            if (id === "library") setActivePlaylistId(null);
+            setMenuOpen(false);
+          }}
+          onOpenPlaylist={(id) => {
+            setPcRail("library");
+            setActivePlaylistId(id);
+            setMenuOpen(false);
+          }}
+          onClose={() => setMenuOpen(false)}
+          onBackToMap={() => {
+            setMenuOpen(false);
+            onClose();
+          }}
+        />
       </div>
 
       {memberPopupAndConfirm}
