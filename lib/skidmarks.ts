@@ -190,6 +190,12 @@ import {
   type SunnyBanksLiveState,
   type SunnyBanksWorkspaceSnapshot,
 } from "./sunnyBanksWorkspace";
+import {
+  emptySkidmarksEpisodesState,
+  normalizeSkidmarksEpisodesState,
+  skidmarksEpisodesHaveUserContent,
+  type SkidmarksEpisodesState,
+} from "./skidmarksEpisodes";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -216,7 +222,7 @@ export interface SkidmarksProjectKindMeta {
 
 export const SKIDMARKS_PROJECT_KINDS: SkidmarksProjectKindMeta[] = [
   { kind: "music-video", label: "Music video", icon: "note", enabled: true },
-  { kind: "skidmarks", label: "Skidmarks", icon: "tire", enabled: false },
+  { kind: "skidmarks", label: "Skidmarks", icon: "tire", enabled: true },
   { kind: "sunnybank", label: "Sunnybank", icon: "sun", enabled: true },
 ];
 
@@ -1350,6 +1356,12 @@ export interface SkidmarksState {
    * URLs only, never inline still bytes.
    */
   sunnyBanks: SkidmarksSunnyBanksState | null;
+  /**
+   * Skidmarks episodes + cast bank (stage 1, 2026-09-27) — same Neon
+   * session row, see `lib/skidmarksEpisodes.ts`. `null` until the first
+   * edit; missing on older sessions.
+   */
+  skidmarksEpisodes?: SkidmarksEpisodesState | null;
 }
 
 function isBrowser(): boolean {
@@ -1413,6 +1425,7 @@ function emptyState(): SkidmarksState {
     session: { projectKind: null, bandId: null, mp3: null, scriptSequenceDraft: null },
     removedSeedBandIds: [],
     sunnyBanks: null,
+    skidmarksEpisodes: null,
   };
 }
 
@@ -1801,6 +1814,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
       scriptSequenceDraft: stillHasBand ? scriptSequenceDraft : null,
     },
     sunnyBanks: normalizeSunnyBanksStudio(p.sunnyBanks),
+    skidmarksEpisodes: normalizeSkidmarksEpisodesState(p.skidmarksEpisodes),
   };
 }
 
@@ -2018,7 +2032,8 @@ export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
   const hasMp3 = state.session.mp3 !== null;
   const hasTaggedSegments = hasSkidmarksUserContent(state.session.mp3?.segments ?? []);
   const hasSunnyBanks = sunnyBanksStudioHasUserContent(state.sunnyBanks);
-  return hasRealBand || hasMp3 || hasTaggedSegments || hasSunnyBanks;
+  const hasEpisodes = skidmarksEpisodesHaveUserContent(state.skidmarksEpisodes);
+  return hasRealBand || hasMp3 || hasTaggedSegments || hasSunnyBanks || hasEpisodes;
 }
 
 /**
@@ -3084,6 +3099,20 @@ function notifySkidmarksIdentityWipe(): void {
       // song switch it's reacting to.
     }
   }
+}
+
+/** Skidmarks episodes + cast — empty until the first edit. */
+export function getSkidmarksEpisodesState(state: SkidmarksState = getSkidmarksSnapshot()): SkidmarksEpisodesState {
+  return state.skidmarksEpisodes ?? emptySkidmarksEpisodesState();
+}
+
+export function patchSkidmarksEpisodes(updater: (state: SkidmarksEpisodesState) => SkidmarksEpisodesState): void {
+  const current = getSkidmarksSnapshot();
+  const base = getSkidmarksEpisodesState(current);
+  persist({
+    ...current,
+    skidmarksEpisodes: updater({ episodes: base.episodes.slice(), cast: base.cast.slice() }),
+  });
 }
 
 function resolvedSunnyBanks(state: SkidmarksState): SkidmarksSunnyBanksState {
