@@ -198,14 +198,21 @@ export function SkidmarksLibraryPage({
   ];
 
   return (
-    <div className={["mx-auto flex w-full max-w-6xl flex-col gap-5", compact ? "px-1 py-3" : "px-6 py-6"].join(" ")}>
+    <div className={["mx-auto flex w-full max-w-6xl flex-col gap-5", compact ? "overflow-x-hidden px-1 py-3" : "px-6 py-6"].join(" ")}>
       <header className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold tracking-tight text-white">Library</h1>
           <p className="text-sm text-white/45">Finished Songs and later stills / episodes</p>
         </div>
 
-        <div className={["flex items-center gap-2 border-b border-white/10 pb-0", compact ? "flex-nowrap overflow-x-auto whitespace-nowrap" : "flex-wrap"].join(" ")}>
+        <div
+          className={[
+            "border-b border-white/10 pb-0",
+            // Phone: fixed grid, every tab visible, no sideways scroll.
+            compact ? "grid touch-pan-y overflow-hidden" : "flex flex-wrap items-center gap-2",
+          ].join(" ")}
+          style={compact ? { gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` } : undefined}
+        >
           {tabs.map((t) => {
             const active = tab === t.id;
             return (
@@ -218,7 +225,8 @@ export function SkidmarksLibraryPage({
                 }}
                 aria-current={active ? "page" : undefined}
                 className={[
-                  "-mb-px border-b-2 px-3 pb-2.5 text-sm font-medium transition-colors",
+                  "-mb-px border-b-2 pb-2.5 font-medium transition-colors",
+                  compact ? "flex min-w-0 flex-col items-center px-0.5 text-[13px]" : "px-3 text-sm",
                   active
                     ? "border-white text-white"
                     : "border-transparent text-white/45 hover:text-white/75",
@@ -226,7 +234,7 @@ export function SkidmarksLibraryPage({
               >
                 {t.label}
                 {!t.live && (
-                  <span className="ml-1.5 text-[10px] font-normal uppercase tracking-wide text-white/30">
+                  <span className={["text-[10px] font-normal uppercase tracking-wide text-white/30", compact ? "leading-none" : "ml-1.5"].join(" ")}>
                     soon
                   </span>
                 )}

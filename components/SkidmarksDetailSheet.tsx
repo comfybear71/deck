@@ -26,7 +26,6 @@ import { SkidmarksMp3Card } from "./SkidmarksMp3Card";
 import { SkidmarksClipTimeline } from "./SkidmarksClipTimeline";
 import { SkidmarksScriptSequencePanel } from "./SkidmarksScriptSequencePanel";
 import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
-import { SkidmarksArchiveShelf } from "./SkidmarksArchiveShelf";
 import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
 import { useIsPcShell } from "@/hooks/useIsPcShell";
 import { DeckPcRail } from "./DeckPcRail";
@@ -636,7 +635,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       <SkidmarksRenderedClipsShelf renders={renders} onRemoved={removeRender} />
     ) : null;
 
-  /** Phone: single-column stack + Finished Songs shelf. PC: 2-col desk, no shelf. */
+  /** Phone: single-column stack + link to Library. PC: 2-col desk. Finished Songs live in Library on both. */
   const renderDeskBody = (layout: "phone" | "pc") => (
     <div className="flex flex-col gap-8 pt-2">
       <SkidmarksLandingTiles activeKind={session.projectKind} onSelect={selectProjectKind} />
@@ -663,7 +662,15 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             {scriptBlock}
             {timelineBlock}
             {renderedBlock}
-            <SkidmarksArchiveShelf onOpenInEditor={handleOpenInEditor} refreshToken={archiveRefreshToken} />
+            {/* Finished Songs moved to Library (the shelf here was a duplicate). */}
+            <button
+              type="button"
+              onClick={() => setPcRail("library")}
+              className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm text-white/70 transition-colors hover:bg-white/[0.06] hover:text-white"
+            >
+              <span>Finished songs are in Library</span>
+              <span aria-hidden className="text-white/40">{"\u203a"}</span>
+            </button>
           </>
         ))}
     </div>
