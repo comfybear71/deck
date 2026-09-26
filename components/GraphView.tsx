@@ -19,6 +19,7 @@ import { PropfolioNodeCard } from "./PropfolioNodeCard";
 import { PropfolioDetailSheet } from "./PropfolioDetailSheet";
 import { SkidmarksNodeCard } from "./SkidmarksNodeCard";
 import { SkidmarksDetailSheet } from "./SkidmarksDetailSheet";
+import { useOpenDeckSheet } from "@/hooks/useOpenDeckSheet";
 import { GraphBoard } from "./GraphBoard";
 import { CostHeader } from "./CostHeader";
 import { CostDetailSheet } from "./CostDetailSheet";
@@ -47,7 +48,8 @@ interface GraphViewProps {
  * README's "Running costs (header + deep dive)" section.
  */
 export function GraphView({ graph, meters, receipts, lastMailSync, referenceDate }: GraphViewProps) {
-  const [openNodeId, setOpenNodeId] = useState<string | null>(null);
+  // Remembered across refresh for Skidmarks only (see useOpenDeckSheet).
+  const [openNodeId, setOpenNodeId] = useOpenDeckSheet();
   const [costSheetOpen, setCostSheetOpen] = useState(false);
   const [budjuData, setBudjuData] = useState<BudjuData>(budjuSeedData);
   const [budjuRefreshing, setBudjuRefreshing] = useState(false);
