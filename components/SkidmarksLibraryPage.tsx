@@ -205,7 +205,7 @@ export function SkidmarksLibraryPage({
           <p className="text-sm text-white/45">Finished Songs and later stills / episodes</p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-white/10 pb-0">
+        <div className={["flex items-center gap-2 border-b border-white/10 pb-0", compact ? "flex-nowrap overflow-x-auto whitespace-nowrap" : "flex-wrap"].join(" ")}>
           {tabs.map((t) => {
             const active = tab === t.id;
             return (
