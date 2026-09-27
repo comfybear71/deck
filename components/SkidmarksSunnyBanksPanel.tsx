@@ -1,5 +1,6 @@
 "use client";
 
+import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { triggerBlobDownload } from "@/lib/clipRenders";
@@ -619,6 +620,7 @@ function SunnyBanksScriptHighlightOverlay({
   overlayRef: RefObject<HTMLDivElement | null>;
 }) {
   const segments = buildSunnyBanksHighlightSegments(text);
+  useTextareaOverlayMirror(overlayRef, text);
   return (
     <div
       ref={overlayRef}

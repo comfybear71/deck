@@ -1,5 +1,6 @@
 "use client";
 
+import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useMemo, useRef, useState, type RefObject } from "react";
 import {
   buildScriptSequenceHighlightSegments,
@@ -171,6 +172,7 @@ function ScriptSequenceHighlightOverlay({
   overlayRef: RefObject<HTMLDivElement | null>;
 }) {
   const segments = buildScriptSequenceHighlightSegments(text);
+  useTextareaOverlayMirror(overlayRef, text);
   return (
     <div
       ref={overlayRef}
