@@ -18,8 +18,16 @@ import { ADULT_SHORTS_MAX_SHOT_SEC } from "@/lib/adultShorts";
  * or the previous clip's last frame). Deliberately its own small route
  * rather than another branch of `generate-clip` (which is built around a
  * song's segments/plates): submit, poll, download, save MP4 + last frame
- * to Blob. A 202 `{ pending, sirayTaskId }` means Siray is still
- * rendering; call again with that id to keep waiting on the same paid job.
+ * to Blob.
+ *
+ * **Two short calls, never one long one (2026-09-28 live fix).** The
+ * first version held one request open for up to ~4.5 min while Siray
+ * rendered; on live the browser connection dropped ("Failed to fetch")
+ * and the client never learned the task id of a job Siray had already
+ * started. Now a call without `sirayTaskId` only submits and returns
+ * `202 { pending, sirayTaskId }` straight away, so the client can save
+ * the id before waiting. Each call with `sirayTaskId` polls for at most
+ * `POLL_DEADLINE_MS` and returns 202 again if Siray is still going.
  *
  * The prompt arrives already carrying the adult/content locks from
  * `lib/adultShorts.ts`; this route re-checks the adult lock is present so
@@ -29,7 +37,7 @@ import { ADULT_SHORTS_MAX_SHOT_SEC } from "@/lib/adultShorts";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const POLL_DEADLINE_MS = 240_000;
+const POLL_DEADLINE_MS = 40_000;
 const MAX_PROMPT_LENGTH = 2000;
 const FETCH_TIMEOUT_MS = 30_000;
 
@@ -114,13 +122,14 @@ export async function POST(request: Request) {
     );
   }
 
-  let taskId = resumeTaskId;
+  const taskId = resumeTaskId;
   if (!taskId) {
     const start = await resolveStartImage(startImageUrl);
     if (!start.ok) return NextResponse.json({ error: start.error, code: "start_image" }, { status: 400 });
     const submit = await siraySubmitVideoAsync({ prompt, image: start.dataUrl, durationSec }, creds);
     if (!submit.ok) return NextResponse.json({ error: submit.error, code: submit.code }, { status: submit.status });
-    taskId = submit.taskId;
+    // Hand the id back before any waiting — see the doc comment above.
+    return NextResponse.json({ pending: true, sirayTaskId: submit.taskId, code: "siray_submitted" }, { status: 202 });
   }
 
   const poll = await sirayPollVideoAsync(taskId, creds, POLL_DEADLINE_MS);
