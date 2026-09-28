@@ -39,7 +39,19 @@ import {
  */
 
 const REFERENCE_MAX_DIMENSION = 1600;
-const MAX_PENDING_POLLS = 6;
+/** ~40s per server poll, so this is roughly 12 minutes of waiting. */
+const MAX_PENDING_POLLS = 18;
+/** A dropped connection (Safari/Chrome "Failed to fetch") is retried this many times in a row. */
+const MAX_NETWORK_RETRIES = 3;
+
+function isNetworkDrop(err: unknown): boolean {
+  return err instanceof TypeError;
+}
+
+function friendlyError(err: unknown, fallback: string): string {
+  if (isNetworkDrop(err)) return "The connection dropped while Siray was working. Tap again to retry.";
+  return err instanceof Error ? err.message : fallback;
+}
 
 type Busy = { shotId: string; kind: "plate" | "clip" } | null;
 
@@ -159,7 +171,7 @@ export function AdultShortsPanel() {
       patchShot(shot.id, { plateUrl });
       flushSkidmarksSessionNow();
     } catch (err) {
-      setShotError(shot.id, err instanceof Error ? err.message : "Siray still failed.");
+      setShotError(shot.id, friendlyError(err, "Siray still failed."));
     } finally {
       setBusy(null);
     }
@@ -179,18 +191,33 @@ export function AdultShortsPanel() {
     setShotError(shot.id, null);
     setBusy({ shotId: shot.id, kind: "clip" });
     let taskId = shot.sirayTaskId;
+    let networkRetries = 0;
     try {
-      for (let attempt = 0; attempt <= MAX_PENDING_POLLS; attempt += 1) {
-        const res = await fetch("/api/skidmarks/adult-shorts/render-clip", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt: buildAdultShortsMotionPrompt(character, shot),
-            startImageUrl,
-            durationSec: shot.durationSec,
-            ...(taskId ? { sirayTaskId: taskId } : {}),
-          }),
-        });
+      for (let attempt = 0; attempt <= MAX_PENDING_POLLS; ) {
+        let res: Response;
+        try {
+          res = await fetch("/api/skidmarks/adult-shorts/render-clip", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              prompt: buildAdultShortsMotionPrompt(character, shot),
+              startImageUrl,
+              durationSec: shot.durationSec,
+              ...(taskId ? { sirayTaskId: taskId } : {}),
+            }),
+          });
+        } catch (err) {
+          // Only retry automatically once we hold a task id — retrying a
+          // submit whose answer we never saw could start a second paid job.
+          if (isNetworkDrop(err) && taskId && networkRetries < MAX_NETWORK_RETRIES) {
+            networkRetries += 1;
+            await new Promise((r) => setTimeout(r, 3000));
+            continue;
+          }
+          throw err;
+        }
+        networkRetries = 0;
+        attempt += 1;
         const json = (await res.json().catch(() => ({}))) as {
           pending?: boolean;
           sirayTaskId?: string;
@@ -204,14 +231,23 @@ export function AdultShortsPanel() {
           flushSkidmarksSessionNow();
           continue;
         }
-        if (!res.ok || !json.videoUrl) throw new Error(json.error || `Siray clip failed (HTTP ${res.status}).`);
+        if (!res.ok || !json.videoUrl) {
+          // A failed job is finished — drop its id so the next tap starts fresh.
+          if (taskId) patchShot(shot.id, { sirayTaskId: null });
+          throw new Error(json.error || `Siray clip failed (HTTP ${res.status}).`);
+        }
         patchShot(shot.id, { clipUrl: json.videoUrl, lastFrameUrl: json.lastFrameUrl ?? null, sirayTaskId: null });
         flushSkidmarksSessionNow();
         return;
       }
-      setShotError(shot.id, "Siray is still rendering. Tap Render again to keep waiting. It won't charge twice.");
+      setShotError(shot.id, "Siray is still rendering. Tap Keep waiting. It won't charge twice.");
     } catch (err) {
-      setShotError(shot.id, err instanceof Error ? err.message : "Siray clip failed.");
+      setShotError(
+        shot.id,
+        isNetworkDrop(err) && taskId
+          ? "The connection dropped, but Siray has the job. Tap Keep waiting. It won't charge twice."
+          : friendlyError(err, "Siray clip failed.")
+      );
     } finally {
       setBusy(null);
     }
