@@ -28,6 +28,7 @@ import { SkidmarksScriptSequencePanel } from "./SkidmarksScriptSequencePanel";
 import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
 import { SkidmarksEpisodesPanel } from "./SkidmarksEpisodesPanel";
+import { AdultShortsPanel } from "./AdultShortsPanel";
 import { useIsPcShell } from "@/hooks/useIsPcShell";
 import { DeckPcRail } from "./DeckPcRail";
 import { DeckMobileDrawer } from "./DeckMobileDrawer";
@@ -644,6 +645,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {session.projectKind === "sunnybank" && <SkidmarksSunnyBanksPanel />}
 
       {session.projectKind === "skidmarks" && <SkidmarksEpisodesPanel onOpenLibrary={() => setPcRail("library")} />}
+
+      {session.projectKind === "adult-shorts" && <AdultShortsPanel />}
 
       {session.projectKind === "music-video" &&
         (layout === "pc" ? (

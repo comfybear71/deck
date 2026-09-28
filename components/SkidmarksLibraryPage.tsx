@@ -1,7 +1,7 @@
 "use client";
 
 import { SkidmarksConfirmDialog } from "./SkidmarksConfirmDialog";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   buildArchiveZip,
   fetchArchiveSnapshot,
@@ -9,8 +9,8 @@ import {
   fetchSkidmarksArchiveIndex,
   type SkidmarksArchivedSong,
 } from "@/lib/skidmarksArchive";
-import { triggerBlobDownload } from "@/lib/clipRenders";
-import { formatDuration } from "@/lib/skidmarks";
+import { buildForceDownloadUrl, triggerBlobDownload } from "@/lib/clipRenders";
+import { formatDuration, getAdultShortsState, getSkidmarksSnapshot, subscribeSkidmarks } from "@/lib/skidmarks";
 import {
   entryForSong,
   playlistHasSong,
@@ -37,7 +37,7 @@ interface SkidmarksLibraryPageProps {
   compact?: boolean;
 }
 
-type LibraryTab = "songs" | "playlists" | "stills" | "episodes";
+type LibraryTab = "songs" | "playlists" | "stills" | "episodes" | "adult";
 
 function formatArchivedAt(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, {
@@ -74,6 +74,14 @@ export function SkidmarksLibraryPage({
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<SkidmarksArchivedSong | null>(null);
   const [chosenTab, setTab] = useState<LibraryTab>("songs");
+  const skidmarksSnapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
+  const adultClips = useMemo(() => {
+    const adult = getAdultShortsState(skidmarksSnapshot);
+    const who = adult.character.name.trim() || "Adult short";
+    return adult.shots.flatMap((shot, i) =>
+      shot.clipUrl ? [{ id: shot.id, url: shot.clipUrl, label: `${who} · shot ${i + 1}` }] : []
+    );
+  }, [skidmarksSnapshot]);
   // Opening a playlist from the menu always shows the Playlists tab.
   const tab: LibraryTab = activePlaylistId && playlistsEnabled ? "playlists" : chosenTab;
   const [query, setQuery] = useState("");
@@ -195,6 +203,8 @@ export function SkidmarksLibraryPage({
     ...(playlistsEnabled ? [{ id: "playlists" as const, label: "Playlists", live: true }] : []),
     { id: "stills", label: "Stills", live: false },
     { id: "episodes", label: "Episodes", live: false },
+    // Adult shorts' finished clips (2026-09-28), kept apart from songs.
+    ...(adultClips.length ? [{ id: "adult" as const, label: "18+", live: true }] : []),
   ];
 
   return (
@@ -431,6 +441,24 @@ export function SkidmarksLibraryPage({
             </ul>
           )}
         </div>
+      )}
+
+      {tab === "adult" && (
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {adultClips.map((clip) => (
+            <li key={clip.id} className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+              <video src={clip.url} controls playsInline preload="metadata" className="aspect-video w-full bg-black object-cover" />
+              <div className="flex items-center justify-between gap-2 px-2.5 py-2 text-xs text-white/60">
+                <span className="truncate">{clip.label}</span>
+                {clip.url.startsWith("https:") && (
+                  <a href={buildForceDownloadUrl(clip.url)} className="shrink-0 text-white/70 hover:text-white">
+                    Download
+                  </a>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
 
       {(tab === "stills" || tab === "episodes") && (
