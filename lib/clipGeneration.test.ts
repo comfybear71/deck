@@ -883,9 +883,9 @@ describe("estimateClipRenderCostUsd", () => {
 });
 
 describe("estimateSirayClipRenderCostUsd", () => {
-  it("uses Siray model-verse Wan 3.0 Spicy $0.045/s", () => {
-    expect(estimateSirayClipRenderCostUsd(10)).toBeCloseTo(0.45, 5);
-    expect(estimateSirayClipRenderCostUsd(17)).toBeCloseTo(0.765, 5);
+  it("uses the billed Wan 3.0 Spicy 1080p rate of $0.18/s", () => {
+    expect(estimateSirayClipRenderCostUsd(5)).toBeCloseTo(0.9, 5);
+    expect(estimateSirayClipRenderCostUsd(10)).toBeCloseTo(1.8, 5);
   });
 });
 

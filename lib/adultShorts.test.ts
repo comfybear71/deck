@@ -60,7 +60,7 @@ describe("adult shorts state", () => {
   it("clamps durations and prices clips", () => {
     expect(clampAdultShortsDuration(1)).toBe(2);
     expect(clampAdultShortsDuration(NaN)).toBe(5);
-    expect(estimateAdultShortsClipCostUsd(5)).toBe(0.23);
+    expect(estimateAdultShortsClipCostUsd(5)).toBe(0.9);
   });
 
   it("chains from the previous clip's last frame only when asked and available", () => {

@@ -228,13 +228,13 @@ export function estimateH3ClipRenderCostUsd(durationSec: number): number {
 }
 
 /**
- * Wan 3.0 i2v Spicy ($0.045/s) — Siray model-verse `out_price` for
- * `alibaba/wan-3.0-i2v-spicy` (`api-gateway.siray.ai/api/model-verse/models`,
- * billing_type video). Same source as `lib/sirayClient.ts`'s
+ * Wan 3.0 i2v Spicy at 1080p ($0.18/s) — the rate Siray actually billed
+ * (Siray Logs, 2026-09-28: 5s clip = $0.90), not the $0.045/s list
+ * price. Same figure as `lib/sirayClient.ts`'s
  * `SIRAY_WAN_30_I2V_COST_USD_PER_SEC`. Duration is the plate's render
  * length after Siray's 2–30s clamp.
  */
-const SIRAY_SECOND_RATE_USD = 0.045;
+const SIRAY_SECOND_RATE_USD = 0.18;
 
 export function estimateSirayClipRenderCostUsd(durationSec: number): number {
   return durationSec * SIRAY_SECOND_RATE_USD;

@@ -24,8 +24,8 @@ export const ADULT_SHORTS_DEFAULT_SHOT_SEC = 5;
 
 /** Siray Seedream 4.5 spicy still, per image (matches `lib/sirayClient.ts`). */
 export const ADULT_SHORTS_STILL_COST_USD = 0.04;
-/** Siray Wan 3.0 i2v spicy, per second (matches `lib/sirayClient.ts`). */
-export const ADULT_SHORTS_VIDEO_COST_USD_PER_SEC = 0.045;
+/** Siray Wan 3.0 i2v spicy at 1080p, per second — the billed rate (matches `lib/sirayClient.ts`). */
+export const ADULT_SHORTS_VIDEO_COST_USD_PER_SEC = 0.18;
 
 export const ADULT_SHORTS_ADULT_LOCK =
   "Adult woman, clearly over 25, fictional AI-created character, photorealistic, same face, hair and body as the reference.";
