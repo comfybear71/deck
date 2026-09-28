@@ -196,6 +196,12 @@ import {
   skidmarksEpisodesHaveUserContent,
   type SkidmarksEpisodesState,
 } from "./skidmarksEpisodes";
+import {
+  adultShortsHaveUserContent,
+  emptyAdultShortsState,
+  normalizeAdultShortsState,
+  type AdultShortsState,
+} from "./adultShorts";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -211,12 +217,12 @@ export const MAX_MEMBERS_PER_BAND = 3;
  * render (per the locked mockup) but are inert, so the row reads
  * correctly without pretending those flows exist yet.
  */
-export type SkidmarksProjectKind = "music-video" | "skidmarks" | "sunnybank";
+export type SkidmarksProjectKind = "music-video" | "skidmarks" | "sunnybank" | "adult-shorts";
 
 export interface SkidmarksProjectKindMeta {
   kind: SkidmarksProjectKind;
   label: string;
-  icon: "note" | "tire" | "sun";
+  icon: "note" | "tire" | "sun" | "adult";
   enabled: boolean;
 }
 
@@ -224,6 +230,8 @@ export const SKIDMARKS_PROJECT_KINDS: SkidmarksProjectKindMeta[] = [
   { kind: "music-video", label: "Music video", icon: "note", enabled: true },
   { kind: "skidmarks", label: "Skidmarks", icon: "tire", enabled: true },
   { kind: "sunnybank", label: "Sunnybank", icon: "sun", enabled: true },
+  // Adult shorts (2026-09-28) — 18+ photoreal clips, see `lib/adultShorts.ts`.
+  { kind: "adult-shorts", label: "Adult shorts", icon: "adult", enabled: true },
 ];
 
 /** One generated "look" for a member — a stand-in for a real render.
@@ -1362,6 +1370,11 @@ export interface SkidmarksState {
    * edit; missing on older sessions.
    */
   skidmarksEpisodes?: SkidmarksEpisodesState | null;
+  /**
+   * Adult shorts (2026-09-28) — one locked character + shot list, same
+   * Neon session row, see `lib/adultShorts.ts`. URLs only, never bytes.
+   */
+  adultShorts?: AdultShortsState | null;
 }
 
 function isBrowser(): boolean {
@@ -1426,6 +1439,7 @@ function emptyState(): SkidmarksState {
     removedSeedBandIds: [],
     sunnyBanks: null,
     skidmarksEpisodes: null,
+    adultShorts: null,
   };
 }
 
@@ -1815,6 +1829,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
     },
     sunnyBanks: normalizeSunnyBanksStudio(p.sunnyBanks),
     skidmarksEpisodes: normalizeSkidmarksEpisodesState(p.skidmarksEpisodes),
+    adultShorts: normalizeAdultShortsState(p.adultShorts),
   };
 }
 
@@ -2033,7 +2048,8 @@ export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
   const hasTaggedSegments = hasSkidmarksUserContent(state.session.mp3?.segments ?? []);
   const hasSunnyBanks = sunnyBanksStudioHasUserContent(state.sunnyBanks);
   const hasEpisodes = skidmarksEpisodesHaveUserContent(state.skidmarksEpisodes);
-  return hasRealBand || hasMp3 || hasTaggedSegments || hasSunnyBanks || hasEpisodes;
+  const hasAdultShorts = adultShortsHaveUserContent(state.adultShorts);
+  return hasRealBand || hasMp3 || hasTaggedSegments || hasSunnyBanks || hasEpisodes || hasAdultShorts;
 }
 
 /**
@@ -3112,6 +3128,24 @@ export function patchSkidmarksEpisodes(updater: (state: SkidmarksEpisodesState) 
   persist({
     ...current,
     skidmarksEpisodes: updater({ episodes: base.episodes.slice(), cast: base.cast.slice() }),
+  });
+}
+
+/** Adult shorts — empty until the first edit. */
+export function getAdultShortsState(state: SkidmarksState = getSkidmarksSnapshot()): AdultShortsState {
+  return state.adultShorts ?? emptyAdultShortsState();
+}
+
+export function patchAdultShorts(updater: (state: AdultShortsState) => AdultShortsState): void {
+  const current = getSkidmarksSnapshot();
+  const base = getAdultShortsState(current);
+  persist({
+    ...current,
+    adultShorts: updater({
+      ...base,
+      character: { ...base.character, referenceUrls: base.character.referenceUrls.slice() },
+      shots: base.shots.map((s) => ({ ...s })),
+    }),
   });
 }
 

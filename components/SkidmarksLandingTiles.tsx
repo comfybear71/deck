@@ -7,7 +7,15 @@ interface SkidmarksLandingTilesProps {
   onSelect: (kind: SkidmarksProjectKind) => void;
 }
 
-function TileIcon({ icon }: { icon: "note" | "tire" | "sun" }) {
+function TileIcon({ icon }: { icon: "note" | "tire" | "sun" | "adult" }) {
+  if (icon === "adult") {
+    return (
+      <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-5 w-5">
+        <rect x="2.5" y="4.5" width="15" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.5" />
+        <text x="10" y="12.6" textAnchor="middle" fontSize="6.5" fontWeight="700" fill="currentColor">18+</text>
+      </svg>
+    );
+  }
   if (icon === "note") {
     return (
       <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-5 w-5">
@@ -67,10 +75,15 @@ const KIND_ACCENT: Record<
     icon: "text-amber-300",
     label: "text-white/70",
   },
+  "adult-shorts": {
+    ring: "border-red-400/40 hover:border-red-400/60",
+    icon: "text-red-300",
+    label: "text-white",
+  },
 };
 
 /**
- * Landing — the one horizontal row of three compact project-type tiles
+ * Landing — the one horizontal row of four compact project-type tiles
  * ("Start a project"). Only "Music video" (`enabled: true` in
  * `SKIDMARKS_PROJECT_KINDS`) actually continues the scroll below; the
  * other two render for visual completeness (matching the locked mockup)
@@ -82,7 +95,7 @@ export function SkidmarksLandingTiles({ activeKind, onSelect }: SkidmarksLanding
       <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-white/40">
         Start a project
       </p>
-      <div className="grid grid-cols-3 gap-2.5">
+      <div className="grid grid-cols-4 gap-2">
         {SKIDMARKS_PROJECT_KINDS.map((k) => {
           const accent = KIND_ACCENT[k.kind];
           const active = activeKind === k.kind;
@@ -96,7 +109,7 @@ export function SkidmarksLandingTiles({ activeKind, onSelect }: SkidmarksLanding
               aria-disabled={!k.enabled}
               title={k.enabled ? undefined : "Coming soon"}
               className={[
-                "flex flex-col items-center justify-center gap-1.5 rounded-2xl border bg-white/[0.02] px-2 py-4 text-center transition-colors",
+                "flex min-w-0 flex-col items-center justify-center gap-1.5 rounded-2xl border bg-white/[0.02] px-1 py-4 text-center transition-colors",
                 // Real reported gap (2026-09-15): every tile used to show
                 // its own accent-colored ring *all the time*, active or
                 // not — the only difference for "selected" was a barely-
@@ -113,7 +126,7 @@ export function SkidmarksLandingTiles({ activeKind, onSelect }: SkidmarksLanding
               <span className={active ? accent.icon : "text-white/40"}>
                 <TileIcon icon={k.icon} />
               </span>
-              <span className={`text-xs font-medium ${active ? accent.label : "text-white/50"}`}>{k.label}</span>
+              <span className={`text-xs font-medium leading-tight ${active ? accent.label : "text-white/50"}`}>{k.label}</span>
             </button>
           );
         })}
