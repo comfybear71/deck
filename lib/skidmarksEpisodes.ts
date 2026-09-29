@@ -132,6 +132,20 @@ export function buildStarterEpisode(title: string, now: number = Date.now(), id 
   };
 }
 
+/**
+ * A new cast member from the Characters screen's "Add a Skidmarks
+ * character" box. Only called after Stuart ticks made-up adult.
+ */
+export function buildSkidmarksCastMember(
+  name: string,
+  look: string,
+  role: SkidmarksCastRole = "supporting",
+  now: number = Date.now(),
+  id = mintSkidmarksId("cast"),
+): SkidmarksCastMember {
+  return { id, name: name.trim(), role, look: look.trim(), fictionalAdultConfirmed: true, createdAt: now };
+}
+
 export function emptySkidmarksEpisodesState(): SkidmarksEpisodesState {
   return { episodes: [], cast: [] };
 }

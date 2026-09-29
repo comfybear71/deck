@@ -293,8 +293,9 @@ export function CharacterLorasPanel() {
       <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
         <p className="text-sm font-semibold text-white">Your cast</p>
         <p className="mb-3 mt-1 text-xs leading-relaxed text-white/55">
-          Tap a face, then Make pictures. Siray draws about {AUTO_PICTURE_TARGET} pictures of them from it. You check them
-          and tap Train, and it trains and saves the Comfy files by itself. A tick means done.
+          Tap a face and okay one clean picture of them (arms down, empty hands). Then Make pictures: Siray draws{" "}
+          {AUTO_PICTURE_TARGET} from the clean one. Tap any picture to see it big, remove bad ones, then tap Train. A tick
+          means done.
         </p>
         <CharacterRosterGrid snapshot={snapshot} />
       </div>

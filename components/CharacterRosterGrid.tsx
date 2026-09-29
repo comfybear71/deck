@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AUTO_PICTURE_TARGET,
   CHARACTER_LORA_ESTIMATED_COST_USD,
@@ -21,9 +22,10 @@ import {
 import {
   ROSTER_GROUPS,
   buildCharacterRoster,
-  buildFacePrompt,
+  buildCleanReferencePrompt,
   buildTrainingPicturePrompts,
   entryForRosterCharacter,
+  minorBlockReason,
   oneTapCost,
   startingPictures,
   type RosterCharacter,
@@ -32,8 +34,10 @@ import {
   flushSkidmarksSessionNow,
   getCharacterLorasState,
   patchCharacterLoras,
+  patchSkidmarksEpisodes,
   type SkidmarksState,
 } from "@/lib/skidmarks";
+import { buildSkidmarksCastMember } from "@/lib/skidmarksEpisodes";
 
 /**
  * The thumbnail grid at the top of the Characters screen (2026-09-29):
@@ -108,6 +112,9 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [message, setMessage] = useState<Record<string, string>>({});
   const [armedGroup, setArmedGroup] = useState<string | null>(null);
+  const [newCast, setNewCast] = useState({ name: "", look: "", adult: false, open: false });
+  /** Big view: a character's training pictures (flip + remove) or one single picture. */
+  const [viewer, setViewer] = useState<{ entryId: string; index: number } | { url: string } | null>(null);
   const running = useRef(new Set<string>());
   const refCache = useRef(new Map<string, string>());
 
@@ -255,7 +262,7 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
       if (c.blockedReason) continue;
       const entry = entryForRosterCharacter(characters, c.sourceKey);
       if (entry && ((entry.status !== "draft" && entry.status !== "failed") || entry.awaitingReview)) continue;
-      if (!(entry?.referenceUrl ?? c.thumbUrl)) {
+      if (!entry?.cleanReferenceApproved) {
         needFace++;
         continue;
       }
@@ -286,20 +293,108 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
     flushSkidmarksSessionNow();
   };
 
-  const makeFace = async (char: RosterCharacter) => {
+  /**
+   * One clean base picture (arms down, empty hands, plain background)
+   * that every training picture is then made from. Thumbnails often show
+   * props or folded arms, and Siray copies the reference closely, so
+   * making the 15 straight from them gave cigarettes and four arms.
+   */
+  const makeClean = async (char: RosterCharacter) => {
     setBusyKey(char.sourceKey);
     setMessage((m) => ({ ...m, [char.sourceKey]: "" }));
     try {
       const style = styleFor(char, entryForRosterCharacter(characters, char.sourceKey));
       const entry = ensureEntry(char, style);
-      const url = await makeSirayPicture(buildFacePrompt({ ...char, style }), null);
-      patchEntry(entry.id, { referenceUrl: url, trainingImageUrls: [], status: "draft", error: null, trainingStyle: style });
+      const src = char.thumbUrl ?? char.extraPictureUrls[0] ?? null;
+      let refData: string | null = null;
+      if (src) {
+        refData = refCache.current.get(src) ?? (await referenceDataUrlFor(src));
+        refCache.current.set(src, refData);
+      }
+      const url = await makeSirayPicture(buildCleanReferencePrompt({ ...char, style }, Boolean(refData)), refData);
+      const fresh = findEntry(entry.id) ?? entry;
+      patchEntry(entry.id, {
+        cleanCandidateUrl: url,
+        trainingStyle: style,
+        error: null,
+        status: fresh.status === "failed" ? "draft" : fresh.status,
+      });
       flushSkidmarksSessionNow();
     } catch (err) {
-      setMessage((m) => ({ ...m, [char.sourceKey]: err instanceof Error ? err.message : "Siray couldn't make a face." }));
+      setMessage((m) => ({ ...m, [char.sourceKey]: err instanceof Error ? err.message : "Siray couldn't make the picture." }));
     } finally {
       setBusyKey(null);
     }
+  };
+
+  const approveClean = (entry: CharacterLoraEntry) => {
+    if (!entry.cleanCandidateUrl) return;
+    patchEntry(entry.id, { referenceUrl: entry.cleanCandidateUrl, cleanReferenceApproved: true, cleanCandidateUrl: null });
+    flushSkidmarksSessionNow();
+  };
+
+  /** The clean-base step, shown wherever making pictures would otherwise start. */
+  const renderCleanStep = (char: RosterCharacter, entry: CharacterLoraEntry | null) => {
+    const busy = busyKey === char.sourceKey;
+    const candidate = entry?.cleanCandidateUrl ?? null;
+    return (
+      <div className="flex flex-col gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2">
+        {candidate ? (
+          <>
+            <div className="flex items-start gap-2">
+              <button
+                type="button"
+                onClick={() => setViewer({ url: candidate })}
+                className="h-32 w-32 shrink-0 overflow-hidden rounded-md bg-white/5"
+                aria-label="View bigger"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={candidate} alt="" className="h-full w-full object-cover object-top" />
+              </button>
+              <p className="text-xs text-white/60">
+                Is this {char.name}? Check the face, two arms, and nothing in the hands. All the training pictures are made from
+                this one.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => approveClean(entry!)}
+                disabled={busy}
+                className="rounded-md bg-emerald-500 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+              >
+                Use this
+              </button>
+              <button
+                type="button"
+                onClick={() => makeClean(char)}
+                disabled={busy}
+                className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/85 disabled:opacity-40"
+              >
+                {busy ? "Drawing…" : "Try another"} · {formatCostUsd(SIRAY_PICTURE_COST_USD)}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-white/60">
+              {char.thumbUrl || char.extraPictureUrls.length > 0
+                ? `First, Siray draws one clean picture of ${char.name} from this one: arms down, empty hands, plain background. You okay it, then all the training pictures are made from it.`
+                : `${char.name} doesn't have a picture yet. Siray draws one clean picture from their description (arms down, empty hands, plain background). You okay it, then all the training pictures are made from it.`}
+            </p>
+            {!char.thumbUrl && char.look && <p className="line-clamp-2 text-[11px] italic text-white/40">{char.look}</p>}
+            <button
+              type="button"
+              onClick={() => makeClean(char)}
+              disabled={busy}
+              className="self-start rounded-md bg-sky-500 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+            >
+              {busy ? "Drawing…" : "Make clean picture"} · {formatCostUsd(SIRAY_PICTURE_COST_USD)}
+            </button>
+          </>
+        )}
+      </div>
+    );
   };
 
   const selected = selectedKey ? charByKey.get(selectedKey) ?? null : null;
@@ -319,8 +414,10 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
         <div className="flex items-start gap-3">
           <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-white/5">
             {face ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={face} alt="" className="h-full w-full object-cover" />
+              <button type="button" onClick={() => setViewer({ url: face })} className="block h-full w-full" aria-label="View bigger">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={face} alt="" className="h-full w-full object-cover" />
+              </button>
             ) : (
               <div className="flex h-full w-full items-center justify-center text-lg text-white/40">{initials(char.name)}</div>
             )}
@@ -364,7 +461,7 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
                   >
                     {busy ? "Starting…" : `Train on these ${entry.trainingImageUrls.length}`}
                   </button>
-                  {entry.trainingImageUrls.length < AUTO_PICTURE_TARGET && (
+                  {entry.trainingImageUrls.length < AUTO_PICTURE_TARGET && entry.cleanReferenceApproved && (
                     <button
                       type="button"
                       onClick={() => startOneTap(char)}
@@ -379,6 +476,12 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
                 {entry.trainingImageUrls.length < CHARACTER_LORA_MIN_IMAGES && (
                   <p className="text-[11px] text-amber-200/80">Needs at least {CHARACTER_LORA_MIN_IMAGES} pictures to train.</p>
                 )}
+                {entry.trainingImageUrls.length < AUTO_PICTURE_TARGET && !entry.cleanReferenceApproved && (
+                  <>
+                    <p className="text-[11px] text-white/45">To make more, start from a clean picture:</p>
+                    {renderCleanStep(char, entry)}
+                  </>
+                )}
                 {message[char.sourceKey] && <p className="text-xs text-red-300">{message[char.sourceKey]}</p>}
               </div>
             ) : status === "making" ? (
@@ -392,21 +495,15 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
             ) : (
               <div className="mt-1 flex flex-col gap-2">
                 {status === "failed" && entry?.error && <p className="text-xs text-red-300">{entry.error}</p>}
-                {!face ? (
-                  <>
-                    <p className="text-xs text-white/60">
-                      {char.name} doesn&apos;t have a picture yet. Siray can draw one from their description, then you decide
-                      whether to train on it.
-                    </p>
-                    {char.look && <p className="line-clamp-2 text-[11px] italic text-white/40">{char.look}</p>}
-                  </>
-                ) : (
+                {entry?.cleanReferenceApproved ? (
                   <p className="text-xs text-white/60">
-                    Siray makes {cost.sirayPictures} pictures of {char.name} based on this one, all with empty hands (
+                    Siray makes {cost.sirayPictures} pictures of {char.name} from their clean picture, all with empty hands (
                     {formatCostUsd(cost.sirayPictures * SIRAY_PICTURE_COST_USD)}). You check them, then training is about{" "}
                     {formatCostUsd(CHARACTER_LORA_ESTIMATED_COST_USD)}. Tapping confirms {char.name} is made up, clearly an
                     adult, and not a real person.
                   </p>
+                ) : (
+                  renderCleanStep(char, entry)
                 )}
                 <label className="flex items-center gap-1.5 text-[11px] text-white/50">
                   Style
@@ -423,7 +520,7 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
                   </select>
                 </label>
                 <div className="flex flex-wrap gap-2">
-                  {canTrain && (
+                  {canTrain && entry?.cleanReferenceApproved && (
                     <button
                       type="button"
                       onClick={() => startOneTap(char)}
@@ -433,14 +530,17 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
                       {status === "failed" ? "Try again" : "Make pictures"} · {formatCostUsd(cost.sirayPictures * SIRAY_PICTURE_COST_USD)}
                     </button>
                   )}
-                  {!char.thumbUrl && (
+                  {entry?.cleanReferenceApproved && (
                     <button
                       type="button"
-                      onClick={() => makeFace(char)}
+                      onClick={() => {
+                        patchEntry(entry.id, { cleanReferenceApproved: false });
+                        void makeClean(char);
+                      }}
                       disabled={busy}
                       className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/85 disabled:opacity-40"
                     >
-                      {busy ? "Drawing…" : face ? "Try another face" : "Make a face"} · {formatCostUsd(SIRAY_PICTURE_COST_USD)}
+                      New clean picture · {formatCostUsd(SIRAY_PICTURE_COST_USD)}
                     </button>
                   )}
                 </div>
@@ -453,8 +553,15 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
           <div className="mt-3 grid grid-cols-4 gap-1.5 sm:grid-cols-6">
             {entry.trainingImageUrls.map((u) => (
               <div key={u} className="relative aspect-square overflow-hidden rounded-md bg-white/5">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={u} alt="" className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  onClick={() => setViewer({ entryId: entry.id, index: entry.trainingImageUrls.indexOf(u) })}
+                  className="block h-full w-full"
+                  aria-label="View bigger"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={u} alt="" className="h-full w-full object-cover" />
+                </button>
                 {entry.awaitingReview && status === "draft" && (
                   <button
                     type="button"
@@ -473,8 +580,150 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
     );
   };
 
+  const newCastBlocked = minorBlockReason(`${newCast.name} ${newCast.look}`);
+  const canAddCast = newCast.name.trim().length > 0 && newCast.look.trim().length > 0 && newCast.adult && !newCastBlocked;
+
+  const addSkidmarksCast = () => {
+    if (!canAddCast) return;
+    const member = buildSkidmarksCastMember(newCast.name, newCast.look);
+    patchSkidmarksEpisodes((st) => ({ ...st, cast: [...st.cast, member] }));
+    flushSkidmarksSessionNow();
+    setNewCast({ name: "", look: "", adult: false, open: false });
+    setSelectedKey(`sk:${member.id}`);
+  };
+
+  /** Add a Skidmarks character: saved to the Skidmarks cast list, so the episodes can use them too. */
+  const renderAddSkidmarksCast = () =>
+    newCast.open ? (
+      <div className="mb-2 flex flex-col gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2">
+        <input
+          value={newCast.name}
+          onChange={(e) => setNewCast((c) => ({ ...c, name: e.target.value }))}
+          placeholder="Name"
+          maxLength={60}
+          className="rounded-md border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white placeholder:text-white/30"
+        />
+        <textarea
+          value={newCast.look}
+          onChange={(e) => setNewCast((c) => ({ ...c, look: e.target.value }))}
+          placeholder="Their look, e.g. late-40s bloke, sunburnt, wild grey mullet, faded hi-vis shirt, stubby shorts"
+          rows={2}
+          maxLength={600}
+          className="rounded-md border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white placeholder:text-white/30"
+        />
+        <label className="flex items-start gap-2 text-[11px] text-white/60">
+          <input
+            type="checkbox"
+            checked={newCast.adult}
+            onChange={(e) => setNewCast((c) => ({ ...c, adult: e.target.checked }))}
+            className="mt-0.5"
+          />
+          Made up, clearly an adult (over 25), and not a real person.
+        </label>
+        {newCastBlocked && <p className="text-[11px] text-red-300">{newCastBlocked}</p>}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={addSkidmarksCast}
+            disabled={!canAddCast}
+            className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+          >
+            Add
+          </button>
+          <button
+            type="button"
+            onClick={() => setNewCast({ name: "", look: "", adult: false, open: false })}
+            className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/70"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    ) : (
+      <button
+        type="button"
+        onClick={() => setNewCast((c) => ({ ...c, open: true }))}
+        className="mb-2 rounded-md border border-white/20 px-2.5 py-1 text-[11px] text-white/80"
+      >
+        + Add a Skidmarks character
+      </button>
+    );
+
+  // Big view: resolve against the live entry so a removal shows at once.
+  const viewerEntry = viewer && "entryId" in viewer ? findEntry(viewer.entryId) : null;
+  const viewerUrls = viewer ? ("url" in viewer ? [viewer.url] : viewerEntry?.trainingImageUrls ?? []) : [];
+  const viewerIndex = viewer && "index" in viewer ? Math.min(viewer.index, viewerUrls.length - 1) : 0;
+  const viewerUrl = viewerUrls[viewerIndex] ?? null;
+  const viewerCanRemove = Boolean(viewerEntry?.awaitingReview && viewerEntry.status === "draft");
+  const flip = (step: number) =>
+    setViewer((v) => (v && "entryId" in v && viewerUrls.length > 0 ? { ...v, index: (viewerIndex + step + viewerUrls.length) % viewerUrls.length } : v));
+
+  useEffect(() => {
+    if (!viewer) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setViewer(null);
+      else if (e.key === "ArrowRight") flip(1);
+      else if (e.key === "ArrowLeft") flip(-1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  useEffect(() => {
+    if (viewer && !viewerUrl) setViewer(null);
+  }, [viewer, viewerUrl]);
+
+  const renderViewer = () =>
+    viewer && viewerUrl && typeof document !== "undefined" ? createPortal(
+      <div
+        className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-3 bg-black/90 p-4"
+        onClick={() => setViewer(null)}
+        role="dialog"
+        aria-modal="true"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={viewerUrl}
+          alt=""
+          className="max-h-[80vh] max-w-full rounded-lg object-contain"
+          onClick={(e) => e.stopPropagation()}
+        />
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          {viewerUrls.length > 1 && (
+            <button type="button" onClick={() => flip(-1)} className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white">
+              ‹
+            </button>
+          )}
+          {viewerUrls.length > 1 && (
+            <span className="text-xs text-white/60">
+              {viewerIndex + 1} of {viewerUrls.length}
+            </span>
+          )}
+          {viewerUrls.length > 1 && (
+            <button type="button" onClick={() => flip(1)} className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white">
+              ›
+            </button>
+          )}
+          {viewerCanRemove && viewerEntry && (
+            <button
+              type="button"
+              onClick={() => removeReviewPicture(findEntry(viewerEntry.id) ?? viewerEntry, viewerUrl)}
+              className="rounded-md border border-red-400/40 px-3 py-1.5 text-xs text-red-300"
+            >
+              ✕ Remove
+            </button>
+          )}
+          <button type="button" onClick={() => setViewer(null)} className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/80">
+            Close
+          </button>
+        </div>
+      </div>,
+      document.body,
+    ) : null;
+
   return (
     <div className="flex flex-col gap-4">
+      {renderViewer()}
       {ROSTER_GROUPS.map((g) => {
         const list = roster[g.id];
         const done = list.filter((c) => entryForRosterCharacter(characters, c.sourceKey)?.status === "ready").length;
@@ -514,13 +763,12 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
                 Makes pictures for {plan.ready.map((c) => c.name).join(", ")}, two at a time. Each one then waits for you to
                 check the pictures and tap Train (that total includes training). Tapping again confirms they&apos;re all made up,
                 clearly adults, and not real people.
-                {plan.needFace > 0 && ` ${plan.needFace} without a picture ${plan.needFace === 1 ? "is" : "are"} skipped until you make and okay a face.`}
+                {plan.needFace > 0 && ` ${plan.needFace} ${plan.needFace === 1 ? "is" : "are"} skipped until you make and okay their clean picture.`}
               </p>
             )}
+            {g.id === "skidmarks" && renderAddSkidmarksCast()}
             {list.length === 0 ? (
-              <p className="text-[11px] text-white/35">
-                {g.id === "skidmarks" ? "No cast yet. Add cast on the Skidmarks screen." : "No characters yet."}
-              </p>
+              <p className="text-[11px] text-white/35">{g.id === "skidmarks" ? "No Skidmarks characters yet." : "No characters yet."}</p>
             ) : (
               <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
                 {list.map((c) => {

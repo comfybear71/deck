@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildCharacterLoraEntry } from "./characterLoras";
 import {
   buildCharacterRoster,
+  buildCleanReferencePrompt,
   buildFacePrompt,
   buildTrainingPicturePrompts,
   EMPTY_HANDS_LINE,
@@ -13,6 +14,7 @@ import {
 } from "./characterRoster";
 import { buildSdxlTrainingInput } from "./replicateTrainer";
 import { getSkidmarksSnapshot, type SkidmarksState } from "./skidmarks";
+import { buildSkidmarksCastMember } from "./skidmarksEpisodes";
 
 function stateWith(extra: Partial<SkidmarksState> = {}): SkidmarksState {
   return { ...getSkidmarksSnapshot(), ...extra };
@@ -178,6 +180,45 @@ describe("no extra arms", () => {
     expect(stripHeldProps("big blonde hair, crossed arms, denim shorts")).toBe("big blonde hair, denim shorts");
     expect(EMPTY_HANDS_LINE).toMatch(/exactly two arms and two hands/);
     expect(EMPTY_HANDS_LINE).not.toMatch(/relaxed/);
+  });
+});
+
+describe("clean reference picture", () => {
+  it("asks for arms down, empty hands and exactly two arms, from the reference", () => {
+    const p = buildCleanReferencePrompt(
+      { name: "Shazza", look: "big blonde hair, leopard-print top, cigarette, arms folded", style: "cartoon" },
+      true,
+    );
+    expect(p).toMatch(/arms hanging relaxed straight down at the sides/);
+    expect(p).toContain(EMPTY_HANDS_LINE);
+    expect(p).toMatch(/same cartoon character as in the reference image/);
+    expect(p).not.toMatch(/top, cigarette|arms folded/);
+    expect(p.length).toBeLessThanOrEqual(1900);
+  });
+
+  it("draws from the look when there is no picture, and keeps Jack's lips", () => {
+    expect(buildCleanReferencePrompt({ name: "Nova", look: "tall woman, silver bob", style: "photo" }, false)).toMatch(
+      /^Nova: tall woman, silver bob\./,
+    );
+    const jack = buildCharacterRoster(stateWith())["music-video"].find((c) => c.name === "Jack Ash")!;
+    expect(buildCleanReferencePrompt(jack, true)).toContain("neon blue and are clearly visible");
+  });
+});
+
+describe("clean reference fields", () => {
+  it("default off on new entries and survive a save", () => {
+    const e = buildCharacterLoraEntry("Shazza", [], new Date());
+    expect(e.cleanReferenceApproved).toBe(false);
+    expect(e.cleanCandidateUrl).toBeNull();
+  });
+});
+
+describe("Add a Skidmarks character", () => {
+  it("shows a new cast member in the Skidmarks row as a photo character with no picture yet", () => {
+    const member = buildSkidmarksCastMember(" Darryl ", "late-40s bloke, grey mullet, faded hi-vis", "supporting", 1, "cast_1");
+    const r = buildCharacterRoster(stateWith({ skidmarksEpisodes: { episodes: [], cast: [member] } }));
+    expect(r.skidmarks).toHaveLength(1);
+    expect(r.skidmarks[0]).toMatchObject({ sourceKey: "sk:cast_1", name: "Darryl", style: "photo", thumbUrl: null, blockedReason: null });
   });
 });
 

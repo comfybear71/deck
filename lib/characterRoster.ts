@@ -297,6 +297,36 @@ export function buildTrainingPicturePrompts(
   });
 }
 
+/**
+ * Siray prompt for the one clean base picture every training picture is
+ * made from: arms down, empty hands, plain background. With a reference
+ * it copies the character from their existing picture (which may show
+ * props or folded arms); without one it draws them from the look.
+ */
+export function buildCleanReferencePrompt(
+  char: Pick<RosterCharacter, "name" | "look" | "style">,
+  hasReference: boolean,
+): string {
+  const who = char.style === "cartoon" ? "cartoon character" : char.style === "faceless" ? "man" : "person";
+  const look = stripHeldProps(char.look);
+  const pose =
+    char.style === "faceless"
+      ? "Full body standing, three-quarter view, arms hanging relaxed at the sides, hands open and empty, face in deep shadow under the hat brim, plain dark background, one soft key light."
+      : "Full body standing, facing the viewer at a slight angle, arms hanging relaxed straight down at the sides, hands open and empty, neutral expression, plain light background, even soft light.";
+  const parts = [
+    hasReference
+      ? `The same ${who} as in the reference image (${char.name}): exactly the same face, hair, body shape and outfit, but a new pose.`
+      : `${char.name}: ${clip(look || "an original made-up character", MAX_LOOK_CHARS)}.`,
+    pose,
+    hasReference && look ? clip(look, MAX_LOOK_CHARS) : "",
+    signatureLine(char.look),
+    styleLine(char.style),
+    EMPTY_HANDS_LINE,
+    "A made-up adult, clearly over 25, not resembling any real person, fully clothed, one person only, no text, no watermark.",
+  ];
+  return clip(parts.filter(Boolean).join(" "), MAX_PROMPT_CHARS);
+}
+
 /** Text-only Siray prompt for a first face when a character has no picture yet. */
 export function buildFacePrompt(char: Pick<RosterCharacter, "name" | "look" | "style">): string {
   const framing =

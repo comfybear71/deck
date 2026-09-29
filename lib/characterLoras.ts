@@ -84,6 +84,14 @@ export interface CharacterLoraEntry {
   autoPictureTarget: number | null;
   /** Siray has finished the pictures; waiting for Stuart to check them and tap Train. */
   awaitingReview: boolean;
+  /**
+   * A clean base picture Siray drew (arms down, empty hands, plain
+   * background), waiting for Stuart to okay it. Once okayed it becomes
+   * `referenceUrl` and `cleanReferenceApproved` goes true.
+   */
+  cleanCandidateUrl: string | null;
+  /** `referenceUrl` is an okayed clean base, so the training pictures can be made from it. */
+  cleanReferenceApproved: boolean;
 }
 
 export interface CharacterLorasState {
@@ -114,6 +122,8 @@ export const SKYE_SEED: CharacterLoraEntry = {
   referenceUrl: null,
   autoPictureTarget: null,
   awaitingReview: false,
+  cleanCandidateUrl: null,
+  cleanReferenceApproved: false,
 };
 
 export function emptyCharacterLorasState(): CharacterLorasState {
@@ -240,6 +250,8 @@ export function buildCharacterLoraEntry(
     referenceUrl: null,
     autoPictureTarget: null,
     awaitingReview: false,
+    cleanCandidateUrl: null,
+    cleanReferenceApproved: false,
     ...extra,
   };
 }
@@ -293,6 +305,9 @@ function normalizeEntry(raw: unknown): CharacterLoraEntry | null {
         ? Math.min(CHARACTER_LORA_MAX_IMAGES, Math.floor(r.autoPictureTarget))
         : null,
     awaitingReview: r.awaitingReview === true,
+    cleanCandidateUrl:
+      typeof r.cleanCandidateUrl === "string" && /^(https:|data:image\/|\/)/.test(r.cleanCandidateUrl) ? r.cleanCandidateUrl : null,
+    cleanReferenceApproved: r.cleanReferenceApproved === true,
   };
 }
 
