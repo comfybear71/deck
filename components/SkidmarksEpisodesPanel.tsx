@@ -598,7 +598,7 @@ function EpisodeEditor({ episode, onBack }: { episode: SkidmarksEpisode; onBack:
         <p className={`px-4 py-1.5 text-[11px] ${inTarget ? "text-emerald-300" : "text-amber-200"}`}>
           Total {formatDuration(total)} (aim for 8:00 to 10:00). Nothing is spent on this screen.
         </p>
-        <div className="flex gap-1.5 overflow-x-auto px-3 pb-[max(env(safe-area-inset-bottom),0.6rem)] pt-0.5 touch-pan-x">
+        <div className="flex gap-1.5 overflow-x-auto px-3 pb-[max(env(safe-area-inset-bottom),0.6rem)] pt-0.5 touch-pan-x touch-pan-y">
           {tags.map((t) => (
             <button
               key={t.label}

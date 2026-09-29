@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { coverGradientClass, flushSkidmarksSessionNow, readImageFileAsDataUrl, type SkidmarksBand } from "@/lib/skidmarks";
 import { bandCoverTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
+import { EditGlyph, TrashGlyph } from "@/components/TileCornerGlyphs";
 
 interface SkidmarksBandPickerProps {
   bands: SkidmarksBand[];
@@ -19,46 +20,6 @@ interface SkidmarksBandPickerProps {
 /** Native file picker's accept list — jpg/png/webp only, matches what a
  * phone's own photo library exports. */
 const COVER_IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp";
-
-function EditGlyph({ icon }: { icon: "pencil" | "camera" }) {
-  if (icon === "camera") {
-    return (
-      <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3 w-3">
-        <path
-          d="M4 7.5h2l1-1.5h6l1 1.5h2v8H4v-8Z"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinejoin="round"
-        />
-        <circle cx="10" cy="11.5" r="2" stroke="currentColor" strokeWidth="1.5" />
-      </svg>
-    );
-  }
-  return (
-    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3 w-3">
-      <path
-        d="M13.5 3.5 16 6l-8.5 8.5-3 1 1-3L13.5 3.5Z"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function TrashGlyph() {
-  return (
-    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3 w-3">
-      <path
-        d="M5 5.5h10M8.25 5.5v-1a1 1 0 0 1 1-1h1.5a1 1 0 0 1 1 1v1M6.25 5.5l.5 9a1 1 0 0 0 1 .95h4.5a1 1 0 0 0 1-.95l.5-9"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 function NewBandTile({ onClick }: { onClick: () => void }) {
   return (

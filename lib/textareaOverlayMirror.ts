@@ -54,3 +54,59 @@ export function isIosWebKit(userAgent: string, platform: string, maxTouchPoints:
   if (/iPad|iPhone|iPod/.test(userAgent)) return true;
   return platform === "MacIntel" && maxTouchPoints > 1;
 }
+
+/**
+ * Every computed style that changes where a glyph lands, copied from
+ * the textarea onto the overlay (2026-09-30). The first fix copied only
+ * font family/size, line height and letter/word spacing, which left the
+ * rest to whatever each element happened to get: weight, kerning,
+ * ligatures, tab width and the wrapping rules can all differ between a
+ * form control and a div, and any one of them walks the words off the
+ * caret. Copying them all makes the two identical by construction.
+ */
+export const MIRRORED_TEXT_STYLE_PROPERTIES = [
+  "font-family",
+  "font-size",
+  "font-weight",
+  "font-style",
+  "font-stretch",
+  "font-variant",
+  "font-variant-ligatures",
+  "font-kerning",
+  "font-feature-settings",
+  "font-variation-settings",
+  "font-optical-sizing",
+  "line-height",
+  "letter-spacing",
+  "word-spacing",
+  "text-indent",
+  "text-transform",
+  "text-rendering",
+  "tab-size",
+  "white-space",
+  "word-break",
+  "overflow-wrap",
+  "hyphens",
+  "direction",
+  "unicode-bidi",
+  "box-sizing",
+] as const;
+
+/**
+ * Height a self-growing script box needs: its text's own height
+ * (`scrollHeight` with the box collapsed, which includes padding), never
+ * less than `minRows` lines, plus the border. Rounded up so the last
+ * line is never clipped by a fraction of a pixel.
+ */
+export function autoGrowMinHeightPx(m: {
+  scrollHeight: number;
+  lineHeight: number;
+  paddingTop: number;
+  paddingBottom: number;
+  borderTop: number;
+  borderBottom: number;
+  minRows: number;
+}): number {
+  const minimum = m.minRows * m.lineHeight + m.paddingTop + m.paddingBottom;
+  return Math.ceil(Math.max(m.scrollHeight, minimum) + m.borderTop + m.borderBottom);
+}

@@ -1081,13 +1081,15 @@ function SkidmarksPlateBox({
               : "Empty plate \u2014 tap to upload or generate a still"
           }
           className={[
-            // `touch-pan-x` (not `touch-none`): keeps vertical/pinch
-            // gestures suppressed for a reliable press-and-hold, but
-            // still lets a horizontal drag scroll the strip \u2014
+            // `touch-pan-x touch-pan-y` (not `touch-none`): a sideways
+            // drag scrolls the strip and an up/down swipe scrolls the
+            // page (2026-09-30: `touch-pan-x` alone stopped a swipe that
+            // started on a tile from scrolling the drawer). Pinch stays
+            // blocked; a press-and-hold doesn't move, so it still works \u2014
             // `touch-none` was blocking that scroll on iOS Safari
             // whenever a drag started on a tile (the whole strip's
             // touchable surface).
-            "relative flex h-32 w-40 touch-pan-x select-none items-center justify-center overflow-hidden rounded-2xl",
+            "relative flex h-32 w-40 touch-pan-x touch-pan-y select-none items-center justify-center overflow-hidden rounded-2xl",
             hasStill
               ? "border border-white/10 bg-white/[0.02]"
               : "border border-dashed border-white/15 bg-white/[0.02] text-white/20",
@@ -1337,10 +1339,11 @@ function SkidmarksPlateBox({
  * **iOS Safari horizontal-scroll fix**: each tile had `touch-action:
  * none` (Tailwind's `touch-none`), which blocks *all* native panning
  * starting on that tile — including the horizontal drag needed to
- * reach the 3rd plate/"+". Swapped to `touch-pan-x` (still blocks
- * vertical/pinch so the press-and-hold stays reliable) plus
+ * reach the 3rd plate/"+". Swapped to `touch-pan-x` plus
  * `overscroll-x-contain` + `-webkit-overflow-scrolling: touch` on the
- * strip container.
+ * strip container. Since 2026-09-30 it is `touch-pan-x touch-pan-y`,
+ * because `touch-pan-x` alone also stopped an up/down swipe that
+ * started on a tile from scrolling the page on iPhone.
  *
  * **One shared shot prompt for the whole clip, not one per plate** —
  * Stuart's explicit preference: editing the prompt before tapping

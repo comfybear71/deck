@@ -1,5 +1,6 @@
 "use client";
 
+import { useScriptFormatFeedback } from "@/hooks/useScriptFormatFeedback";
 import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useMemo, useRef, useState, type RefObject } from "react";
 import {
@@ -167,17 +168,20 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
 function ScriptSequenceHighlightOverlay({
   text,
   overlayRef,
+  autoGrowMinRows,
 }: {
   text: string;
   overlayRef: RefObject<HTMLDivElement | null>;
+  /** Inline box: grow with the text, at least this many lines. */
+  autoGrowMinRows?: number;
 }) {
   const segments = buildScriptSequenceHighlightSegments(text);
-  useTextareaOverlayMirror(overlayRef, text);
+  useTextareaOverlayMirror(overlayRef, text, { autoGrowMinRows });
   return (
     <div
       ref={overlayRef}
       aria-hidden="true"
-      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2.5 text-sm leading-relaxed"
+      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2.5 text-base leading-6"
     >
       {segments.map((segment, index) => (
         <span key={index} className={SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[segment.kind]}>
@@ -208,6 +212,7 @@ function ScriptSequenceFullScreenEditor({
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
   const dirty = draft !== initialText;
+  const formatFeedback = useScriptFormatFeedback();
 
   const handleCancel = () => {
     if (dirty && !confirmingDiscard) {
@@ -265,18 +270,23 @@ function ScriptSequenceFullScreenEditor({
           autoFocus
           spellCheck={false}
           aria-label="Script sequence full screen editor"
-          className="relative z-10 h-full w-full resize-none bg-transparent px-3 py-2.5 text-sm leading-relaxed text-transparent caret-rose-300 focus:outline-none"
+          className="relative z-10 h-full w-full resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-transparent caret-rose-300 focus:outline-none"
         />
       </div>
 
       <div className="flex items-center gap-2 border-t border-white/10 px-3 py-2">
         <button
           type="button"
-          onClick={() => setDraft((prev) => formatScriptSequencePartTitles(prev))}
+          onClick={() => {
+            const formatted = formatScriptSequencePartTitles(draft);
+            if (formatted !== draft) setDraft(formatted);
+            formatFeedback.show(formatted !== draft);
+          }}
           disabled={!draft.trim()}
+          aria-live="polite"
           className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
         >
-          {"\u21e5"} Format
+          {formatFeedback.label}
         </button>
         <p className="min-w-0 flex-1 text-[10px] leading-snug text-white/40">
           Nothing remints until you tap Apply. Format only fixes Vocal/Instrumental headers and Prompt labels —
@@ -421,9 +431,12 @@ export function SkidmarksScriptSequencePanel({
     if (captureUndo) flushSkidmarksSessionNow();
   };
 
+  const scriptFormatFeedback = useScriptFormatFeedback();
+
   const handleFormatScript = () => {
     if (running) return;
     const formatted = formatScriptSequencePartTitles(script);
+    scriptFormatFeedback.show(formatted !== script);
     applyScriptText(formatted, true);
     // When an MP3 is already attached, also remint-safe-apply the
     // formatted draft onto the clip timeline (times + Positive/Negative).
@@ -795,9 +808,10 @@ export function SkidmarksScriptSequencePanel({
           onClick={handleFormatScript}
           disabled={!!running || !script.trim()}
           aria-label="Format part header type words"
+          aria-live="polite"
           className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
         >
-          {"\u21e5"} Format
+          {scriptFormatFeedback.label}
         </button>
         <button
           type="button"
@@ -820,7 +834,7 @@ export function SkidmarksScriptSequencePanel({
       </div>
 
       <div className="relative rounded-xl border border-white/10 bg-white/[0.03] focus-within:border-rose-400/40">
-        <ScriptSequenceHighlightOverlay text={script} overlayRef={scriptHighlightRef} />
+        <ScriptSequenceHighlightOverlay text={script} overlayRef={scriptHighlightRef} autoGrowMinRows={12} />
         <textarea
           value={script}
           onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl, chainLastFrameToNext })}
@@ -836,9 +850,9 @@ export function SkidmarksScriptSequencePanel({
             'Paste your "Part 1 (0:00 - 0:15) — Vocal[Duration: ...]. ..." script here. ' +
             "Types: Vocal (singing / LTX) or Instrumental (not singing / Grok). Format maps Intro/Outro/Bridge/Lead/Break → Instrumental."
           }
-          rows={4}
+          rows={12}
           spellCheck={false}
-          className="relative z-10 min-h-[7.5rem] w-full resize-y bg-transparent px-3 py-2.5 text-sm leading-relaxed text-transparent caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60"
+          className="relative z-10 w-full resize-y bg-transparent px-3 py-2.5 text-base leading-6 text-transparent caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60"
         />
       </div>
 

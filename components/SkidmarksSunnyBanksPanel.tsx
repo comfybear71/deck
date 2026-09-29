@@ -1,5 +1,6 @@
 "use client";
 
+import { useScriptFormatFeedback } from "@/hooks/useScriptFormatFeedback";
 import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
@@ -29,26 +30,19 @@ import {
   SUNNY_BANKS_GOD_SCRIPT_RULES,
 } from "@/lib/sunnyBanksGodScriptGuide";
 import {
-  deleteSunnyBanksWorkspace,
   ensureSunnyBanksEpisodeMediaSlug,
   getSkidmarksSnapshot,
   getSunnyBanksLiveOrDefault,
-  openSunnyBanksWorkspace,
   patchSunnyBanksLive,
-  saveSunnyBanksProjectWorkspace,
-  startNewSunnyBanksEpisode,
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
 import {
   cloneActRecord,
-  describeSunnyBanksWorkspace,
-  isSunnyBanksLiveSaved,
   fingerprintWorkspace,
   mintWorkspaceId,
   SUNNY_BANKS_INITIAL_ACTS,
   type SunnyBanksActKeyed,
   type SunnyBanksRowRuntime,
-  type SunnyBanksWorkspaceSnapshot,
 } from "@/lib/sunnyBanksWorkspace";
 
 /**
@@ -92,7 +86,7 @@ import {
  * queue rows are one spreadsheet-style line (not stacked cards) so a
  * phone isn't a tall scroll of identical containers. Act I/II/III
  * pills sit at the top of the Script card in one horizontal
- * `touch-pan-x` strip. The strip opens on Act I/II/III (EP02 seed)
+ * `touch-pan-x touch-pan-y` strip. The strip opens on Act I/II/III (EP02 seed)
  * and **+ Add Act** appends the next roman bucket (IV, V, …) with an
  * empty script buffer — still not a Neon act table. Save and the episode zip walk `actIds` in order so
  * a typed Act IV is not dropped. The textarea and
@@ -149,7 +143,7 @@ import {
  * finished MP4s sit in one `overflow-x-auto` row at the base of the
  * working panel (after the script, before the Episode workspace,
  * same reading order as music-video rendered clips then archive),
- * same card size and `touch-pan-x` as `SkidmarksRenderedClipsShelf`
+ * same card size and `touch-pan-x touch-pan-y` as `SkidmarksRenderedClipsShelf`
  * (`w-44` / `h-28`, inline controls), sectioned Act I / II / III.
  * Workspace save writes the whole live episode (every act, not the
  * open Act pill) onto the existing Neon session row. Same episode
@@ -163,6 +157,20 @@ import {
  * has a live Sunny Banks copy. No re-render, no Crash Lab chrome, no
  * new Neon table. Playback hits skidmarks.aiglitch.app while that host
  * stays ungated.
+ *
+ * **EPISODES cards replace the bottom shelf (2026-09-30, Stuart)** —
+ * the "+ New Episode" button, Episode name field, Save Episode,
+ * Download Episode (.zip) and the "Episode workspace" list that used to
+ * sit under the Clips strip are gone. Each episode is a card in the
+ * EPISODES row at the top (`SunnyBanksEpisodeRow`), with a pencil
+ * (open in the editor), a download icon (the same zip,
+ * `downloadSunnyBanksEpisodeZip`) and a bin (delete, tap twice). The
+ * dotted + card starts a new episode. There is no Save button any more:
+ * every change is saved onto the open episode's card as it happens
+ * (`patchSunnyBanksLive` in `lib/skidmarks.ts`). The episode's name
+ * comes from a `# EPISODE:` header in the script, else its first line.
+ * Some of the notes above still mention the old shelf; they are kept
+ * as history.
  */
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
@@ -277,8 +285,6 @@ interface ScriptUndoSnapshot {
   runtimeMap: ActKeyed<Record<number, RowRuntime>>;
   workspaceTitle: string;
 }
-
-type EpisodeWorkspace = SunnyBanksWorkspaceSnapshot;
 
 export interface SunnyBanksRenderedClip {
   act: SunnyBanksActId;
@@ -462,7 +468,11 @@ function extractGodScriptTags(raw: string): {
 export type SunnyBanksHighlightTagKind = "location" | "character" | "action";
 export type SunnyBanksHighlightSegment =
   | { kind: "plain"; text: string }
-  | { kind: SunnyBanksHighlightTagKind; text: string };
+  | { kind: SunnyBanksHighlightTagKind; text: string }
+  /** A `Name:` / `Name says:` speaker prefix at the start of a line —
+   * overlay colour only (`buildSunnyBanksOverlaySegments`), never a tag
+   * for `formatSunnyBanksGodScript`. */
+  | { kind: "speaker"; text: string };
 
 /** Same three literal shapes `extractGodScriptTags` recognizes, plus a
  * literal `[silence]` grouped into the same "action" color per Stuart's
@@ -501,6 +511,48 @@ export function buildSunnyBanksHighlightSegments(raw: string): SunnyBanksHighlig
 }
 
 /**
+ * What the script box's overlay actually draws (2026-09-30): the tag
+ * segments above, plus each line's speaker prefix (`Shazza:`, `Ranger
+ * Bazza says:`) in the same colour as `[Character ]`, so a plain
+ * dialogue script (no tags at all, like EP02 Act I) is coloured too
+ * instead of reading as one block of white. A prefix counts at the
+ * start of a line or straight after a tag on that line, the same places
+ * `parseSunnyBanksScriptBlock` reads a speaker. Display-only; the
+ * segments still join back into `raw` exactly.
+ */
+export function buildSunnyBanksOverlaySegments(raw: string): SunnyBanksHighlightSegment[] {
+  const out: SunnyBanksHighlightSegment[] = [];
+  const speakerRe =
+    SPEAKER_NAMES.length > 0
+      ? new RegExp(`^([ \\t]*)((?:${SPEAKER_NAMES.map(escapeRegExp).join("|")})\\s*(?:says\\s*)?:)`, "i")
+      : null;
+  let atLineStart = true;
+  for (const segment of buildSunnyBanksHighlightSegments(raw)) {
+    if (segment.kind !== "plain" || !speakerRe) {
+      out.push(segment);
+      if (segment.kind !== "plain") atLineStart = true;
+      continue;
+    }
+    const lines = segment.text.split("\n");
+    lines.forEach((line, i) => {
+      const text = i < lines.length - 1 ? `${line}\n` : line;
+      if (!text) return;
+      const match = atLineStart || i > 0 ? line.match(speakerRe) : null;
+      if (match) {
+        if (match[1]) out.push({ kind: "plain", text: match[1] });
+        out.push({ kind: "speaker", text: match[2] });
+        const rest = text.slice(match[1].length + match[2].length);
+        if (rest) out.push({ kind: "plain", text: rest });
+      } else {
+        out.push({ kind: "plain", text });
+      }
+    });
+    atLineStart = segment.text.endsWith("\n");
+  }
+  return out;
+}
+
+/**
  * Text color for every segment the overlay draws — tags *and* plain
  * text.
  *
@@ -518,6 +570,7 @@ export const SUNNY_BANKS_HIGHLIGHT_CLASSES: Record<SunnyBanksHighlightSegment["k
   location: "text-yellow-300",
   character: "text-cyan-300",
   action: "text-green-300",
+  speaker: "text-cyan-300",
 };
 
 /** Placeholder marker used only inside `formatSunnyBanksGodScript`'s own
@@ -547,8 +600,8 @@ const FORMAT_TAG_PLACEHOLDER_RE = /\u0000TAG(\d+)\u0000/g;
  * *inside* a tag (e.g. the "Dazza:" inside `[Character Dazza: ...]`)
  * and split a tag in half. Then: force a newline before every tag and
  * every recognized `Name:`/`Name says:` prefix that isn't already at
- * the start of a line, drop blank lines (never meaningful to the
- * parser), and restore the real tag text.
+ * the start of a line, drop blank lines, put exactly one blank line
+ * after each speech line, and restore the real tag text.
  *
  * Known, accepted limitation: a cast member's name followed by a colon
  * *inside* real dialogue (e.g. `Shazza: ask Dazza: he'd know`) reads as
@@ -594,7 +647,31 @@ export function formatSunnyBanksGodScript(text: string): string {
     .map((line) => line.replace(/[ \t]+$/g, ""))
     .filter((line) => line.trim().length > 0);
 
-  return lines.join("\n").replace(FORMAT_TAG_PLACEHOLDER_RE, (_, index: string) => tagTexts[Number(index)]);
+  // One blank line after every speech line (2026-09-30, Stuart's ask),
+  // so each spoken beat stands on its own. Tag-only lines stay glued to
+  // the line they belong to (a tag is used up by the next row), and so
+  // do `# EPISODE:` / `=== … ===` headers. The parser skips blank lines,
+  // so rows, row numbers and every clip's `lineKey` are unchanged.
+  const out: string[] = [];
+  lines.forEach((line, i) => {
+    out.push(line);
+    const isLast = i === lines.length - 1;
+    if (!isLast && isSunnyBanksSpeechFormatLine(line)) out.push("");
+  });
+
+  return out.join("\n").replace(FORMAT_TAG_PLACEHOLDER_RE, (_, index: string) => tagTexts[Number(index)]);
+}
+
+/** A formatter working line that is spoken (or a silent `Name:` hold),
+ * not a tag-only line and not a header. Tags are still placeholders
+ * here, so a tag-only line is placeholders and whitespace only. */
+function isSunnyBanksSpeechFormatLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (trimmed.replace(/\u0000TAG\d+\u0000/g, "").trim().length === 0) return false;
+  if (parseSunnyBanksEpisodeHeader(trimmed) || parseSunnyBanksActHeader(trimmed)) return false;
+  if (parseSunnyBanksSceneHeader(trimmed)) return false;
+  return true;
 }
 
 /** Positioned behind the real `<textarea>` (which has its own text made
@@ -612,17 +689,20 @@ export function formatSunnyBanksGodScript(text: string): string {
 function SunnyBanksScriptHighlightOverlay({
   text,
   overlayRef,
+  autoGrowMinRows,
 }: {
   text: string;
   overlayRef: RefObject<HTMLDivElement | null>;
+  /** Inline box: grow with the text, at least this many lines. */
+  autoGrowMinRows?: number;
 }) {
-  const segments = buildSunnyBanksHighlightSegments(text);
-  useTextareaOverlayMirror(overlayRef, text);
+  const segments = buildSunnyBanksOverlaySegments(text);
+  useTextareaOverlayMirror(overlayRef, text, { autoGrowMinRows });
   return (
     <div
       ref={overlayRef}
       aria-hidden="true"
-      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-sm leading-relaxed"
+      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-base leading-6"
     >
       {segments.map((segment, index) => (
         <span key={index} className={SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]}>
@@ -1030,21 +1110,6 @@ function statusPillClass(status: RowStatus): string {
   return "bg-white/10 text-white/55";
 }
 
-function workspaceLabelFromScripts(
-  actScripts: ActKeyed<string>,
-  fallback: string,
-  actIds: readonly string[]
-): string {
-  for (const act of actIds) {
-    const first = (actScripts[act] ?? "")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean);
-    if (first) return first.length > 36 ? `${first.slice(0, 33)}…` : first;
-  }
-  return fallback;
-}
-
 export function collectRenderedClips(args: {
   actIds: readonly string[];
   actScripts: ActKeyed<string>;
@@ -1075,6 +1140,108 @@ export function collectRenderedClips(args: {
   }
   return clips;
 }
+
+/** Prompts for any episode source — the live working copy, or a saved
+ * card straight off the EPISODES row. Parameterised (2026-09-18) so
+ * "download that episode" doesn't have to load it into the editor
+ * first, which would quietly replace whatever is open. */
+export function collectSunnyBanksEpisodePrompts(source: {
+  actIds: readonly SunnyBanksActId[];
+  actScripts: ActKeyed<string>;
+  characterOverrides: ActKeyed<Record<number, string>>;
+  locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
+  defaultLocationId: SunnyBanksLocationId;
+}) {
+  const prompts: Array<{
+    act: SunnyBanksActId;
+    index: number;
+    characterName: string;
+    kind: BeatKind;
+    line: string;
+    locationId: string;
+    prompt: string;
+  }> = [];
+  for (const act of source.actIds) {
+    const chunks = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(source.actScripts[act] ?? ""));
+    const overrides = source.characterOverrides[act] ?? {};
+    const locations = source.locationOverrides[act] ?? {};
+    chunks.forEach((chunk, index) => {
+      const characterName = overrides[index] ?? chunk.characterName;
+      const lock = getSunnyBanksCharacterLock(characterName);
+      const locationId = locations[index] ?? chunk.locationId ?? source.defaultLocationId;
+      const kind = chunk.kind;
+      const extra = [chunk.action, chunk.appearanceModifier].filter(Boolean).join(" ");
+      const gold = lock
+        ? kind === "hold"
+          ? buildSunnyBanksHoldPrompt(lock)
+          : buildSunnyBanksSpeakingPrompt(lock, chunk.line)
+        : kind === "hold"
+          ? buildSunnyBanksLocationCutawayPrompt(chunk.action)
+          : "";
+      const prompt = lock ? appendSunnyBanksActionToPrompt(gold, extra) : gold;
+      prompts.push({
+        act,
+        index,
+        characterName,
+        kind,
+        line: chunk.line,
+        locationId,
+        prompt,
+      });
+    });
+  }
+  return prompts;
+}
+
+/** The panel root's id: the pencil on an EPISODES card scrolls here. */
+export const SUNNY_BANKS_EDITOR_ID = "sunny-banks-editor";
+
+/** Everything the episode zip needs: a saved card or the live copy. */
+export interface SunnyBanksEpisodeZipSource {
+  title: string;
+  defaultLocationId: SunnyBanksLocationId;
+  actIds: readonly SunnyBanksActId[];
+  actScripts: ActKeyed<string>;
+  characterOverrides: ActKeyed<Record<number, string>>;
+  locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
+  runtimeMap: ActKeyed<Record<number, RowRuntime>>;
+}
+
+/**
+ * Zip one episode (script + gold prompts + every finished clip) and hand
+ * it to the browser as a download. Moved out of the panel (2026-09-30)
+ * so the download icon on each EPISODES card can use it; the panel's own
+ * Download Episode button is gone.
+ *
+ * Live QA (2026-09-18): a 64-clip episode over a phone connection takes
+ * minutes, so `onProgress` reports each clip, and the result says how
+ * many clips actually made it in (a dropped stream is skipped rather
+ * than sinking the whole zip).
+ */
+export async function downloadSunnyBanksEpisodeZip(
+  source: SunnyBanksEpisodeZipSource,
+  onProgress?: (progress: { done: number; total: number }) => void
+): Promise<{ clipCount: number; fetchedClipCount: number }> {
+  const clips = collectRenderedClips({
+    actIds: source.actIds,
+    actScripts: source.actScripts,
+    runtimeMap: source.runtimeMap,
+    characterOverrides: source.characterOverrides,
+  });
+  const result = await buildSunnyBanksEpisodeBundle({
+    title: source.title,
+    defaultLocationId: source.defaultLocationId,
+    actIds: source.actIds,
+    actScripts: source.actScripts,
+    prompts: collectSunnyBanksEpisodePrompts(source),
+    clips,
+    onProgress,
+  });
+  const zipBlob = new Blob([result.zipBytes.slice().buffer], { type: "application/zip" });
+  triggerBlobDownload(zipBlob, result.filename);
+  return { clipCount: result.clipCount, fetchedClipCount: result.fetchedClipCount };
+}
+
 
 /**
  * On-page God Script cheat sheet (2026-09-18, Stuart's ask: "add this as
@@ -1136,6 +1303,12 @@ function SunnyBanksFullScreenScriptEditor({
   const [draft, setDraft] = useState(initialText);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const formatFeedback = useScriptFormatFeedback();
+  const handleFormat = () => {
+    const formatted = formatSunnyBanksGodScript(draft);
+    if (formatted !== draft) setDraft(formatted);
+    formatFeedback.show(formatted !== draft);
+  };
   const dirty = draft !== initialText;
 
   const handleCancel = () => {
@@ -1204,18 +1377,19 @@ function SunnyBanksFullScreenScriptEditor({
           autoFocus
           spellCheck={false}
           aria-label="God Script full screen editor"
-          className="relative z-10 h-full w-full resize-none bg-transparent px-3 py-2 text-sm leading-relaxed text-transparent caret-amber-300 focus:outline-none"
+          className="relative z-10 h-full w-full resize-none bg-transparent px-3 py-2 text-base leading-6 text-transparent caret-amber-300 focus:outline-none"
         />
       </div>
 
       <div className="flex items-center gap-2 border-t border-white/10 px-3 py-2">
         <button
           type="button"
-          onClick={() => setDraft((prev) => formatSunnyBanksGodScript(prev))}
+          onClick={handleFormat}
           disabled={!draft.trim()}
+          aria-live="polite"
           className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
         >
-          {"\u21e5"} Format
+          {formatFeedback.label}
         </button>
         <p className="min-w-0 flex-1 text-[10px] leading-snug text-white/40">
           Nothing re-parses until you tap Done. Coloured text is a tag the app understands —
@@ -1343,7 +1517,6 @@ function ChevronIcon({ open }: { open: boolean }) {
 export function SkidmarksSunnyBanksPanel() {
   const studioState = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const live = studioState.sunnyBanks?.live ?? getSunnyBanksLiveOrDefault(studioState);
-  const workspaces = studioState.sunnyBanks?.workspaces ?? [];
   const actIds = live.actIds;
   const activeAct = live.activeAct;
   const actScripts = live.actScripts;
@@ -1355,7 +1528,6 @@ export function SkidmarksSunnyBanksPanel() {
   const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
   const [runningIndex, setRunningIndex] = useState<number | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
-  const [shelfOpen, setShelfOpen] = useState(false);
   const [clipsOpen, setClipsOpen] = useState(true);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [scriptUndo, setScriptUndo] = useState<ScriptUndoSnapshot | null>(null);
@@ -1363,13 +1535,6 @@ export function SkidmarksSunnyBanksPanel() {
    * past the right edge — `handleAddAct` scrolls it into view rather
    * than leaving Stuart to discover it by swiping. */
   const actStripRef = useRef<HTMLDivElement>(null);
-  const [confirmingNewEpisode, setConfirmingNewEpisode] = useState(false);
-  const [bundleError, setBundleError] = useState<string | null>(null);
-  /** What the save/download buttons are doing right now, in plain words.
-   * Live QA (2026-09-18): both buttons did their job silently, which is
-   * indistinguishable from a broken button on a phone. */
-  const [bundleNotice, setBundleNotice] = useState<string | null>(null);
-  const [bundleBusy, setBundleBusy] = useState(false);
   const scriptHighlightRef = useRef<HTMLDivElement>(null);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
@@ -1381,11 +1546,11 @@ export function SkidmarksSunnyBanksPanel() {
   const remappedRuntime = preserveRenderedRuntimes(parsed, runtimeMapByAct[activeAct] ?? {});
   const running = runningKind !== null;
   // Tell the episode row above (outside this panel) not to swap episodes
-  // while a clip renders or a zip builds.
+  // while a clip renders.
   useEffect(() => {
-    setSunnyBanksBusy(running || bundleBusy);
-  }, [running, bundleBusy]);
-  useEffect(() => () => setSunnyBanksBusy(false), []);
+    setSunnyBanksBusy(running, "render");
+  }, [running]);
+  useEffect(() => () => setSunnyBanksBusy(false, "render"), []);
 
   const runtimeFor = (index: number, raw: string): RowRuntime => {
     return remappedRuntime[index] ?? { lineKey: raw, status: "idle" };
@@ -1420,10 +1585,6 @@ export function SkidmarksSunnyBanksPanel() {
    * `status === "done"` rows — a failed row stays visible, because that
    * is unfinished work, not history. */
   const [doneRowsOpen, setDoneRowsOpen] = useState(false);
-
-  /** Whether what's on screen is already captured by a saved card —
-   * so New Episode can say whether it's about to discard real work. */
-  const liveIsSaved = isSunnyBanksLiveSaved(live, workspaces);
 
   const pendingRows = queue.filter((row) => runtimeFor(row.index, row.chunk.raw).status !== "done");
   /** Finished history vs. rows still worth looking at. A row that is
@@ -1624,61 +1785,6 @@ export function SkidmarksSunnyBanksPanel() {
     }
   };
 
-  /** Prompts for any episode source — the live working copy, or a saved
-   * card straight off the shelf. Parameterised (2026-09-18) so
-   * "download that episode" doesn't have to load it into the editor
-   * first, which would quietly replace whatever is open. */
-  const collectEpisodePrompts = (source: {
-    actIds: readonly SunnyBanksActId[];
-    actScripts: ActKeyed<string>;
-    characterOverrides: ActKeyed<Record<number, string>>;
-    locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
-    defaultLocationId: SunnyBanksLocationId;
-  }) => {
-    const prompts: Array<{
-      act: SunnyBanksActId;
-      index: number;
-      characterName: string;
-      kind: BeatKind;
-      line: string;
-      locationId: string;
-      prompt: string;
-    }> = [];
-    for (const act of source.actIds) {
-      const chunks = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(source.actScripts[act] ?? ""));
-      const overrides = source.characterOverrides[act] ?? {};
-      const locations = source.locationOverrides[act] ?? {};
-      chunks.forEach((chunk, index) => {
-        const characterName = overrides[index] ?? chunk.characterName;
-        const lock = getSunnyBanksCharacterLock(characterName);
-        const locationId = locations[index] ?? chunk.locationId ?? source.defaultLocationId;
-        const kind = chunk.kind;
-        const extra = [chunk.action, chunk.appearanceModifier].filter(Boolean).join(" ");
-        const gold = lock
-          ? kind === "hold"
-            ? buildSunnyBanksHoldPrompt(lock)
-            : buildSunnyBanksSpeakingPrompt(lock, chunk.line)
-          : kind === "hold"
-            ? buildSunnyBanksLocationCutawayPrompt(chunk.action)
-            : "";
-        const prompt = lock ? appendSunnyBanksActionToPrompt(gold, extra) : gold;
-        prompts.push({
-          act,
-          index,
-          characterName,
-          kind,
-          line: chunk.line,
-          locationId,
-          prompt,
-        });
-      });
-    }
-    return prompts;
-  };
-
-  const resolvedWorkspaceTitle = () =>
-    workspaceTitle.trim() || workspaceLabelFromScripts(actScripts, "Sunny Banks episode", actIds);
-
   const captureScriptUndo = () => {
     setScriptUndo({
       actIds: [...actIds],
@@ -1717,25 +1823,52 @@ export function SkidmarksSunnyBanksPanel() {
    * nothing about the edit until Done applies it in one go. */
   const [fullScreenScriptOpen, setFullScreenScriptOpen] = useState(false);
 
+  /** What the Format button last did, shown on the button itself for a
+   * moment (2026-09-30). Live QA: on an already-tidy script Format was a
+   * silent no-op, and with the script box folded shut even a real
+   * change happened out of sight, so the tap looked dead either way. */
+  const formatFeedback = useScriptFormatFeedback();
+
   const handleFormatScript = () => {
     if (running) return;
     const formatted = formatSunnyBanksGodScript(scriptText);
-    if (formatted !== scriptText) handleScriptChange(formatted);
+    const changed = formatted !== scriptText;
+    if (changed) {
+      handleScriptChange(formatted);
+      setScriptOpen(true);
+    }
+    formatFeedback.show(changed);
   };
 
   const handleScriptChange = (value: string) => {
     const decoded = decodeSunnyBanksPastedScript(value);
-    const doc = parseSunnyBanksGodDocument(decoded, activeAct);
+    const parsedDoc = parseSunnyBanksGodDocument(decoded, activeAct);
+    // Typing inside an act whose own script has a titled header
+    // (`=== ACT IV — SCENE A1 — THE PAYOFF ===`) used to go down the
+    // "split into acts" path on every keystroke (2026-09-30): that path
+    // trims each line and the ends of the text, so a space typed at the
+    // end of a line or a new line vanished, the text changed under the
+    // caret, and the act's per-row picks were reset. When every header
+    // names the act already open there is nothing to split, so it is
+    // an ordinary edit and the text is kept exactly as typed.
+    const staysInThisAct = parsedDoc.actIds.every((id) => id === activeAct);
+    const doc = staysInThisAct ? { ...parsedDoc, hasActHeaders: false } : parsedDoc;
     if (doc.hasActHeaders || decoded !== scriptText) {
       captureScriptUndo();
     }
     patchSunnyBanksLive((prev) => {
       // A pasted script whose own title header names a different episode
-      // is a new episode, not a rename of the card that's open: Save then
-      // adds a card instead of overwriting this one (as it always did).
-      // Typing in the title box is still a rename of the same card.
+      // is a new episode, not a rename of the card that's open: auto-save
+      // then adds a card instead of overwriting this one (as Save always
+      // did). Only a paste counts (a big jump in length), and only when
+      // the open episode already has a name, so typing or editing the
+      // `# EPISODE:` line a letter at a time renames this card instead
+      // of minting a new card per keystroke.
+      const looksLikePaste = Math.abs(decoded.length - scriptText.length) > 12;
       const namesOtherEpisode =
+        looksLikePaste &&
         typeof doc.episodeTitle === "string" &&
+        prev.workspaceTitle.trim().length > 0 &&
         doc.episodeTitle.trim().toLowerCase() !== prev.workspaceTitle.trim().toLowerCase();
       if (namesOtherEpisode) prev = { ...prev, episodeId: undefined, mediaSlug: undefined };
       if (!doc.hasActHeaders) {
@@ -1898,127 +2031,8 @@ export function SkidmarksSunnyBanksPanel() {
     }, 0);
   };
 
-  /** **New Episode** (2026-09-18). Two taps, because it throws the live
-   * working copy away: the first tap arms it and says exactly what will
-   * happen, including whether there is unsaved work on screen right
-   * now. Saved cards are never touched. */
-  const handleNewEpisode = () => {
-    if (running) return;
-    if (!confirmingNewEpisode) {
-      setConfirmingNewEpisode(true);
-      return;
-    }
-    startNewSunnyBanksEpisode();
-    setConfirmingNewEpisode(false);
-    setScriptUndo(null);
-    setBundleError(null);
-    setBundleNotice("New episode started — your saved episodes are untouched.");
-  };
-
-  const handleSaveWorkspace = () => {
-    const saved = saveSunnyBanksProjectWorkspace();
-    setShelfOpen(true);
-    // Live QA (2026-09-18): "I don't even know if the save button is
-    // working." It was — it just said nothing. Name what was saved and
-    // what is in it, so the tap has a visible result.
-    setBundleNotice(`Saved "${saved.label}" — ${describeSunnyBanksWorkspace(saved)}.`);
-    setBundleError(null);
-  };
-
-  /**
-   * Zip one episode — the live working copy, or a saved card straight
-   * off the shelf without opening it first.
-   *
-   * Live QA (2026-09-18): "cannot download episodes". The zip itself
-   * worked; it fetches every clip's MP4 one at a time, and a 64-clip
-   * episode over a phone connection left the button silent for minutes
-   * with no way to tell it apart from a dead button. So this reports
-   * progress per clip, then says how many clips actually made it in —
-   * a dropped stream is skipped rather than sinking the whole zip, so
-   * "64 clips" and "what you got" are genuinely different numbers and
-   * claiming otherwise would be a lie.
-   */
-  const downloadEpisodeBundle = async (source: {
-    title: string;
-    defaultLocationId: SunnyBanksLocationId;
-    actIds: readonly SunnyBanksActId[];
-    actScripts: ActKeyed<string>;
-    characterOverrides: ActKeyed<Record<number, string>>;
-    locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
-    runtimeMap: ActKeyed<Record<number, RowRuntime>>;
-  }) => {
-    if (bundleBusy) return;
-    setBundleError(null);
-    setBundleBusy(true);
-    setBundleNotice(`Preparing "${source.title}"…`);
-    try {
-      const clips = collectRenderedClips({
-        actIds: source.actIds,
-        actScripts: source.actScripts,
-        runtimeMap: source.runtimeMap,
-        characterOverrides: source.characterOverrides,
-      });
-      const result = await buildSunnyBanksEpisodeBundle({
-        title: source.title,
-        defaultLocationId: source.defaultLocationId,
-        actIds: source.actIds,
-        actScripts: source.actScripts,
-        prompts: collectEpisodePrompts(source),
-        clips,
-        onProgress: ({ done, total }) => setBundleNotice(`Getting clip ${done} of ${total}…`),
-      });
-      const zipBlob = new Blob([result.zipBytes.slice().buffer], { type: "application/zip" });
-      triggerBlobDownload(zipBlob, result.filename);
-      setBundleNotice(
-        result.fetchedClipCount === result.clipCount
-          ? `Downloaded "${source.title}" — ${result.clipCount} clip${result.clipCount === 1 ? "" : "s"}.`
-          : `Downloaded "${source.title}" — ${result.fetchedClipCount} of ${result.clipCount} clips. ` +
-              "The rest could not be fetched; try again on a better connection."
-      );
-    } catch (err) {
-      setBundleNotice(null);
-      setBundleError(err instanceof Error ? err.message : "Could not build the episode zip.");
-    } finally {
-      setBundleBusy(false);
-    }
-  };
-
-  const handleDownloadEpisodeBundle = () =>
-    void downloadEpisodeBundle({
-      title: resolvedWorkspaceTitle(),
-      defaultLocationId,
-      actIds,
-      actScripts,
-      characterOverrides: characterOverridesByAct,
-      locationOverrides: locationOverridesByAct,
-      runtimeMap: runtimeMapByAct,
-    });
-
-  const handleDownloadWorkspace = (workspace: EpisodeWorkspace) =>
-    void downloadEpisodeBundle({
-      title: workspace.label,
-      defaultLocationId: workspace.defaultLocationId,
-      actIds: workspace.actIds,
-      actScripts: workspace.actScripts,
-      characterOverrides: workspace.characterOverrides,
-      locationOverrides: workspace.locationOverrides,
-      runtimeMap: workspace.runtimeMap,
-    });
-
-  const handleDeleteWorkspace = (id: string) => {
-    deleteSunnyBanksWorkspace(id);
-  };
-
-  const handleOpenWorkspace = (workspace: EpisodeWorkspace) => {
-    if (running) return;
-    openSunnyBanksWorkspace(workspace.id);
-    setBundleError(null);
-    setBundleNotice(`Opened "${workspace.label}" — ${describeSunnyBanksWorkspace(workspace)}.`);
-    setProgressText(null);
-  };
-
   return (
-    <div className="flex flex-col gap-4">
+    <div id={SUNNY_BANKS_EDITOR_ID} className="flex scroll-mt-4 flex-col gap-4">
       {/* The display-only Cast strip was removed 2026-09-29 (Stuart): the
           faces live in the Characters section now, with "not ready" shown
           there (see `sunnyBanksNotReadyReason` in lib/characterRoster.ts). */}
@@ -2042,7 +2056,7 @@ export function SkidmarksSunnyBanksPanel() {
               ref={actStripRef}
               role="tablist"
               aria-label="Act"
-              className="flex min-w-0 flex-row flex-nowrap gap-2 overflow-x-auto overscroll-x-contain whitespace-nowrap touch-pan-x pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:none]"
+              className="flex min-w-0 flex-row flex-nowrap gap-2 overflow-x-auto overscroll-x-contain whitespace-nowrap touch-pan-x touch-pan-y pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:none]"
             >
               {actIds.map((act) => {
                 const selected = act === activeAct;
@@ -2085,9 +2099,10 @@ export function SkidmarksSunnyBanksPanel() {
                 onClick={handleFormatScript}
                 disabled={running || !scriptText.trim()}
                 aria-label="Auto-format script spacing"
+                aria-live="polite"
                 className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
               >
-                ⇥ Format
+                {formatFeedback.label}
               </button>
               <button
                 type="button"
@@ -2125,7 +2140,7 @@ export function SkidmarksSunnyBanksPanel() {
             {scriptOpen && (
               <div className="flex touch-pan-y flex-col gap-2.5 overscroll-y-contain">
                 <div className="relative rounded-xl border border-white/10 bg-white/[0.03] focus-within:border-amber-300/40">
-                  <SunnyBanksScriptHighlightOverlay text={scriptText} overlayRef={scriptHighlightRef} />
+                  <SunnyBanksScriptHighlightOverlay text={scriptText} overlayRef={scriptHighlightRef} autoGrowMinRows={12} />
                   <textarea
                     value={scriptText}
                     onChange={(e) => handleScriptChange(e.target.value)}
@@ -2148,8 +2163,8 @@ export function SkidmarksSunnyBanksPanel() {
                     }}
                     disabled={running}
                     placeholder={"Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"}
-                    rows={5}
-                    className="relative z-10 min-h-[7.5rem] w-full resize-y bg-transparent px-3 py-2 text-sm leading-relaxed text-transparent caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60"
+                    rows={12}
+                    className="relative z-10 w-full resize-y bg-transparent px-3 py-2 text-base leading-6 text-transparent caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60"
                   />
                 </div>
                 {/* The prose hint that used to sit here (one-speaker-per-line,
@@ -2166,7 +2181,7 @@ export function SkidmarksSunnyBanksPanel() {
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-cyan-300" />
-                      <span className="text-cyan-300/90">[Character ]</span>
+                      <span className="text-cyan-300/90">[Character ] / Name:</span>
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-green-300" />
@@ -2448,7 +2463,7 @@ export function SkidmarksSunnyBanksPanel() {
                       {group.clips.map((clip) => (
                         <div
                           key={`${clip.act}:${clip.index}:${clip.videoUrl}`}
-                          className="flex w-44 shrink-0 touch-pan-x flex-col gap-1.5"
+                          className="flex w-44 shrink-0 touch-pan-x touch-pan-y flex-col gap-1.5"
                         >
                           <video
                             src={clip.videoUrl}
@@ -2476,147 +2491,6 @@ export function SkidmarksSunnyBanksPanel() {
           ))}
       </div>
 
-      <div className="rounded-xl border border-white/10 bg-zinc-950/95">
-        <div className="flex flex-col gap-2 px-3 pb-3 pt-2">
-          <button
-            type="button"
-            onClick={handleNewEpisode}
-            disabled={running || bundleBusy}
-            className={[
-              "min-h-[44px] rounded-md px-3 text-[13px] font-semibold disabled:opacity-60",
-              confirmingNewEpisode
-                ? "bg-rose-400 text-zinc-950"
-                : "border border-white/15 bg-white/[0.04] text-white/80",
-            ].join(" ")}
-          >
-            {confirmingNewEpisode ? "Tap again to start a new episode" : "+ New Episode"}
-          </button>
-          {confirmingNewEpisode && (
-            <p role="alert" className="text-[11px] leading-snug text-amber-200/90">
-              This clears the script and clips on screen and starts blank. Your{" "}
-              {workspaces.length === 1 ? "saved episode is" : `${workspaces.length} saved episodes are`} kept.
-              {liveIsSaved
-                ? " What's on screen is already saved."
-                : " What's on screen is NOT saved yet — tap Save Episode first if you want to keep it."}
-            </p>
-          )}
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-white/40">
-              Episode name
-            </span>
-            <input
-              type="text"
-              value={workspaceTitle}
-              onChange={(e) => patchSunnyBanksLive((prev) => ({ ...prev, workspaceTitle: e.target.value }))}
-              disabled={running}
-              placeholder="EP02 — Drop Bears Dilemma"
-              className="min-h-[44px] w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 text-sm text-white placeholder:text-white/30 focus:border-amber-300/40 focus:outline-none disabled:opacity-60"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={handleSaveWorkspace}
-            disabled={running || bundleBusy}
-            className="min-h-[44px] rounded-md bg-white px-3 text-[13px] font-semibold text-zinc-950 disabled:opacity-60"
-          >
-            Save Episode
-          </button>
-          <button
-            type="button"
-            onClick={handleDownloadEpisodeBundle}
-            disabled={running || bundleBusy}
-            className="min-h-[40px] rounded-md border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80 disabled:opacity-60"
-          >
-            {bundleBusy ? "Working…" : "Download Episode (.zip)"}
-          </button>
-          {bundleNotice && (
-            <p role="status" className="text-[11px] leading-snug text-emerald-200/90">
-              {bundleNotice}
-            </p>
-          )}
-          {bundleError && (
-            <p role="alert" className="text-[11px] leading-snug text-rose-300/90">
-              {bundleError}
-            </p>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => setShelfOpen((open) => !open)}
-          aria-expanded={shelfOpen}
-          className="flex min-h-[40px] w-full items-center justify-between gap-2 border-t border-white/10 px-3 text-[12px] font-semibold text-white/80"
-        >
-          <span>Episode workspace</span>
-          <span className="flex items-center gap-1.5 text-[11px] font-medium text-white/45">
-            {workspaces.length === 0 ? "empty" : `${workspaces.length} saved`}
-            <ChevronIcon open={shelfOpen} />
-          </span>
-        </button>
-        {shelfOpen && (
-          <div className="flex flex-col gap-2 border-t border-white/10 px-3 pb-3 pt-2">
-            {workspaces.length === 0 ? (
-              <p className="text-[10px] leading-snug text-white/40">
-                Save keeps the whole episode (every act, every clip URL) on the
-                server. Same episode name updates that one card. ✕ drops the
-                named card only — the live copy still survives a refresh. Zip is
-                script + gold prompts + clip files, not a re-render.
-              </p>
-            ) : (
-              // Full-width rows with their own named Open / Download
-              // buttons (2026-09-18). These used to be small cards in a
-              // sideways-scrolling strip where the whole card was the
-              // (unlabelled) open target: live QA was "how do we open it
-              // back up in an editor?" and "why can't I just download
-              // that?" — both were possible, neither looked it.
-              <div className="flex flex-col gap-2">
-                {workspaces.map((workspace) => (
-                  <div
-                    key={workspace.id}
-                    className="flex flex-col gap-2 rounded-lg border border-white/10 bg-white/[0.04] p-2.5"
-                  >
-                    <div className="flex min-w-0 items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[12px] font-semibold text-white/85">{workspace.label}</p>
-                        <p className="mt-0.5 text-[10px] text-white/40">
-                          {describeSunnyBanksWorkspace(workspace)}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteWorkspace(workspace.id)}
-                        aria-label={`Delete ${workspace.label}`}
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-rose-400"
-                      >
-                        <span aria-hidden className="text-[16px] font-semibold leading-none">
-                          ✕
-                        </span>
-                      </button>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenWorkspace(workspace)}
-                        disabled={running || bundleBusy}
-                        className="min-h-[40px] flex-1 rounded-md bg-amber-300 px-3 text-[12px] font-semibold text-zinc-950 disabled:opacity-60"
-                      >
-                        Open in editor
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadWorkspace(workspace)}
-                        disabled={running || bundleBusy}
-                        className="min-h-[40px] flex-1 rounded-md border border-white/15 bg-white/[0.04] px-3 text-[12px] font-semibold text-white/80 disabled:opacity-60"
-                      >
-                        {bundleBusy ? "Working…" : "Download (.zip)"}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
     </div>
   );
 }

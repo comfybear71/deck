@@ -61,6 +61,8 @@ import {
   patchSunnyBanksLive,
   saveSunnyBanksProjectWorkspace,
   deleteSunnyBanksWorkspace,
+  openSunnyBanksWorkspace,
+  startNewSunnyBanksEpisode,
   type SkidmarksBand,
   type SkidmarksClipPlateSlot,
   type SkidmarksClipSegment,
@@ -74,6 +76,7 @@ import {
 import {
   buildDefaultSunnyBanksLive,
   buildSunnyBanksWorkspaceFromLive,
+  normalizeSunnyBanksStudio,
 } from "./sunnyBanksWorkspace";
 import type { SkidmarksTranscribedWord } from "./transcription";
 
@@ -2248,6 +2251,112 @@ describe("Sunny Banks Neon workspace persist", () => {
     expect(cards).toHaveLength(1);
     expect(cards[0].actIds).toEqual(["I", "II", "III"]);
     expect(cards[0].actScripts.II.length).toBeGreaterThan(0);
+  });
+
+  /** Sunny Banks state is not reset by the file's `beforeEach`: clear
+   * every card and start blank so each test below stands alone. */
+  function resetSunnyBanks() {
+    for (const card of getSkidmarksSnapshot().sunnyBanks?.workspaces ?? []) {
+      deleteSunnyBanksWorkspace(card.id);
+    }
+    startNewSunnyBanksEpisode();
+  }
+
+  const CLIP_URL = "https://example.test/sunnybank/act-ii-line-1.mp4";
+
+  function patchInEp02WithOneClip() {
+    patchSunnyBanksLive(() => {
+      const seed = buildDefaultSunnyBanksLive();
+      return {
+        ...seed,
+        workspaceTitle: "EP02 test",
+        runtimeMap: {
+          ...seed.runtimeMap,
+          II: { 0: { lineKey: "Nan: G'day.", status: "done", videoUrl: CLIP_URL, durationSec: 6 } },
+        },
+      };
+    });
+  }
+
+  it("save, then New, then reopening the card brings back every act and clip", () => {
+    resetSunnyBanks();
+    patchInEp02WithOneClip();
+    const saved = saveSunnyBanksProjectWorkspace();
+    startNewSunnyBanksEpisode();
+    expect(getSkidmarksSnapshot().sunnyBanks?.live.actScripts.I).toBe("");
+
+    openSunnyBanksWorkspace(saved.id);
+    const live = getSkidmarksSnapshot().sunnyBanks!.live;
+    expect(live.episodeId).toBe(saved.id);
+    expect(live.actIds).toEqual(["I", "II", "III"]);
+    expect(live.actScripts).toEqual(buildDefaultSunnyBanksLive().actScripts);
+    expect(live.runtimeMap.II[0]?.videoUrl).toBe(CLIP_URL);
+    expect(live.workspaceTitle).toBe("EP02 test");
+  });
+
+  it("auto-saves every edit onto the open card: add Act IV, reopen, 4 acts (and it survives a reload)", () => {
+    resetSunnyBanks();
+    patchInEp02WithOneClip();
+    // No Save tap: the edit alone made the card.
+    const cards = getSkidmarksSnapshot().sunnyBanks!.workspaces;
+    expect(cards).toHaveLength(1);
+    const id = cards[0].id;
+    expect(getSkidmarksSnapshot().sunnyBanks!.live.episodeId).toBe(id);
+
+    patchSunnyBanksLive((live) => ({
+      ...live,
+      actIds: [...live.actIds, "IV"],
+      activeAct: "IV",
+      actScripts: { ...live.actScripts, IV: "Dazza: That's the lot." },
+      characterOverrides: { ...live.characterOverrides, IV: {} },
+      locationOverrides: { ...live.locationOverrides, IV: {} },
+      runtimeMap: { ...live.runtimeMap, IV: {} },
+    }));
+    const afterAct4 = getSkidmarksSnapshot().sunnyBanks!;
+    expect(afterAct4.workspaces).toHaveLength(1);
+    expect(afterAct4.workspaces[0].id).toBe(id);
+    expect(afterAct4.workspaces[0].actIds).toEqual(["I", "II", "III", "IV"]);
+
+    startNewSunnyBanksEpisode();
+    openSunnyBanksWorkspace(id);
+    const reopened = getSkidmarksSnapshot().sunnyBanks!.live;
+    expect(reopened.actIds).toEqual(["I", "II", "III", "IV"]);
+    expect(reopened.actScripts.IV).toBe("Dazza: That's the lot.");
+    expect(reopened.runtimeMap.II[0]?.videoUrl).toBe(CLIP_URL);
+
+    // What a reload reads back from the saved session.
+    const reloaded = normalizeSunnyBanksStudio(JSON.parse(JSON.stringify(getSkidmarksSnapshot().sunnyBanks)));
+    expect(reloaded?.workspaces).toHaveLength(1);
+    expect(reloaded?.workspaces[0].actIds).toEqual(["I", "II", "III", "IV"]);
+    expect(reloaded?.workspaces[0].actScripts.IV).toBe("Dazza: That's the lot.");
+    expect(reloaded?.live.actIds).toEqual(["I", "II", "III", "IV"]);
+  });
+
+  it("auto-save skips the blank page and the untouched seed", () => {
+    resetSunnyBanks();
+    patchSunnyBanksLive((live) => ({ ...live }));
+    expect(getSkidmarksSnapshot().sunnyBanks!.workspaces).toHaveLength(0);
+    patchSunnyBanksLive(() => buildDefaultSunnyBanksLive());
+    expect(getSkidmarksSnapshot().sunnyBanks!.workspaces).toHaveLength(0);
+  });
+
+  it("auto-save never overwrites another card that only shares its name, and keeps the row order", () => {
+    resetSunnyBanks();
+    patchSunnyBanksLive((live) => ({ ...live, workspaceTitle: "Same", actScripts: { ...live.actScripts, I: "Nan: One." } }));
+    const first = getSkidmarksSnapshot().sunnyBanks!.workspaces[0];
+    startNewSunnyBanksEpisode();
+    patchSunnyBanksLive((live) => ({ ...live, workspaceTitle: "Same", actScripts: { ...live.actScripts, I: "Nan: Two." } }));
+    let cards = getSkidmarksSnapshot().sunnyBanks!.workspaces;
+    expect(cards).toHaveLength(2);
+    expect(cards.find((card) => card.id === first.id)?.actScripts.I).toBe("Nan: One.");
+
+    // Editing the older card updates it where it sits.
+    const order = cards.map((card) => card.id);
+    openSunnyBanksWorkspace(first.id);
+    patchSunnyBanksLive((live) => ({ ...live, actScripts: { ...live.actScripts, I: "Nan: One, again." } }));
+    cards = getSkidmarksSnapshot().sunnyBanks!.workspaces;
+    expect(cards.map((card) => card.id)).toEqual(order);
+    expect(cards.find((card) => card.id === first.id)?.actScripts.I).toBe("Nan: One, again.");
   });
 });
 

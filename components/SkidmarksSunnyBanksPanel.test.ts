@@ -31,6 +31,7 @@ import {
   toSunnyBanksActId,
   buildSunnyBanksHighlightSegments,
   SUNNY_BANKS_HIGHLIGHT_CLASSES,
+  buildSunnyBanksOverlaySegments,
   formatSunnyBanksGodScript,
 } from "./SkidmarksSunnyBanksPanel";
 import { SUNNY_BANKS_CAST, SUNNY_BANKS_LOCATIONS, buildSunnyBanksSpeakingPrompt } from "@/lib/sunnyBanks";
@@ -823,6 +824,7 @@ describe("formatSunnyBanksGodScript (one-tap spacing/format button)", () => {
     expect(formatted).toBe(
       "[Location: office_storefront]\n" +
         "Dazza: hey Shaz, where do you want me to setup the scam repellent for these suckers?\n" +
+        "\n" +
         "Shazza: not so loud Dazza, we don't want the suckers to find out"
     );
     const chunks = parseSunnyBanksScriptBlock(formatted);
@@ -837,6 +839,7 @@ describe("formatSunnyBanksGodScript (one-tap spacing/format button)", () => {
     expect(formatted).toBe(
       "[Character Dazza: holding a rusty tin spray can]\nDazza: hey Shaz, where do you want this?"
     );
+    // (one speech line only, so no trailing blank line)
   });
 
   it("never breaks a name+colon that sits inside a tag's own brackets", () => {
@@ -845,13 +848,39 @@ describe("formatSunnyBanksGodScript (one-tap spacing/format button)", () => {
     expect(formatted).not.toContain("Dazza\n:");
   });
 
-  it("collapses blank lines and trims trailing whitespace without touching real content", () => {
+  it("collapses runs of blank lines to one after each speech line and trims trailing whitespace", () => {
     const raw = "Shazza: You right?   \n\n\n\nDazza: Yeah nah.\n\n";
-    expect(formatSunnyBanksGodScript(raw)).toBe("Shazza: You right?\nDazza: Yeah nah.");
+    expect(formatSunnyBanksGodScript(raw)).toBe("Shazza: You right?\n\nDazza: Yeah nah.");
+  });
+
+  it("puts a blank line after every speech line, never between a tag and its line", () => {
+    const raw =
+      "Shazza: One\nDazza: Two\n[Character Dazza: holding a can]\n[Action: shakes it]\nDazza: Three\nShazza:\n=== ACT III — SCENE A4 ===\n[Location: office_storefront]\nShazza: Four";
+    expect(formatSunnyBanksGodScript(raw)).toBe(
+      "Shazza: One\n\n" +
+        "Dazza: Two\n\n" +
+        "[Character Dazza: holding a can]\n[Action: shakes it]\nDazza: Three\n\n" +
+        "Shazza:\n\n" +
+        "=== ACT III — SCENE A4 ===\n[Location: office_storefront]\nShazza: Four"
+    );
+  });
+
+  it("keeps every row, row number and clip key: blank lines are separators, not lines", () => {
+    const raw =
+      "Ranger Bazza: Well here we go\nShazza: Ranger Bazza, ya flaming Gumboot?\n[Character Dazza: holding a can]\nDazza: hey Shaz\nShazza:\nCrowd:";
+    const before = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(raw));
+    const after = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(formatSunnyBanksGodScript(raw)));
+    expect(after).toHaveLength(before.length);
+    after.forEach((chunk, index) => {
+      expect(chunk.raw).toBe(before[index].raw);
+      expect(chunk.characterName).toBe(before[index].characterName);
+      expect(chunk.kind).toBe(before[index].kind);
+      expect(chunk.appearanceModifier).toBe(before[index].appearanceModifier);
+    });
   });
 
   it("is idempotent — formatting already-clean text is a no-op", () => {
-    const clean = "[Location: site_laundry]\nShazza: You right?\nDazza: Yeah nah.";
+    const clean = "[Location: site_laundry]\nShazza: You right?\n\nDazza: Yeah nah.";
     expect(formatSunnyBanksGodScript(clean)).toBe(clean);
     expect(formatSunnyBanksGodScript(formatSunnyBanksGodScript(clean))).toBe(formatSunnyBanksGodScript(clean));
   });
@@ -860,6 +889,34 @@ describe("formatSunnyBanksGodScript (one-tap spacing/format button)", () => {
     const raw = "[Action: leans in][Location: site_laundry]Shazza says: careful with that";
     const formatted = formatSunnyBanksGodScript(raw);
     expect(formatted).toBe("[Action: leans in]\n[Location: site_laundry]\nShazza says: careful with that");
+  });
+});
+
+describe("buildSunnyBanksOverlaySegments (what the script box colours)", () => {
+  it("colours each line's speaker name, so a tag-free script is not all white", () => {
+    const raw = "Ranger Bazza: Well here we go\n\nShazza: Ranger Bazza, ya flaming Gumboot?\nDazza says: yeah";
+    const segments = buildSunnyBanksOverlaySegments(raw);
+    expect(segments.filter((seg) => seg.kind === "speaker").map((seg) => seg.text)).toEqual([
+      "Ranger Bazza:",
+      "Shazza:",
+      "Dazza says:",
+    ]);
+    // A name inside the dialogue is not a speaker.
+    expect(segments.some((seg) => seg.kind === "speaker" && seg.text.startsWith("Ranger Bazza,"))).toBe(false);
+  });
+
+  it("colours tags and the speaker after a tag on the same line, and rebuilds the text exactly", () => {
+    const raw = "[Location: office_storefront]\n[Character Dazza: holding a can] Dazza: hey Shaz\nCrowd:\n  Nuggets: nah";
+    const segments = buildSunnyBanksOverlaySegments(raw);
+    expect(segments.map((seg) => seg.text).join("")).toBe(raw);
+    expect(segments.map((seg) => seg.kind)).toEqual(
+      expect.arrayContaining(["location", "character", "speaker"])
+    );
+    expect(segments.filter((seg) => seg.kind === "speaker").map((seg) => seg.text)).toEqual(["Dazza:", "Nuggets:"]);
+  });
+
+  it("has a real colour for the speaker kind", () => {
+    expect(SUNNY_BANKS_HIGHLIGHT_CLASSES.speaker).toBe("text-cyan-300");
   });
 });
 
