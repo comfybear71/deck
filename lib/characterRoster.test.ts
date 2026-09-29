@@ -218,7 +218,46 @@ describe("Add a Skidmarks character", () => {
     const member = buildSkidmarksCastMember(" Darryl ", "late-40s bloke, grey mullet, faded hi-vis", "supporting", 1, "cast_1");
     const r = buildCharacterRoster(stateWith({ skidmarksEpisodes: { episodes: [], cast: [member] } }));
     expect(r.skidmarks).toHaveLength(1);
-    expect(r.skidmarks[0]).toMatchObject({ sourceKey: "sk:cast_1", name: "Darryl", style: "photo", thumbUrl: null, blockedReason: null });
+    expect(r.skidmarks[0]).toMatchObject({ sourceKey: "sk:cast_1", name: "Darryl", style: "render3d", thumbUrl: null, blockedReason: null });
   });
 });
 
+
+describe("Skidmarks pictures, 3D cartoon and animals", () => {
+  const withCast = (cast: unknown[]) => stateWith({ skidmarksEpisodes: { episodes: [], cast } as SkidmarksState["skidmarksEpisodes"] });
+
+  it("uses the first uploaded picture as the thumbnail and the rest as extras, in 3D cartoon style", () => {
+    const member = buildSkidmarksCastMember("Clive", "", "supporting", 1, "c9", {
+      pictureUrls: ["https://x.public.blob.vercel-storage.com/a.jpg", "https://x.public.blob.vercel-storage.com/b.jpg"],
+    });
+    const [c] = buildCharacterRoster(withCast([member])).skidmarks;
+    expect(c.thumbUrl).toBe("https://x.public.blob.vercel-storage.com/a.jpg");
+    expect(c.extraPictureUrls).toEqual(["https://x.public.blob.vercel-storage.com/b.jpg"]);
+    expect(c.style).toBe("render3d");
+    expect(c.subjectWord).toBe("person");
+  });
+
+  it("marks an animal cast member so prompts say animal", () => {
+    const owl = buildSkidmarksCastMember("Owl", "", "supporting", 1, "o1", { isAnimal: true });
+    const [c] = buildCharacterRoster(withCast([owl])).skidmarks;
+    expect(c.subjectWord).toBe("animal");
+    const [p] = buildTrainingPicturePrompts(c, 1);
+    expect(p).toMatch(/same animal character/);
+    expect(p).toMatch(/made-up animal/);
+    expect(p).not.toMatch(/two arms/);
+    expect(p).not.toMatch(/\bperson\b/);
+    const clean = buildCleanReferencePrompt(c, true);
+    expect(clean).toMatch(/animal character/);
+    expect(clean).not.toMatch(/over 25/);
+  });
+
+  it("3D cartoon prompts keep the 3D look, not the flat Sunny Banks style", () => {
+    const c = { name: "Clive", look: "bowl cut, long nose", neverShow: "", style: "render3d" as const, subjectWord: "person" };
+    const [p] = buildTrainingPicturePrompts(c, 1);
+    expect(p).toMatch(/3D cartoon/);
+    expect(p).toMatch(/two arms/);
+    expect(p).toMatch(/over 25/);
+    expect(buildCleanReferencePrompt(c, true)).toMatch(/3D animated caricature/);
+    expect(buildFacePrompt(c)).toMatch(/3D animated caricature/);
+  });
+});

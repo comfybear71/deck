@@ -65,6 +65,10 @@ export interface SkidmarksCastMember {
   /** Ticked when added: made up, clearly adult, not a real person. */
   fictionalAdultConfirmed: true;
   createdAt: number;
+  /** Uploaded pictures of them (Blob https URLs), first one is the main picture. */
+  pictureUrls?: string[];
+  /** An animal character (owl, pig cop, street cat): prompts say "animal", not "person". */
+  isAnimal?: boolean;
 }
 
 export interface SkidmarksEpisodeBeat {
@@ -142,8 +146,41 @@ export function buildSkidmarksCastMember(
   role: SkidmarksCastRole = "supporting",
   now: number = Date.now(),
   id = mintSkidmarksId("cast"),
+  extra: { pictureUrls?: readonly string[]; isAnimal?: boolean } = {},
 ): SkidmarksCastMember {
-  return { id, name: name.trim(), role, look: look.trim(), fictionalAdultConfirmed: true, createdAt: now };
+  const member: SkidmarksCastMember = { id, name: name.trim(), role, look: look.trim(), fictionalAdultConfirmed: true, createdAt: now };
+  const pictures = cleanPictureUrls(extra.pictureUrls);
+  if (pictures.length) member.pictureUrls = pictures;
+  if (extra.isAnimal) member.isAnimal = true;
+  return member;
+}
+
+/** At most this many uploaded pictures are kept per cast member. */
+export const SKIDMARKS_CAST_MAX_PICTURES = 12;
+
+function cleanPictureUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const u of value) {
+    if (typeof u !== "string") continue;
+    const t = u.trim();
+    if (!/^(https:\/\/|data:image\/)/i.test(t) || out.includes(t)) continue;
+    out.push(t);
+    if (out.length >= SKIDMARKS_CAST_MAX_PICTURES) break;
+  }
+  return out;
+}
+
+/**
+ * A character name from an uploaded file name: "Clive 3.jpg" and
+ * "clive_3.jpeg" both become "Clive", so numbered pictures of the same
+ * person group together.
+ */
+export function castNameFromFileName(fileName: string): string {
+  const base = fileName.replace(/\.[a-z0-9]{2,5}$/i, "").replace(/[_]+/g, " ");
+  const noNumber = base.replace(/[\s\-(]*\d+\)?\s*$/, "").trim();
+  const name = (noNumber || base).replace(/\s+/g, " ").trim();
+  return name ? name.charAt(0).toUpperCase() + name.slice(1) : "";
 }
 
 export function emptySkidmarksEpisodesState(): SkidmarksEpisodesState {
@@ -283,6 +320,8 @@ function normalizeCast(value: unknown): SkidmarksCastMember | null {
     look: typeof v.look === "string" ? v.look : "",
     fictionalAdultConfirmed: true,
     createdAt: typeof v.createdAt === "number" ? v.createdAt : Date.now(),
+    ...(cleanPictureUrls(v.pictureUrls).length ? { pictureUrls: cleanPictureUrls(v.pictureUrls) } : {}),
+    ...(v.isAnimal === true ? { isAnimal: true } : {}),
   };
 }
 

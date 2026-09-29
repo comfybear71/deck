@@ -38,8 +38,8 @@ export type CharacterLoraStatus = "draft" | "making" | "training" | "finishing" 
  * switch face detection off, since there's no real face to find, and
  * caption "a cartoon of" / "a photo of" respectively.
  */
-export type CharacterTrainingStyle = "photo" | "cartoon" | "faceless";
-export const CHARACTER_TRAINING_STYLES: CharacterTrainingStyle[] = ["photo", "cartoon", "faceless"];
+export type CharacterTrainingStyle = "photo" | "cartoon" | "faceless" | "render3d";
+export const CHARACTER_TRAINING_STYLES: CharacterTrainingStyle[] = ["photo", "cartoon", "faceless", "render3d"];
 
 /** Pictures the one-tap flow aims for (existing pictures plus Siray-made ones). */
 export const AUTO_PICTURE_TARGET = 15;
@@ -177,8 +177,9 @@ export function comfyEmbeddingToken(repo: string, embeddingFile: string): string
 
 /** Caption opener, used both for training captions (`TOK`) and the Comfy prompt (the embedding token). */
 export function captionPrefix(style: CharacterTrainingStyle, token: string, subjectWord: string): string {
-  const word = subjectWord.trim().toLowerCase() || (style === "cartoon" ? "character" : "person");
-  return `${style === "cartoon" ? "a cartoon of" : "a photo of"} ${token} ${word}, `;
+  const word = subjectWord.trim().toLowerCase() || (style === "cartoon" || style === "render3d" ? "character" : "person");
+  const opener = style === "cartoon" ? "a cartoon of" : style === "render3d" ? "a 3D cartoon render of" : "a photo of";
+  return `${opener} ${token} ${word}, `;
 }
 
 /** The prompt opener that switches the character on in Comfy. */

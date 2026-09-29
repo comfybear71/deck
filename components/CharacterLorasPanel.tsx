@@ -43,11 +43,12 @@ import {
 
 const TRAINING_PICTURE_MAX_DIMENSION = 1600;
 const POLL_EVERY_MS = 20_000;
-const SUBJECT_WORDS = ["woman", "man", "person", "character"];
+const SUBJECT_WORDS = ["woman", "man", "person", "character", "animal"];
 const STYLE_OPTIONS: { value: CharacterTrainingStyle; label: string }[] = [
   { value: "photo", label: "Real-looking face" },
   { value: "cartoon", label: "Cartoon" },
   { value: "faceless", label: "Face hidden" },
+  { value: "render3d", label: "3D cartoon" },
 ];
 
 type Busy = { id: string; kind: "upload" | "train" | "check" } | null;

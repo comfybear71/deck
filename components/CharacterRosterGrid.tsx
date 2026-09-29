@@ -18,6 +18,7 @@ import {
   makeSirayPicture,
   referenceDataUrlFor,
   startCharacterTraining,
+  toTrainingPicture,
 } from "@/lib/characterAutoLora";
 import {
   ROSTER_GROUPS,
@@ -37,7 +38,7 @@ import {
   patchSkidmarksEpisodes,
   type SkidmarksState,
 } from "@/lib/skidmarks";
-import { buildSkidmarksCastMember } from "@/lib/skidmarksEpisodes";
+import { SKIDMARKS_CAST_MAX_PICTURES, buildSkidmarksCastMember, castNameFromFileName } from "@/lib/skidmarksEpisodes";
 
 /**
  * The thumbnail grid at the top of the Characters screen (2026-09-29):
@@ -59,7 +60,16 @@ const STYLE_LABELS: Record<CharacterTrainingStyle, string> = {
   photo: "Real-looking face",
   cartoon: "Cartoon",
   faceless: "Face hidden",
+  render3d: "3D cartoon",
 };
+
+interface CastUpload {
+  key: string;
+  name: string;
+  isAnimal: boolean;
+  files: File[];
+  previews: string[];
+}
 
 function initials(name: string): string {
   return (
@@ -113,6 +123,10 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
   const [message, setMessage] = useState<Record<string, string>>({});
   const [armedGroup, setArmedGroup] = useState<string | null>(null);
   const [newCast, setNewCast] = useState({ name: "", look: "", adult: false, open: false });
+  // Picked picture files, grouped by name ("Clive 1.jpg", "Clive 2.jpg" are one character).
+  const [castUploads, setCastUploads] = useState<CastUpload[]>([]);
+  const [castUploadBusy, setCastUploadBusy] = useState<string | null>(null);
+  const castFileInput = useRef<HTMLInputElement | null>(null);
   /** Big view: a character's training pictures (flip + remove) or one single picture. */
   const [viewer, setViewer] = useState<{ entryId: string; index: number } | { url: string } | null>(null);
   const running = useRef(new Set<string>());
@@ -581,36 +595,209 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
   };
 
   const newCastBlocked = minorBlockReason(`${newCast.name} ${newCast.look}`);
-  const canAddCast = newCast.name.trim().length > 0 && newCast.look.trim().length > 0 && newCast.adult && !newCastBlocked;
+  const uploadsBlocked = castUploads.map((u) => (u.isAnimal ? null : minorBlockReason(u.name))).find(Boolean) ?? null;
+  const hasUploads = castUploads.length > 0;
+  const canAddCast = hasUploads
+    ? newCast.adult && !uploadsBlocked && !castUploadBusy && castUploads.every((u) => u.name.trim().length > 0)
+    : newCast.name.trim().length > 0 && newCast.look.trim().length > 0 && newCast.adult && !newCastBlocked;
+  const skidmarksCastByName = new Map(
+    allChars.filter((c) => c.group === "skidmarks").map((c) => [c.name.trim().toLowerCase(), c.sourceKey.replace(/^sk:/, "")]),
+  );
 
-  const addSkidmarksCast = () => {
-    if (!canAddCast) return;
-    const member = buildSkidmarksCastMember(newCast.name, newCast.look);
-    patchSkidmarksEpisodes((st) => ({ ...st, cast: [...st.cast, member] }));
-    flushSkidmarksSessionNow();
-    setNewCast({ name: "", look: "", adult: false, open: false });
-    setSelectedKey(`sk:${member.id}`);
+  const clearCastUploads = () => {
+    setCastUploads((list) => {
+      for (const u of list) for (const p of u.previews) URL.revokeObjectURL(p);
+      return [];
+    });
   };
+
+  const closeAddCast = () => {
+    clearCastUploads();
+    setCastUploadBusy(null);
+    setNewCast({ name: "", look: "", adult: false, open: false });
+  };
+
+  const pickCastFiles = (files: FileList | null) => {
+    const picked = Array.from(files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (!picked.length) return;
+    setCastUploads((list) => {
+      const next = list.map((u) => ({ ...u, files: [...u.files], previews: [...u.previews] }));
+      for (const f of picked) {
+        const name = castNameFromFileName(f.name) || "New character";
+        const key = name.toLowerCase();
+        let group = next.find((u) => u.key === key);
+        if (!group) {
+          group = { key, name, isAnimal: false, files: [], previews: [] };
+          next.push(group);
+        }
+        if (group.files.length >= SKIDMARKS_CAST_MAX_PICTURES) continue;
+        group.files.push(f);
+        group.previews.push(URL.createObjectURL(f));
+      }
+      return next;
+    });
+  };
+
+  const addSkidmarksCast = async () => {
+    if (!canAddCast) return;
+    if (!hasUploads) {
+      const member = buildSkidmarksCastMember(newCast.name, newCast.look);
+      patchSkidmarksEpisodes((st) => ({ ...st, cast: [...st.cast, member] }));
+      flushSkidmarksSessionNow();
+      closeAddCast();
+      setSelectedKey(`sk:${member.id}`);
+      return;
+    }
+    let lastKey: string | null = null;
+    try {
+      for (const u of castUploads) {
+        const urls: string[] = [];
+        for (let i = 0; i < u.previews.length; i++) {
+          setCastUploadBusy(`Saving ${u.name.trim()}, picture ${i + 1} of ${u.previews.length}…`);
+          urls.push(await toTrainingPicture(u.previews[i]));
+        }
+        const existingId = skidmarksCastByName.get(u.name.trim().toLowerCase());
+        if (existingId) {
+          patchSkidmarksEpisodes((st) => ({
+            ...st,
+            cast: st.cast.map((c) =>
+              c.id === existingId
+                ? {
+                    ...c,
+                    pictureUrls: [...new Set([...(c.pictureUrls ?? []), ...urls])].slice(0, SKIDMARKS_CAST_MAX_PICTURES),
+                    ...(u.isAnimal ? { isAnimal: true } : {}),
+                  }
+                : c,
+            ),
+          }));
+          lastKey = `sk:${existingId}`;
+        } else {
+          const member = buildSkidmarksCastMember(u.name, "", "supporting", Date.now(), undefined, {
+            pictureUrls: urls,
+            isAnimal: u.isAnimal,
+          });
+          patchSkidmarksEpisodes((st) => ({ ...st, cast: [...st.cast, member] }));
+          lastKey = `sk:${member.id}`;
+        }
+        flushSkidmarksSessionNow();
+      }
+      closeAddCast();
+      if (lastKey) setSelectedKey(lastKey);
+    } catch (err) {
+      setCastUploadBusy(null);
+      setMessage((m) => ({
+        ...m,
+        "add-cast": err instanceof Error ? err.message : "A picture couldn't be saved. Try again.",
+      }));
+    }
+  };
+
+  const renderCastUploads = () =>
+    hasUploads ? (
+      <div className="flex flex-col gap-2">
+        {castUploads.map((u, i) => {
+          const existing = skidmarksCastByName.has(u.name.trim().toLowerCase());
+          return (
+            <div key={u.key} className="flex flex-col gap-1.5 rounded-md border border-white/10 bg-black/30 p-1.5">
+              <div className="flex gap-1 overflow-x-auto">
+                {u.previews.map((p) => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img key={p} src={p} alt="" className="h-14 w-14 shrink-0 rounded object-cover" />
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  value={u.name}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    setCastUploads((list) => list.map((x, j) => (j === i ? { ...x, name } : x)));
+                  }}
+                  maxLength={60}
+                  className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/40 px-2 py-1 text-xs text-white"
+                />
+                <label className="flex items-center gap-1 text-[11px] text-white/60">
+                  <input
+                    type="checkbox"
+                    checked={u.isAnimal}
+                    onChange={(e) => {
+                      const isAnimal = e.target.checked;
+                      setCastUploads((list) => list.map((x, j) => (j === i ? { ...x, isAnimal } : x)));
+                    }}
+                  />
+                  Animal
+                </label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCastUploads((list) => {
+                      for (const p of list[i]?.previews ?? []) URL.revokeObjectURL(p);
+                      return list.filter((_, j) => j !== i);
+                    })
+                  }
+                  className="text-[11px] text-white/50"
+                  aria-label={`Remove ${u.name}`}
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="text-[10px] text-white/40">
+                {u.previews.length} picture{u.previews.length === 1 ? "" : "s"}
+                {existing ? ` · adds to your existing ${u.name.trim()}` : " · new character"}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    ) : null;
 
   /** Add a Skidmarks character: saved to the Skidmarks cast list, so the episodes can use them too. */
   const renderAddSkidmarksCast = () =>
     newCast.open ? (
       <div className="mb-2 flex flex-col gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2">
         <input
-          value={newCast.name}
-          onChange={(e) => setNewCast((c) => ({ ...c, name: e.target.value }))}
-          placeholder="Name"
-          maxLength={60}
-          className="rounded-md border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white placeholder:text-white/30"
+          ref={castFileInput}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            pickCastFiles(e.target.files);
+            e.target.value = "";
+          }}
         />
-        <textarea
-          value={newCast.look}
-          onChange={(e) => setNewCast((c) => ({ ...c, look: e.target.value }))}
-          placeholder="Their look, e.g. late-40s bloke, sunburnt, wild grey mullet, faded hi-vis shirt, stubby shorts"
-          rows={2}
-          maxLength={600}
-          className="rounded-md border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white placeholder:text-white/30"
-        />
+        <button
+          type="button"
+          onClick={() => castFileInput.current?.click()}
+          disabled={Boolean(castUploadBusy)}
+          className="rounded-md border border-dashed border-white/25 px-2 py-2 text-xs text-white/80 disabled:opacity-40"
+        >
+          {hasUploads ? "+ Add more pictures" : "Add from pictures (pick one or many)"}
+        </button>
+        {hasUploads ? (
+          <p className="text-[11px] text-white/50">
+            Each file name becomes the name. Pictures with the same name and a number (Clive 1, Clive 2) go to one character.
+            A name you already have adds the pictures to them.
+          </p>
+        ) : (
+          <>
+            <input
+              value={newCast.name}
+              onChange={(e) => setNewCast((c) => ({ ...c, name: e.target.value }))}
+              placeholder="Name"
+              maxLength={60}
+              className="rounded-md border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white placeholder:text-white/30"
+            />
+            <textarea
+              value={newCast.look}
+              onChange={(e) => setNewCast((c) => ({ ...c, look: e.target.value }))}
+              placeholder="Their look, e.g. late-40s bloke, sunburnt, wild grey mullet, faded hi-vis shirt, stubby shorts"
+              rows={2}
+              maxLength={600}
+              className="rounded-md border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white placeholder:text-white/30"
+            />
+          </>
+        )}
+        {renderCastUploads()}
         <label className="flex items-start gap-2 text-[11px] text-white/60">
           <input
             type="checkbox"
@@ -618,22 +805,29 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
             onChange={(e) => setNewCast((c) => ({ ...c, adult: e.target.checked }))}
             className="mt-0.5"
           />
-          Made up, clearly an adult (over 25), and not a real person.
+          {hasUploads
+            ? "All made up and not real people. Every person is clearly an adult (over 25)."
+            : "Made up, clearly an adult (over 25), and not a real person."}
         </label>
-        {newCastBlocked && <p className="text-[11px] text-red-300">{newCastBlocked}</p>}
+        {(hasUploads ? uploadsBlocked : newCastBlocked) && (
+          <p className="text-[11px] text-red-300">{hasUploads ? uploadsBlocked : newCastBlocked}</p>
+        )}
+        {castUploadBusy && <p className="text-[11px] text-sky-300">{castUploadBusy}</p>}
+        {message["add-cast"] && !castUploadBusy && <p className="text-[11px] text-red-300">{message["add-cast"]}</p>}
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={addSkidmarksCast}
+            onClick={() => void addSkidmarksCast()}
             disabled={!canAddCast}
             className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
           >
-            Add
+            {hasUploads ? `Add ${castUploads.length} character${castUploads.length === 1 ? "" : "s"}` : "Add"}
           </button>
           <button
             type="button"
-            onClick={() => setNewCast({ name: "", look: "", adult: false, open: false })}
-            className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/70"
+            onClick={closeAddCast}
+            disabled={Boolean(castUploadBusy)}
+            className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/70 disabled:opacity-40"
           >
             Cancel
           </button>
