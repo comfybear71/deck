@@ -366,3 +366,13 @@ export function estimateAdultShortsClipCostUsd(durationSec: number): number {
 export function formatUsd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
+
+/**
+ * One saved short cleaned the same way the session loader cleans the
+ * Library, or `null` if it isn't one. Used by per-item saving
+ * (`deck_items`, kind `adult-short`) so a short's row and the session
+ * copy always compare field for field.
+ */
+export function normalizeAdultShortsSavedEntry(value: unknown): AdultShortsSaved | null {
+  return normalizeSaved([value])[0] ?? null;
+}

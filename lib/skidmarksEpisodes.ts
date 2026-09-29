@@ -348,3 +348,14 @@ export function normalizeSkidmarksEpisodesState(value: unknown): SkidmarksEpisod
 export function skidmarksEpisodesHaveUserContent(state: SkidmarksEpisodesState | null | undefined): boolean {
   return Boolean(state && (state.episodes.length > 0 || state.cast.length > 0));
 }
+
+/**
+ * One episode cleaned the same way the session loader cleans it, or
+ * `null` if it isn't one. Used by per-item saving (`deck_items`, kind
+ * `skidmarks-episode`) so an episode row and the session copy always
+ * compare field for field. Cast ids are kept as they are here; the
+ * session loader drops ones whose cast member is gone.
+ */
+export function normalizeSkidmarksEpisode(value: unknown): SkidmarksEpisode | null {
+  return normalizeEpisode(value);
+}

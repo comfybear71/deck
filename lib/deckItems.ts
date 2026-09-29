@@ -15,8 +15,10 @@
  * Nothing in the app creates them.
  */
 
-/** The kinds this build saves per item. Later steps add more. */
-export const DECK_ITEM_KINDS = ["character"] as const;
+/** The kinds this build saves per item. Later steps add more.
+ * `skidmarks-episode`: one Skidmarks episode (`SkidmarksState.skidmarksEpisodes.episodes[]`).
+ * `adult-short`: one saved short from the Shorts Library (`SkidmarksState.adultShorts.saved[]`). */
+export const DECK_ITEM_KINDS = ["character", "skidmarks-episode", "adult-short"] as const;
 export type DeckItemKind = (typeof DECK_ITEM_KINDS)[number];
 
 export function isDeckItemKind(value: unknown): value is DeckItemKind {
@@ -64,6 +66,16 @@ export function characterFolder(sourceKey: string | null | undefined): DeckFolde
   }
 }
 
+/**
+ * The folder every row of a kind lives in, for the kinds that belong to
+ * one project. Characters are foldered per card instead (`characterFolder`).
+ * Shorts keep the `adult-shorts` key the database and code already use.
+ */
+export const DECK_ITEM_KIND_FOLDERS: Partial<Record<DeckItemKind, DeckFolder>> = {
+  "skidmarks-episode": "skidmarks",
+  "adult-short": "adult-shorts",
+};
+
 /** `expectedRevision` for an item this device has never seen on the server. */
 export const DECK_ITEM_NEW_REVISION = 0;
 
@@ -90,7 +102,8 @@ export interface DeckItemTombstone {
   revision: number;
 }
 
-/** Item ids are app-made (`clora_<uuid>`, `clora_skye`); anything else is refused. */
+/** Item ids are app-made (`clora_<uuid>`, `clora_skye`, `ep_<uuid>`,
+ * `short_<time>_<rand>`); anything else is refused. */
 export function isValidDeckItemId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(value);
 }
