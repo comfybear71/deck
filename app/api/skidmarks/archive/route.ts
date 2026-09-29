@@ -1,5 +1,7 @@
 import { del, list, put } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { listAllBlobsUnder } from "@/lib/blobListAll";
+import { DECK_ARCHIVE_PATHNAME_RE, deckProjectsPrefixes } from "@/lib/deckMediaPaths";
 import {
   collapseArchivedSongsByIdentity,
   songsShareArchiveIdentity,
@@ -92,18 +94,30 @@ async function deleteSnapshotUrls(urls: string[]): Promise<void> {
  */
 async function recoverOrphanedSnapshots(indexed: unknown[]): Promise<unknown[]> {
   const knownIds = new Set(indexed.filter(isRecordWithId).map((s) => s.id));
+  const knownUrls = new Set(indexed.map(snapshotUrlOf).filter((url): url is string => url !== null));
   let blobs: { pathname: string; url: string; uploadedAt: Date }[];
   try {
     ({ blobs } = await list({ prefix: ARCHIVE_PATH_PREFIX }));
   } catch {
     return []; // Blob itself unreachable — nothing to recover this pass, not a crash.
   }
+  // New snapshots live in each song's own `archive/` folder in the
+  // readable tree. Listed separately and best-effort, so a problem there
+  // never stops old snapshots from being recovered.
+  try {
+    blobs = [...blobs, ...(await listAllBlobsUnder(deckProjectsPrefixes()))];
+  } catch {
+    // Keep what the old folder gave us.
+  }
 
   const recovered: unknown[] = [];
   for (const blob of blobs) {
-    const match = blob.pathname.match(SNAPSHOT_PATHNAME_RE);
-    if (!match) continue;
-    const id = match[1];
+    if (knownUrls.has(blob.url)) continue;
+    const oldMatch = blob.pathname.match(SNAPSHOT_PATHNAME_RE);
+    const deckMatch = oldMatch ? null : blob.pathname.match(DECK_ARCHIVE_PATHNAME_RE);
+    if (!oldMatch && !deckMatch) continue;
+    // A tree snapshot has no id in its path; its own path stands in.
+    const id = oldMatch ? oldMatch[1] : `deck-${blob.pathname.replace(/[^a-z0-9-]+/g, "-")}`;
     if (knownIds.has(id)) continue;
     try {
       const res = await fetch(blob.url);

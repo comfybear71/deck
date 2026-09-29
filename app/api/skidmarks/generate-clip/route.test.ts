@@ -1868,3 +1868,21 @@ describe("POST /api/skidmarks/generate-clip — Instrumental Siray Wan 3.0 i2v S
     expect(sent.duration).toBe(30);
   });
 });
+
+describe("resolvePersistenceTarget: song folder in the readable tree (2026-09-30)", () => {
+  const base = { segmentId: "segment_1", plateId: "plate_1", clipIndex: 3, startSec: 40, endSec: 90 };
+
+  it("keeps a valid song project", () => {
+    expect(resolvePersistenceTarget({ ...base, mediaProject: { genre: "music-video", slug: "crack-haul" } })).toMatchObject({
+      project: { genre: "music-video", slug: "crack-haul" },
+    });
+  });
+
+  it("drops a bad one and saves the old way", () => {
+    for (const mediaProject of [{ genre: "music-video", slug: "../x" }, { genre: "nope", slug: "a" }, "crack-haul", null]) {
+      const t = resolvePersistenceTarget({ ...base, mediaProject });
+      expect(t).not.toBeNull();
+      expect(t).not.toHaveProperty("project");
+    }
+  });
+});

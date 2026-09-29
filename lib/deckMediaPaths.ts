@@ -169,6 +169,31 @@ export function deckCharacterOwner(genre: DeckGenre, characterSlug: string): Dec
   };
 }
 
+export const DECK_GENRES: readonly DeckGenre[] = ["sunnybank", "music-video", "skidmarks", "shorts"];
+
+export function isDeckGenre(value: unknown): value is DeckGenre {
+  return typeof value === "string" && (DECK_GENRES as readonly string[]).includes(value);
+}
+
+/** Every genre's projects folder, `deck/<genre>/<episodes|songs|shorts>/`
+ * — what a shelf lists to find renders and archives in the new tree. */
+export function deckProjectsPrefixes(): string[] {
+  return DECK_GENRES.map((g) => `${DECK_MEDIA_ROOT}/${g}/${DECK_GENRE_PROJECTS_FOLDER[g]}/`);
+}
+
+/** Which project a render or archive belongs to (`music-video` + `crack-haul`). */
+export interface DeckMediaProject {
+  genre: DeckGenre;
+  slug: string;
+}
+
+/** Reads a project sent over the wire. Anything off-shape is `null`. */
+export function parseDeckMediaProject(value: unknown): DeckMediaProject | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  return isDeckGenre(v.genre) && isSafeDeckMediaSlug(v.slug) && v.slug.length <= 40 ? { genre: v.genre, slug: v.slug } : null;
+}
+
 /** `deck/<genre>/<episodes|songs|shorts>/<project>` — the same for every genre. */
 export function deckProjectFolder(genre: DeckGenre, projectSlug: string): string {
   return `${DECK_MEDIA_ROOT}/${genre}/${DECK_GENRE_PROJECTS_FOLDER[genre]}/${projectSlug}`;
@@ -289,6 +314,16 @@ export function songMediaSlug(fileName: string): string {
 export function songAudioTarget(songSlug: string): DeckMediaTarget {
   return { folder: deckProjectFolder("music-video", songSlug), name: songSlug };
 }
+
+/** A song's archive snapshot: `deck/music-video/songs/crack-haul/archive/crack-haul-archive.json`
+ * (`-v2`… for a later Archive while an older one is still there). */
+export function projectArchiveTarget(project: DeckMediaProject): DeckMediaTarget {
+  return { folder: `${deckProjectFolder(project.genre, project.slug)}/archive`, name: `${project.slug}-archive` };
+}
+
+/** Matches an archive snapshot anywhere in the tree; `[1]` is its stem. */
+export const DECK_ARCHIVE_PATHNAME_RE =
+  /^deck\/[a-z0-9-]+\/(?:episodes|songs|shorts)\/[a-z0-9-]+\/archive\/([a-z0-9-]+)\.json$/;
 
 /** `deck/music-video/songs/crack-haul/plates/crack-haul-clip-03b` —
  * clip number is 1-based, plate letter 0 → `a` (matches the render

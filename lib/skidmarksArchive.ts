@@ -43,6 +43,8 @@
 
 import { upload } from "@vercel/blob/client";
 import { buildStoreZip } from "./zipDownload";
+import { projectArchiveTarget, songMediaSlug } from "./deckMediaPaths";
+import { uploadToDeckTreeOrLegacy } from "./deckMediaUpload";
 import { fetchPersistedClipRenders } from "./clipRenders";
 import { getSkidmarksCharacterLock, resolvePlateReferenceDataUrl, resolveVocalistForPrompt } from "./plateGeneration";
 import { formatDuration, type SkidmarksBand, type SkidmarksMp3Attachment, type SkidmarksScriptSequenceDraft } from "./skidmarks";
@@ -103,14 +105,25 @@ export async function uploadArchiveSnapshot(
   archiveId: string,
   snapshot: SkidmarksArchiveSnapshot
 ): Promise<UploadArchiveSnapshotOutcome> {
-  const pathname = `${ARCHIVE_PATH_PREFIX}${archiveId}/snapshot.json`;
+  const legacyPathname = () => `${ARCHIVE_PATH_PREFIX}${archiveId}/snapshot.json`;
   try {
     const blob = new Blob([JSON.stringify(snapshot)], { type: "application/json" });
-    const result = await upload(pathname, blob, {
-      access: "public",
-      handleUploadUrl: HANDLE_UPLOAD_URL,
-      contentType: "application/json",
-    });
+    // In the song's own folder in the readable tree
+    // (`deck/music-video/songs/<song>/archive/<song>-archive.json`, `-v2`…
+    // while an older copy is still there) when the song has a name;
+    // otherwise, or if that fails, the old `skidmarks/archive/` path.
+    // The shelf finds either through the index (and its recovery scan).
+    const fileName = snapshot.mp3?.fileName ?? "";
+    const target = fileName.trim()
+      ? projectArchiveTarget({ genre: "music-video", slug: songMediaSlug(fileName) })
+      : null;
+    const result = target
+      ? await uploadToDeckTreeOrLegacy(blob, "application/json", "json", target, legacyPathname)
+      : await upload(legacyPathname(), blob, {
+          access: "public",
+          handleUploadUrl: HANDLE_UPLOAD_URL,
+          contentType: "application/json",
+        });
     return { ok: true, url: result.url };
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : "Could not upload the archive snapshot." };

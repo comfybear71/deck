@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLIP_RENDER_PATH_PREFIX } from "@/lib/clipRenderBlob";
+import { deckProjectsPrefixes } from "@/lib/deckMediaPaths";
+
+const TREE_PREFIX_COUNT = deckProjectsPrefixes().length;
 
 const listMock = vi.fn();
 const delMock = vi.fn();
@@ -24,6 +27,8 @@ describe("GET /api/skidmarks/clip-renders", () => {
   beforeEach(() => {
     listMock.mockReset();
     delMock.mockReset();
+    // The readable tree's project folders are listed too; empty unless a test says otherwise.
+    listMock.mockResolvedValue({ blobs: [] });
   });
 
   afterEach(() => {
@@ -58,7 +63,7 @@ describe("GET /api/skidmarks/clip-renders", () => {
     const res = await GET(getRequest("?segmentIds=seg-1,seg-2"));
     const body = await res.json();
 
-    expect(listMock).toHaveBeenCalledTimes(1);
+    expect(listMock).toHaveBeenCalledTimes(1 + TREE_PREFIX_COUNT);
     expect(listMock).toHaveBeenCalledWith({ prefix: CLIP_RENDER_PATH_PREFIX });
     expect(body).toEqual({
       configured: true,
@@ -144,7 +149,7 @@ describe("GET /api/skidmarks/clip-renders", () => {
     listMock.mockResolvedValueOnce({ blobs: [] });
     const { GET } = await importRoute();
     await GET(getRequest("?segmentIds=seg-1,seg-1,seg-1"));
-    expect(listMock).toHaveBeenCalledTimes(1);
+    expect(listMock).toHaveBeenCalledTimes(1 + TREE_PREFIX_COUNT);
   });
 
   it("ignores an unsafe id in the query string rather than passing it through", async () => {
@@ -171,6 +176,8 @@ describe("DELETE /api/skidmarks/clip-renders", () => {
   beforeEach(() => {
     listMock.mockReset();
     delMock.mockReset();
+    // The readable tree's project folders are listed too; empty unless a test says otherwise.
+    listMock.mockResolvedValue({ blobs: [] });
   });
 
   it("rejects a request missing segmentId or plateId without calling list()/del()", async () => {
@@ -245,5 +252,95 @@ describe("DELETE /api/skidmarks/clip-renders", () => {
     const body = await res.json();
 
     expect(body).toEqual({ deleted: false, error: "Vercel Blob: delete failed." });
+  });
+});
+
+describe("renders in the readable deck/ tree (2026-09-30)", () => {
+  const songs = "deck/music-video/songs/";
+  const at = (d: string) => new Date(d);
+
+  beforeEach(() => {
+    listMock.mockReset();
+    delMock.mockReset();
+    listMock.mockImplementation(async ({ prefix }: { prefix: string }) => {
+      if (prefix === CLIP_RENDER_PATH_PREFIX) {
+        return { blobs: [{ pathname: `${CLIP_RENDER_PATH_PREFIX}seg-1/plate-1/01_0000-0040_render.mp4`, url: "https://x/old.mp4", uploadedAt: at("2026-09-01T00:00:00Z") }] };
+      }
+      if (prefix === songs) {
+        return {
+          blobs: [
+            { pathname: `${songs}crack-haul/renders/seg-2/plate-1/crack-haul-clip-02a-0040-0090.mp4`, url: "https://x/new.mp4", uploadedAt: at("2026-09-30T00:00:00Z") },
+            { pathname: `${songs}crack-haul/renders/seg-2/plate-1/crack-haul-clip-02a-0040-0090-last-frame.jpg`, url: "https://x/new.jpg", uploadedAt: at("2026-09-30T00:00:00Z") },
+            { pathname: `${songs}crack-haul/plates/crack-haul-clip-02a.jpg`, url: "https://x/plate.jpg", uploadedAt: at("2026-09-30T00:00:00Z") },
+          ],
+        };
+      }
+      return { blobs: [] };
+    });
+  });
+
+  it("shows old and new renders side by side, and nothing that isn't a render", async () => {
+    const { GET } = await importRoute();
+    const body = await (await GET(getRequest("?segmentIds=seg-1,seg-2"))).json();
+    expect(body.renders).toEqual([
+      { segmentId: "seg-1", plateId: "plate-1", url: "https://x/old.mp4", filename: "01_0000-0040_render.mp4", clipIndex: 1, startSec: 0, endSec: 40 },
+      { segmentId: "seg-2", plateId: "plate-1", url: "https://x/new.mp4", filename: "crack-haul-clip-02a-0040-0090.mp4", clipIndex: 2, startSec: 40, endSec: 90 },
+    ]);
+  });
+
+  it("the newest take wins when a plate has one in each place", async () => {
+    listMock.mockImplementation(async ({ prefix }: { prefix: string }) => {
+      if (prefix === CLIP_RENDER_PATH_PREFIX) {
+        return { blobs: [{ pathname: `${CLIP_RENDER_PATH_PREFIX}seg-2/plate-1/02a_0040-0090_render.mp4`, url: "https://x/old.mp4", uploadedAt: at("2026-09-01T00:00:00Z") }] };
+      }
+      if (prefix === songs) {
+        return { blobs: [{ pathname: `${songs}crack-haul/renders/seg-2/plate-1/crack-haul-clip-02a-0040-0090.mp4`, url: "https://x/new.mp4", uploadedAt: at("2026-09-30T00:00:00Z") }] };
+      }
+      return { blobs: [] };
+    });
+    const { GET } = await importRoute();
+    const body = await (await GET(getRequest("?segmentIds=seg-2"))).json();
+    expect(body.renders.map((r: { url: string }) => r.url)).toEqual(["https://x/new.mp4"]);
+  });
+
+  it("follows Blob's page cursor so renders past the first page still show", async () => {
+    listMock.mockImplementation(async ({ prefix, cursor }: { prefix: string; cursor?: string }) => {
+      if (prefix === songs && !cursor) return { blobs: [], hasMore: true, cursor: "page-2" };
+      if (prefix === songs && cursor === "page-2") {
+        return { blobs: [{ pathname: `${songs}crack-haul/renders/seg-2/plate-1/crack-haul-clip-02a-0040-0090.mp4`, url: "https://x/new.mp4", uploadedAt: at("2026-09-30T00:00:00Z") }] };
+      }
+      return { blobs: [] };
+    });
+    const { GET } = await importRoute();
+    const body = await (await GET(getRequest("?segmentIds=seg-2"))).json();
+    expect(body.renders).toHaveLength(1);
+  });
+
+  it("Remove clears the plate's files in both places, and only that plate's", async () => {
+    listMock.mockImplementation(async ({ prefix }: { prefix: string }) => {
+      if (prefix === `${CLIP_RENDER_PATH_PREFIX}seg-2/plate-1/`) {
+        return { blobs: [{ pathname: `${CLIP_RENDER_PATH_PREFIX}seg-2/plate-1/02_0040-0090_render.mp4`, url: "u", uploadedAt: at("2026-09-01T00:00:00Z") }] };
+      }
+      if (prefix === songs) {
+        return {
+          blobs: [
+            { pathname: `${songs}crack-haul/renders/seg-2/plate-1/crack-haul-clip-02a-0040-0090.mp4`, url: "u", uploadedAt: at("2026-09-30T00:00:00Z") },
+            { pathname: `${songs}crack-haul/renders/seg-2/plate-1/crack-haul-clip-02a-0040-0090-last-frame.jpg`, url: "u", uploadedAt: at("2026-09-30T00:00:00Z") },
+            { pathname: `${songs}crack-haul/renders/seg-2/plate-2/crack-haul-clip-02b-0040-0090.mp4`, url: "u", uploadedAt: at("2026-09-30T00:00:00Z") },
+            { pathname: `${songs}crack-haul/plates/crack-haul-clip-02a.jpg`, url: "u", uploadedAt: at("2026-09-30T00:00:00Z") },
+          ],
+        };
+      }
+      return { blobs: [] };
+    });
+    delMock.mockResolvedValue(undefined);
+    const { DELETE } = await importRoute();
+    const body = await (await DELETE(deleteRequest("?segmentId=seg-2&plateId=plate-1"))).json();
+    expect(body).toEqual({ deleted: true });
+    expect(delMock).toHaveBeenCalledWith([
+      `${CLIP_RENDER_PATH_PREFIX}seg-2/plate-1/02_0040-0090_render.mp4`,
+      `${songs}crack-haul/renders/seg-2/plate-1/crack-haul-clip-02a-0040-0090.mp4`,
+      `${songs}crack-haul/renders/seg-2/plate-1/crack-haul-clip-02a-0040-0090-last-frame.jpg`,
+    ]);
   });
 });
