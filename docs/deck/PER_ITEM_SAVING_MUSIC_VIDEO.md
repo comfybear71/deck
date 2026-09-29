@@ -78,7 +78,7 @@ The tables already exist (made for characters). Nothing to migrate.
 - `lib/deckItems.ts`: the `music-video-band` and `music-video-song` kinds, and `deckItemSeedKinds` (bands and songs are seeded together).
 - `lib/deckItems-server.ts`: `prepareDeckItemData` cleans a band or song; `listDeckItems` reports `seeded` for the pair.
 - `lib/musicVideoItemData.ts`: what a band row and a song row hold, cleaned the same way on the server, in the browser and in the seed.
-- `lib/deckItemSync.ts`: the shared per-item engine, the same file as the Skidmarks episodes and shorts step (PR 216), plus one optional `toData` hook so a band's PUT can carry its members' character references.
+- `lib/deckItemSync.ts`: the shared per-item engine, the one engine every kind uses, plus one optional `toData` hook so a band's PUT can carry its members' character references.
 - `lib/musicVideoItems.ts`: Music video glue (the band and song kind configs, laying server rows over the studio state).
 - `lib/skidmarks.ts`: wiring (`persist` hands every edit over; `removeSkidmarksBand` and `clearSkidmarksMp3` are the only deletes; read after each session load).
 - `lib/musicVideoItemsSeed.ts` + `scripts/seed-deck-items-music-video.ts`: the one-time seed.
