@@ -154,7 +154,7 @@ function BandTile({
               className="absolute inset-0 h-full w-full object-cover"
             />
             {/* A thin bottom-only scrim — just enough to keep the name/
-                tagline legible without washing out the middle of the
+                legible without washing out the middle of the
                 picked cover photo. */}
             <span
               aria-hidden
@@ -164,9 +164,6 @@ function BandTile({
               <span className="line-clamp-1 text-sm font-bold uppercase tracking-wide text-white drop-shadow">
                 {displayName}
               </span>
-              <span className="line-clamp-1 text-[10px] leading-tight text-white/80">
-                {band.tagline}
-              </span>
             </span>
           </>
         ) : (
@@ -174,15 +171,21 @@ function BandTile({
             <span className="line-clamp-2 text-sm font-bold uppercase tracking-wide text-white drop-shadow">
               {displayName}
             </span>
-            <span className="line-clamp-2 text-[10px] leading-tight text-white/70">
-              {band.tagline}
-            </span>
           </span>
+        )}
+        {/* The chosen border is drawn as its own top layer: the cover
+            <img> paints over the button's own inset ring, which is why it
+            was nearly invisible on a real cover (Stuart, 2026-09-29). */}
+        {active && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 z-10 rounded-2xl ring-4 ring-inset ring-rose-400"
+          />
         )}
         {active && (
           <span
             aria-hidden
-            className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-rose-400 text-[12px] font-bold text-white shadow"
+            className="absolute bottom-1.5 right-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-rose-400 text-[12px] font-bold text-white shadow"
           >
             ✓
           </span>
@@ -240,7 +243,7 @@ function BandTile({
  * renders instead of the mock gradient — a real picked photo, not a
  * generated stand-in — and a trash "remove band" glyph (top-left) that
  * deletes the band outright via `onRemoveBand`. When a cover photo is
- * set, the name/tagline sit in a thin bottom scrim only, so the picked
+ * set, the band name sits in a thin bottom scrim only, so the picked
  * photo's middle stays visible instead of getting washed out.
  */
 export function SkidmarksBandPicker({
