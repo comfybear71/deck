@@ -5,6 +5,7 @@ import {
   getSkidmarksEpisodesState,
   getSkidmarksSnapshot,
   patchSkidmarksEpisodes,
+  removeSkidmarksEpisode,
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
 import {
@@ -135,7 +136,7 @@ function EpisodesTab({ onOpen }: { onOpen: (id: string) => void }) {
   };
 
   const remove = (id: string) => {
-    patchSkidmarksEpisodes((s) => ({ ...s, episodes: s.episodes.filter((e) => e.id !== id) }));
+    removeSkidmarksEpisode(id);
     setConfirmDeleteId(null);
   };
 

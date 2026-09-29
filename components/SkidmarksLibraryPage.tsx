@@ -16,10 +16,10 @@ import {
   getAdultShortsState,
   getSkidmarksSnapshot,
   patchAdultShorts,
+  removeSavedAdultShort,
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
 import {
-  deleteSavedAdultShort,
   editorHasUnsavedChanges,
   openSavedAdultShort,
   type AdultShortsSaved,
@@ -741,7 +741,7 @@ export function SkidmarksLibraryPage({
           const entry = pendingAdultDelete;
           setPendingAdultDelete(null);
           if (!entry) return;
-          patchAdultShorts((st) => deleteSavedAdultShort(st, entry.id));
+          removeSavedAdultShort(entry.id);
           flushSkidmarksSessionNow();
         }}
       />

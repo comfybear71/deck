@@ -12,13 +12,19 @@
  *
  * Step 1 covered characters (`kind = "character"`). Step 2 adds Sunnybank
  * episodes (`kind = "sunnybank-episode"`, one row per saved episode card,
- * folder `sunnybank`). The tables are created by
+ * folder `sunnybank`), Skidmarks episodes (`skidmarks-episode`, folder
+ * `skidmarks`) and saved shorts (`adult-short`, folder `adult-shorts`).
+ * The tables are created by
  * `db/migrations/2026-09-30_deck_items.sql`, run by hand. Nothing in the
  * app creates them.
  */
 
-/** The kinds this build saves per item. Later steps add more. */
-export const DECK_ITEM_KINDS = ["character", "sunnybank-episode"] as const;
+/** The kinds this build saves per item. Later steps add more.
+ * `character`: one character card (`SkidmarksState.characterLoras.characters[]`).
+ * `sunnybank-episode`: one saved Sunnybank episode card.
+ * `skidmarks-episode`: one Skidmarks episode (`SkidmarksState.skidmarksEpisodes.episodes[]`).
+ * `adult-short`: one saved short from the Shorts Library (`SkidmarksState.adultShorts.saved[]`). */
+export const DECK_ITEM_KINDS = ["character", "sunnybank-episode", "skidmarks-episode", "adult-short"] as const;
 export type DeckItemKind = (typeof DECK_ITEM_KINDS)[number];
 
 export function isDeckItemKind(value: unknown): value is DeckItemKind {
@@ -67,6 +73,17 @@ export function characterFolder(sourceKey: string | null | undefined): DeckFolde
   }
 }
 
+/**
+ * The folder every row of a kind lives in, for the kinds that belong to
+ * one project. Characters are foldered per card instead (`characterFolder`).
+ * Shorts keep the `adult-shorts` key the database and code already use.
+ */
+export const DECK_ITEM_KIND_FOLDERS: Partial<Record<DeckItemKind, DeckFolder>> = {
+  "sunnybank-episode": "sunnybank",
+  "skidmarks-episode": "skidmarks",
+  "adult-short": "adult-shorts",
+};
+
 /** `expectedRevision` for an item this device has never seen on the server. */
 export const DECK_ITEM_NEW_REVISION = 0;
 
@@ -93,8 +110,9 @@ export interface DeckItemTombstone {
   revision: number;
 }
 
-/** Item ids are app-made (`clora_<uuid>`, `clora_skye`, an episode's
- * `ws-<savedAt>-<seq>-<fingerprint>`); anything else is refused. */
+/** Item ids are app-made (`clora_<uuid>`, `clora_skye`, a Sunnybank
+ * episode's `ws-<savedAt>-<seq>-<fingerprint>`, a Skidmarks episode's
+ * `ep_<uuid>`, a short's `short_<time>_<rand>`); anything else is refused. */
 export function isValidDeckItemId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(value);
 }

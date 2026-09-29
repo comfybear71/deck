@@ -196,12 +196,15 @@ import {
   emptySkidmarksEpisodesState,
   normalizeSkidmarksEpisodesState,
   skidmarksEpisodesHaveUserContent,
+  type SkidmarksEpisode,
   type SkidmarksEpisodesState,
 } from "./skidmarksEpisodes";
 import {
   adultShortsHaveUserContent,
+  deleteSavedAdultShort,
   emptyAdultShortsState,
   normalizeAdultShortsState,
+  type AdultShortsSaved,
   type AdultShortsState,
 } from "./adultShorts";
 import {
@@ -217,8 +220,11 @@ import {
   type CharacterLoraEntry,
   type CharacterLorasState,
 } from "./characterLoras";
-import { createCharacterItemSync, type CharacterItemSync } from "./characterItems";
-import { createSunnybankEpisodeItemSync, type SunnybankEpisodeItemSync } from "./sunnybankEpisodeItems";
+import { createDeckItemSync, type DeckItemEntry, type DeckItemKindConfig, type DeckItemSync } from "./deckItemSync";
+import { CHARACTER_ITEMS } from "./characterItems";
+import { SUNNYBANK_EPISODE_ITEMS } from "./sunnybankEpisodeItems";
+import { SKIDMARKS_EPISODE_ITEMS } from "./skidmarksEpisodeItems";
+import { ADULT_SHORT_ITEMS } from "./adultShortItems";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -2692,9 +2698,11 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     // the session load just put on screen (items win). Read-only; it
     // never writes an item by itself. See `lib/characterItems.ts`.
     void getCharacterItemSync()?.refreshFromServer();
-    // Same for the Sunnybank episode cards. Read-only too. See
-    // `lib/sunnybankEpisodeItems.ts`.
+    // Same for every other kind (Sunnybank episodes, Skidmarks episodes,
+    // shorts): one engine, `lib/deckItemSync.ts`. Read-only too.
     void getSunnybankEpisodeItemSync()?.refreshFromServer();
+    void getSkidmarksEpisodeItemSync()?.refreshFromServer();
+    void getAdultShortItemSync()?.refreshFromServer();
   }
 }
 
@@ -2960,6 +2968,8 @@ export function flushSkidmarksSessionNow(keepalive = false): void {
   // Any character card or episode card waiting on its own debounce goes now too.
   characterItemSync?.flush(keepalive);
   sunnybankEpisodeItemSync?.flush(keepalive);
+  skidmarksEpisodeItemSync?.flush(keepalive);
+  adultShortItemSync?.flush(keepalive);
 }
 
 /**
@@ -3013,6 +3023,8 @@ export async function loadSkidmarksSessionFromServerNow(): Promise<boolean> {
     // win). Read-only.
     void getCharacterItemSync()?.refreshFromServer();
     void getSunnybankEpisodeItemSync()?.refreshFromServer();
+    void getSkidmarksEpisodeItemSync()?.refreshFromServer();
+    void getAdultShortItemSync()?.refreshFromServer();
     return true;
   } catch (err) {
     setSessionSync({
@@ -3061,7 +3073,9 @@ function ensureSessionPersistenceWired(): void {
       sessionSync.status === "saving" ||
       sessionSync.status === "error" ||
       characterItemSync?.hasUnsavedWork() ||
-      sunnybankEpisodeItemSync?.hasUnsavedWork()
+      sunnybankEpisodeItemSync?.hasUnsavedWork() ||
+      skidmarksEpisodeItemSync?.hasUnsavedWork() ||
+      adultShortItemSync?.hasUnsavedWork()
     ) {
       e.preventDefault();
       e.returnValue = "";
@@ -3211,10 +3225,23 @@ export function getSkidmarksEpisodesState(state: SkidmarksState = getSkidmarksSn
 export function patchSkidmarksEpisodes(updater: (state: SkidmarksEpisodesState) => SkidmarksEpisodesState): void {
   const current = getSkidmarksSnapshot();
   const base = getSkidmarksEpisodesState(current);
-  persist({
-    ...current,
-    skidmarksEpisodes: updater({ episodes: base.episodes.slice(), cast: base.cast.slice() }),
-  });
+  const next = updater({ episodes: base.episodes.slice(), cast: base.cast.slice() });
+  persist({ ...current, skidmarksEpisodes: next });
+  // Per-item saving: only the episodes that really changed are sent, one
+  // debounced PUT each. An episode missing from `next` is never a delete;
+  // only `removeSkidmarksEpisode` (a real delete tap) deletes.
+  getSkidmarksEpisodeItemSync()?.noteLocalChange(base.episodes, next.episodes);
+}
+
+/**
+ * The one real delete for a Skidmarks episode, called only from its
+ * delete tap. Removes it here (and from the whole-session save, as
+ * before) and soft-deletes its `deck_items` row.
+ */
+export function removeSkidmarksEpisode(id: string): void {
+  const before = getSkidmarksEpisodesState().episodes.find((e) => e.id === id) ?? null;
+  patchSkidmarksEpisodes((s) => ({ ...s, episodes: s.episodes.filter((e) => e.id !== id) }));
+  getSkidmarksEpisodeItemSync()?.deleteItem(id, before);
 }
 
 /** Adult shorts — empty until the first edit. */
@@ -3225,15 +3252,28 @@ export function getAdultShortsState(state: SkidmarksState = getSkidmarksSnapshot
 export function patchAdultShorts(updater: (state: AdultShortsState) => AdultShortsState): void {
   const current = getSkidmarksSnapshot();
   const base = getAdultShortsState(current);
-  persist({
-    ...current,
-    adultShorts: updater({
-      ...base,
-      character: { ...base.character, referenceUrls: base.character.referenceUrls.slice() },
-      shots: base.shots.map((s) => ({ ...s })),
-      saved: base.saved.slice(),
-    }),
+  const next = updater({
+    ...base,
+    character: { ...base.character, referenceUrls: base.character.referenceUrls.slice() },
+    shots: base.shots.map((s) => ({ ...s })),
+    saved: base.saved.slice(),
   });
+  persist({ ...current, adultShorts: next });
+  // Per-item saving: only the saved shorts that really changed are sent,
+  // one debounced PUT each. A short missing from `next.saved` is never a
+  // delete; only `removeSavedAdultShort` (a real delete tap) deletes.
+  getAdultShortItemSync()?.noteLocalChange(base.saved, next.saved);
+}
+
+/**
+ * The one real delete for a saved short, called only from its delete
+ * tap in the Library. Removes it here (and from the whole-session save,
+ * as before) and soft-deletes its `deck_items` row.
+ */
+export function removeSavedAdultShort(id: string): void {
+  const before = getAdultShortsState().saved.find((x) => x.id === id) ?? null;
+  patchAdultShorts((s) => deleteSavedAdultShort(s, id));
+  getAdultShortItemSync()?.deleteItem(id, before);
 }
 
 /** Character LoRAs — the Skye seed until the first edit. */
@@ -3262,35 +3302,73 @@ export function patchCharacterLoras(updater: (state: CharacterLorasState) => Cha
 export function removeCharacterLora(id: string): void {
   const before = getCharacterLorasState().characters.find((c) => c.id === id) ?? null;
   patchCharacterLoras((s) => ({ characters: s.characters.filter((c) => c.id !== id) }));
-  getCharacterItemSync()?.deleteCharacter(id, before);
+  getCharacterItemSync()?.deleteItem(id, before);
 }
 
 /* --------------------------------------------------------------------
- * Per-item saving for characters (2026-09-30, step 1). The engine and
- * its rules live in `lib/characterItems.ts`; this is only the wiring
- * into the in-memory store. Browser only. The whole-session save above
- * keeps running as a mirror; the `deck_items` rows are the source of
- * truth for characters once the seed has run.
+ * Per-item saving (2026-09-30): characters, Sunnybank episodes,
+ * Skidmarks episodes and shorts. ONE engine and one set of rules for
+ * every kind (`lib/deckItemSync.ts`), one instance per kind; each kind's
+ * own file (`lib/characterItems.ts`, `lib/sunnybankEpisodeItems.ts`,
+ * `lib/skidmarksEpisodeItems.ts`, `lib/adultShortItems.ts`) only says
+ * which kind it is and how one item is cleaned. This is only the wiring
+ * into the in-memory store, the same four lines for every kind. Browser
+ * only. The whole-session save keeps running as a mirror; the
+ * `deck_items` rows are the source of truth for a kind once its seed has
+ * run.
  * -------------------------------------------------------------------- */
-let characterItemSync: CharacterItemSync | null = null;
+function createStoreItemSync<T extends DeckItemEntry>(
+  config: DeckItemKindConfig<T>,
+  getEntries: () => T[],
+  applyServerEntries: (next: T[]) => void,
+): DeckItemSync<T> {
+  return createDeckItemSync(config, {
+    fetch: (input, init) => fetch(input, init),
+    getEntries,
+    applyServerEntries,
+    onProblem: (message) => console.warn(`[deck items] ${message}`),
+  });
+}
 
-function getCharacterItemSync(): CharacterItemSync | null {
+let characterItemSync: DeckItemSync<CharacterLoraEntry> | null = null;
+function getCharacterItemSync(): DeckItemSync<CharacterLoraEntry> | null {
   if (!isBrowser()) return null;
-  if (!characterItemSync) {
-    characterItemSync = createCharacterItemSync({
-      fetch: (input, init) => fetch(input, init),
-      getCharacters: () => getCharacterLorasState().characters,
-      applyServerCharacters: applyServerCharacterLoras,
-      onProblem: (message) => console.warn(`[deck items] ${message}`),
-    });
-  }
+  characterItemSync ??= createStoreItemSync(CHARACTER_ITEMS, () => getCharacterLorasState().characters, applyServerCharacterLoras);
   return characterItemSync;
 }
 
-/** Puts server cards on screen. Deliberately not `persist()` and not
- * `patchCharacterLoras`: this is a load, so it must never count as an
- * edit or write anything back (items or session). The next real edit
- * mirrors it into the session save as usual. */
+let sunnybankEpisodeItemSync: DeckItemSync<SunnyBanksWorkspaceSnapshot> | null = null;
+function getSunnybankEpisodeItemSync(): DeckItemSync<SunnyBanksWorkspaceSnapshot> | null {
+  if (!isBrowser()) return null;
+  sunnybankEpisodeItemSync ??= createStoreItemSync(
+    SUNNYBANK_EPISODE_ITEMS,
+    () => getSkidmarksSnapshot().sunnyBanks?.workspaces ?? [],
+    applyServerSunnyBanksEpisodes,
+  );
+  return sunnybankEpisodeItemSync;
+}
+
+let skidmarksEpisodeItemSync: DeckItemSync<SkidmarksEpisode> | null = null;
+function getSkidmarksEpisodeItemSync(): DeckItemSync<SkidmarksEpisode> | null {
+  if (!isBrowser()) return null;
+  skidmarksEpisodeItemSync ??= createStoreItemSync(SKIDMARKS_EPISODE_ITEMS, () => getSkidmarksEpisodesState().episodes, applyServerSkidmarksEpisodes);
+  return skidmarksEpisodeItemSync;
+}
+
+let adultShortItemSync: DeckItemSync<AdultShortsSaved> | null = null;
+function getAdultShortItemSync(): DeckItemSync<AdultShortsSaved> | null {
+  if (!isBrowser()) return null;
+  adultShortItemSync ??= createStoreItemSync(ADULT_SHORT_ITEMS, () => getAdultShortsState().saved, applyServerAdultShorts);
+  return adultShortItemSync;
+}
+
+/*
+ * Putting server items on screen. Each is a load, not an edit: never
+ * `persist()` and never the kind's patch function, so it never counts
+ * as an edit or writes anything back (items or session). The next real
+ * edit mirrors it into the session save as usual.
+ */
+
 function applyServerCharacterLoras(characters: CharacterLoraEntry[]): void {
   const current = getSkidmarksSnapshot();
   cachedState = { ...current, characterLoras: { characters } };
@@ -3298,32 +3376,7 @@ function applyServerCharacterLoras(characters: CharacterLoraEntry[]): void {
   notify();
 }
 
-/* --------------------------------------------------------------------
- * Per-item saving for Sunnybank episodes (2026-09-30, step 2). Same
- * shape as the characters wiring above; the engine and its rules live
- * in `lib/sunnybankEpisodeItems.ts`. One saved episode card = one
- * `deck_items` row. The live working copy is not an item; it keeps
- * riding in the whole-session save, which also keeps mirroring the
- * cards.
- * -------------------------------------------------------------------- */
-let sunnybankEpisodeItemSync: SunnybankEpisodeItemSync | null = null;
-
-function getSunnybankEpisodeItemSync(): SunnybankEpisodeItemSync | null {
-  if (!isBrowser()) return null;
-  if (!sunnybankEpisodeItemSync) {
-    sunnybankEpisodeItemSync = createSunnybankEpisodeItemSync({
-      fetch: (input, init) => fetch(input, init),
-      getEpisodes: () => getSkidmarksSnapshot().sunnyBanks?.workspaces ?? [],
-      applyServerEpisodes: applyServerSunnyBanksEpisodes,
-      onProblem: (message) => console.warn(`[deck items] ${message}`),
-    });
-  }
-  return sunnybankEpisodeItemSync;
-}
-
-/** Puts server episode cards on the shelf. Like `applyServerCharacterLoras`:
- * not `persist()`, so it never counts as an edit or writes anything back.
- * The live working copy is left alone. */
+/** The shelf only; the live working copy is left alone. */
 function applyServerSunnyBanksEpisodes(workspaces: SunnyBanksWorkspaceSnapshot[]): void {
   const current = getSkidmarksSnapshot();
   const studio = resolvedSunnyBanks(current);
@@ -3332,11 +3385,44 @@ function applyServerSunnyBanksEpisodes(workspaces: SunnyBanksWorkspaceSnapshot[]
   notify();
 }
 
+/** The episode list only; the cast is left alone. */
+function applyServerSkidmarksEpisodes(episodes: SkidmarksEpisode[]): void {
+  const current = getSkidmarksSnapshot();
+  cachedState = { ...current, skidmarksEpisodes: { ...getSkidmarksEpisodesState(current), episodes } };
+  noteContentObserved(cachedState);
+  notify();
+}
+
+/** The Library list only; the open editor is left exactly as it is. */
+function applyServerAdultShorts(saved: AdultShortsSaved[]): void {
+  const current = getSkidmarksSnapshot();
+  const base = getAdultShortsState(current);
+  cachedState = {
+    ...current,
+    adultShorts: {
+      ...base,
+      saved,
+      // Same rule the session loader applies: a Library link to a short
+      // that is gone is cleared, never pointed at something else.
+      currentSavedId: base.currentSavedId && saved.some((x) => x.id === base.currentSavedId) ? base.currentSavedId : null,
+    },
+  };
+  noteContentObserved(cachedState);
+  notify();
+}
+
 /** After the Blob image migration: keep the per-item lists that are on
- * screen now rather than the pre-upload snapshot's copy of them. */
+ * screen now rather than the pre-upload snapshot's copy of them (the
+ * migration never touches them, and an overlay or 409 adopt may have
+ * landed meanwhile). */
 function keepPerItemListsOnScreen(migrated: SkidmarksState): SkidmarksState {
   const onScreen = cachedState;
-  const next: SkidmarksState = { ...migrated, characterLoras: onScreen?.characterLoras ?? migrated.characterLoras };
+  const next: SkidmarksState = {
+    ...migrated,
+    characterLoras: onScreen?.characterLoras ?? migrated.characterLoras,
+    skidmarksEpisodes: onScreen?.skidmarksEpisodes ?? migrated.skidmarksEpisodes,
+    adultShorts: onScreen?.adultShorts ?? migrated.adultShorts,
+  };
   if (onScreen?.sunnyBanks) {
     next.sunnyBanks = migrated.sunnyBanks
       ? { ...migrated.sunnyBanks, workspaces: onScreen.sunnyBanks.workspaces }
@@ -3448,7 +3534,7 @@ export function deleteSunnyBanksWorkspace(id: string): void {
       workspaces: current.sunnyBanks.workspaces.filter((workspace) => workspace.id !== id),
     },
   });
-  getSunnybankEpisodeItemSync()?.deleteEpisode(id, before);
+  getSunnybankEpisodeItemSync()?.deleteItem(id, before);
 }
 
 /**
