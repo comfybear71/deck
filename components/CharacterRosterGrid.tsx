@@ -141,16 +141,116 @@ function Badge({ char, entry }: { char: RosterCharacter; entry: CharacterLoraEnt
   return null;
 }
 
+/**
+ * The one button on a face (top-right): an empty ring to start, a
+ * filling ring while it works, a green tick once trained. No prices.
+ */
+function CornerButton({
+  char,
+  entry,
+  onStart,
+  onOpen,
+}: {
+  char: RosterCharacter;
+  entry: CharacterLoraEntry | null;
+  onStart: () => void;
+  onOpen: () => void;
+}) {
+  const base = "absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-full";
+  if (char.blockedReason)
+    return (
+      <span className={`${base} bg-black/70 text-[11px]`} title={char.blockedReason}>
+        🔒
+      </span>
+    );
+  const status = entry?.status;
+  if (status === "ready")
+    return (
+      <button
+        type="button"
+        onClick={onOpen}
+        className={`${base} bg-emerald-500 text-[13px] font-bold text-white shadow`}
+        aria-label={`${char.name} is trained. Show their pictures`}
+      >
+        ✓
+      </button>
+    );
+  if (status === "making" || status === "training" || status === "finishing") {
+    const target = entry?.autoPictureTarget ?? AUTO_PICTURE_TARGET;
+    // Pictures fill most of the ring; training spins the last part.
+    const frac =
+      status === "making"
+        ? entry?.cleanReferenceApproved
+          ? 0.1 + 0.7 * Math.min(1, (entry?.trainingImageUrls.length ?? 0) / Math.max(1, target))
+          : 0.05
+        : 0.9;
+    const r = 11;
+    const c = 2 * Math.PI * r;
+    return (
+      <span
+        className={`${base} bg-black/70`}
+        role="progressbar"
+        aria-label={status === "making" ? `Making ${char.name}'s pictures` : `Training ${char.name}`}
+        aria-valuenow={Math.round(frac * 100)}
+      >
+        <svg viewBox="0 0 28 28" className={`h-7 w-7 -rotate-90 ${status === "making" ? "" : "animate-spin"}`} aria-hidden>
+          <circle cx="14" cy="14" r={r} fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="3" />
+          <circle
+            cx="14"
+            cy="14"
+            r={r}
+            fill="none"
+            stroke="rgb(52 211 153)"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeDasharray={`${c * frac} ${c}`}
+          />
+        </svg>
+      </span>
+    );
+  }
+  if (status === "failed")
+    return (
+      <button
+        type="button"
+        onClick={onStart}
+        className={`${base} bg-red-500 text-[13px] font-bold text-white shadow`}
+        aria-label={`Didn't finish for ${char.name}. Tap to try again`}
+        title={entry?.error ?? "Didn't finish. Tap to try again."}
+      >
+        !
+      </button>
+    );
+  return (
+    <button
+      type="button"
+      onClick={onStart}
+      className={`${base} bg-black/60 shadow ring-2 ring-inset ring-white/70 hover:ring-emerald-300`}
+      aria-label={`Train ${char.name}`}
+      title={`Train ${char.name}`}
+    >
+      <span className="h-2 w-2 rounded-full bg-white/80" aria-hidden />
+    </button>
+  );
+}
+
 export function CharacterRosterGrid({
   snapshot,
   onlyGroup,
   renderEntryCard,
+  simple = false,
 }: {
   snapshot: SkidmarksState;
   /** Show just this group (the Characters bar on each project screen). */
   onlyGroup?: RosterGroup;
   /** The character's LoRA card (pictures, Train, Comfy links), shown inside their panel. */
   renderEntryCard?: (entry: CharacterLoraEntry) => ReactNode;
+  /**
+   * One-button faces (Stuart, 2026-09-29; Sunny Banks first): a corner
+   * button on each face does everything with no stops, prices or
+   * settings; a ticked face opens just its pictures and Redo.
+   */
+  simple?: boolean;
 }) {
   const roster = useMemo(() => buildCharacterRoster(snapshot), [snapshot]);
   const { characters } = getCharacterLorasState(snapshot);
@@ -196,6 +296,33 @@ export function CharacterRosterGrid({
           (e.sourceKey && charByKey.get(e.sourceKey)) || { name: e.name, look: "", neverShow: "", style: e.trainingStyle };
         const withStyle = { ...char, style: e.trainingStyle };
 
+        // One-button faces: draw the clean picture (arms down, empty hands)
+        // and use it straight away, with no stop to okay it.
+        if (e.autoTrain && !e.cleanReferenceApproved) {
+          const src = char.thumbUrl ?? char.extraPictureUrls?.[0] ?? e.trainingImageUrls[0] ?? null;
+          try {
+            let refData: string | null = null;
+            if (src) {
+              refData = refCache.current.get(src) ?? (await referenceDataUrlFor(src));
+              refCache.current.set(src, refData);
+            }
+            const clean = await makeSirayPicture(
+              buildCleanReferencePrompt({ ...withStyle, subjectWord: e.subjectWord }, Boolean(refData)),
+              refData,
+            );
+            patchEntry(entryId, { referenceUrl: clean, cleanReferenceApproved: true, cleanCandidateUrl: null });
+            flushSkidmarksSessionNow();
+            failedRounds = 0;
+          } catch (err) {
+            failedRounds++;
+            const permanent = err instanceof AutoLoraError && err.permanent;
+            if (permanent || failedRounds >= MAX_FAILED_ROUNDS) {
+              return fail(entryId, err instanceof Error ? err.message : "Couldn't draw their clean picture.");
+            }
+          }
+          continue;
+        }
+
         // Their existing picture is only Siray's reference, never a training
         // picture: thumbnails often show a held prop (Shazza's cigarette, Nan's
         // bat) and anything in the training set gets baked into the LoRA.
@@ -219,6 +346,16 @@ export function CharacterRosterGrid({
 
         const target = e.autoPictureTarget ?? AUTO_PICTURE_TARGET;
         const have = e.trainingImageUrls.length;
+        if (have >= target && e.autoTrain) {
+          // One-button faces go straight on to training.
+          try {
+            patchEntry(entryId, await startCharacterTraining({ ...e, fictionalAdultConfirmed: true }));
+            flushSkidmarksSessionNow();
+          } catch (err) {
+            fail(entryId, err instanceof Error ? err.message : "Training didn't start.");
+          }
+          return;
+        }
         if (have >= target) {
           // Stop for a look. Training only starts from "Train on these".
           patchEntry(entryId, { status: "draft", awaitingReview: true, autoPictureTarget: null, error: null });
@@ -232,7 +369,12 @@ export function CharacterRosterGrid({
           refData = await referenceDataUrlFor(refSrc);
           refCache.current.set(refSrc, refData);
         }
-        const prompts = buildTrainingPicturePrompts(withStyle, Math.min(SIRAY_AT_ONCE, target - have), have);
+        const prompts = buildTrainingPicturePrompts(
+          { ...withStyle, subjectWord: e.subjectWord },
+          Math.min(SIRAY_AT_ONCE, target - have),
+          have,
+          e.pictureRound ?? 0,
+        );
         const results = await Promise.allSettled(prompts.map((p) => makeSirayPicture(p, refData!)));
         const made = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
         if (made.length > 0) {
@@ -308,6 +450,42 @@ export function CharacterRosterGrid({
     });
     flushSkidmarksSessionNow();
     pump();
+  };
+
+  /** The corner button: clean picture, pictures and training in one go. Picks the group's style itself. */
+  const startAuto = (char: RosterCharacter) => {
+    if (char.blockedReason) return;
+    const entry = ensureEntry(char, char.style);
+    if (entry.status === "making" || entry.status === "training" || entry.status === "finishing") return;
+    patchEntry(entry.id, {
+      status: "making",
+      trainingStyle: char.style,
+      subjectWord: char.subjectWord,
+      fictionalAdultConfirmed: true,
+      autoTrain: true,
+      error: null,
+      awaitingReview: false,
+      autoPictureTarget: Math.max(AUTO_PICTURE_TARGET, entry.trainingImageUrls.length),
+    });
+    flushSkidmarksSessionNow();
+    pump();
+  };
+
+  /**
+   * Redo on a trained face: pictures Stuart removed get replaced with new
+   * poses and places; if he removed none, all of them are made fresh.
+   * Then it retrains (the next version, so the current one keeps working).
+   */
+  const redo = (char: RosterCharacter, entry: CharacterLoraEntry) => {
+    const fresh = findEntry(entry.id) ?? entry;
+    const keep = fresh.trainingImageUrls.length >= AUTO_PICTURE_TARGET ? [] : fresh.trainingImageUrls;
+    patchEntry(entry.id, {
+      trainingImageUrls: keep,
+      pictureRound: (fresh.pictureRound ?? 0) + 1,
+      status: "draft",
+    });
+    setSelectedKey(null);
+    startAuto(char);
   };
 
   /** Who "Train everyone" would start in a group, and what it costs. */
@@ -638,6 +816,76 @@ export function CharacterRosterGrid({
     );
   };
 
+  /** A ticked face, opened: just its pictures (X to remove each) and Redo. A failed one shows why and Try again. */
+  const renderSimpleSelected = (char: RosterCharacter) => {
+    const entry = entryForRosterCharacter(characters, char.sourceKey);
+    if (!entry) return null;
+    if (entry.status === "failed")
+      return (
+        <div className="col-span-full flex flex-wrap items-center gap-2 rounded-xl border border-red-400/25 bg-black/30 p-3">
+          <p className="min-w-0 flex-1 text-xs text-red-200/90">{entry.error ?? "That didn't finish."}</p>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedKey(null);
+              startAuto(char);
+            }}
+            className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-medium text-white"
+          >
+            Try again
+          </button>
+        </div>
+      );
+    if (entry.status !== "ready") return null;
+    const pics = entry.trainingImageUrls;
+    return (
+      <div className="col-span-full rounded-xl border border-emerald-400/25 bg-black/30 p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="truncate text-sm font-semibold text-white">{char.name}</p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => redo(char, entry)}
+              className="rounded-md border border-white/20 px-3 py-1 text-xs text-white/85 hover:border-white/40"
+            >
+              Redo
+            </button>
+            <button type="button" onClick={() => setSelectedKey(null)} className="px-1 text-xs text-white/40" aria-label="Close">
+              ✕
+            </button>
+          </div>
+        </div>
+        {pics.length === 0 ? (
+          <p className="text-[11px] text-white/40">No pictures kept for {char.name}. Redo makes a new set.</p>
+        ) : (
+          <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-6">
+            {pics.map((u, i) => (
+              <div key={`${u}-${i}`} className="relative aspect-square overflow-hidden rounded-md bg-white/5">
+                <button
+                  type="button"
+                  onClick={() => setViewer({ entryId: entry.id, index: i })}
+                  className="block h-full w-full"
+                  aria-label="View bigger"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={u} alt="" className="h-full w-full object-cover object-top" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeReviewPicture(findEntry(entry.id) ?? entry, u)}
+                  className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/75 text-[11px] text-red-300"
+                  aria-label="Remove picture"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const newCastBlocked = minorBlockReason(`${newCast.name} ${newCast.look}`);
   const uploadsBlocked = castUploads.map((u) => (u.isAnimal ? null : minorBlockReason(u.name))).find(Boolean) ?? null;
   const hasUploads = castUploads.length > 0;
@@ -932,7 +1180,9 @@ export function CharacterRosterGrid({
   const viewerUrls = viewer ? ("url" in viewer ? [viewer.url] : viewerEntry?.trainingImageUrls ?? []) : [];
   const viewerIndex = viewer && "index" in viewer ? Math.min(viewer.index, viewerUrls.length - 1) : 0;
   const viewerUrl = viewerUrls[viewerIndex] ?? null;
-  const viewerCanRemove = Boolean(viewerEntry?.awaitingReview && viewerEntry.status === "draft");
+  const viewerCanRemove = Boolean(
+    viewerEntry && ((viewerEntry.awaitingReview && viewerEntry.status === "draft") || (simple && viewerEntry.status === "ready")),
+  );
   const flip = (step: number) =>
     setViewer((v) => (v && "entryId" in v && viewerUrls.length > 0 ? { ...v, index: (viewerIndex + step + viewerUrls.length) % viewerUrls.length } : v));
 
@@ -1017,7 +1267,7 @@ export function CharacterRosterGrid({
                       {done} of {list.length} trained
                     </p>
                   )}
-                  {plan.ready.length > 0 && (
+                  {!simple && plan.ready.length > 0 && (
                     <button
                       type="button"
                       onClick={() => {
@@ -1038,7 +1288,7 @@ export function CharacterRosterGrid({
                 </div>
               )}
             </div>
-            {armedGroup === g.id && (
+            {!simple && armedGroup === g.id && (
               <p className="mb-2 text-[11px] leading-relaxed text-white/50">
                 Makes pictures for {plan.ready.map((c) => c.name).join(", ")}, two at a time. Each one then waits for you to
                 check the pictures and tap Train (that total includes training). Tapping again confirms they&apos;re all made up,
@@ -1057,6 +1307,42 @@ export function CharacterRosterGrid({
                   const entry = entryForRosterCharacter(characters, c.sourceKey);
                   const face = entry?.referenceUrl ?? c.thumbUrl;
                   const isSel = selectedKey === c.sourceKey;
+                  if (simple) {
+                    // Only a ticked (or failed) face opens; the rest stay closed.
+                    const opens = entry?.status === "ready" || entry?.status === "failed";
+                    const toggle = () => setSelectedKey(isSel ? null : c.sourceKey);
+                    return (
+                      <div key={c.sourceKey} className={`flex min-w-0 flex-col items-center gap-1 rounded-lg p-1 ${isSel ? "bg-emerald-500/10" : ""}`}>
+                        <span
+                          className={`relative block aspect-square w-full overflow-hidden rounded-lg bg-white/5 ${
+                            c.blockedReason ? "opacity-40" : ""
+                          } ${entry?.status === "ready" ? "ring-2 ring-emerald-400/70" : ""}`}
+                        >
+                          <button
+                            type="button"
+                            onClick={opens ? toggle : undefined}
+                            className={`block h-full w-full ${opens ? "" : "cursor-default"}`}
+                            aria-label={opens ? `Show ${c.name}'s pictures` : c.name}
+                            tabIndex={opens ? 0 : -1}
+                          >
+                            {face ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={face} alt="" className="h-full w-full object-cover object-top" />
+                            ) : (
+                              <span className="flex h-full w-full items-center justify-center text-sm text-white/40">{initials(c.name)}</span>
+                            )}
+                          </button>
+                          <CornerButton char={c} entry={entry} onStart={() => startAuto(c)} onOpen={toggle} />
+                        </span>
+                        <span className="w-full truncate text-center text-[11px] text-white/75">{c.name}</span>
+                        {c.notReadyReason && (
+                          <span className="-mt-1 w-full truncate text-center text-[9px] text-white/40" title={c.notReadyReason}>
+                            not ready
+                          </span>
+                        )}
+                      </div>
+                    );
+                  }
                   return (
                     <button
                       key={c.sourceKey}
@@ -1081,8 +1367,8 @@ export function CharacterRosterGrid({
                     </button>
                   );
                 })}
-                {selected && selected.group === g.id && renderSelected(selected)}
-                {selected && selected.group === g.id && renderEntryCard && selectedEntry && (
+                {selected && selected.group === g.id && (simple ? renderSimpleSelected(selected) : renderSelected(selected))}
+                {!simple && selected && selected.group === g.id && renderEntryCard && selectedEntry && (
                   <div className="col-span-full">{renderEntryCard(selectedEntry)}</div>
                 )}
               </div>

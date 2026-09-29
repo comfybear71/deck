@@ -92,6 +92,14 @@ export interface CharacterLoraEntry {
   cleanCandidateUrl: string | null;
   /** `referenceUrl` is an okayed clean base, so the training pictures can be made from it. */
   cleanReferenceApproved: boolean;
+  /**
+   * One-button faces (2026-09-29): make the clean picture, make the
+   * pictures and start training with no stops for a look. Set by the
+   * corner button on a face; `false`/missing keeps the older step-by-step flow.
+   */
+  autoTrain?: boolean;
+  /** How many times Redo has run. 0 uses the fixed poses; each Redo picks new poses and places. */
+  pictureRound?: number;
 }
 
 export interface CharacterLorasState {
@@ -309,6 +317,8 @@ function normalizeEntry(raw: unknown): CharacterLoraEntry | null {
     cleanCandidateUrl:
       typeof r.cleanCandidateUrl === "string" && /^(https:|data:image\/|\/)/.test(r.cleanCandidateUrl) ? r.cleanCandidateUrl : null,
     cleanReferenceApproved: r.cleanReferenceApproved === true,
+    autoTrain: r.autoTrain === true,
+    pictureRound: typeof r.pictureRound === "number" && r.pictureRound > 0 ? Math.floor(r.pictureRound) : 0,
   };
 }
 

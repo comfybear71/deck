@@ -163,12 +163,6 @@ import {
  */
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
-/** The always-on cast strip only ever shows the locked series regulars
- * — a one-episode guest (Hans today) has no business sitting in a
- * permanent "the cast" row with no episode to scope him to (Stuart's
- * own correction, 2026-09-15). Still selectable in the line-test form
- * below once he has a voice + plate — this only hides the strip. */
-const SERIES_REGULARS = CAST_LIST.filter((c) => !c.guest);
 
 /** Longest name first so "Ranger Bazza" / "Unit 4S" win over a
  * shorter prefix. Keys of `SUNNY_BANKS_CAST`, not a parallel array. */
@@ -1994,47 +1988,9 @@ export function SkidmarksSunnyBanksPanel() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-white/40">Cast</p>
-        {/* Square thumbnails, horizontal scroll — same shape as the
-            "Choose a band" cover strip (`SkidmarksBandPicker`).
-            `overscroll-x-contain` + `-webkit-overflow-scrolling:touch`
-            match the plate strip's iOS Safari momentum-scroll fix. */}
-        <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 pl-0.5 pr-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
-          {SERIES_REGULARS.map((c) => {
-            const startImage = resolveSunnyBanksStartImage(c);
-            const ready = !!(c.voiceId && startImage);
-            return (
-              <div
-                key={c.name}
-                className={[
-                  "relative flex h-20 w-20 shrink-0 overflow-hidden rounded-xl",
-                  ready
-                    ? "bg-amber-300/[0.04] ring-1 ring-inset ring-amber-300/30"
-                    : "bg-white/[0.02] ring-1 ring-inset ring-white/10",
-                ].join(" ")}
-              >
-                {startImage ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- a fixed small static asset, not worth next/image here
-                  <img src={startImage} alt="" className="absolute inset-0 h-full w-full object-cover" />
-                ) : (
-                  <span className="flex h-full w-full items-center justify-center border border-dashed border-white/15 text-[10px] text-white/25">
-                    ?
-                  </span>
-                )}
-                <span aria-hidden className="absolute inset-x-0 bottom-0 h-9 bg-gradient-to-t from-black/85 via-black/40 to-transparent" />
-                <span className="absolute inset-x-0 bottom-0 flex flex-col gap-0.5 px-1.5 py-1 text-center">
-                  <span className={["line-clamp-1 text-[10px] font-semibold", ready ? "text-amber-100" : "text-white/60"].join(" ")}>
-                    {c.name}
-                  </span>
-                  {!ready && <span className="text-[8px] leading-tight text-white/40">not ready</span>}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
+      {/* The display-only Cast strip was removed 2026-09-29 (Stuart): the
+          faces live in the Characters section now, with "not ready" shown
+          there (see `sunnyBanksNotReadyReason` in lib/characterRoster.ts). */}
       <div className="flex touch-pan-y flex-col gap-2.5 overscroll-y-contain rounded-2xl border border-amber-300/25 bg-amber-300/[0.03] p-3">
         {PLATE_CAST.length === 0 ? (
           <p className="text-[12px] leading-relaxed text-white/40">

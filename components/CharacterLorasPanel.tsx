@@ -109,7 +109,7 @@ export function CharacterLorasPanel({ group }: { group?: RosterGroup } = {}) {
   const [armedDeleteId, setArmedDeleteId] = useState<string | null>(null);
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const polling = useRef(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(group === "sunny-banks");
   const roster = useMemo(() => buildCharacterRoster(snapshot), [snapshot]);
 
   const setError = (id: string, msg: string | null) =>
@@ -471,6 +471,10 @@ export function CharacterLorasPanel({ group }: { group?: RosterGroup } = {}) {
     );
   };
 
+  // One-button faces are Sunny Banks first (Stuart, 2026-09-29); the other
+  // project screens move over one at a time.
+  const simple = group === "sunny-banks";
+
   if (group) {
     const groupChars = roster[group];
     const done = groupChars.filter((ch) => characters.find((e) => e.sourceKey === ch.sourceKey)?.status === "ready").length;
@@ -494,10 +498,11 @@ export function CharacterLorasPanel({ group }: { group?: RosterGroup } = {}) {
         {(
           <div className={open ? "border-t border-white/10 px-4 pb-4 pt-3" : "hidden"}>
             <p className="mb-3 text-xs leading-relaxed text-white/55">
-              Tap a face to train them: okay one clean picture, make pictures, check them, then Train. Everything for that
-              character opens under their face.
+              {simple
+                ? "Tap the circle on a face to train them. A tick means they're ready. Tap a ticked face to see their pictures."
+                : "Tap a face to train them: okay one clean picture, make pictures, check them, then Train. Everything for that character opens under their face."}
             </p>
-            <CharacterRosterGrid snapshot={snapshot} onlyGroup={group} renderEntryCard={renderCard} />
+            <CharacterRosterGrid snapshot={snapshot} onlyGroup={group} renderEntryCard={renderCard} simple={simple} />
           </div>
         )}
       </section>

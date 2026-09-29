@@ -27,7 +27,7 @@ import { resolveMemberStillSleeve } from "./memberStillSleeve";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
 import type { SkidmarksState } from "./skidmarks";
 import { normalizeSkidmarksEpisodesState } from "./skidmarksEpisodes";
-import { SUNNY_BANKS_CAST, SUNNY_BANKS_STYLE_LOCK } from "./sunnyBanks";
+import { SUNNY_BANKS_CAST, SUNNY_BANKS_STYLE_LOCK, resolveSunnyBanksStartImage } from "./sunnyBanks";
 
 export type RosterGroup = "music-video" | "sunny-banks" | "skidmarks" | "adult-shorts";
 
@@ -55,6 +55,12 @@ export interface RosterCharacter {
   subjectWord: string;
   /** Set when this character can't be trained, with the reason shown on the tile. */
   blockedReason: string | null;
+  /**
+   * Set when an episode can't use them yet (a Sunny Banks regular with no
+   * voice or no start picture), shown as "not ready" under the name. This
+   * used to live on the Sunny Banks Cast strip, removed 2026-09-29.
+   */
+  notReadyReason?: string | null;
 }
 
 const MINOR_WORDS = /\b(teen|teens|teenage|teenager|child|children|kid|kids|boy|girl|minor|schoolkid|schoolboy|schoolgirl|underage|juvenile|toddler|baby)\b/i;
@@ -117,6 +123,7 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
       style: "cartoon",
       subjectWord: "character",
       blockedReason: minorBlockReason(`${c.name} ${c.look}`),
+      notReadyReason: sunnyBanksNotReadyReason(c),
     });
   }
 
@@ -196,6 +203,12 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
     }
   }
   return out;
+}
+
+/** Why a Sunny Banks regular can't be put in an episode yet (no voice, no start picture), or `null`. */
+export function sunnyBanksNotReadyReason(c: (typeof SUNNY_BANKS_CAST)[string]): string | null {
+  const missing = [!c.voiceId ? "a voice" : null, !resolveSunnyBanksStartImage(c) ? "a start picture" : null].filter(Boolean);
+  return missing.length ? `Needs ${missing.join(" and ")} before an episode can use them.` : null;
 }
 
 /** The style an added character trains in, same as the rest of their group. */
@@ -305,6 +318,89 @@ const ANIMAL_VARIATIONS = [
   "head-and-shoulders, facing the camera, neutral expression, plain white background",
 ];
 
+// Redo rounds (2026-09-29): Stuart's Redo should give new poses and new
+// places, not the same 15 again. Round 0 is the fixed list above; each
+// later round pairs a pose with a background from these pools, shifted
+// by the round so every Redo lands on a different mix.
+const REDO_POSES = [
+  "full body standing, weight on one leg, facing slightly left",
+  "full body mid-stride walking past, side-on",
+  "waist-up, leaning forward, curious expression",
+  "full body, hands resting on the hips, big grin",
+  "head-and-shoulders, turned to the right, eyebrows raised",
+  "sitting on a low step, full body, relaxed",
+  "full body, crouching down, looking at the viewer",
+  "waist-up, glancing back over the left shoulder",
+  "full body, stretching both arms up in a yawn",
+  "close-up of the face, squinting in bright sun",
+  "full body, leaning on a fence post",
+  "waist-up, frowning, one eyebrow up",
+  "full body from behind at three-quarter, head turned to the viewer",
+  "full body, jogging toward the viewer",
+  "waist-up, chuckling with the eyes shut",
+  "full body, standing with feet apart, chin up",
+  "head-and-shoulders, looking down, thoughtful",
+  "full body, waving one hand hello",
+];
+const REDO_BACKGROUNDS: Record<"cartoon" | "photo" | "animal", string[]> = {
+  cartoon: [
+    "outside a rusty letterbox",
+    "beside a clothesline full of washing",
+    "by a caravan park pool fence",
+    "under a jacaranda tree in bloom",
+    "on a cracked concrete driveway",
+    "next to a sun-faded ute",
+    "at a barbecue area with a tin roof",
+    "in front of a row of caravans at dusk",
+    "on a gravel road with a cattle grid",
+    "by the park office screen door",
+    "in the evening light by the amenities block",
+    "plain soft blue background",
+    "beside a garden gnome and pot plants",
+    "near a wheelie bin and a shed",
+  ],
+  photo: [
+    "plain warm beige background, soft light",
+    "quiet suburban street, morning light",
+    "park with trees, dappled shade",
+    "rooftop at sunset",
+    "inside a bright kitchen",
+    "old brick laneway, overcast",
+    "beach boardwalk, midday",
+    "empty car park at night, streetlights",
+    "library with shelves behind",
+    "field of long grass, golden hour",
+    "plain dark background, one side light",
+    "train platform, cool morning light",
+    "garden with flowers, soft daylight",
+    "underpass with graffiti, even light",
+  ],
+  animal: [
+    "on a sunny verandah",
+    "in long grass at golden hour",
+    "on a wooden fence",
+    "plain pale background, soft light",
+    "beside a garden tap and puddle",
+    "on a dusty road at dusk",
+    "under a shady tree",
+    "on a picnic table",
+    "by a back door screen",
+    "in soft morning mist",
+  ],
+};
+
+function redoVariation(style: CharacterTrainingStyle, subjectWord: string | undefined, index: number, round: number): string {
+  const bgs = isAnimal(subjectWord) ? REDO_BACKGROUNDS.animal : style === "cartoon" || style === "render3d" ? REDO_BACKGROUNDS.cartoon : REDO_BACKGROUNDS.photo;
+  if (isAnimal(subjectWord) || style === "faceless") {
+    // Keep their own safe poses (no chair poses for animals, face hidden for faceless); only the place changes.
+    const base = variationsFor(style, subjectWord);
+    const pose = base[(index + round * 4) % base.length].split(",").slice(0, 2).join(",");
+    return `${pose}, ${bgs[(index * 3 + round * 5) % bgs.length]}`;
+  }
+  const pose = REDO_POSES[(index + round * 5) % REDO_POSES.length];
+  return `${pose}, ${bgs[(index * 3 + round * 7) % bgs.length]}`;
+}
+
 function isAnimal(subjectWord?: string): boolean {
   return (subjectWord ?? "").trim().toLowerCase() === "animal";
 }
@@ -383,11 +479,14 @@ export function signatureLine(look: string): string {
 /**
  * Siray prompts for the training pictures, starting at `startIndex` so
  * a resumed run keeps moving through the list rather than repeating.
+ * `round` above 0 (a Redo) uses fresh pose and background pairs instead
+ * of the fixed list.
  */
 export function buildTrainingPicturePrompts(
   char: Pick<RosterCharacter, "name" | "look" | "neverShow" | "style"> & { subjectWord?: string },
   count: number,
   startIndex = 0,
+  round = 0,
 ): string[] {
   const animal = isAnimal(char.subjectWord);
   const list = variationsFor(char.style, char.subjectWord);
@@ -398,7 +497,7 @@ export function buildTrainingPicturePrompts(
       ? "exactly the same silhouette, hat, clothes and build"
       : "exactly the same face, hair, body shape and outfit";
   return Array.from({ length: Math.max(0, count) }, (_, i) => {
-    const variation = list[(startIndex + i) % list.length];
+    const variation = round > 0 ? redoVariation(char.style, char.subjectWord, startIndex + i, round) : list[(startIndex + i) % list.length];
     const parts = [
       `The same ${who} as in the reference image (${char.name}), ${same}.`,
       `${variation}.`,
