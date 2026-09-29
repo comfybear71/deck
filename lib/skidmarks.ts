@@ -219,6 +219,9 @@ import {
 } from "./characterLoras";
 import { createCharacterItemSync, type CharacterItemSync } from "./characterItems";
 import { createSunnybankEpisodeItemSync, type SunnybankEpisodeItemSync } from "./sunnybankEpisodeItems";
+import { createDeckItemSync, type DeckItemSync } from "./deckItemSync";
+import type { MusicVideoSongItem } from "./musicVideoItemData";
+import { MUSIC_VIDEO_SONG_ITEMS, deskSongItems, musicVideoBandItems, withServerBands, withServerDeskSong } from "./musicVideoItems";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -2663,10 +2666,14 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
       void migrateInlineSessionImagesToBlob(fetched).then(({ state: migrated, changed }) => {
         if (!changed) return;
         if (!shouldApplyHydratedSkidmarksSession(editsAtApply, localEditCount)) return;
-        // Keep the character cards and Sunnybank episode cards currently
-        // on screen: the per-item overlay may have landed while the images
-        // were uploading, and this migration never touches either anyway.
-        cachedState = keepPerItemListsOnScreen(migrated);
+        // Keep the character cards, Sunnybank episode cards, Music video
+        // bands and the desk's song currently on screen: a per-item
+        // overlay may have landed while the images were uploading.
+        const beforeMigration = cachedState;
+        cachedState = keepMusicVideoOverlay(fetched, keepPerItemListsOnScreen(migrated));
+        // The uploaded links replace inline pictures in bands/the song:
+        // a real content change, sent the same way as an edit.
+        noteMusicVideoItemChanges(beforeMigration, cachedState);
         writeLocalMirror(migrated);
         notify();
         void pushSkidmarksSessionNow();
@@ -2695,6 +2702,8 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     // Same for the Sunnybank episode cards. Read-only too. See
     // `lib/sunnybankEpisodeItems.ts`.
     void getSunnybankEpisodeItemSync()?.refreshFromServer();
+    // Same for Music video bands and songs (`lib/musicVideoItems.ts`).
+    refreshMusicVideoItems();
   }
 }
 
@@ -2808,11 +2817,13 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   if (!keepalive && snapshot) {
     const { state: migrated, changed } = await migrateInlineSessionImagesToBlob(snapshot);
     if (changed) {
-      // Same as the hydrate path: never roll the character cards or the
-      // episode cards back to the pre-upload snapshot (a per-item overlay
-      // or 409 adopt may have landed meanwhile); this migration never
-      // touches them.
-      cachedState = keepPerItemListsOnScreen(migrated);
+      // Same as the hydrate path: never roll the character cards, the
+      // episode cards, the bands or the desk's song back to the
+      // pre-upload snapshot (a per-item overlay or 409 adopt may have
+      // landed meanwhile).
+      const beforeMigration = cachedState;
+      cachedState = keepMusicVideoOverlay(snapshot, keepPerItemListsOnScreen(migrated));
+      noteMusicVideoItemChanges(beforeMigration, cachedState);
       writeLocalMirror(migrated);
       notify();
     }
@@ -2960,6 +2971,9 @@ export function flushSkidmarksSessionNow(keepalive = false): void {
   // Any character card or episode card waiting on its own debounce goes now too.
   characterItemSync?.flush(keepalive);
   sunnybankEpisodeItemSync?.flush(keepalive);
+  // And any Music video band or song.
+  bandItemSync?.flush(keepalive);
+  songItemSync?.flush(keepalive);
 }
 
 /**
@@ -3013,6 +3027,7 @@ export async function loadSkidmarksSessionFromServerNow(): Promise<boolean> {
     // win). Read-only.
     void getCharacterItemSync()?.refreshFromServer();
     void getSunnybankEpisodeItemSync()?.refreshFromServer();
+    refreshMusicVideoItems();
     return true;
   } catch (err) {
     setSessionSync({
@@ -3061,7 +3076,9 @@ function ensureSessionPersistenceWired(): void {
       sessionSync.status === "saving" ||
       sessionSync.status === "error" ||
       characterItemSync?.hasUnsavedWork() ||
-      sunnybankEpisodeItemSync?.hasUnsavedWork()
+      sunnybankEpisodeItemSync?.hasUnsavedWork() ||
+      bandItemSync?.hasUnsavedWork() ||
+      songItemSync?.hasUnsavedWork()
     ) {
       e.preventDefault();
       e.returnValue = "";
@@ -3149,7 +3166,10 @@ export function subscribeSkidmarks(listener: () => void): () => void {
  * principle, just reporting on the store that actually exists. */
 
 function persist(next: SkidmarksState) {
+  const prev = cachedState;
   cachedState = next;
+  // Per-item saving: only the bands/song that really changed are sent.
+  noteMusicVideoItemChanges(prev, next);
   localEditCount += 1;
   noteContentObserved(next);
   writeLocalMirror(next);
@@ -3343,6 +3363,107 @@ function keepPerItemListsOnScreen(migrated: SkidmarksState): SkidmarksState {
       : onScreen.sunnyBanks;
   }
   return next;
+}
+
+/* --------------------------------------------------------------------
+ * Per-item saving for Music video bands and songs (2026-09-30), the
+ * same pattern as characters above. The engine is `lib/deckItemSync.ts`,
+ * the Music video glue `lib/musicVideoItems.ts`; this is only the wiring
+ * into the in-memory store. Every band/song edit goes through
+ * `persist()`, which hands the before/after to `noteMusicVideoItemChanges`.
+ * Browser only. The whole-session save keeps running as a mirror.
+ * -------------------------------------------------------------------- */
+let bandItemSync: DeckItemSync<SkidmarksBand> | null = null;
+let songItemSync: DeckItemSync<MusicVideoSongItem> | null = null;
+const SEED_BAND_IDS: ReadonlySet<string> = new Set(SEED_BANDS.map((b) => b.id));
+
+function getBandItemSync(): DeckItemSync<SkidmarksBand> | null {
+  if (!isBrowser()) return null;
+  if (!bandItemSync) {
+    bandItemSync = createDeckItemSync(musicVideoBandItems(() => getCharacterLorasState().characters), {
+      fetch: (input, init) => fetch(input, init),
+      getEntries: () => getSkidmarksSnapshot().bands,
+      applyServerEntries: applyServerMusicVideoBands,
+      onProblem: (message) => console.warn(`[deck items] ${message}`),
+    });
+  }
+  return bandItemSync;
+}
+
+function getSongItemSync(): DeckItemSync<MusicVideoSongItem> | null {
+  if (!isBrowser()) return null;
+  if (!songItemSync) {
+    songItemSync = createDeckItemSync(MUSIC_VIDEO_SONG_ITEMS, {
+      fetch: (input, init) => fetch(input, init),
+      getEntries: () => deskSongItems(getSkidmarksSnapshot()),
+      applyServerEntries: applyServerMusicVideoSongs,
+      onProblem: (message) => console.warn(`[deck items] ${message}`),
+    });
+  }
+  return songItemSync;
+}
+
+/** Read the server's bands and songs and lay them over the screen. Read-only. */
+function refreshMusicVideoItems(): void {
+  void getBandItemSync()?.refreshFromServer();
+  void getSongItemSync()?.refreshFromServer();
+}
+
+/** Hands a real edit's before/after to the band and song engines. Only
+ * called for edits (`persist`, the upload-then-link migration), never
+ * for a load. A band or song missing from `next` is never a delete. */
+function noteMusicVideoItemChanges(prev: SkidmarksState | null, next: SkidmarksState): void {
+  if (!prev || !isBrowser()) return;
+  if (prev.bands !== next.bands) getBandItemSync()?.noteLocalChange(prev.bands, next.bands);
+  if (prev.session.mp3 !== next.session.mp3 || prev.session.scriptSequenceDraft !== next.session.scriptSequenceDraft || prev.session.bandId !== next.session.bandId) {
+    getSongItemSync()?.noteLocalChange(deskSongItems(prev), deskSongItems(next));
+  }
+}
+
+/** After an upload-then-link migration: keep bands/desk from `migrated`
+ * only if nothing (a per-item overlay, a 409 adopt) replaced them on
+ * screen since `snapshot` was taken; otherwise keep what's on screen
+ * and let the next save migrate again. */
+function keepMusicVideoOverlay(snapshot: SkidmarksState | null, migrated: SkidmarksState): SkidmarksState {
+  const now = cachedState;
+  if (!now || !snapshot) return migrated;
+  const bandsMoved = now.bands !== snapshot.bands || now.removedSeedBandIds !== snapshot.removedSeedBandIds;
+  return {
+    ...migrated,
+    bands: bandsMoved ? now.bands : migrated.bands,
+    removedSeedBandIds: bandsMoved ? now.removedSeedBandIds : migrated.removedSeedBandIds,
+    session: now.session !== snapshot.session ? now.session : migrated.session,
+  };
+}
+
+/** Puts server bands on screen. Like `applyServerCharacterLoras`: not
+ * `persist()`, so it never counts as an edit or writes anything back.
+ * Bands go through the same cleaning a session load does. */
+function applyServerMusicVideoBands(bands: SkidmarksBand[]): void {
+  const current = getSkidmarksSnapshot();
+  const next = withServerBands(current, bands.map(renameLegacySeedBand), SEED_BAND_IDS);
+  if (next.session.bandId !== current.session.bandId) notifySkidmarksIdentityWipe();
+  cachedState = next;
+  noteContentObserved(cachedState);
+  notify();
+}
+
+/** Puts the server's copy of the desk's song on screen (never a
+ * different song). Not `persist()`. The song goes through the same
+ * cleaning a session load does (`normalizeState`), so an upload or
+ * analysis that was mid-way on another device reads honestly here too. */
+function applyServerMusicVideoSongs(songs: MusicVideoSongItem[]): void {
+  const current = getSkidmarksSnapshot();
+  const next = withServerDeskSong(current, songs);
+  if (next === current) return;
+  const loaded = next.session.mp3 ? normalizeState(next).session : next.session;
+  const session = { ...next.session, mp3: loaded.mp3, scriptSequenceDraft: loaded.scriptSequenceDraft };
+  if (session.mp3?.attachId !== current.session.mp3?.attachId || session.bandId !== current.session.bandId) {
+    notifySkidmarksIdentityWipe();
+  }
+  cachedState = { ...next, session };
+  noteContentObserved(cachedState);
+  notify();
 }
 
 function resolvedSunnyBanks(state: SkidmarksState): SkidmarksSunnyBanksState {
@@ -3543,6 +3664,7 @@ export function createSkidmarksBand(): SkidmarksBand {
  * behavior as switching bands via `selectSkidmarksBand`). */
 export function removeSkidmarksBand(bandId: string): void {
   const current = getSkidmarksSnapshot();
+  const before = current.bands.find((b) => b.id === bandId) ?? null;
   const bands = current.bands.filter((b) => b.id !== bandId);
   const isSeed = SEED_BANDS.some((b) => b.id === bandId);
   const removedSeedBandIds = isSeed
@@ -3557,6 +3679,9 @@ export function removeSkidmarksBand(bandId: string): void {
       ? { ...current.session, bandId: null, mp3: null }
       : current.session,
   });
+  // The band's own trash tap: the one real delete for a band row (soft
+  // delete, history kept). Its song leaving the desk is not a delete.
+  getBandItemSync()?.deleteItem(bandId, before);
   if (wasActive) notifySkidmarksIdentityWipe();
 }
 
@@ -4325,7 +4450,12 @@ export function markSkidmarksTranscriptionFailed(attachId: string, reason: strin
 export function clearSkidmarksMp3(): void {
   const current = getSkidmarksSnapshot();
   if (!current.session.mp3) return;
+  const before = deskSongItems(current)[0] ?? null;
   persist({ ...current, session: { ...current.session, mp3: null } });
+  // The MP3 card's own remove tap: the one real delete for a song row
+  // (soft delete, history kept). A song merely leaving the desk (band
+  // switch, New, after Archive) is never a delete.
+  if (before) getSongItemSync()?.deleteItem(before.id, before);
 }
 
 function updateSkidmarksSegment(
