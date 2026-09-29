@@ -7,7 +7,15 @@ interface SkidmarksLandingTilesProps {
   onSelect: (kind: SkidmarksProjectKind) => void;
 }
 
-function TileIcon({ icon }: { icon: "note" | "tire" | "sun" | "adult" }) {
+function TileIcon({ icon }: { icon: "note" | "tire" | "sun" | "adult" | "face" }) {
+  if (icon === "face") {
+    return (
+      <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-5 w-5">
+        <circle cx="10" cy="7" r="3.25" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M3.75 17c.8-3.1 3.2-4.75 6.25-4.75S15.45 13.9 16.25 17" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+    );
+  }
   if (icon === "adult") {
     return (
       <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-5 w-5">
@@ -80,6 +88,11 @@ const KIND_ACCENT: Record<
     icon: "text-red-300",
     label: "text-white",
   },
+  characters: {
+    ring: "border-sky-400/40 hover:border-sky-400/60",
+    icon: "text-sky-300",
+    label: "text-white",
+  },
 };
 
 /**
@@ -95,7 +108,7 @@ export function SkidmarksLandingTiles({ activeKind, onSelect }: SkidmarksLanding
       <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-white/40">
         Start a project
       </p>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-5 gap-2">
         {SKIDMARKS_PROJECT_KINDS.map((k) => {
           const accent = KIND_ACCENT[k.kind];
           const active = activeKind === k.kind;

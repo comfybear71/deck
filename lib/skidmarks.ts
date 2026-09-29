@@ -202,6 +202,12 @@ import {
   normalizeAdultShortsState,
   type AdultShortsState,
 } from "./adultShorts";
+import {
+  characterLorasHaveUserContent,
+  emptyCharacterLorasState,
+  normalizeCharacterLorasState,
+  type CharacterLorasState,
+} from "./characterLoras";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -217,12 +223,12 @@ export const MAX_MEMBERS_PER_BAND = 3;
  * render (per the locked mockup) but are inert, so the row reads
  * correctly without pretending those flows exist yet.
  */
-export type SkidmarksProjectKind = "music-video" | "skidmarks" | "sunnybank" | "adult-shorts";
+export type SkidmarksProjectKind = "music-video" | "skidmarks" | "sunnybank" | "adult-shorts" | "characters";
 
 export interface SkidmarksProjectKindMeta {
   kind: SkidmarksProjectKind;
   label: string;
-  icon: "note" | "tire" | "sun" | "adult";
+  icon: "note" | "tire" | "sun" | "adult" | "face";
   enabled: boolean;
 }
 
@@ -232,6 +238,8 @@ export const SKIDMARKS_PROJECT_KINDS: SkidmarksProjectKindMeta[] = [
   { kind: "sunnybank", label: "Sunnybank", icon: "sun", enabled: true },
   // Adult shorts (2026-09-28) — 18+ photoreal clips, see `lib/adultShorts.ts`.
   { kind: "adult-shorts", label: "Adult shorts", icon: "adult", enabled: true },
+  // Characters (2026-09-29) — one card per character + Train LoRA, see `lib/characterLoras.ts`.
+  { kind: "characters", label: "Characters", icon: "face", enabled: true },
 ];
 
 /** One generated "look" for a member — a stand-in for a real render.
@@ -1375,6 +1383,12 @@ export interface SkidmarksState {
    * Neon session row, see `lib/adultShorts.ts`. URLs only, never bytes.
    */
   adultShorts?: AdultShortsState | null;
+  /**
+   * Character LoRAs (2026-09-29) — one card per character with training
+   * pictures + trained LoRA links, same Neon session row, see
+   * `lib/characterLoras.ts`. `null` reads as the Skye seed.
+   */
+  characterLoras?: CharacterLorasState | null;
 }
 
 function isBrowser(): boolean {
@@ -1440,6 +1454,7 @@ function emptyState(): SkidmarksState {
     sunnyBanks: null,
     skidmarksEpisodes: null,
     adultShorts: null,
+    characterLoras: null,
   };
 }
 
@@ -1830,6 +1845,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
     sunnyBanks: normalizeSunnyBanksStudio(p.sunnyBanks),
     skidmarksEpisodes: normalizeSkidmarksEpisodesState(p.skidmarksEpisodes),
     adultShorts: normalizeAdultShortsState(p.adultShorts),
+    characterLoras: normalizeCharacterLorasState(p.characterLoras),
   };
 }
 
@@ -2049,7 +2065,10 @@ export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
   const hasSunnyBanks = sunnyBanksStudioHasUserContent(state.sunnyBanks);
   const hasEpisodes = skidmarksEpisodesHaveUserContent(state.skidmarksEpisodes);
   const hasAdultShorts = adultShortsHaveUserContent(state.adultShorts);
-  return hasRealBand || hasMp3 || hasTaggedSegments || hasSunnyBanks || hasEpisodes || hasAdultShorts;
+  const hasCharacterLoras = characterLorasHaveUserContent(state.characterLoras);
+  return (
+    hasRealBand || hasMp3 || hasTaggedSegments || hasSunnyBanks || hasEpisodes || hasAdultShorts || hasCharacterLoras
+  );
 }
 
 /**
@@ -3146,6 +3165,22 @@ export function patchAdultShorts(updater: (state: AdultShortsState) => AdultShor
       character: { ...base.character, referenceUrls: base.character.referenceUrls.slice() },
       shots: base.shots.map((s) => ({ ...s })),
       saved: base.saved.slice(),
+    }),
+  });
+}
+
+/** Character LoRAs — the Skye seed until the first edit. */
+export function getCharacterLorasState(state: SkidmarksState = getSkidmarksSnapshot()): CharacterLorasState {
+  return state.characterLoras ?? emptyCharacterLorasState();
+}
+
+export function patchCharacterLoras(updater: (state: CharacterLorasState) => CharacterLorasState): void {
+  const current = getSkidmarksSnapshot();
+  const base = getCharacterLorasState(current);
+  persist({
+    ...current,
+    characterLoras: updater({
+      characters: base.characters.map((c) => ({ ...c, trainingImageUrls: c.trainingImageUrls.slice() })),
     }),
   });
 }
