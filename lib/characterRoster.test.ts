@@ -133,7 +133,7 @@ describe("empty hands in training pictures", () => {
       "tiny elderly woman, hair bun, round glasses, purple housecoat",
     );
     expect(stripHeldProps("big blonde hair, leopard-print top, cigarette, arms folded")).toBe(
-      "big blonde hair, leopard-print top, arms folded",
+      "big blonde hair, leopard-print top",
     );
     expect(stripHeldProps("short purple alien, antennae, teal bucket hat, holding a pair of thongs, bare feet")).toBe(
       "short purple alien, antennae, teal bucket hat, bare feet",
@@ -170,6 +170,14 @@ describe("Jack's neon blue lips", () => {
 
   it("adds nothing for characters without the lips", () => {
     expect(signatureLine("big blonde hair, leopard-print top")).toBe("");
+  });
+});
+
+describe("no extra arms", () => {
+  it("drops arm poses from the look and asks for exactly two arms", () => {
+    expect(stripHeldProps("big blonde hair, crossed arms, denim shorts")).toBe("big blonde hair, denim shorts");
+    expect(EMPTY_HANDS_LINE).toMatch(/exactly two arms and two hands/);
+    expect(EMPTY_HANDS_LINE).not.toMatch(/relaxed/);
   });
 });
 

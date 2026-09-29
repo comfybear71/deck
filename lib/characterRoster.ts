@@ -230,17 +230,21 @@ const MAX_LOOK_CHARS = 1100;
 const HELD_PROP_RE =
   /\b(holding|holds|carrying|carries|clutching|gripping|wielding|cigarettes?|smok(e|es|ing)|vape|pipe|pies?|tea ?cups?|cups?|mugs?|glass(es)? of|cricket bat|bats?|thongs|beers?|beer cans?|stubb(y|ies)|tinnies|cans?|bottles?|coins|hair ?dryer|cameras?|whistles?|phones?|microphones?|mic|guitars?|instruments?|drinks?|guns?|rifles?|knife|knives|tools?|umbrella|bags?|tins?)\b/i;
 
+// Arm poses in a look ("arms folded") fight each shot's own pose and
+// Siray draws both sets of arms, so the shot description owns the pose.
+const ARM_POSE_RE = /\b(arms?|hands?)\s+(folded|crossed|on (her|his|their) hips|in (her|his|their) pockets|raised|out)\b|\b(folded|crossed) arms\b/i;
+
 /** The look with any held-prop clauses taken out (clauses split on commas, semicolons and dashes). */
 export function stripHeldProps(look: string): string {
   return look
     .split(/\s*(?:,|;|—|–|\s-\s)\s*/)
     .map((part) => part.trim())
-    .filter((part) => part && !HELD_PROP_RE.test(part))
+    .filter((part) => part && !HELD_PROP_RE.test(part) && !ARM_POSE_RE.test(part))
     .join(", ");
 }
 
 export const EMPTY_HANDS_LINE =
-  "Hands empty and relaxed: not holding anything, no props, no cigarette, no drink, no phone, no tools, no weapons, no instrument. If the reference shows them holding something, leave it out.";
+  "Nothing in the hands: no props, no cigarette, no drink, no phone, no tools, no weapons, no instrument. If the reference shows them holding something, leave it out. Correct anatomy: exactly two arms and two hands, arms posed only as this shot describes, no extra or duplicated limbs.";
 const MAX_PROMPT_CHARS = 1900; // the Siray route refuses over 2000
 
 function clip(text: string, max: number): string {

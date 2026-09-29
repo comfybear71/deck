@@ -384,7 +384,7 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
             ) : status === "making" ? (
               <p className="mt-1 text-xs text-amber-100/80">
                 Making training pictures with Siray: {entry!.trainingImageUrls.length} of{" "}
-                {entry!.autoPictureTarget ?? AUTO_PICTURE_TARGET}. Training starts by itself after that. Keep this screen open,
+                {entry!.autoPictureTarget ?? AUTO_PICTURE_TARGET}. Then it stops so you can check them before training. Keep this screen open,
                 or come back later and it carries on.
               </p>
             ) : status === "training" || status === "finishing" ? (
