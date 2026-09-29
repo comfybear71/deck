@@ -146,31 +146,31 @@ describe("adult shorts Library save / new / open", () => {
   });
 });
 
-describe("adult shorts Blob folder tag", () => {
-  const withTag = (tag: string): AdultShortsState => ({
+describe("adult shorts Blob folder name", () => {
+  const withSlug = (tag: string): AdultShortsState => ({
     ...emptyAdultShortsState(),
     ageConfirmed: true,
     character,
     shots: [{ ...buildAdultShortsShot("shot_1"), prompt: "On the couch" }],
-    mediaTag: tag,
+    mediaSlug: tag,
   });
 
   it("survives a reload and rides along into the Library copy", () => {
-    const saved = saveAdultShortToLibrary(withTag("3f9a2c"), new Date("2026-09-30T00:00:00Z"), "Test");
-    expect(saved.saved[0].mediaTag).toBe("3f9a2c");
+    const saved = saveAdultShortToLibrary(withSlug("blonde-girl-1"), new Date("2026-09-30T00:00:00Z"), "Test");
+    expect(saved.saved[0].mediaSlug).toBe("blonde-girl-1");
     const reloaded = normalizeAdultShortsState(JSON.parse(JSON.stringify(saved)))!;
-    expect(reloaded.mediaTag).toBe("3f9a2c");
-    expect(reloaded.saved[0].mediaTag).toBe("3f9a2c");
+    expect(reloaded.mediaSlug).toBe("blonde-girl-1");
+    expect(reloaded.saved[0].mediaSlug).toBe("blonde-girl-1");
   });
 
-  it("drops a junk tag on load", () => {
-    expect(normalizeAdultShortsState({ ...withTag("3f9a2c"), mediaTag: "../x" })!.mediaTag).toBeUndefined();
+  it("drops a junk folder name on load", () => {
+    expect(normalizeAdultShortsState({ ...withSlug("blonde-girl-1"), mediaSlug: "../x" })!.mediaSlug).toBeUndefined();
   });
 
   it("a new short starts without one; opening a saved short brings its own back", () => {
-    const saved = saveAdultShortToLibrary(withTag("3f9a2c"), new Date("2026-09-30T00:00:00Z"), "Test");
+    const saved = saveAdultShortToLibrary(withSlug("blonde-girl-1"), new Date("2026-09-30T00:00:00Z"), "Test");
     const fresh = startNewAdultShort(saved, false);
-    expect(fresh.mediaTag).toBeUndefined();
-    expect(openSavedAdultShort(fresh, saved.saved[0].id).mediaTag).toBe("3f9a2c");
+    expect(fresh.mediaSlug).toBeUndefined();
+    expect(openSavedAdultShort(fresh, saved.saved[0].id).mediaSlug).toBe("blonde-girl-1");
   });
 });
