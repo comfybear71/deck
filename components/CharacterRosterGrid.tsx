@@ -35,12 +35,14 @@ import {
   type RosterGroup,
 } from "@/lib/characterRoster";
 import {
+  addSkidmarksMemberWithPictures,
   flushSkidmarksSessionNow,
   getCharacterLorasState,
   getRosterExtrasState,
   patchCharacterLoras,
   patchRosterExtras,
   patchSkidmarksEpisodes,
+  MAX_MEMBERS_PER_BAND,
   type SkidmarksState,
 } from "@/lib/skidmarks";
 import { normalizeAdultShortsState } from "@/lib/adultShorts";
@@ -239,6 +241,7 @@ export function CharacterRosterGrid({
   snapshot,
   onlyGroup,
   bandMemberIds,
+  addToBandId,
   renderEntryCard,
   simple = false,
 }: {
@@ -247,6 +250,8 @@ export function CharacterRosterGrid({
   onlyGroup?: RosterGroup;
   /** Music video: only these band members (plus added characters). */
   bandMemberIds?: readonly string[];
+  /** Music video: "+ Add a character" adds a member to this band. */
+  addToBandId?: string;
   /** The character's LoRA card (pictures, Train, Comfy links), shown inside their panel. */
   renderEntryCard?: (entry: CharacterLoraEntry) => ReactNode;
   /**
@@ -950,6 +955,14 @@ export function CharacterRosterGrid({
     isAnimal: boolean,
   ): string => {
     const slug = slugifyCharacterName(name);
+    if (group === "music-video" && addToBandId) {
+      const memberId = addSkidmarksMemberWithPictures(addToBandId, name, look, urls);
+      if (!memberId) {
+        setMessage((m) => ({ ...m, "add-cast": `This band already has ${MAX_MEMBERS_PER_BAND} people.` }));
+        return "";
+      }
+      return `mv:${memberId}`;
+    }
     if (group === "skidmarks") {
       const existingKey = addGroupKeyByName.get(slug);
       const existingId = existingKey?.startsWith("sk:") ? existingKey.slice(3) : null;
@@ -1306,7 +1319,7 @@ export function CharacterRosterGrid({
                 {g.id === "adult-shorts" && adultConfirmed ? "No characters yet. Tap + Add a character." : EMPTY_GROUP_TEXT[g.id]}
               </p>
             ) : (
-              <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+              <div className={simple ? "grid grid-cols-3 gap-3 sm:grid-cols-4" : "grid grid-cols-4 gap-2 sm:grid-cols-6"}>
                 {list.map((c) => {
                   const entry = entryForRosterCharacter(characters, c.sourceKey);
                   const face = entry?.referenceUrl ?? c.thumbUrl;
