@@ -18,6 +18,8 @@ interface SkidmarksMembersModuleProps {
   onOpenMember: (memberId: string) => void;
   onAddMember: () => void;
   onRemoveMember: (memberId: string) => void;
+  /** Moves a member up (-1) or down (+1) in the band's list. */
+  onMoveMember?: (memberId: string, delta: -1 | 1) => void;
   /** Writes a member's own lock card — see `SkidmarksMemberLockCard`. */
   onSetMemberLock: (memberId: string, lock: SkidmarksMemberLockCard) => void;
   onSetMemberAvatarImage: (memberId: string, dataUrl: string) => void;
@@ -232,16 +234,46 @@ function MemberLockCardEditor({
   );
 }
 
+function MoveButton({ dir, name, onMove }: { dir: "up" | "down"; name: string; onMove?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onMove?.();
+      }}
+      disabled={!onMove}
+      aria-label={`Move ${name || "this member"} ${dir}`}
+      title={dir === "up" ? "Move up" : "Move down"}
+      className="shrink-0 rounded-full p-1 text-white/35 transition-colors hover:bg-white/10 hover:text-white disabled:invisible"
+    >
+      <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+        <path
+          d={dir === "up" ? "M5 12.5l5-5 5 5" : "M5 7.5l5 5 5-5"}
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
 function MemberRow({
   member,
   onOpen,
   onRemove,
   onPickPhoto,
+  onMoveUp,
+  onMoveDown,
 }: {
   member: SkidmarksMember;
   onOpen: () => void;
   onRemove: () => void;
   onPickPhoto: (file: File) => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 }) {
   const displayName = member.name.trim() || "New member";
   return (
@@ -289,6 +321,12 @@ function MemberRow({
           />
         </svg>
       </div>
+      {(onMoveUp || onMoveDown) && (
+        <>
+          <MoveButton dir="up" name={member.name} onMove={onMoveUp} />
+          <MoveButton dir="down" name={member.name} onMove={onMoveDown} />
+        </>
+      )}
       <RemoveMemberButton memberName={member.name} onRemove={onRemove} />
     </div>
   );
@@ -313,6 +351,7 @@ export function SkidmarksMembersModule({
   onOpenMember,
   onAddMember,
   onRemoveMember,
+  onMoveMember,
   onSetMemberLock,
   onSetMemberAvatarImage,
   onRenameBand,
@@ -355,13 +394,15 @@ export function SkidmarksMembersModule({
           className="mb-2 w-full truncate bg-transparent text-base font-bold text-rose-200 placeholder:text-rose-200/40 focus:outline-none"
         />
         <div className="flex flex-col divide-y divide-white/[0.06]">
-          {band.members.map((member) => (
+          {band.members.map((member, i) => (
             <div key={member.id}>
               <MemberRow
                 member={member}
                 onOpen={() => onOpenMember(member.id)}
                 onRemove={() => onRemoveMember(member.id)}
                 onPickPhoto={(file) => handlePickPhoto(member.id, file)}
+                onMoveUp={onMoveMember && i > 0 ? () => onMoveMember(member.id, -1) : undefined}
+                onMoveDown={onMoveMember && i < band.members.length - 1 ? () => onMoveMember(member.id, 1) : undefined}
               />
               <MemberLockCardEditor
                 member={member}

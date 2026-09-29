@@ -3398,6 +3398,20 @@ export function removeSkidmarksMember(bandId: string, memberId: string): void {
   persist({ ...current, bands });
 }
 
+/** Moves a member one place up (-1) or down (+1) in their band. Only the
+ * listed order changes (the first one is the original artist). */
+export function moveSkidmarksMember(bandId: string, memberId: string, delta: -1 | 1): void {
+  const current = getSkidmarksSnapshot();
+  const band = current.bands.find((b) => b.id === bandId);
+  if (!band) return;
+  const from = band.members.findIndex((m) => m.id === memberId);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= band.members.length) return;
+  const members = [...band.members];
+  [members[from], members[to]] = [members[to], members[from]];
+  persist({ ...current, bands: current.bands.map((b) => (b.id === bandId ? { ...b, members } : b)) });
+}
+
 /** Sets a member's display name — how a blank "+ Add member" row gets
  * filled in, via the generate popup's name field. */
 /** Writes a member's own lock card — see `SkidmarksMemberLockCard`. */

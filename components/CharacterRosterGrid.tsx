@@ -24,6 +24,7 @@ import {
 import {
   ROSTER_GROUPS,
   buildCharacterRoster,
+  onlyBandCharacters,
   buildCleanReferencePrompt,
   buildTrainingPicturePrompts,
   entryForRosterCharacter,
@@ -237,12 +238,15 @@ function CornerButton({
 export function CharacterRosterGrid({
   snapshot,
   onlyGroup,
+  bandMemberIds,
   renderEntryCard,
   simple = false,
 }: {
   snapshot: SkidmarksState;
   /** Show just this group (the Characters bar on each project screen). */
   onlyGroup?: RosterGroup;
+  /** Music video: only these band members (plus added characters). */
+  bandMemberIds?: readonly string[];
   /** The character's LoRA card (pictures, Train, Comfy links), shown inside their panel. */
   renderEntryCard?: (entry: CharacterLoraEntry) => ReactNode;
   /**
@@ -1253,7 +1257,7 @@ export function CharacterRosterGrid({
     <div className="flex flex-col gap-4">
       {renderViewer()}
       {ROSTER_GROUPS.filter((g) => !onlyGroup || g.id === onlyGroup).map((g) => {
-        const list = roster[g.id];
+        const list = g.id === "music-video" ? onlyBandCharacters(roster[g.id], bandMemberIds) : roster[g.id];
         const done = list.filter((c) => entryForRosterCharacter(characters, c.sourceKey)?.status === "ready").length;
         const plan = groupPlan(list);
         return (
