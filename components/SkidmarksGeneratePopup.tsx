@@ -3,10 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { downscaleDataUrlImage, flushSkidmarksSessionNow, lookGradientClass, type SkidmarksLook, type SkidmarksMember } from "@/lib/skidmarks";
 import { buildMemberLookRequest, generatePlateStill, resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
+import { memberLookTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 
 interface SkidmarksGeneratePopupProps {
   member: SkidmarksMember;
+  /** Which band this member is in — only used to file the new look in
+   * that band's folder in the Blob tree (`lib/deckMediaTargets.ts`). */
+  bandId?: string;
   bandName: string;
   onGenerate: (prompt: string, photoreal: number, imageUrl: string) => void;
   onRename: (name: string) => void;
@@ -83,6 +87,7 @@ function EmptySlot() {
  */
 export function SkidmarksGeneratePopup({
   member,
+  bandId,
   bandName,
   onGenerate,
   onRename,
@@ -139,7 +144,10 @@ export function SkidmarksGeneratePopup({
       } catch {
         // Keep the original, full-size dataUrl.
       }
-      const uploadOutcome = await uploadSkidmarksMemberPhoto(dataUrl);
+      const uploadOutcome = await uploadSkidmarksMemberPhoto(
+        dataUrl,
+        bandId ? memberLookTargetFor(bandId, member.id) : null,
+      );
       onGenerate(prompt, photoreal, uploadOutcome.ok ? uploadOutcome.url : dataUrl);
       if (!uploadOutcome.ok) {
         setError(`Generated, but couldn't save it for persistence yet — ${uploadOutcome.message}`);

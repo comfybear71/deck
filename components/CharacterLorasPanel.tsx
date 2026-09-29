@@ -19,6 +19,7 @@ import {
   type CharacterLoraEntry,
 } from "@/lib/characterLoras";
 import { startCharacterTraining } from "@/lib/characterAutoLora";
+import { characterPlateTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 import { type RosterGroup } from "@/lib/characterRoster";
 import { CharacterRosterGrid } from "./CharacterRosterGrid";
@@ -152,7 +153,8 @@ export function CharacterLorasPanel({
       const urls: string[] = [];
       for (const file of picked) {
         const dataUrl = await readImageFileAsDataUrl(file, TRAINING_PICTURE_MAX_DIMENSION, 0.9);
-        const up = await uploadSkidmarksMemberPhoto(dataUrl);
+        const plateNumber = entry.trainingImageUrls.length + urls.length + 1;
+        const up = await uploadSkidmarksMemberPhoto(dataUrl, characterPlateTargetFor(entry, plateNumber));
         if (!up.ok) throw new Error(up.message || "A picture couldn't be uploaded.");
         urls.push(up.url);
       }

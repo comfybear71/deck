@@ -9,7 +9,8 @@ import { NextResponse } from "next/server";
  * pictures whose list on the BIG SEXY / SOUL REBEL character cards was
  * wiped on 2026-09-29, when the pictures themselves were never deleted.
  * It never uploads, changes or deletes anything, and makes no paid
- * call. The prefix must stay inside `skidmarks/`.
+ * call. The prefix must stay inside `skidmarks/` or (2026-09-30, the
+ * readable tree from `lib/deckMediaPaths.ts`) `deck/`.
  *
  * No `BLOB_READ_WRITE_TOKEN` makes `list()` throw, which comes back as
  * `{ configured: false }`, never a 500.
@@ -35,8 +36,9 @@ function parseTime(raw: string | null): number | null {
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const rawPrefix = params.get("prefix")?.trim() || DEFAULT_PREFIX;
-  if (!rawPrefix.startsWith("skidmarks/") || rawPrefix.includes("..")) {
-    return NextResponse.json({ error: "prefix must start with skidmarks/" }, { status: 400 });
+  const inKnownTree = rawPrefix.startsWith("skidmarks/") || rawPrefix.startsWith("deck/");
+  if (!inKnownTree || rawPrefix.includes("..") || rawPrefix.includes("\\")) {
+    return NextResponse.json({ error: "prefix must start with skidmarks/ or deck/" }, { status: 400 });
   }
   const since = parseTime(params.get("since"));
   const until = parseTime(params.get("until"));

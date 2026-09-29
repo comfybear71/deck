@@ -1117,6 +1117,27 @@ never a delete; only `removeCharacterLora` (the delete tap) deletes. See
   feature and it could plausibly carry more than a few hundred KB,
   default to this same client-upload pattern rather than a normal JSON
   POST body.
+- **New media uploads land in a readable `deck/` tree (2026-09-30,
+  step 2 of the Blob tidy-up).** Every genre (`sunnybank`,
+  `music-video`, `skidmarks`, `shorts`) has the same shape, built by one
+  shared helper (`deckCharacterOwner` / `deckProjectFolder` in
+  `lib/deckMediaPaths.ts`): `deck/<genre>/characters/<char>/plates/
+  <char>-plate-07.jpg` and `deck/<genre>/<episodes|songs|shorts>/
+  <project>/...`. Band members are ordinary Music video characters
+  (`deck/music-video/characters/<member>/`); only a band's cover has its
+  own `deck/music-video/bands/<band>/` folder. A character with no
+  genre prefix (Skye, anyone added by hand) is a Shorts character. The
+  only genre difference: Shorts file names get a short random tag
+  (`skye-7b1e04-plate-03.jpg`). A taken name becomes `-v2`, `-v3`… and
+  `deck/` uploads are always `allowOverwrite: false`. Folder names are
+  pinned the first time (a card's own `slug`, a band's or member's
+  `mediaSlug`, a short's `mediaTag`) and never follow a rename. Anything
+  without a known folder, or an upload that fails for any reason other
+  than a taken name, falls back to its old `skidmarks/...` path. DB and
+  UI names are unchanged (the folder id is still `adult-shorts`; the old
+  `skidmarks/adult-shorts/` Blob folder and every existing link stay).
+  Clip renders, MP3s and archives are deliberately not in this tree
+  yet: the app finds them by listing their old prefixes.
 - `DATABASE_URL` (falls back to `DATABASE_URL_UNPOOLED`) — **Neon is
   now wired**, via `@neondatabase/serverless`'s HTTP driver
   (`lib/db.ts`). Backs the Skidmarks studio session store

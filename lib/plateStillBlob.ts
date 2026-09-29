@@ -24,10 +24,12 @@
  * nothing here changes what those callers do with it.
  */
 
-import { upload } from "@vercel/blob/client";
+import { extensionForImageContentType, type DeckMediaTarget } from "./deckMediaPaths";
+import { uploadToDeckTreeOrLegacy } from "./deckMediaUpload";
 
+/** The old flat folder. Still used for any still whose owner isn't known
+ * (and every still saved before 2026-09-30 stays here, links unchanged). */
 const PLATE_STILL_PATH_PREFIX = "skidmarks/plate-stills/";
-const HANDLE_UPLOAD_URL = "/api/skidmarks/blob-upload";
 
 function generatePlateStillId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -43,12 +45,6 @@ export type UploadPlateStillOutcome = { ok: true; url: string } | { ok: false; u
  * doc comment. */
 const UNCONFIGURED_MESSAGE_RE = /token|credentials/i;
 
-function extensionForContentType(contentType: string): string {
-  if (contentType.includes("png")) return "png";
-  if (contentType.includes("webp")) return "webp";
-  return "jpg";
-}
-
 /**
  * Uploads one plate still's image bytes to a fresh, durable Blob
  * pathname and returns its public URL — or an honest, non-throwing
@@ -57,8 +53,16 @@ function extensionForContentType(contentType: string): string {
  * URL string (the generated-still path, whose result already comes back
  * as one). A fresh, random pathname per still, same "never let two
  * different stills collide" reasoning `lib/mp3Blob.ts` uses for audio.
+ *
+ * `target` (optional): where it belongs in the readable tree, e.g.
+ * `deck/music-video/songs/crack-haul/plates` + `crack-haul-clip-03a`.
+ * Without one, or if the tree upload can't be done, it goes to the old
+ * random path as before. A taken name becomes `-v2`, never an overwrite.
  */
-export async function uploadSkidmarksPlateStill(source: File | Blob | string): Promise<UploadPlateStillOutcome> {
+export async function uploadSkidmarksPlateStill(
+  source: File | Blob | string,
+  target?: DeckMediaTarget | null,
+): Promise<UploadPlateStillOutcome> {
   try {
     let body: File | Blob;
     let contentType = "image/jpeg";
@@ -71,12 +75,14 @@ export async function uploadSkidmarksPlateStill(source: File | Blob | string): P
       body = source;
       contentType = source.type || contentType;
     }
-    const pathname = `${PLATE_STILL_PATH_PREFIX}${generatePlateStillId()}.${extensionForContentType(contentType)}`;
-    const result = await upload(pathname, body, {
-      access: "public",
-      handleUploadUrl: HANDLE_UPLOAD_URL,
+    const ext = extensionForImageContentType(contentType);
+    const result = await uploadToDeckTreeOrLegacy(
+      body,
       contentType,
-    });
+      ext,
+      target,
+      () => `${PLATE_STILL_PATH_PREFIX}${generatePlateStillId()}.${ext}`,
+    );
     return { ok: true, url: result.url };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not upload the still.";

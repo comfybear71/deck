@@ -44,6 +44,19 @@ describe("GET /api/skidmarks/picture-finder", () => {
     expect(listMock).not.toHaveBeenCalled();
   });
 
+  it("also lists the readable deck/ tree", async () => {
+    listMock.mockResolvedValueOnce({ blobs: [blob("deck/sunnybank/characters/shazza/shazza-reference.jpg", "2026-09-30T01:00:00Z")], hasMore: false });
+    const res = await GET(req("?prefix=deck/sunnybank/"));
+    expect(res.status).toBe(200);
+    expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ prefix: "deck/sunnybank/" }));
+  });
+
+  it("refuses deck/ prefixes that climb out", async () => {
+    const res = await GET(req("?prefix=deck/../secret/"));
+    expect(res.status).toBe(400);
+    expect(listMock).not.toHaveBeenCalled();
+  });
+
   it("reports configured:false, not a 500, when Blob is not set up", async () => {
     listMock.mockRejectedValueOnce(new Error("no BLOB_READ_WRITE_TOKEN"));
     const body = await (await GET(req(""))).json();

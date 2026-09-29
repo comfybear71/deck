@@ -1,5 +1,6 @@
-import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { deckMediaStem, parseDeckMediaTarget, type DeckMediaExtension, type DeckMediaTarget } from "@/lib/deckMediaPaths";
+import { putDeckMediaOrLegacy } from "@/lib/deckMediaPut";
 import { decodeDataUrl } from "@/lib/dataUrl";
 import { extractLastVideoFrameServer } from "@/lib/serverVideoFrame";
 import {
@@ -46,6 +47,10 @@ interface Body {
   startImageUrl?: unknown;
   durationSec?: unknown;
   sirayTaskId?: unknown;
+  /** Optional `{ folder, name }` for the clip in the readable `deck/`
+   * tree (`lib/deckMediaPaths.ts`); its last frame is saved next to it
+   * as `<name>-last-frame.jpg`. Missing → the old flat path. */
+  mediaTarget?: unknown;
 }
 
 async function resolveStartImage(url: string): Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }> {
@@ -70,11 +75,17 @@ async function resolveStartImage(url: string): Promise<{ ok: true; dataUrl: stri
   return { ok: true, dataUrl: `data:${framed.mimeType};base64,${Buffer.from(framed.bytes).toString("base64")}` };
 }
 
-async function saveToBlob(bytes: Uint8Array, pathname: string, contentType: string): Promise<string | null> {
+async function saveToBlob(
+  bytes: Uint8Array,
+  legacyPathname: string,
+  contentType: string,
+  target: DeckMediaTarget | null,
+  ext: DeckMediaExtension,
+): Promise<{ url: string; pathname: string } | null> {
   if (!process.env.BLOB_READ_WRITE_TOKEN) return null;
   try {
-    const blob = await put(pathname, Buffer.from(bytes), { access: "public", contentType, addRandomSuffix: false });
-    return blob.url;
+    const blob = await putDeckMediaOrLegacy(Buffer.from(bytes), { target, ext, contentType, legacyPathname });
+    return { url: blob.url, pathname: blob.pathname };
   } catch {
     return null;
   }
@@ -142,12 +153,20 @@ export async function POST(request: Request) {
   if (!download.ok) return NextResponse.json({ error: download.error, code: download.code }, { status: download.status });
 
   const stem = `skidmarks/adult-shorts/${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const videoUrl = await saveToBlob(download.bytes, `${stem}.mp4`, "video/mp4");
+  const clipTarget = parseDeckMediaTarget(body.mediaTarget);
+  const savedClip = await saveToBlob(download.bytes, `${stem}.mp4`, "video/mp4", clipTarget, "mp4");
+  const videoUrl = savedClip?.url ?? null;
+  // The last frame sits next to the clip it came from, under the same
+  // (possibly `-v2`) name, so the two always read as a pair.
+  const frameTarget: DeckMediaTarget | null =
+    clipTarget && savedClip?.pathname.startsWith(`${clipTarget.folder}/`)
+      ? { folder: clipTarget.folder, name: `${deckMediaStem(savedClip.pathname)}-last-frame` }
+      : null;
   let lastFrameUrl: string | null = null;
   const frame = await extractLastVideoFrameServer(download.bytes);
   if (frame.ok) {
     lastFrameUrl =
-      (await saveToBlob(frame.bytes, `${stem}-last.jpg`, "image/jpeg")) ??
+      (await saveToBlob(frame.bytes, `${stem}-last.jpg`, "image/jpeg", frameTarget, "jpg"))?.url ??
       `data:image/jpeg;base64,${Buffer.from(frame.bytes).toString("base64")}`;
   }
 

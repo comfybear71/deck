@@ -14,6 +14,7 @@ import {
   nextTrainingVersion,
   type CharacterLoraEntry,
 } from "./characterLoras";
+import { sirayOriginalTarget, type DeckMediaTarget } from "./deckMediaPaths";
 import { uploadSkidmarksMemberPhoto } from "./memberPhotoBlob";
 import { resolvePlateReferenceDataUrl } from "./plateGeneration";
 import { readImageFileAsDataUrl } from "./skidmarks";
@@ -40,34 +41,49 @@ function isDeckBlobUrl(url: string): boolean {
   }
 }
 
-/** Any picture (static app path, data URL, Blob URL) as a 1600px JPEG in Deck's Blob store. */
-export async function toTrainingPicture(src: string): Promise<string> {
+/** Any picture (static app path, data URL, Blob URL) as a 1600px JPEG in
+ * Deck's Blob store — at `target` in the readable tree when given
+ * (`lib/deckMediaTargets.ts`), else the old flat folder. */
+export async function toTrainingPicture(src: string, target?: DeckMediaTarget | null): Promise<string> {
   const res = await fetch(src);
   if (!res.ok) throw new AutoLoraError(`A picture couldn't be loaded (HTTP ${res.status}).`, false);
   const blob = await res.blob();
   const dataUrl = await readImageFileAsDataUrl(blob, TRAINING_PICTURE_MAX_DIMENSION, 0.9);
-  const up = await uploadSkidmarksMemberPhoto(dataUrl);
+  const up = await uploadSkidmarksMemberPhoto(dataUrl, target);
   if (!up.ok) throw new AutoLoraError(up.message || "A picture couldn't be saved.", false);
   return up.url;
 }
 
-/** Keeps a picture that's already a Blob JPEG/PNG as is; converts anything else. */
-export async function ensureTrainingPicture(src: string): Promise<string> {
-  return isDeckBlobUrl(src) ? src : toTrainingPicture(src);
+/** Keeps a picture that's already a Blob JPEG/PNG as is (never copied or
+ * moved); converts anything else, saving it at `target` when given. */
+export async function ensureTrainingPicture(src: string, target?: DeckMediaTarget | null): Promise<string> {
+  return isDeckBlobUrl(src) ? src : toTrainingPicture(src, target);
 }
 
 /**
  * One Siray picture (US$0.04). With a reference it copies that character
  * into the prompt's new angle; without one it draws from the words alone
  * (used only for a first face). Returns the Blob URL of a 1600px JPEG.
+ * With a `target`, the JPEG lands there and Siray's full-size original
+ * next to it in an `originals` folder; without one, both use the old
+ * flat folders.
  */
-export async function makeSirayPicture(prompt: string, referenceDataUrl: string | null): Promise<string> {
+export async function makeSirayPicture(
+  prompt: string,
+  referenceDataUrl: string | null,
+  target?: DeckMediaTarget | null,
+): Promise<string> {
+  const original = target ? sirayOriginalTarget(target) : null;
   let res: Response;
   try {
     res = await fetch(SIRAY_STILL_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, referenceImageDataUrls: referenceDataUrl ? [referenceDataUrl] : [] }),
+      body: JSON.stringify({
+        prompt,
+        referenceImageDataUrls: referenceDataUrl ? [referenceDataUrl] : [],
+        ...(original ? { mediaTarget: original } : {}),
+      }),
     });
   } catch {
     throw new AutoLoraError("Couldn't reach Siray. Check the connection.", false);
@@ -79,7 +95,7 @@ export async function makeSirayPicture(prompt: string, referenceDataUrl: string 
   }
   const out = json.url || json.dataUrl;
   if (!out) throw new AutoLoraError("Siray finished but sent no picture back.", false);
-  return toTrainingPicture(out);
+  return toTrainingPicture(out, target);
 }
 
 export async function referenceDataUrlFor(src: string): Promise<string> {

@@ -360,7 +360,7 @@ function CastTab() {
               onChange={(e) => setConfirmed(e.target.checked)}
               className="mt-0.5"
             />
-            <span>This character is made up and clearly an adult. They aren't based on a real person&apos;s face or name.</span>
+            <span>This character is made up and clearly an adult. They aren&apos;t based on a real person&apos;s face or name.</span>
           </label>
           <div className="flex gap-2">
             <button

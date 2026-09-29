@@ -167,6 +167,7 @@ import {
   type SkidmarksTranscribedWord,
   type SkidmarksTranscriptionProvider,
 } from "./transcription";
+import { deckMediaSlug, isSafeDeckMediaSlug, uniqueDeckMediaSlug } from "./deckMediaPaths";
 import { uploadSkidmarksMemberPhoto } from "./memberPhotoBlob";
 import {
   appendKeptStillToSleeve,
@@ -297,6 +298,9 @@ export interface SkidmarksMember {
    * directly.
    */
   stillSleeve?: SkidmarksMemberSleeveEntry[];
+  /** This member's folder name under their band in the readable Blob
+   * tree (`…/members/<mediaSlug>/`). Pinned like `SkidmarksBand.mediaSlug`. */
+  mediaSlug?: string;
 }
 
 /**
@@ -327,6 +331,12 @@ export interface SkidmarksBand {
   /** Which little "edit cover" glyph this band's tile shows — cosmetic variety, matches the mockup. */
   editIcon: "pencil" | "camera";
   members: SkidmarksMember[];
+  /** This band's folder name in the readable Blob tree
+   * (`deck/music-video/bands/<mediaSlug>/`, `lib/deckMediaPaths.ts`).
+   * Pinned from the name the first time the band gets a new file
+   * (`pinSkidmarksBandMediaSlugs`) and never changed after, so renaming
+   * the band never moves or breaks anything. Absent until then. */
+  mediaSlug?: string;
 }
 
 export type SkidmarksChecklistKey = "lyrics" | "timing" | "ready";
@@ -3561,6 +3571,64 @@ export function renameSkidmarksBand(bandId: string, name: string): void {
   const trimmed = name.trim();
   const bands = current.bands.map((b) => (b.id === bandId ? { ...b, name: trimmed } : b));
   persist({ ...current, bands });
+}
+
+/**
+ * The band's (and optionally one member's) folder names in the readable
+ * Blob tree, pinning them on first use: a band or member without a
+ * `mediaSlug` gets one from its current name (`bigsexy`, `big-sexy`;
+ * `-2` if another band/member in the same place already has it), saved
+ * with the normal session save. After that the slug never follows a
+ * rename. `null` when the band is gone or still has no name (a blank
+ * "New band" has no folder yet, so its files keep the old flat path);
+ * `member` is omitted when the member is gone or unnamed.
+ */
+export function pinSkidmarksBandMediaSlugs(
+  bandId: string,
+  memberId?: string,
+): { band: string; member?: string } | null {
+  const current = getSkidmarksSnapshot();
+  const band = current.bands.find((b) => b.id === bandId);
+  if (!band) return null;
+  let changed = false;
+  let bandSlug = isSafeDeckMediaSlug(band.mediaSlug) ? band.mediaSlug : null;
+  if (!bandSlug) {
+    if (!band.name.trim()) return null;
+    const taken = current.bands
+      .filter((b) => b.id !== bandId)
+      .map((b) => b.mediaSlug)
+      .filter((slug): slug is string => isSafeDeckMediaSlug(slug));
+    bandSlug = uniqueDeckMediaSlug(deckMediaSlug(band.name, "band"), taken);
+    changed = true;
+  }
+  let memberSlug: string | undefined;
+  let members = band.members;
+  if (memberId) {
+    const member = band.members.find((m) => m.id === memberId);
+    if (member && isSafeDeckMediaSlug(member.mediaSlug)) {
+      memberSlug = member.mediaSlug;
+    } else if (member && member.name.trim()) {
+      // Members are Music video characters, so their folder names are
+      // unique across every band (`deck/music-video/characters/<member>`).
+      const taken = current.bands
+        .flatMap((b) => b.members)
+        .filter((m) => m.id !== memberId)
+        .map((m) => m.mediaSlug)
+        .filter((slug): slug is string => isSafeDeckMediaSlug(slug));
+      const pinned = uniqueDeckMediaSlug(deckMediaSlug(member.name, "member"), taken);
+      memberSlug = pinned;
+      members = band.members.map((m) => (m.id === memberId ? { ...m, mediaSlug: pinned } : m));
+      changed = true;
+    }
+  }
+  if (changed) {
+    const pinnedBand = bandSlug;
+    persist({
+      ...current,
+      bands: current.bands.map((b) => (b.id === bandId ? { ...b, mediaSlug: pinnedBand, members } : b)),
+    });
+  }
+  return memberSlug ? { band: bandSlug, member: memberSlug } : { band: bandSlug };
 }
 
 /** Prepends a freshly generated look onto a member — newest look reads

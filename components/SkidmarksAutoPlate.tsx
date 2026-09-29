@@ -15,6 +15,7 @@ import {
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
+import { songPlateTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import {
   flushSkidmarksSessionNow,
@@ -257,7 +258,10 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
         // back to keeping the still inline this session on a Blob
         // failure rather than losing a still Stuart just paid for.
         generatedStills.set(target.plateId, { dataUrl: outcome.dataUrl, featuresLockedCharacter });
-        const uploadOutcome = await uploadSkidmarksPlateStill(outcome.dataUrl);
+        const uploadOutcome = await uploadSkidmarksPlateStill(
+          outcome.dataUrl,
+          songPlateTargetFor(target.segmentId, target.plateId),
+        );
         onSetClipPlateStill(target.segmentId, target.plateId, {
           dataUrl: uploadOutcome.ok ? uploadOutcome.url : outcome.dataUrl,
           source: "generated",

@@ -1,5 +1,6 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
+import { isDeckMediaPathname } from "@/lib/deckMediaPaths";
 
 /**
  * POST /api/skidmarks/blob-upload — the one shared token-issuing route
@@ -49,6 +50,13 @@ import { NextResponse } from "next/server";
  * plain `400` with a real message, which `lib/mp3Blob.ts`/
  * `lib/skidmarksArchive.ts` surface as an honest "not saved this time"
  * outcome, never a silent success.
+ *
+ * **The readable tree (2026-09-30):** also issues tokens for `deck/...`
+ * pathnames (`lib/deckMediaPaths.ts`: `isDeckMediaPathname` — slug
+ * folders and names only, known extensions only), always with
+ * `allowOverwrite: false`, so a taken name fails and the browser tries
+ * `-v2` instead of replacing anyone's file. The old `skidmarks/...`
+ * prefixes keep their old behaviour exactly.
  */
 export const runtime = "nodejs";
 
@@ -61,6 +69,7 @@ const ALLOWED_PATHNAME_PREFIXES = [
 
 function isAllowedPathname(pathname: string): boolean {
   if (pathname.includes("..") || pathname.includes("\\")) return false;
+  if (isDeckMediaPathname(pathname)) return true;
   return ALLOWED_PATHNAME_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
@@ -80,7 +89,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         if (!isAllowedPathname(pathname)) {
           throw new Error(
             `Rejected upload target "${pathname}" \u2014 this route only issues tokens for this feature's own ` +
-              "mp3-audio/archive pathnames."
+              "skidmarks/ and deck/ pathnames."
           );
         }
         return {
@@ -95,7 +104,9 @@ export async function POST(request: Request): Promise<NextResponse> {
             "image/webp",
           ],
           addRandomSuffix: false,
-          allowOverwrite: true,
+          // deck/ files are never replaced: a taken name is an error and
+          // the browser moves on to `-v2`. Old prefixes unchanged.
+          allowOverwrite: !isDeckMediaPathname(pathname),
         };
       },
     });

@@ -652,6 +652,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {session.projectKind === "music-video" && activeBand && openMember && (
         <SkidmarksGeneratePopup
           member={openMember}
+          bandId={activeBand.id}
           bandName={activeBand.name}
           onGenerate={handleGenerate}
           onRename={handleRenameMember}
