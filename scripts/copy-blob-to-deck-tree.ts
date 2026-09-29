@@ -50,9 +50,9 @@
  *    step 2 are reused, not duplicated.
  *
  * All the real work (database read, dry-run checks, the copy loop, the
- * one SQL statement) lives in `lib/deckBlobCopyRun.ts`, shared with the
- * one-off route `app/api/deck/admin/copy-blob-tree/route.ts` so the two
- * always run the same code. `--plan bundled` uses the copy of the plan
+ * one SQL statement) lives in `lib/deckBlobCopyRun.ts` (it was shared
+ * with the one-off route `/api/deck/admin/copy-blob-tree`, which ran the
+ * copy on 2026-09-30 and has since been removed). `--plan bundled` uses the copy of the plan
  * that ships with the app (`lib/deckBlobMovePlan207.ts`).
  */
 import fs from "node:fs";

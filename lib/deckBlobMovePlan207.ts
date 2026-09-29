@@ -1,6 +1,6 @@
 /**
- * ONE-OFF — remove together with `app/api/deck/admin/copy-blob-tree/`
- * once the copy has been run.
+ * ONE-OFF. The one-off route that shipped it has been removed; it stays
+ * only for the CLI's `--plan bundled` and can go with the script.
  *
  * The approved move plan (`/workspace/deck-blob-plan/move-plan-207.csv`,
  * 207 files, header `old,new,owner,role,also,also_in_song_archives,bytes`)
