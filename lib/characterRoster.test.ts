@@ -7,6 +7,7 @@ import {
   EMPTY_HANDS_LINE,
   minorBlockReason,
   oneTapCost,
+  signatureLine,
   startingPictures,
   stripHeldProps,
 } from "./characterRoster";
@@ -154,3 +155,21 @@ describe("empty hands in training pictures", () => {
     expect(roster["sunny-banks"].map((c) => c.name)).not.toContain("Hans");
   });
 });
+
+describe("Jack's neon blue lips", () => {
+  it("asks for the glowing lips in every one of Jack's training pictures and keeps them in his look", () => {
+    const jack = buildCharacterRoster(stateWith())["music-video"].find((c) => c.name === "Jack Ash")!;
+    const prompts = buildTrainingPicturePrompts(jack, 15);
+    expect(prompts).toHaveLength(15);
+    for (const p of prompts) {
+      expect(p).toContain("neon blue and are clearly visible");
+      expect(p.length).toBeLessThanOrEqual(1900);
+    }
+    expect(stripHeldProps(jack.look)).toMatch(/lips glow a vivid neon blue/);
+  });
+
+  it("adds nothing for characters without the lips", () => {
+    expect(signatureLine("big blonde hair, leopard-print top")).toBe("");
+  });
+});
+

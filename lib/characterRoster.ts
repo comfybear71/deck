@@ -183,19 +183,19 @@ const PHOTO_VARIATIONS = [
 const FACELESS_VARIATIONS = [
   "full body standing, three-quarter view, desert road at dusk",
   "waist-up, side profile, hat brim throwing the face into shadow, neon sign glow behind",
-  "full body walking away down a wet city street at night",
+  "full body, three-quarter view, walking down a wet city street at night, glowing lips visible under the brim",
   "waist-up, three-quarter view, leaning on a bar, smoky low light",
-  "full body silhouette against a bright sunset",
-  "head-and-shoulders from a low angle, face lost in shadow under the brim, moody backlight",
+  "full body silhouette against a bright sunset, turned three-quarter so the glowing lips still show",
+  "head-and-shoulders from a low angle, face lost in shadow under the brim except the glowing lips, moody backlight",
   "sitting on the hood of an old car, full body, dusty roadside, harsh noon sun",
   "waist-up on a small stage, arms loose at the sides, spotlight from above",
   "full body in a doorway, light behind, long shadow on the floor",
   "three-quarter view, waist-up, rain, streetlight from the side",
   "side profile, head-and-shoulders, plain dark studio background, one rim light",
   "full body, standing in tall dry grass, overcast sky",
-  "waist-up, walking toward the camera, face hidden in shadow, alley at night",
+  "waist-up, walking toward the camera at an angle, face hidden in shadow except the glowing lips, alley at night",
   "high angle, full body, standing on a cracked desert floor",
-  "waist-up, back three-quarter view looking over the shoulder, face still in shadow, motel neon",
+  "waist-up, looking over the shoulder, face still in shadow except the glowing lips, motel neon",
 ];
 
 const CARTOON_VARIATIONS = [
@@ -253,6 +253,15 @@ function styleLine(style: CharacterTrainingStyle): string {
   return "Photographic, realistic light and skin, sharp focus.";
 }
 
+const NEON_LIPS_RE = /neon[- ]blue lips|lips glow[^.]*neon blue/i;
+
+/** The one feature that must show in every picture, when the look has one (Jack's neon blue lips). */
+export function signatureLine(look: string): string {
+  return NEON_LIPS_RE.test(look)
+    ? "Must show: his lips glow a vivid neon blue and are clearly visible in this picture, the only lit feature of his shadowed face."
+    : "";
+}
+
 /**
  * Siray prompts for the training pictures, starting at `startIndex` so
  * a resumed run keeps moving through the list rather than repeating.
@@ -273,6 +282,7 @@ export function buildTrainingPicturePrompts(
     const parts = [
       `The same ${who} as in the reference image (${char.name}), ${same}.`,
       `${variation}.`,
+      signatureLine(char.look),
       char.look ? clip(stripHeldProps(char.look), MAX_LOOK_CHARS) : "",
       styleLine(char.style),
       EMPTY_HANDS_LINE,
