@@ -109,3 +109,36 @@ describe("skidmarks episodes", () => {
     expect(skidmarksEpisodesHaveUserContent({ episodes: [buildStarterEpisode("x")], cast: [] })).toBe(true);
   });
 });
+
+describe("cast pictures from uploads", () => {
+  it("names a character from a file name and groups numbered pictures", async () => {
+    const { castNameFromFileName } = await import("./skidmarksEpisodes");
+    expect(castNameFromFileName("Clive 3.jpg")).toBe("Clive");
+    expect(castNameFromFileName("clive_12.jpeg")).toBe("Clive");
+    expect(castNameFromFileName("Street cat.jpg")).toBe("Street cat");
+    expect(castNameFromFileName("Lock & chain woman (2).png")).toBe("Lock & chain woman");
+    expect(castNameFromFileName("Deep Fried.jpg")).toBe("Deep Fried");
+    expect(castNameFromFileName("1234.jpg")).toBe("1234");
+  });
+
+  it("keeps https and image data pictures, drops junk, and keeps the animal flag through a reload", async () => {
+    const { normalizeSkidmarksEpisodesState } = await import("./skidmarksEpisodes");
+    const st = normalizeSkidmarksEpisodesState({
+      episodes: [],
+      cast: [
+        {
+          id: "a",
+          name: "Owl",
+          role: "supporting",
+          look: "",
+          fictionalAdultConfirmed: true,
+          createdAt: 1,
+          isAnimal: true,
+          pictureUrls: ["https://x.com/a.jpg", "javascript:alert(1)", 5, "https://x.com/a.jpg", "data:image/jpeg;base64,AA"],
+        },
+      ],
+    });
+    expect(st?.cast[0].pictureUrls).toEqual(["https://x.com/a.jpg", "data:image/jpeg;base64,AA"]);
+    expect(st?.cast[0].isAnimal).toBe(true);
+  });
+});

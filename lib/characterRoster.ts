@@ -123,12 +123,14 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
       sourceKey: `sk:${c.id}`,
       group: "skidmarks",
       name: c.name,
-      thumbUrl: null,
-      extraPictureUrls: [],
+      thumbUrl: c.pictureUrls?.[0] ?? null,
+      extraPictureUrls: (c.pictureUrls ?? []).slice(1),
       look: c.look,
       neverShow: "",
-      style: "photo",
-      subjectWord: "person",
+      // Skidmarks characters are 3D cartoon caricatures, not photos and
+      // not the flat Sunny Banks style.
+      style: "render3d",
+      subjectWord: c.isAnimal ? "animal" : "person",
       blockedReason: c.fictionalAdultConfirmed === true ? minorBlockReason(`${c.name} ${c.look}`) : "Not marked as a made-up adult.",
     });
   }
@@ -216,10 +218,48 @@ const CARTOON_VARIATIONS = [
   "full body, arms out, mid-shout, dusty road",
 ];
 
-function variationsFor(style: CharacterTrainingStyle): string[] {
+// Animals: no "arms crossed" or "sitting on a chair" poses.
+const ANIMAL_VARIATIONS = [
+  "full body, facing the viewer, plain light grey background, soft even light",
+  "three-quarter view from the left, full body, outdoors in daylight",
+  "three-quarter view from the right, full body, city street behind",
+  "side profile facing left, full body, plain dark background, studio light",
+  "close-up of the face, curious expression, soft window light",
+  "full body, mid-step walking toward the camera, midday sun",
+  "head-and-shoulders, looking back over the shoulder, night, neon signs behind",
+  "full body, low angle, blue sky behind",
+  "full body, high angle, looking up at the camera",
+  "waist-up, cheeky expression, warm golden-hour light",
+  "close-up, grumpy expression, overcast daylight",
+  "full body, standing on a brick wall, late afternoon side light",
+  "three-quarter view, surprised expression, cool blue dusk light",
+  "full body, on a pub counter, warm low light",
+  "head-and-shoulders, facing the camera, neutral expression, plain white background",
+];
+
+function isAnimal(subjectWord?: string): boolean {
+  return (subjectWord ?? "").trim().toLowerCase() === "animal";
+}
+
+function variationsFor(style: CharacterTrainingStyle, subjectWord?: string): string[] {
+  if (isAnimal(subjectWord)) return ANIMAL_VARIATIONS;
   if (style === "faceless") return FACELESS_VARIATIONS;
   if (style === "cartoon") return CARTOON_VARIATIONS;
   return PHOTO_VARIATIONS;
+}
+
+/** What the prompts call them: "animal character", "cartoon character", "man" or "person". */
+function whoWord(style: CharacterTrainingStyle, subjectWord?: string, facelessWord = "person"): string {
+  if (isAnimal(subjectWord)) return "animal character";
+  if (style === "cartoon" || style === "render3d") return "cartoon character";
+  return style === "faceless" ? facelessWord : "person";
+}
+
+/** The closing safety line: made-up adults for people, a made-up animal for animals. */
+function madeUpLine(who: string, subjectWord?: string): string {
+  return isAnimal(subjectWord)
+    ? `Only this one ${who} in the picture, a made-up animal, no people, no text, no watermark.`
+    : `Only this one ${who} in the picture, a made-up adult, clearly over 25, not resembling any real person, fully clothed, no text, no watermark.`;
 }
 
 const MAX_LOOK_CHARS = 1100;
@@ -230,17 +270,23 @@ const MAX_LOOK_CHARS = 1100;
 const HELD_PROP_RE =
   /\b(holding|holds|carrying|carries|clutching|gripping|wielding|cigarettes?|smok(e|es|ing)|vape|pipe|pies?|tea ?cups?|cups?|mugs?|glass(es)? of|cricket bat|bats?|thongs|beers?|beer cans?|stubb(y|ies)|tinnies|cans?|bottles?|coins|hair ?dryer|cameras?|whistles?|phones?|microphones?|mic|guitars?|instruments?|drinks?|guns?|rifles?|knife|knives|tools?|umbrella|bags?|tins?)\b/i;
 
+// Arm poses in a look ("arms folded") fight each shot's own pose and
+// Siray draws both sets of arms, so the shot description owns the pose.
+const ARM_POSE_RE = /\b(arms?|hands?)\s+(folded|crossed|on (her|his|their) hips|in (her|his|their) pockets|raised|out)\b|\b(folded|crossed) arms\b/i;
+
 /** The look with any held-prop clauses taken out (clauses split on commas, semicolons and dashes). */
 export function stripHeldProps(look: string): string {
   return look
     .split(/\s*(?:,|;|—|–|\s-\s)\s*/)
     .map((part) => part.trim())
-    .filter((part) => part && !HELD_PROP_RE.test(part))
+    .filter((part) => part && !HELD_PROP_RE.test(part) && !ARM_POSE_RE.test(part))
     .join(", ");
 }
 
 export const EMPTY_HANDS_LINE =
-  "Hands empty and relaxed: not holding anything, no props, no cigarette, no drink, no phone, no tools, no weapons, no instrument. If the reference shows them holding something, leave it out.";
+  "Nothing in the hands: no props, no cigarette, no drink, no phone, no tools, no weapons, no instrument. If the reference shows them holding something, leave it out. Correct anatomy: exactly two arms and two hands, arms posed only as this shot describes, no extra or duplicated limbs.";
+export const ANIMAL_ANATOMY_LINE =
+  "Nothing held and no props. Correct anatomy for this animal: the right number of legs, wings or paws, no extra or duplicated limbs.";
 const MAX_PROMPT_CHARS = 1900; // the Siray route refuses over 2000
 
 function clip(text: string, max: number): string {
@@ -248,8 +294,12 @@ function clip(text: string, max: number): string {
   return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`;
 }
 
+const RENDER_3D_STYLE =
+  "Stylised 3D animated caricature, like a feature-animation film still: exaggerated proportions, smooth rendered materials, soft cinematic light";
+
 function styleLine(style: CharacterTrainingStyle): string {
   if (style === "cartoon") return `Keep the exact same cartoon style as the reference: ${SUNNY_BANKS_STYLE_LOCK}.`;
+  if (style === "render3d") return `Keep the exact same 3D cartoon look as the reference. ${RENDER_3D_STYLE}.`;
   return "Photographic, realistic light and skin, sharp focus.";
 }
 
@@ -267,14 +317,16 @@ export function signatureLine(look: string): string {
  * a resumed run keeps moving through the list rather than repeating.
  */
 export function buildTrainingPicturePrompts(
-  char: Pick<RosterCharacter, "name" | "look" | "neverShow" | "style">,
+  char: Pick<RosterCharacter, "name" | "look" | "neverShow" | "style"> & { subjectWord?: string },
   count: number,
   startIndex = 0,
 ): string[] {
-  const list = variationsFor(char.style);
-  const who = char.style === "cartoon" ? "cartoon character" : "person";
-  const same =
-    char.style === "faceless"
+  const animal = isAnimal(char.subjectWord);
+  const list = variationsFor(char.style, char.subjectWord);
+  const who = whoWord(char.style, char.subjectWord);
+  const same = animal
+    ? "exactly the same species, face, markings, body shape and any clothes"
+    : char.style === "faceless"
       ? "exactly the same silhouette, hat, clothes and build"
       : "exactly the same face, hair, body shape and outfit";
   return Array.from({ length: Math.max(0, count) }, (_, i) => {
@@ -285,12 +337,46 @@ export function buildTrainingPicturePrompts(
       signatureLine(char.look),
       char.look ? clip(stripHeldProps(char.look), MAX_LOOK_CHARS) : "",
       styleLine(char.style),
-      EMPTY_HANDS_LINE,
-      `Only this one ${who} in the picture, a made-up adult, fully clothed, no text, no watermark.`,
+      animal ? ANIMAL_ANATOMY_LINE : EMPTY_HANDS_LINE,
+      madeUpLine(who, char.subjectWord),
       char.neverShow ? `Do not show: ${clip(char.neverShow, 300)}.` : "",
     ];
     return clip(parts.filter(Boolean).join(" "), MAX_PROMPT_CHARS);
   });
+}
+
+/**
+ * Siray prompt for the one clean base picture every training picture is
+ * made from: arms down, empty hands, plain background. With a reference
+ * it copies the character from their existing picture (which may show
+ * props or folded arms); without one it draws them from the look.
+ */
+export function buildCleanReferencePrompt(
+  char: Pick<RosterCharacter, "name" | "look" | "style"> & { subjectWord?: string },
+  hasReference: boolean,
+): string {
+  const animal = isAnimal(char.subjectWord);
+  const who = whoWord(char.style, char.subjectWord, "man");
+  const look = stripHeldProps(char.look);
+  const pose = animal
+    ? "Full body, standing, facing the viewer at a slight angle, neutral expression, plain light background, even soft light."
+    : char.style === "faceless"
+      ? "Full body standing, three-quarter view, arms hanging relaxed at the sides, hands open and empty, face in deep shadow under the hat brim, plain dark background, one soft key light."
+      : "Full body standing, facing the viewer at a slight angle, arms hanging relaxed straight down at the sides, hands open and empty, neutral expression, plain light background, even soft light.";
+  const parts = [
+    hasReference
+      ? `The same ${who} as in the reference image (${char.name}): exactly the same ${animal ? "species, face, markings, body shape and any clothes" : "face, hair, body shape and outfit"}, but a new pose.`
+      : `${char.name}: ${clip(look || "an original made-up character", MAX_LOOK_CHARS)}.`,
+    pose,
+    hasReference && look ? clip(look, MAX_LOOK_CHARS) : "",
+    signatureLine(char.look),
+    styleLine(char.style),
+    animal ? ANIMAL_ANATOMY_LINE : EMPTY_HANDS_LINE,
+    animal
+      ? "A made-up animal character, one animal only, no people, no text, no watermark."
+      : "A made-up adult, clearly over 25, not resembling any real person, fully clothed, one person only, no text, no watermark.",
+  ];
+  return clip(parts.filter(Boolean).join(" "), MAX_PROMPT_CHARS);
 }
 
 /** Text-only Siray prompt for a first face when a character has no picture yet. */
@@ -303,7 +389,7 @@ export function buildFacePrompt(char: Pick<RosterCharacter, "name" | "look" | "s
     `${char.name}: ${clip(stripHeldProps(char.look) || "an original made-up character", MAX_LOOK_CHARS)}.`,
     framing,
     EMPTY_HANDS_LINE,
-    char.style === "cartoon" ? `${SUNNY_BANKS_STYLE_LOCK}.` : "Photographic, realistic.",
+    char.style === "cartoon" ? `${SUNNY_BANKS_STYLE_LOCK}.` : char.style === "render3d" ? `${RENDER_3D_STYLE}.` : "Photographic, realistic.",
     "A made-up adult, clearly over 25, not resembling any real person, fully clothed, one person only, no text.",
   ];
   return clip(parts.join(" "), MAX_PROMPT_CHARS);

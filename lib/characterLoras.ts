@@ -38,8 +38,8 @@ export type CharacterLoraStatus = "draft" | "making" | "training" | "finishing" 
  * switch face detection off, since there's no real face to find, and
  * caption "a cartoon of" / "a photo of" respectively.
  */
-export type CharacterTrainingStyle = "photo" | "cartoon" | "faceless";
-export const CHARACTER_TRAINING_STYLES: CharacterTrainingStyle[] = ["photo", "cartoon", "faceless"];
+export type CharacterTrainingStyle = "photo" | "cartoon" | "faceless" | "render3d";
+export const CHARACTER_TRAINING_STYLES: CharacterTrainingStyle[] = ["photo", "cartoon", "faceless", "render3d"];
 
 /** Pictures the one-tap flow aims for (existing pictures plus Siray-made ones). */
 export const AUTO_PICTURE_TARGET = 15;
@@ -84,6 +84,14 @@ export interface CharacterLoraEntry {
   autoPictureTarget: number | null;
   /** Siray has finished the pictures; waiting for Stuart to check them and tap Train. */
   awaitingReview: boolean;
+  /**
+   * A clean base picture Siray drew (arms down, empty hands, plain
+   * background), waiting for Stuart to okay it. Once okayed it becomes
+   * `referenceUrl` and `cleanReferenceApproved` goes true.
+   */
+  cleanCandidateUrl: string | null;
+  /** `referenceUrl` is an okayed clean base, so the training pictures can be made from it. */
+  cleanReferenceApproved: boolean;
 }
 
 export interface CharacterLorasState {
@@ -114,6 +122,8 @@ export const SKYE_SEED: CharacterLoraEntry = {
   referenceUrl: null,
   autoPictureTarget: null,
   awaitingReview: false,
+  cleanCandidateUrl: null,
+  cleanReferenceApproved: false,
 };
 
 export function emptyCharacterLorasState(): CharacterLorasState {
@@ -167,8 +177,9 @@ export function comfyEmbeddingToken(repo: string, embeddingFile: string): string
 
 /** Caption opener, used both for training captions (`TOK`) and the Comfy prompt (the embedding token). */
 export function captionPrefix(style: CharacterTrainingStyle, token: string, subjectWord: string): string {
-  const word = subjectWord.trim().toLowerCase() || (style === "cartoon" ? "character" : "person");
-  return `${style === "cartoon" ? "a cartoon of" : "a photo of"} ${token} ${word}, `;
+  const word = subjectWord.trim().toLowerCase() || (style === "cartoon" || style === "render3d" ? "character" : "person");
+  const opener = style === "cartoon" ? "a cartoon of" : style === "render3d" ? "a 3D cartoon render of" : "a photo of";
+  return `${opener} ${token} ${word}, `;
 }
 
 /** The prompt opener that switches the character on in Comfy. */
@@ -240,6 +251,8 @@ export function buildCharacterLoraEntry(
     referenceUrl: null,
     autoPictureTarget: null,
     awaitingReview: false,
+    cleanCandidateUrl: null,
+    cleanReferenceApproved: false,
     ...extra,
   };
 }
@@ -293,6 +306,9 @@ function normalizeEntry(raw: unknown): CharacterLoraEntry | null {
         ? Math.min(CHARACTER_LORA_MAX_IMAGES, Math.floor(r.autoPictureTarget))
         : null,
     awaitingReview: r.awaitingReview === true,
+    cleanCandidateUrl:
+      typeof r.cleanCandidateUrl === "string" && /^(https:|data:image\/|\/)/.test(r.cleanCandidateUrl) ? r.cleanCandidateUrl : null,
+    cleanReferenceApproved: r.cleanReferenceApproved === true,
   };
 }
 

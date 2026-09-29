@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildCharacterLoraEntry } from "./characterLoras";
 import {
   buildCharacterRoster,
+  buildCleanReferencePrompt,
   buildFacePrompt,
   buildTrainingPicturePrompts,
   EMPTY_HANDS_LINE,
@@ -13,6 +14,7 @@ import {
 } from "./characterRoster";
 import { buildSdxlTrainingInput } from "./replicateTrainer";
 import { getSkidmarksSnapshot, type SkidmarksState } from "./skidmarks";
+import { buildSkidmarksCastMember } from "./skidmarksEpisodes";
 
 function stateWith(extra: Partial<SkidmarksState> = {}): SkidmarksState {
   return { ...getSkidmarksSnapshot(), ...extra };
@@ -133,7 +135,7 @@ describe("empty hands in training pictures", () => {
       "tiny elderly woman, hair bun, round glasses, purple housecoat",
     );
     expect(stripHeldProps("big blonde hair, leopard-print top, cigarette, arms folded")).toBe(
-      "big blonde hair, leopard-print top, arms folded",
+      "big blonde hair, leopard-print top",
     );
     expect(stripHeldProps("short purple alien, antennae, teal bucket hat, holding a pair of thongs, bare feet")).toBe(
       "short purple alien, antennae, teal bucket hat, bare feet",
@@ -173,3 +175,89 @@ describe("Jack's neon blue lips", () => {
   });
 });
 
+describe("no extra arms", () => {
+  it("drops arm poses from the look and asks for exactly two arms", () => {
+    expect(stripHeldProps("big blonde hair, crossed arms, denim shorts")).toBe("big blonde hair, denim shorts");
+    expect(EMPTY_HANDS_LINE).toMatch(/exactly two arms and two hands/);
+    expect(EMPTY_HANDS_LINE).not.toMatch(/relaxed/);
+  });
+});
+
+describe("clean reference picture", () => {
+  it("asks for arms down, empty hands and exactly two arms, from the reference", () => {
+    const p = buildCleanReferencePrompt(
+      { name: "Shazza", look: "big blonde hair, leopard-print top, cigarette, arms folded", style: "cartoon" },
+      true,
+    );
+    expect(p).toMatch(/arms hanging relaxed straight down at the sides/);
+    expect(p).toContain(EMPTY_HANDS_LINE);
+    expect(p).toMatch(/same cartoon character as in the reference image/);
+    expect(p).not.toMatch(/top, cigarette|arms folded/);
+    expect(p.length).toBeLessThanOrEqual(1900);
+  });
+
+  it("draws from the look when there is no picture, and keeps Jack's lips", () => {
+    expect(buildCleanReferencePrompt({ name: "Nova", look: "tall woman, silver bob", style: "photo" }, false)).toMatch(
+      /^Nova: tall woman, silver bob\./,
+    );
+    const jack = buildCharacterRoster(stateWith())["music-video"].find((c) => c.name === "Jack Ash")!;
+    expect(buildCleanReferencePrompt(jack, true)).toContain("neon blue and are clearly visible");
+  });
+});
+
+describe("clean reference fields", () => {
+  it("default off on new entries and survive a save", () => {
+    const e = buildCharacterLoraEntry("Shazza", [], new Date());
+    expect(e.cleanReferenceApproved).toBe(false);
+    expect(e.cleanCandidateUrl).toBeNull();
+  });
+});
+
+describe("Add a Skidmarks character", () => {
+  it("shows a new cast member in the Skidmarks row as a photo character with no picture yet", () => {
+    const member = buildSkidmarksCastMember(" Darryl ", "late-40s bloke, grey mullet, faded hi-vis", "supporting", 1, "cast_1");
+    const r = buildCharacterRoster(stateWith({ skidmarksEpisodes: { episodes: [], cast: [member] } }));
+    expect(r.skidmarks).toHaveLength(1);
+    expect(r.skidmarks[0]).toMatchObject({ sourceKey: "sk:cast_1", name: "Darryl", style: "render3d", thumbUrl: null, blockedReason: null });
+  });
+});
+
+
+describe("Skidmarks pictures, 3D cartoon and animals", () => {
+  const withCast = (cast: unknown[]) => stateWith({ skidmarksEpisodes: { episodes: [], cast } as SkidmarksState["skidmarksEpisodes"] });
+
+  it("uses the first uploaded picture as the thumbnail and the rest as extras, in 3D cartoon style", () => {
+    const member = buildSkidmarksCastMember("Clive", "", "supporting", 1, "c9", {
+      pictureUrls: ["https://x.public.blob.vercel-storage.com/a.jpg", "https://x.public.blob.vercel-storage.com/b.jpg"],
+    });
+    const [c] = buildCharacterRoster(withCast([member])).skidmarks;
+    expect(c.thumbUrl).toBe("https://x.public.blob.vercel-storage.com/a.jpg");
+    expect(c.extraPictureUrls).toEqual(["https://x.public.blob.vercel-storage.com/b.jpg"]);
+    expect(c.style).toBe("render3d");
+    expect(c.subjectWord).toBe("person");
+  });
+
+  it("marks an animal cast member so prompts say animal", () => {
+    const owl = buildSkidmarksCastMember("Owl", "", "supporting", 1, "o1", { isAnimal: true });
+    const [c] = buildCharacterRoster(withCast([owl])).skidmarks;
+    expect(c.subjectWord).toBe("animal");
+    const [p] = buildTrainingPicturePrompts(c, 1);
+    expect(p).toMatch(/same animal character/);
+    expect(p).toMatch(/made-up animal/);
+    expect(p).not.toMatch(/two arms/);
+    expect(p).not.toMatch(/\bperson\b/);
+    const clean = buildCleanReferencePrompt(c, true);
+    expect(clean).toMatch(/animal character/);
+    expect(clean).not.toMatch(/over 25/);
+  });
+
+  it("3D cartoon prompts keep the 3D look, not the flat Sunny Banks style", () => {
+    const c = { name: "Clive", look: "bowl cut, long nose", neverShow: "", style: "render3d" as const, subjectWord: "person" };
+    const [p] = buildTrainingPicturePrompts(c, 1);
+    expect(p).toMatch(/3D cartoon/);
+    expect(p).toMatch(/two arms/);
+    expect(p).toMatch(/over 25/);
+    expect(buildCleanReferencePrompt(c, true)).toMatch(/3D animated caricature/);
+    expect(buildFacePrompt(c)).toMatch(/3D animated caricature/);
+  });
+});
