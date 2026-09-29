@@ -6,8 +6,10 @@ import {
   buildSunnyBanksWorkspaceFromLive,
   describeSunnyBanksWorkspace,
   fingerprintWorkspace,
+  liveFromSunnyBanksWorkspace,
   mintWorkspaceId,
   normalizeSunnyBanksStudio,
+  pickSunnyBanksEpisodeMediaSlug,
   sunnyBanksStudioHasUserContent,
   upsertSunnyBanksWorkspace,
 } from "./sunnyBanksWorkspace";
@@ -146,5 +148,72 @@ describe("isSunnyBanksLiveSaved (2026-09-18)", () => {
       2
     );
     expect(isSunnyBanksLiveSaved(live, [other, saved])).toBe(true);
+  });
+});
+
+describe("stable episode ids and pinned media folders (2026-09-30)", () => {
+  const named = (title: string) => {
+    const live = { ...buildEmptySunnyBanksLive(), workspaceTitle: title };
+    live.actScripts = { ...live.actScripts, I: "SHAZZA: G'day" };
+    return live;
+  };
+
+  it("a rename updates the same card: same id, same media folder, one card", () => {
+    const first = buildSunnyBanksWorkspaceFromLive(named("The Big Wet"), 1, 1);
+    const shelf = upsertSunnyBanksWorkspace([], first);
+    expect(shelf[0].mediaSlug).toBe("the-big-wet");
+    const renamed = buildSunnyBanksWorkspaceFromLive(named("The Big Dry"), 2, 2);
+    const next = upsertSunnyBanksWorkspace(shelf, renamed, shelf[0].id);
+    expect(next).toHaveLength(1);
+    expect(next[0]).toMatchObject({ id: first.id, label: "The Big Dry", mediaSlug: "the-big-wet" });
+  });
+
+  it("without an episode id it falls back to the old match-by-name", () => {
+    const first = upsertSunnyBanksWorkspace([], buildSunnyBanksWorkspaceFromLive(named("EP1"), 1, 1));
+    const again = upsertSunnyBanksWorkspace(first, buildSunnyBanksWorkspaceFromLive(named("EP1"), 2, 2));
+    expect(again).toHaveLength(1);
+    expect(again[0].id).toBe(first[0].id);
+    expect(upsertSunnyBanksWorkspace(first, buildSunnyBanksWorkspaceFromLive(named("EP2"), 3, 3))).toHaveLength(2);
+  });
+
+  it("an episode id that is no longer on the shelf (card deleted) adds a new card", () => {
+    const next = upsertSunnyBanksWorkspace([], buildSunnyBanksWorkspaceFromLive(named("EP1"), 1, 1), "ws-gone");
+    expect(next).toHaveLength(1);
+  });
+
+  it("media folders are unique on the shelf and a pinned one is never replaced", () => {
+    const a = upsertSunnyBanksWorkspace([], buildSunnyBanksWorkspaceFromLive(named("Drop Bears"), 1, 1));
+    const b = upsertSunnyBanksWorkspace(a, buildSunnyBanksWorkspaceFromLive(named("Drop  Bears!"), 2, 2));
+    expect(b.map((w) => w.mediaSlug)).toEqual(["drop-bears-2", "drop-bears"]);
+    const withLiveSlug = upsertSunnyBanksWorkspace([], buildSunnyBanksWorkspaceFromLive(named("Later name"), 3, 3), null, "first-name");
+    expect(withLiveSlug[0].mediaSlug).toBe("first-name");
+  });
+
+  it("the episode id and media folder are not part of the fingerprint (old cards still read as saved)", () => {
+    const live = named("EP1");
+    const card = buildSunnyBanksWorkspaceFromLive(live, 1, 1);
+    expect(fingerprintWorkspace({ ...live, episodeId: card.id, mediaSlug: "ep1" })).toBe(fingerprintWorkspace(live));
+    expect(isSunnyBanksLiveSaved({ ...live, episodeId: card.id, mediaSlug: "ep1" }, [card])).toBe(true);
+  });
+
+  it("opening a card carries its id and media folder into the live copy, and both survive a reload", () => {
+    const [card] = upsertSunnyBanksWorkspace([], buildSunnyBanksWorkspaceFromLive(named("EP1"), 1, 1));
+    const live = liveFromSunnyBanksWorkspace(card);
+    expect(live).toMatchObject({ episodeId: card.id, mediaSlug: "ep1" });
+    const reloaded = normalizeSunnyBanksStudio(JSON.parse(JSON.stringify({ live, workspaces: [card], saveSeq: 1 })));
+    expect(reloaded?.live).toMatchObject({ episodeId: card.id, mediaSlug: "ep1" });
+    expect(reloaded?.workspaces[0].mediaSlug).toBe("ep1");
+  });
+
+  it("a bad media folder name from storage is dropped, not trusted", () => {
+    const reloaded = normalizeSunnyBanksStudio({ live: { ...named("EP1"), mediaSlug: "../x" }, workspaces: [], saveSeq: 0 });
+    expect(reloaded?.live.mediaSlug).toBeUndefined();
+  });
+
+  it("New Episode starts with no episode id or media folder", () => {
+    const live = buildEmptySunnyBanksLive();
+    expect(live.episodeId).toBeUndefined();
+    expect(live.mediaSlug).toBeUndefined();
+    expect(pickSunnyBanksEpisodeMediaSlug("", [])).toBe("episode");
   });
 });

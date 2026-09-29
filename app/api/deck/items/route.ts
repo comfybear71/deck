@@ -3,10 +3,11 @@ import { deleteDeckItem, listDeckItems, putDeckItem, type DeckItemsFailure, type
 import { isDeckItemKind, isValidDeckItemId } from "@/lib/deckItems";
 
 /**
- * GET/PUT/DELETE /api/deck/items — per-item saving (step 1: characters).
+ * GET/PUT/DELETE /api/deck/items — per-item saving (step 1: characters,
+ * step 2: Sunnybank episodes, `kind=sunnybank-episode`).
  * See `lib/deckItems.ts` and `lib/deckItems-server.ts`.
  *
- * - `GET ?kind=character` → the live items with their revisions, plus
+ * - `GET ?kind=character` (or `sunnybank-episode`) → the live items with their revisions, plus
  *   tombstones for deleted ones and whether the seed has run.
  * - `PUT { kind, itemId, expectedRevision, data }` → saves one item if it
  *   is still at `expectedRevision` (0 = new). 409 with the server's copy

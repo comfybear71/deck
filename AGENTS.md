@@ -985,6 +985,13 @@ run by hand), loading never writes, and a card missing from a list is
 never a delete; only `removeCharacterLora` (the delete tap) deletes. See
 `docs/deck/PER_ITEM_SAVING.md`.
 
+Sunnybank episode cards (step 2) follow the same rules as kind
+`sunnybank-episode` (`lib/sunnybankEpisodeItems.ts`); the only seeder is
+`scripts/seed-deck-items-sunnybank-episodes.ts` (dry run by default) and
+only `deleteSunnyBanksWorkspace` (the ✕ tap) deletes. A card's `id` never
+changes and its `mediaSlug` (media folder) is pinned once; never derive
+either from the live episode name.
+
 ## Env vars this feature actually reads
 
 - `XAI_API_KEY` — slot A (default) team key for plate-still generation

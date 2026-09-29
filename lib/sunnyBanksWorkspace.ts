@@ -9,6 +9,15 @@
  * one card per Act pill. The live working copy is stored beside the
  * shelf so a refresh (or closing the sheet) does not reseeds EP02 and
  * drop Act III / extra Holds. ✕ drops that named card only.
+ *
+ * Stable ids (2026-09-30, per-item saving for episodes): a saved card's
+ * `id` never changes once minted, and the live copy remembers which card
+ * it came from (`episodeId`), so saving after a rename updates that same
+ * card instead of minting a second one. Each episode also pins its media
+ * folder name (`mediaSlug`, `deck/sunnybank/episodes/<mediaSlug>/`) the
+ * first time it needs one, so a rename never moves where new clips go.
+ * Neither field is part of the fingerprint, so older cards still read as
+ * "saved" exactly as before.
  */
 import {
   getSunnyBanksLocation,
@@ -16,6 +25,7 @@ import {
   type SunnyBanksLocationId,
 } from "./sunnyBanks";
 import { buildSunnyBanksDropBearsSeed, DROP_BEARS_TITLE } from "./sunnyBanksDropBears";
+import { deckMediaSlug, isSafeDeckMediaSlug, uniqueDeckMediaSlug } from "./deckMediaPaths";
 
 export const SUNNY_BANKS_INITIAL_ACTS = ["I", "II", "III"] as const;
 
@@ -44,6 +54,10 @@ export interface SunnyBanksLiveState {
   characterOverrides: SunnyBanksActKeyed<Record<number, string>>;
   locationOverrides: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>>;
   runtimeMap: SunnyBanksActKeyed<Record<number, SunnyBanksRowRuntime>>;
+  /** The saved card this live copy was opened from or last saved as. */
+  episodeId?: string;
+  /** Pinned media folder name, see `lib/deckMediaPaths.ts`. */
+  mediaSlug?: string;
 }
 
 export interface SunnyBanksWorkspaceSnapshot {
@@ -58,6 +72,9 @@ export interface SunnyBanksWorkspaceSnapshot {
   characterOverrides: SunnyBanksActKeyed<Record<number, string>>;
   locationOverrides: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>>;
   runtimeMap: SunnyBanksActKeyed<Record<number, SunnyBanksRowRuntime>>;
+  /** Pinned media folder name (`deck/sunnybank/episodes/<mediaSlug>/`).
+   * Set once, never re-derived from the label. Missing on older cards. */
+  mediaSlug?: string;
 }
 
 export interface SkidmarksSunnyBanksState {
@@ -76,7 +93,7 @@ export function cloneActRecord<T>(value: SunnyBanksActKeyed<T>, actIds?: readonl
 }
 
 export function cloneSunnyBanksLive(live: SunnyBanksLiveState): SunnyBanksLiveState {
-  return {
+  const next: SunnyBanksLiveState = {
     workspaceTitle: live.workspaceTitle,
     defaultLocationId: live.defaultLocationId,
     actIds: [...live.actIds],
@@ -86,6 +103,9 @@ export function cloneSunnyBanksLive(live: SunnyBanksLiveState): SunnyBanksLiveSt
     locationOverrides: cloneActRecord(live.locationOverrides, live.actIds),
     runtimeMap: cloneActRecord(live.runtimeMap, live.actIds),
   };
+  if (live.episodeId) next.episodeId = live.episodeId;
+  if (live.mediaSlug) next.mediaSlug = live.mediaSlug;
+  return next;
 }
 
 export function liveFromSunnyBanksWorkspace(workspace: SunnyBanksWorkspaceSnapshot): SunnyBanksLiveState {
@@ -98,6 +118,8 @@ export function liveFromSunnyBanksWorkspace(workspace: SunnyBanksWorkspaceSnapsh
     characterOverrides: workspace.characterOverrides,
     locationOverrides: workspace.locationOverrides,
     runtimeMap: workspace.runtimeMap,
+    episodeId: workspace.id,
+    mediaSlug: workspace.mediaSlug,
   });
 }
 
@@ -172,7 +194,9 @@ export function isSunnyBanksLiveSaved(
 
 /** djb2 of the snapshot payload — same scripts + same clip URLs hash
  * the same. Used as part of the workspace id and to tell seed-equal
- * live apart from real user work. */
+ * live apart from real user work. `episodeId` and `mediaSlug` are
+ * bookkeeping, not content, and are left out so every fingerprint
+ * stored before they existed still matches. */
 export function fingerprintWorkspace(snapshot: {
   defaultLocationId: string;
   actIds: readonly string[];
@@ -181,8 +205,12 @@ export function fingerprintWorkspace(snapshot: {
   characterOverrides: SunnyBanksActKeyed<Record<number, string>>;
   locationOverrides: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>>;
   runtimeMap: SunnyBanksActKeyed<Record<number, SunnyBanksRowRuntime>>;
+  episodeId?: string;
+  mediaSlug?: string;
 }): string {
-  const payload = JSON.stringify(snapshot);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { episodeId, mediaSlug, ...content } = snapshot;
+  const payload = JSON.stringify(content);
   let hash = 5381;
   for (let i = 0; i < payload.length; i += 1) {
     hash = (hash * 33) ^ payload.charCodeAt(i);
@@ -215,16 +243,46 @@ export function describeSunnyBanksWorkspace(workspace: Pick<SunnyBanksWorkspaceS
   return `${acts} · ${clips}`;
 }
 
+/**
+ * Saves `snapshot` onto the shelf. The card it replaces is, in order:
+ * the one with id `episodeId` (the card the live copy was opened from or
+ * last saved as, so a rename updates it), else the one with the same
+ * name (the old behaviour), else none (a new card). A replaced card keeps
+ * its `id` and its pinned `mediaSlug`, so neither ever changes. A card
+ * with no `mediaSlug` yet gets one: `preferredMediaSlug` if given (the
+ * live copy may already have filed clips under it), else from the name,
+ * never one another card already uses.
+ */
 export function upsertSunnyBanksWorkspace(
   workspaces: readonly SunnyBanksWorkspaceSnapshot[],
-  snapshot: SunnyBanksWorkspaceSnapshot
+  snapshot: SunnyBanksWorkspaceSnapshot,
+  episodeId?: string | null,
+  preferredMediaSlug?: string | null
 ): SunnyBanksWorkspaceSnapshot[] {
   const key = snapshot.label.trim().toLowerCase();
-  const index = workspaces.findIndex((workspace) => workspace.label.trim().toLowerCase() === key);
-  if (index < 0) return [snapshot, ...workspaces];
-  const keptId = workspaces[index].id;
-  const updated: SunnyBanksWorkspaceSnapshot = { ...snapshot, id: keptId };
-  return [updated, ...workspaces.filter((_, i) => i !== index)];
+  let index = episodeId ? workspaces.findIndex((workspace) => workspace.id === episodeId) : -1;
+  if (index < 0) index = workspaces.findIndex((workspace) => workspace.label.trim().toLowerCase() === key);
+  const others = index < 0 ? workspaces : workspaces.filter((_, i) => i !== index);
+  const replaced = index < 0 ? null : workspaces[index];
+  const mediaSlug =
+    replaced?.mediaSlug ||
+    pickSunnyBanksEpisodeMediaSlug(
+      preferredMediaSlug || snapshot.mediaSlug || snapshot.label,
+      others.map((workspace) => workspace.mediaSlug)
+    );
+  const updated: SunnyBanksWorkspaceSnapshot = { ...snapshot, id: replaced?.id ?? snapshot.id, mediaSlug };
+  return [updated, ...others];
+}
+
+/**
+ * A media folder name for an episode: `text` as a slug (`deckMediaSlug`,
+ * so "The Big Wet" → `the-big-wet`), made unique against `taken`
+ * (`the-big-wet-2`…). Used once per episode; the result is pinned.
+ */
+export function pickSunnyBanksEpisodeMediaSlug(text: string, taken: Iterable<string | undefined | null>): string {
+  const used: string[] = [];
+  for (const slug of taken) if (slug) used.push(slug);
+  return uniqueDeckMediaSlug(deckMediaSlug(text, "episode"), used);
 }
 
 function normalizeLocationId(value: unknown, fallback: SunnyBanksLocationId): SunnyBanksLocationId {
@@ -320,7 +378,7 @@ export function normalizeSunnyBanksLive(value: unknown): SunnyBanksLiveState | n
     locationOverrides[act] = normalizeLocationMap((locationRaw as Record<string, unknown>)[act], defaultLocationId);
     runtimeMap[act] = normalizeRuntimeMap((runtimeRaw as Record<string, unknown>)[act]);
   }
-  return {
+  const live: SunnyBanksLiveState = {
     workspaceTitle: typeof v.workspaceTitle === "string" ? v.workspaceTitle : fallback.workspaceTitle,
     defaultLocationId,
     actIds: [...ids],
@@ -330,6 +388,9 @@ export function normalizeSunnyBanksLive(value: unknown): SunnyBanksLiveState | n
     locationOverrides,
     runtimeMap,
   };
+  if (typeof v.episodeId === "string" && v.episodeId.length > 0) live.episodeId = v.episodeId;
+  if (isSafeDeckMediaSlug(v.mediaSlug)) live.mediaSlug = v.mediaSlug;
+  return live;
 }
 
 export function normalizeSunnyBanksWorkspace(value: unknown): SunnyBanksWorkspaceSnapshot | null {
@@ -341,7 +402,7 @@ export function normalizeSunnyBanksWorkspace(value: unknown): SunnyBanksWorkspac
   if (typeof v.savedAt !== "number") return null;
   const fingerprint = typeof v.fingerprint === "string" && v.fingerprint.length > 0 ? v.fingerprint : fingerprintWorkspace(live);
   const label = typeof v.label === "string" && v.label.trim().length > 0 ? v.label : live.workspaceTitle;
-  return {
+  const workspace: SunnyBanksWorkspaceSnapshot = {
     id: v.id,
     savedAt: v.savedAt,
     fingerprint,
@@ -354,6 +415,8 @@ export function normalizeSunnyBanksWorkspace(value: unknown): SunnyBanksWorkspac
     locationOverrides: live.locationOverrides,
     runtimeMap: live.runtimeMap,
   };
+  if (live.mediaSlug) workspace.mediaSlug = live.mediaSlug;
+  return workspace;
 }
 
 export function normalizeSunnyBanksStudio(value: unknown): SkidmarksSunnyBanksState | null {
@@ -389,7 +452,7 @@ export function buildSunnyBanksWorkspaceFromLive(
     }
   }
   if (!label) label = "Sunny Banks episode";
-  return {
+  const snapshot: SunnyBanksWorkspaceSnapshot = {
     id: mintWorkspaceId(savedAt, seq, fingerprint),
     savedAt,
     fingerprint,
@@ -402,6 +465,8 @@ export function buildSunnyBanksWorkspaceFromLive(
     locationOverrides: cloned.locationOverrides,
     runtimeMap: cloned.runtimeMap,
   };
+  if (cloned.mediaSlug) snapshot.mediaSlug = cloned.mediaSlug;
+  return snapshot;
 }
 
 let defaultLiveFingerprint: string | null = null;

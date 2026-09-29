@@ -10,13 +10,15 @@
  * changes, with its own revision, so a stale device can at worst be
  * refused on the one card it touched, never wipe the rest.
  *
- * Step 1 covers **characters only** (`kind = "character"`). The tables
- * are created by `db/migrations/2026-09-30_deck_items.sql`, run by hand.
- * Nothing in the app creates them.
+ * Step 1 covered characters (`kind = "character"`). Step 2 adds Sunnybank
+ * episodes (`kind = "sunnybank-episode"`, one row per saved episode card,
+ * folder `sunnybank`). The tables are created by
+ * `db/migrations/2026-09-30_deck_items.sql`, run by hand. Nothing in the
+ * app creates them.
  */
 
 /** The kinds this build saves per item. Later steps add more. */
-export const DECK_ITEM_KINDS = ["character"] as const;
+export const DECK_ITEM_KINDS = ["character", "sunnybank-episode"] as const;
 export type DeckItemKind = (typeof DECK_ITEM_KINDS)[number];
 
 export function isDeckItemKind(value: unknown): value is DeckItemKind {
@@ -90,7 +92,8 @@ export interface DeckItemTombstone {
   revision: number;
 }
 
-/** Item ids are app-made (`clora_<uuid>`, `clora_skye`); anything else is refused. */
+/** Item ids are app-made (`clora_<uuid>`, `clora_skye`, an episode's
+ * `ws-<savedAt>-<seq>-<fingerprint>`); anything else is refused. */
 export function isValidDeckItemId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(value);
 }

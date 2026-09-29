@@ -185,6 +185,7 @@ import {
   liveFromSunnyBanksWorkspace,
   normalizeSunnyBanksStudio,
   buildEmptySunnyBanksLive,
+  pickSunnyBanksEpisodeMediaSlug,
   sunnyBanksStudioHasUserContent,
   upsertSunnyBanksWorkspace,
   type SkidmarksSunnyBanksState,
@@ -217,6 +218,7 @@ import {
   type CharacterLorasState,
 } from "./characterLoras";
 import { createCharacterItemSync, type CharacterItemSync } from "./characterItems";
+import { createSunnybankEpisodeItemSync, type SunnybankEpisodeItemSync } from "./sunnybankEpisodeItems";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -2661,10 +2663,10 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
       void migrateInlineSessionImagesToBlob(fetched).then(({ state: migrated, changed }) => {
         if (!changed) return;
         if (!shouldApplyHydratedSkidmarksSession(editsAtApply, localEditCount)) return;
-        // Keep the character cards currently on screen: the per-item
-        // overlay may have landed while the images were uploading, and
-        // this migration never touches characters anyway.
-        cachedState = { ...migrated, characterLoras: cachedState?.characterLoras ?? migrated.characterLoras };
+        // Keep the character cards and Sunnybank episode cards currently
+        // on screen: the per-item overlay may have landed while the images
+        // were uploading, and this migration never touches either anyway.
+        cachedState = keepPerItemListsOnScreen(migrated);
         writeLocalMirror(migrated);
         notify();
         void pushSkidmarksSessionNow();
@@ -2690,6 +2692,9 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     // the session load just put on screen (items win). Read-only; it
     // never writes an item by itself. See `lib/characterItems.ts`.
     void getCharacterItemSync()?.refreshFromServer();
+    // Same for the Sunnybank episode cards. Read-only too. See
+    // `lib/sunnybankEpisodeItems.ts`.
+    void getSunnybankEpisodeItemSync()?.refreshFromServer();
   }
 }
 
@@ -2803,10 +2808,11 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   if (!keepalive && snapshot) {
     const { state: migrated, changed } = await migrateInlineSessionImagesToBlob(snapshot);
     if (changed) {
-      // Same as the hydrate path: never roll the character cards back to
-      // the pre-upload snapshot (a per-item overlay or 409 adopt may have
-      // landed meanwhile); this migration never touches them.
-      cachedState = { ...migrated, characterLoras: cachedState?.characterLoras ?? migrated.characterLoras };
+      // Same as the hydrate path: never roll the character cards or the
+      // episode cards back to the pre-upload snapshot (a per-item overlay
+      // or 409 adopt may have landed meanwhile); this migration never
+      // touches them.
+      cachedState = keepPerItemListsOnScreen(migrated);
       writeLocalMirror(migrated);
       notify();
     }
@@ -2951,8 +2957,9 @@ export function flushSkidmarksSessionNow(keepalive = false): void {
     pushTimer = null;
   }
   void pushSkidmarksSessionNow(keepalive);
-  // Any character card waiting on its own debounce goes now too.
+  // Any character card or episode card waiting on its own debounce goes now too.
   characterItemSync?.flush(keepalive);
+  sunnybankEpisodeItemSync?.flush(keepalive);
 }
 
 /**
@@ -3002,8 +3009,10 @@ export async function loadSkidmarksSessionFromServerNow(): Promise<boolean> {
     notify();
     setSessionSync({ status: "synced" });
     // The session copy just replaced everything on screen; lay the
-    // server's character cards back over it (items win). Read-only.
+    // server's character cards and episode cards back over it (items
+    // win). Read-only.
     void getCharacterItemSync()?.refreshFromServer();
+    void getSunnybankEpisodeItemSync()?.refreshFromServer();
     return true;
   } catch (err) {
     setSessionSync({
@@ -3048,7 +3057,12 @@ function ensureSessionPersistenceWired(): void {
   // what actually extends how long this app keeps trying before that
   // becomes a real, final failure.
   window.addEventListener("beforeunload", (e) => {
-    if (sessionSync.status === "saving" || sessionSync.status === "error" || characterItemSync?.hasUnsavedWork()) {
+    if (
+      sessionSync.status === "saving" ||
+      sessionSync.status === "error" ||
+      characterItemSync?.hasUnsavedWork() ||
+      sunnybankEpisodeItemSync?.hasUnsavedWork()
+    ) {
       e.preventDefault();
       e.returnValue = "";
     }
@@ -3284,6 +3298,53 @@ function applyServerCharacterLoras(characters: CharacterLoraEntry[]): void {
   notify();
 }
 
+/* --------------------------------------------------------------------
+ * Per-item saving for Sunnybank episodes (2026-09-30, step 2). Same
+ * shape as the characters wiring above; the engine and its rules live
+ * in `lib/sunnybankEpisodeItems.ts`. One saved episode card = one
+ * `deck_items` row. The live working copy is not an item; it keeps
+ * riding in the whole-session save, which also keeps mirroring the
+ * cards.
+ * -------------------------------------------------------------------- */
+let sunnybankEpisodeItemSync: SunnybankEpisodeItemSync | null = null;
+
+function getSunnybankEpisodeItemSync(): SunnybankEpisodeItemSync | null {
+  if (!isBrowser()) return null;
+  if (!sunnybankEpisodeItemSync) {
+    sunnybankEpisodeItemSync = createSunnybankEpisodeItemSync({
+      fetch: (input, init) => fetch(input, init),
+      getEpisodes: () => getSkidmarksSnapshot().sunnyBanks?.workspaces ?? [],
+      applyServerEpisodes: applyServerSunnyBanksEpisodes,
+      onProblem: (message) => console.warn(`[deck items] ${message}`),
+    });
+  }
+  return sunnybankEpisodeItemSync;
+}
+
+/** Puts server episode cards on the shelf. Like `applyServerCharacterLoras`:
+ * not `persist()`, so it never counts as an edit or writes anything back.
+ * The live working copy is left alone. */
+function applyServerSunnyBanksEpisodes(workspaces: SunnyBanksWorkspaceSnapshot[]): void {
+  const current = getSkidmarksSnapshot();
+  const studio = resolvedSunnyBanks(current);
+  cachedState = { ...current, sunnyBanks: { ...studio, workspaces } };
+  noteContentObserved(cachedState);
+  notify();
+}
+
+/** After the Blob image migration: keep the per-item lists that are on
+ * screen now rather than the pre-upload snapshot's copy of them. */
+function keepPerItemListsOnScreen(migrated: SkidmarksState): SkidmarksState {
+  const onScreen = cachedState;
+  const next: SkidmarksState = { ...migrated, characterLoras: onScreen?.characterLoras ?? migrated.characterLoras };
+  if (onScreen?.sunnyBanks) {
+    next.sunnyBanks = migrated.sunnyBanks
+      ? { ...migrated.sunnyBanks, workspaces: onScreen.sunnyBanks.workspaces }
+      : onScreen.sunnyBanks;
+  }
+  return next;
+}
+
 function resolvedSunnyBanks(state: SkidmarksState): SkidmarksSunnyBanksState {
   return (
     state.sunnyBanks ?? {
@@ -3302,36 +3363,84 @@ export function getSunnyBanksLiveOrDefault(state: SkidmarksState = getSkidmarksS
 export function patchSunnyBanksLive(updater: (live: SunnyBanksLiveState) => SunnyBanksLiveState): void {
   const current = getSkidmarksSnapshot();
   const studio = resolvedSunnyBanks(current);
+  const next = updater(cloneSunnyBanksLive(studio.live));
+  // Which card this is (`episodeId`) and its pinned media folder
+  // (`mediaSlug`) survive an updater that rebuilds the live copy from
+  // scratch (script undo does), unless it sets them itself.
+  const live: SunnyBanksLiveState = { ...next };
+  if (!("episodeId" in next) && studio.live.episodeId) live.episodeId = studio.live.episodeId;
+  if (!("mediaSlug" in next) && studio.live.mediaSlug) live.mediaSlug = studio.live.mediaSlug;
   persist({
     ...current,
     sunnyBanks: {
       ...studio,
-      live: updater(cloneSunnyBanksLive(studio.live)),
+      live,
     },
   });
 }
 
-/** Named save of the whole live episode (every act). Same episode name
- * replaces that card instead of minting an Act I / Act II pair. */
+/**
+ * The live episode's media folder name (`deck/sunnybank/episodes/<slug>/`),
+ * pinned the first time it is asked for so a later rename never moves
+ * where its clips go. Comes from the saved card it was opened from if
+ * that card already has one, else from the episode's name. `null` while
+ * the episode has no name and no pinned slug (the render then keeps the
+ * old path, as before).
+ */
+export function ensureSunnyBanksEpisodeMediaSlug(): string | null {
+  const current = getSkidmarksSnapshot();
+  const studio = resolvedSunnyBanks(current);
+  const live = studio.live;
+  if (live.mediaSlug) return live.mediaSlug;
+  const card = live.episodeId ? studio.workspaces.find((workspace) => workspace.id === live.episodeId) : undefined;
+  let slug = card?.mediaSlug ?? null;
+  if (!slug) {
+    const title = live.workspaceTitle.trim();
+    if (!title) return null;
+    slug = pickSunnyBanksEpisodeMediaSlug(
+      title,
+      studio.workspaces.filter((workspace) => workspace.id !== live.episodeId).map((workspace) => workspace.mediaSlug),
+    );
+  }
+  persist({ ...current, sunnyBanks: { ...studio, live: { ...cloneSunnyBanksLive(live), mediaSlug: slug } } });
+  return slug;
+}
+
+/** Named save of the whole live episode (every act). Updates the card
+ * the live copy was opened from or last saved as (so a rename keeps the
+ * same card, id and media folder), else the card with the same name,
+ * else adds a new card. */
 export function saveSunnyBanksProjectWorkspace(): SunnyBanksWorkspaceSnapshot {
   const current = getSkidmarksSnapshot();
   const studio = resolvedSunnyBanks(current);
   const saveSeq = studio.saveSeq + 1;
   const snapshot = buildSunnyBanksWorkspaceFromLive(studio.live, Date.now(), saveSeq);
+  const workspaces = upsertSunnyBanksWorkspace(studio.workspaces, snapshot, studio.live.episodeId, studio.live.mediaSlug);
+  const saved = workspaces[0];
+  const live = cloneSunnyBanksLive(studio.live);
+  live.episodeId = saved.id;
+  if (saved.mediaSlug) live.mediaSlug = saved.mediaSlug;
   persist({
     ...current,
     sunnyBanks: {
-      live: cloneSunnyBanksLive(studio.live),
-      workspaces: upsertSunnyBanksWorkspace(studio.workspaces, snapshot),
+      live,
+      workspaces,
       saveSeq,
     },
   });
-  return snapshot;
+  // Per-item saving: only the card that really changed is sent. A card
+  // missing from the shelf is never a delete; only the ✕ tap deletes.
+  getSunnybankEpisodeItemSync()?.noteLocalChange(studio.workspaces, workspaces);
+  return saved;
 }
 
+/** The one real delete for a saved episode card, called only from its ✕
+ * tap. Removes it here (and from the whole-session save, as before) and
+ * soft-deletes its `deck_items` row. */
 export function deleteSunnyBanksWorkspace(id: string): void {
   const current = getSkidmarksSnapshot();
   if (!current.sunnyBanks) return;
+  const before = current.sunnyBanks.workspaces.find((workspace) => workspace.id === id) ?? null;
   persist({
     ...current,
     sunnyBanks: {
@@ -3339,6 +3448,7 @@ export function deleteSunnyBanksWorkspace(id: string): void {
       workspaces: current.sunnyBanks.workspaces.filter((workspace) => workspace.id !== id),
     },
   });
+  getSunnybankEpisodeItemSync()?.deleteEpisode(id, before);
 }
 
 /**

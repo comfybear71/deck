@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCharacterLoraEntry } from "./characterLoras";
+import { buildEmptySunnyBanksLive, buildSunnyBanksWorkspaceFromLive } from "./sunnyBanksWorkspace";
 
 /**
  * `lib/deckItems-server.ts` mocked at the `@neondatabase/serverless`
@@ -116,6 +117,26 @@ describe("putDeckItem", () => {
     const { putDeckItem } = await load();
     await putDeckItem("character", "clora_a", { ...character, sourceKey: "mvx:chr_1" }, 0);
     expect(sqlMock.mock.calls[0]).toContain("music-video");
+  });
+
+  it("saves a Sunnybank episode card in the sunnybank folder, whatever the client says", async () => {
+    const live = { ...buildEmptySunnyBanksLive(), workspaceTitle: "The Big Wet" };
+    const episode = { ...buildSunnyBanksWorkspaceFromLive(live, 1_727_600_000_000, 1), id: "ws-1", folder: "deck" };
+    sqlMock.mockResolvedValueOnce([{ ...row(1), item_id: "ws-1", data: episode }]);
+    const { putDeckItem } = await load();
+    const out = await putDeckItem("sunnybank-episode", "ws-1", episode, 0);
+    expect(out).toMatchObject({ ok: true });
+    expect(sqlMock.mock.calls[0]).toContain("sunnybank");
+    expect(sqlMock.mock.calls[0]).toContain("sunnybank-episode");
+  });
+
+  it("refuses an episode whose id doesn't match, or that isn't an episode, without a query", async () => {
+    const live = { ...buildEmptySunnyBanksLive(), workspaceTitle: "EP" };
+    const episode = { ...buildSunnyBanksWorkspaceFromLive(live, 1, 1), id: "ws-1" };
+    const { putDeckItem } = await load();
+    expect(await putDeckItem("sunnybank-episode", "ws-2", episode, 0)).toMatchObject({ ok: false, reason: "invalid" });
+    expect(await putDeckItem("sunnybank-episode", "ws-1", { id: "ws-1" }, 0)).toMatchObject({ ok: false, reason: "invalid" });
+    expect(sqlMock).not.toHaveBeenCalled();
   });
 
   it("refuses data whose id doesn't match, without a query", async () => {
