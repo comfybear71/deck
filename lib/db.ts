@@ -29,7 +29,8 @@ type SkidmarksSql = NeonQueryFunction<false, false>;
 let cachedSql: SkidmarksSql | null = null;
 let cachedConnectionString: string | null = null;
 
-function resolveConnectionString(): string | null {
+/** The connection string `getSkidmarksSql` uses (exported for the one-off copy route's auth check). */
+export function resolveConnectionString(): string | null {
   const pooled = process.env.DATABASE_URL?.trim();
   if (pooled) return pooled;
   const unpooled = process.env.DATABASE_URL_UNPOOLED?.trim();
