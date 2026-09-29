@@ -1,8 +1,11 @@
-import { del, list } from "@vercel/blob";
+import { del } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { listAllBlobsUnder } from "@/lib/blobListAll";
+import { deckProjectsPrefixes } from "@/lib/deckMediaPaths";
 import {
   buildClipRenderPlatePrefix,
   CLIP_RENDER_PATH_PREFIX,
+  isClipRenderFileForPlate,
   isSafeSegmentId,
   parseClipRenderPathname,
 } from "@/lib/clipRenderBlob";
@@ -22,6 +25,11 @@ import {
  * plain read, with no xAI call and no cost implication at all, so it
  * gets its own lightweight `GET` rather than piggybacking on the real,
  * paid `POST /api/skidmarks/generate-clip`.
+ *
+ * **Both places renders live (2026-09-30)**: the old flat
+ * `skidmarks/clip-renders/` folder and each project's own `renders/`
+ * folder in the readable `deck/` tree (`lib/clipRenderBlob.ts`), so
+ * every old render stays on the shelf next to the new ones.
  *
  * Lists the whole `skidmarks/clip-renders/` prefix once (cheap — this
  * is a single-user/single-band app's worth of small video blobs, nowhere
@@ -97,7 +105,12 @@ export async function GET(request: Request) {
   const segmentIdSet = new Set(segmentIds);
 
   try {
-    const { blobs } = await list({ prefix: CLIP_RENDER_PATH_PREFIX });
+    const blobs = await listAllBlobsUnder([CLIP_RENDER_PATH_PREFIX]);
+    try {
+      blobs.push(...(await listAllBlobsUnder(deckProjectsPrefixes())));
+    } catch {
+      // Best-effort: a problem listing the tree never hides the old renders.
+    }
     // `(segmentId, plateId)` \u2014 keyed exactly like `lib/clipRenders.ts`'s
     // client-side `persistedRenderKey` \u2014 mapped to the latest-uploaded
     // blob seen for that plate so far, so two blobs ever sitting under
@@ -176,7 +189,13 @@ export async function DELETE(request: Request) {
   }
 
   try {
-    const { blobs } = await list({ prefix: buildClipRenderPlatePrefix(segmentId, plateId) });
+    // This plate's files in the old folder and in any project's
+    // `renders/<segmentId>/<plateId>/` folder in the tree.
+    const [oldFolder, ...treePrefixes] = [buildClipRenderPlatePrefix(segmentId, plateId), ...deckProjectsPrefixes()];
+    const blobs = [
+      ...(await listAllBlobsUnder([oldFolder])),
+      ...(await listAllBlobsUnder(treePrefixes)).filter((b) => isClipRenderFileForPlate(b.pathname, segmentId, plateId)),
+    ];
     if (blobs.length > 0) {
       await del(blobs.map((b) => b.pathname));
     }

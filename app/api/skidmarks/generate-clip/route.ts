@@ -5,8 +5,12 @@ import {
   buildClipRenderLastFramePathname,
   buildClipRenderPathname,
   buildClipRenderPlatePrefix,
+  buildDeckClipRenderLastFramePathname,
+  buildDeckClipRenderPathname,
+  buildDeckClipRenderPlatePrefix,
   isSafeSegmentId,
 } from "@/lib/clipRenderBlob";
+import { parseDeckMediaProject, type DeckMediaProject } from "@/lib/deckMediaPaths";
 import { extractLastVideoFrameServer } from "@/lib/serverVideoFrame";
 import {
   buildLtx23Ia2vWorkflow,
@@ -689,6 +693,11 @@ interface GenerateClipRequestBody {
    * one plate. */
   segmentId?: unknown;
   plateId?: unknown;
+  /** Optional `{ genre, slug }` of the project (song) this plate belongs
+   * to. When valid, the render is saved in that project's own folder in
+   * the readable tree (`lib/clipRenderBlob.ts`); otherwise the old flat
+   * `skidmarks/clip-renders/` path, exactly as before. */
+  mediaProject?: unknown;
   /** This plate's 0-based position within its own clip's strip, and
    * that strip's total slot count — see `lib/clipRenderBlob.ts`'s
    * `buildClipRenderFilename` for exactly how these letter the
@@ -740,6 +749,26 @@ interface RenderPersistenceTarget {
   /** 0-based index used to letter the filename (`01a_...`) — only set
    * when the client reported more than one plate on this clip. */
   plateLetterIndex?: number;
+  /** Set → save into this project's `renders/` folder in the tree. */
+  project?: DeckMediaProject;
+}
+
+/** The render's and last frame's pathnames and the plate folder to prune,
+ * in the tree when the project is known, else the old flat scheme. */
+function renderPathsFor(target: RenderPersistenceTarget): { video: string; lastFrame: string; platePrefix: string } {
+  const args = [target.segmentId, target.plateId, target.clipIndex, target.startSec, target.endSec, target.plateLetterIndex] as const;
+  if (target.project) {
+    return {
+      video: buildDeckClipRenderPathname(target.project, ...args),
+      lastFrame: buildDeckClipRenderLastFramePathname(target.project, ...args),
+      platePrefix: buildDeckClipRenderPlatePrefix(target.project, target.segmentId, target.plateId),
+    };
+  }
+  return {
+    video: buildClipRenderPathname(...args),
+    lastFrame: buildClipRenderLastFramePathname(...args),
+    platePrefix: buildClipRenderPlatePrefix(target.segmentId, target.plateId),
+  };
 }
 
 /**
@@ -770,6 +799,7 @@ export function resolvePersistenceTarget(body: GenerateClipRequestBody): RenderP
       ? Math.max(0, Math.round(plateIndex))
       : undefined;
 
+  const project = parseDeckMediaProject(body.mediaProject);
   return {
     segmentId,
     plateId,
@@ -777,6 +807,7 @@ export function resolvePersistenceTarget(body: GenerateClipRequestBody): RenderP
     startSec: Math.round(startSec),
     endSec: Math.round(endSec),
     plateLetterIndex,
+    ...(project ? { project } : {}),
   };
 }
 
@@ -823,9 +854,9 @@ type PersistRenderOutcome =
  * are "the current take" and neither should be pruned as if it were a
  * leftover from an earlier one.
  */
-async function pruneStaleRendersForPlate(segmentId: string, plateId: string, keepPathnames: string[]): Promise<void> {
+async function pruneStaleRendersForPlate(platePrefix: string, keepPathnames: string[]): Promise<void> {
   try {
-    const { blobs } = await list({ prefix: buildClipRenderPlatePrefix(segmentId, plateId) });
+    const { blobs } = await list({ prefix: platePrefix });
     const stale = blobs.filter((b) => !keepPathnames.includes(b.pathname)).map((b) => b.pathname);
     if (stale.length > 0) await del(stale);
   } catch {
@@ -845,14 +876,8 @@ async function pruneStaleRendersForPlate(segmentId: string, plateId: string, kee
  * shares (HEAD-verify gap, pruning, honest failure shape).
  */
 async function persistRenderBytesToBlob(bytes: Uint8Array, target: RenderPersistenceTarget): Promise<PersistRenderOutcome> {
-  const pathname = buildClipRenderPathname(
-    target.segmentId,
-    target.plateId,
-    target.clipIndex,
-    target.startSec,
-    target.endSec,
-    target.plateLetterIndex
-  );
+  const paths = renderPathsFor(target);
+  const pathname = paths.video;
   try {
     const blob = await put(pathname, Buffer.from(bytes), {
       access: "public",
@@ -951,14 +976,7 @@ async function persistRenderBytesToBlob(bytes: Uint8Array, target: RenderPersist
     let lastFrameUrl: string | undefined;
     const frameOutcome = await extractLastVideoFrameServer(bytes);
     if (frameOutcome.ok) {
-      lastFramePathname = buildClipRenderLastFramePathname(
-        target.segmentId,
-        target.plateId,
-        target.clipIndex,
-        target.startSec,
-        target.endSec,
-        target.plateLetterIndex
-      );
+      lastFramePathname = paths.lastFrame;
       try {
         const frameBlob = await put(lastFramePathname, Buffer.from(frameOutcome.bytes), {
           access: "public",
@@ -1008,7 +1026,7 @@ async function persistRenderBytesToBlob(bytes: Uint8Array, target: RenderPersist
       }
     }
 
-    await pruneStaleRendersForPlate(target.segmentId, target.plateId, [pathname, lastFramePathname].filter((p): p is string => Boolean(p)));
+    await pruneStaleRendersForPlate(paths.platePrefix, [pathname, lastFramePathname].filter((p): p is string => Boolean(p)));
     return lastFrameUrl ? { ok: true, url: blob.url, lastFrameUrl } : { ok: true, url: blob.url };
   } catch (err) {
     return {

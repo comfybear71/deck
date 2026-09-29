@@ -46,6 +46,8 @@
  * fully reliable across browsers).
  */
 
+import { deckProjectFolder, type DeckMediaProject } from "./deckMediaPaths";
+
 const CLIP_RENDER_PATH_PREFIX = "skidmarks/clip-renders/";
 
 const SEGMENT_ID_RE = /^[A-Za-z0-9_-]+$/;
@@ -191,6 +193,77 @@ export interface ParsedClipRenderPathname {
   filename: string;
 }
 
+// ---- Readable tree (2026-09-30) --------------------------------------------
+//
+// A render made for a known project (a song) now lands in that project's
+// own folder, same shape for every genre:
+//
+//   deck/music-video/songs/crack-haul/renders/<segmentId>/<plateId>/crack-haul-clip-03a-0000-0040.mp4
+//   deck/music-video/songs/crack-haul/renders/<segmentId>/<plateId>/crack-haul-clip-03a-0000-0040-last-frame.jpg
+//
+// The two id folders keep what the old scheme relied on: one folder per
+// plate (so "exactly one render per plate" and Remove still work by
+// listing one folder) and ids readable straight off the path (so the
+// shelf still needs no second store). The file name, which is also the
+// download name, reads like the rest of the tree. Old renders under
+// `skidmarks/clip-renders/` are still listed, parsed and removable.
+
+/** `crack-haul-clip-03a-0000-0040.mp4` — the download name for a render in the tree. */
+export function buildDeckClipRenderFilename(
+  projectSlug: string,
+  clipIndex: number,
+  startSec: number,
+  endSec: number,
+  plateLetterIndex?: number
+): string {
+  return `${projectSlug}-clip-${padNumber(clipIndex, 2)}${plateLetterSuffix(plateLetterIndex)}-${padNumber(startSec, 4)}-${padNumber(endSec, 4)}.mp4`;
+}
+
+/** This plate's own folder in the project's `renders/`. */
+export function buildDeckClipRenderPlatePrefix(project: DeckMediaProject, segmentId: string, plateId: string): string {
+  return `${deckProjectFolder(project.genre, project.slug)}/renders/${segmentId}/${plateId}/`;
+}
+
+export function buildDeckClipRenderPathname(
+  project: DeckMediaProject,
+  segmentId: string,
+  plateId: string,
+  clipIndex: number,
+  startSec: number,
+  endSec: number,
+  plateLetterIndex?: number
+): string {
+  return `${buildDeckClipRenderPlatePrefix(project, segmentId, plateId)}${buildDeckClipRenderFilename(project.slug, clipIndex, startSec, endSec, plateLetterIndex)}`;
+}
+
+export function buildDeckClipRenderLastFramePathname(
+  project: DeckMediaProject,
+  segmentId: string,
+  plateId: string,
+  clipIndex: number,
+  startSec: number,
+  endSec: number,
+  plateLetterIndex?: number
+): string {
+  return buildDeckClipRenderPathname(project, segmentId, plateId, clipIndex, startSec, endSec, plateLetterIndex).replace(
+    /\.mp4$/,
+    "-last-frame.jpg"
+  );
+}
+
+/** Is this blob one of this plate's files (render or last frame), in
+ * either the old folder or any project's `renders/` folder? */
+export function isClipRenderFileForPlate(pathname: string, segmentId: string, plateId: string): boolean {
+  if (pathname.startsWith(buildClipRenderPlatePrefix(segmentId, plateId))) return true;
+  if (!pathname.startsWith("deck/")) return false;
+  const marker = `/renders/${segmentId}/${plateId}/`;
+  const at = pathname.indexOf(marker);
+  return at > 0 && !pathname.slice(at + marker.length).includes("/");
+}
+
+const DECK_PATHNAME_RE =
+  /^deck\/[a-z0-9-]+\/(?:episodes|songs|shorts)\/[a-z0-9-]+\/renders\/([^/]+)\/([^/]+)\/[a-z0-9-]+-clip-(\d+)[a-z]?-(\d+)-(\d+)\.mp4$/;
+
 const PATHNAME_RE = new RegExp(
   `^${CLIP_RENDER_PATH_PREFIX.replace(/[/]/g, "\\/")}([^/]+)\\/([^/]+)\\/(\\d+)[a-z]?_(\\d+)-(\\d+)_render\\.mp4$`
 );
@@ -207,7 +280,7 @@ const PATHNAME_RE = new RegExp(
  * (`null`) rather than guessed at or partially trusted.
  */
 export function parseClipRenderPathname(pathname: string): ParsedClipRenderPathname | null {
-  const match = PATHNAME_RE.exec(pathname);
+  const match = PATHNAME_RE.exec(pathname) ?? DECK_PATHNAME_RE.exec(pathname);
   if (!match) return null;
   const [, segmentId, plateId, clipIndex, startSec, endSec] = match;
   if (!isSafeSegmentId(segmentId) || !isSafeSegmentId(plateId)) return null;
