@@ -55,20 +55,41 @@ describe("uploadArchiveSnapshot", () => {
     uploadMock.mockReset();
   });
 
-  it("uploads the snapshot as JSON under this feature's own archive pathname prefix", async () => {
-    uploadMock.mockResolvedValueOnce({ url: "https://x.public.blob.vercel-storage.com/skidmarks/archive/abc/snapshot.json" });
+  it("uploads the snapshot as JSON into the song's own archive folder in the tree", async () => {
+    uploadMock.mockResolvedValueOnce({
+      url: "https://x.public.blob.vercel-storage.com/deck/music-video/songs/song/archive/song-archive.json",
+      pathname: "deck/music-video/songs/song/archive/song-archive.json",
+    });
 
     const snapshot: SkidmarksArchiveSnapshot = { band: BAND, mp3: createMp3Attachment("song.mp3", 120) };
     const outcome = await uploadArchiveSnapshot("abc", snapshot);
 
-    expect(outcome).toEqual({ ok: true, url: "https://x.public.blob.vercel-storage.com/skidmarks/archive/abc/snapshot.json" });
+    expect(outcome).toEqual({ ok: true, url: "https://x.public.blob.vercel-storage.com/deck/music-video/songs/song/archive/song-archive.json" });
     const [pathname, , options] = uploadMock.mock.calls[0];
-    expect(pathname).toBe("skidmarks/archive/abc/snapshot.json");
+    expect(pathname).toBe("deck/music-video/songs/song/archive/song-archive.json");
     expect(options).toMatchObject({ access: "public", handleUploadUrl: "/api/skidmarks/blob-upload", contentType: "application/json" });
   });
 
+  it("takes -v2 when the song already has an archive there, never overwriting it", async () => {
+    uploadMock
+      .mockRejectedValueOnce(new Error("Vercel Blob: This blob already exists"))
+      .mockResolvedValueOnce({ url: "https://x/v2.json", pathname: "deck/music-video/songs/song/archive/song-archive-v2.json" });
+    const outcome = await uploadArchiveSnapshot("abc", { band: BAND, mp3: createMp3Attachment("song.mp3", 120) });
+    expect(outcome).toEqual({ ok: true, url: "https://x/v2.json" });
+    expect(uploadMock.mock.calls[1][0]).toBe("deck/music-video/songs/song/archive/song-archive-v2.json");
+  });
+
+  it("falls back to the old archive path if the tree upload fails for another reason", async () => {
+    uploadMock
+      .mockRejectedValueOnce(new Error("Failed to retrieve the client token"))
+      .mockResolvedValueOnce({ url: "https://x/old.json", pathname: "skidmarks/archive/abc/snapshot.json" });
+    const outcome = await uploadArchiveSnapshot("abc", { band: BAND, mp3: createMp3Attachment("song.mp3", 120) });
+    expect(outcome).toEqual({ ok: true, url: "https://x/old.json" });
+    expect(uploadMock.mock.calls[1][0]).toBe("skidmarks/archive/abc/snapshot.json");
+  });
+
   it("reports an honest failure rather than throwing", async () => {
-    uploadMock.mockRejectedValueOnce(new Error("No read-write token found."));
+    uploadMock.mockRejectedValue(new Error("No read-write token found."));
     const outcome = await uploadArchiveSnapshot("abc", { band: BAND, mp3: createMp3Attachment("song.mp3", 120) });
     expect(outcome).toEqual({ ok: false, message: "No read-write token found." });
   });

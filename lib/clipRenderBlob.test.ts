@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDeckClipRenderLastFramePathname,
+  buildDeckClipRenderPathname,
+  buildDeckClipRenderPlatePrefix,
+  isClipRenderFileForPlate,
   buildClipRenderFilename,
   buildClipRenderLastFrameFilename,
   buildClipRenderLastFramePathname,
@@ -157,5 +161,43 @@ describe("buildClipRenderPlatePrefix", () => {
     const otherSegment = buildClipRenderPathname("segment_other", "plate_xyz", 1, 0, 40);
     expect(otherPlate.startsWith(prefix)).toBe(false);
     expect(otherSegment.startsWith(prefix)).toBe(false);
+  });
+});
+
+describe("renders in the readable deck/ tree (2026-09-30)", () => {
+  const song = { genre: "music-video" as const, slug: "crack-haul" };
+
+  it("saves into the song's renders folder, one folder per plate, with a readable file name", () => {
+    expect(buildDeckClipRenderPathname(song, "segment_1", "plate_2", 3, 40, 90, 0)).toBe(
+      "deck/music-video/songs/crack-haul/renders/segment_1/plate_2/crack-haul-clip-03a-0040-0090.mp4",
+    );
+    expect(buildDeckClipRenderLastFramePathname(song, "segment_1", "plate_2", 3, 40, 90, 0)).toBe(
+      "deck/music-video/songs/crack-haul/renders/segment_1/plate_2/crack-haul-clip-03a-0040-0090-last-frame.jpg",
+    );
+    expect(buildDeckClipRenderPlatePrefix(song, "segment_1", "plate_2")).toBe(
+      "deck/music-video/songs/crack-haul/renders/segment_1/plate_2/",
+    );
+  });
+
+  it("reads a tree render back like an old one, and ignores its last frame", () => {
+    expect(parseClipRenderPathname("deck/music-video/songs/crack-haul/renders/segment_1/plate_2/crack-haul-clip-03a-0040-0090.mp4")).toEqual({
+      segmentId: "segment_1",
+      plateId: "plate_2",
+      clipIndex: 3,
+      startSec: 40,
+      endSec: 90,
+      filename: "crack-haul-clip-03a-0040-0090.mp4",
+    });
+    // A song whose own name contains "clip" still parses.
+    expect(parseClipRenderPathname("deck/music-video/songs/clip-2-clip/renders/s/p/clip-2-clip-clip-01-0000-0010.mp4")?.clipIndex).toBe(1);
+    expect(parseClipRenderPathname("deck/music-video/songs/crack-haul/renders/segment_1/plate_2/crack-haul-clip-03a-0040-0090-last-frame.jpg")).toBeNull();
+    expect(parseClipRenderPathname("deck/music-video/songs/crack-haul/plates/crack-haul-clip-03a.jpg")).toBeNull();
+  });
+
+  it("knows which files belong to one plate, in either place", () => {
+    expect(isClipRenderFileForPlate("skidmarks/clip-renders/segment_1/plate_2/03a_0040-0090_render.mp4", "segment_1", "plate_2")).toBe(true);
+    expect(isClipRenderFileForPlate("deck/music-video/songs/x/renders/segment_1/plate_2/x-clip-03a-0040-0090.mp4", "segment_1", "plate_2")).toBe(true);
+    expect(isClipRenderFileForPlate("deck/music-video/songs/x/renders/segment_1/plate_22/x-clip-03a-0040-0090.mp4", "segment_1", "plate_2")).toBe(false);
+    expect(isClipRenderFileForPlate("deck/music-video/songs/x/renders/segment_1/plate_2/sub/x.mp4", "segment_1", "plate_2")).toBe(false);
   });
 });

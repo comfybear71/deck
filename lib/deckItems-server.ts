@@ -24,6 +24,7 @@
  *
  * Never throws: every export returns an outcome object.
  */
+import { normalizeAdultShortsSavedEntry } from "./adultShorts";
 import { normalizeCharacterLoraEntry } from "./characterLoras";
 import { normalizeSunnyBanksWorkspace } from "./sunnyBanksWorkspace";
 import { DATABASE_UNCONFIGURED_MESSAGE, getSkidmarksSql } from "./db";
@@ -32,6 +33,7 @@ import {
   DECK_ITEM_MAX_DATA_BYTES,
   DECK_ITEM_NEW_REVISION,
   DECK_ITEMS_TABLE_MISSING_MESSAGE,
+  DECK_ITEM_KIND_FOLDERS,
   characterFolder,
   deckItemSeedKinds,
   isValidDeckItemId,
@@ -39,6 +41,7 @@ import {
   type DeckItemRecord,
   type DeckItemTombstone,
 } from "./deckItems";
+import { normalizeSkidmarksEpisode } from "./skidmarksEpisodes";
 import { MUSIC_VIDEO_ITEM_FOLDER, cleanBandRowData, cleanSongItem } from "./musicVideoItemData";
 import { SKIDMARKS_STUDIO_OWNER_ID } from "./skidmarksSession-server";
 
@@ -143,7 +146,21 @@ export function prepareDeckItemData(
       if (!episode) return { ok: false, error: "That isn't a Sunnybank episode." };
       if (episode.id !== itemId) return { ok: false, error: "The episode's id doesn't match the item id." };
       if (JSON.stringify(episode).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That episode is too big to save." };
-      return { ok: true, data: episode as unknown as Record<string, unknown>, folder: "sunnybank" };
+      return { ok: true, data: episode as unknown as Record<string, unknown>, folder: DECK_ITEM_KIND_FOLDERS[kind] ?? "sunnybank" };
+    }
+    case "skidmarks-episode": {
+      const entry = normalizeSkidmarksEpisode(data);
+      if (!entry) return { ok: false, error: "That isn't a Skidmarks episode." };
+      if (entry.id !== itemId) return { ok: false, error: "The episode's id doesn't match the item id." };
+      if (JSON.stringify(entry).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That episode is too big to save." };
+      return { ok: true, data: entry as unknown as Record<string, unknown>, folder: DECK_ITEM_KIND_FOLDERS[kind] ?? "skidmarks" };
+    }
+    case "adult-short": {
+      const entry = normalizeAdultShortsSavedEntry(data);
+      if (!entry) return { ok: false, error: "That isn't a saved short." };
+      if (entry.id !== itemId) return { ok: false, error: "The short's id doesn't match the item id." };
+      if (JSON.stringify(entry).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That short is too big to save." };
+      return { ok: true, data: entry as unknown as Record<string, unknown>, folder: DECK_ITEM_KIND_FOLDERS[kind] ?? "adult-shorts" };
     }
     case "music-video-band": {
       const band = cleanBandRowData(data);
@@ -289,7 +306,7 @@ export async function putDeckItem(
 
 /**
  * Soft-deletes one item. Only ever called from a real delete tap (see
- * `lib/characterItems.ts`), never because a list was missing something.
+ * `lib/characterItems.ts`, `lib/deckItemSync.ts`), never because a list was missing something.
  * With `expectedRevision`, refuses (conflict) if the item changed since
  * the caller saw it. Deleting an already-deleted item is a no-op success.
  */

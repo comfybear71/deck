@@ -992,6 +992,19 @@ only `deleteSunnyBanksWorkspace` (the ✕ tap) deletes. A card's `id` never
 changes and its `mediaSlug` (media folder) is pinned once; never derive
 either from the live episode name.
 
+Skidmarks episodes (kind `skidmarks-episode`) and saved shorts (kind
+`adult-short`, folder `adult-shorts`) follow exactly the same rules through
+the same engine (`lib/deckItemSync.ts`). Their only deletes are
+`removeSkidmarksEpisode` and `removeSavedAdultShort` (the delete taps);
+their only seeders are `scripts/seed-deck-items-skidmarks-episodes.ts` and
+`scripts/seed-deck-items-adult-shorts.ts`, run by hand with
+`DECK_DATABASE_URL` (never `DATABASE_URL`).
+
+Every kind goes through ONE client engine, `lib/deckItemSync.ts`. A new
+kind is a small kind file (kind + cleaner, like
+`lib/skidmarksEpisodeItems.ts`) plus the same wiring lines in
+`lib/skidmarks.ts`; never a copy of the engine.
+
 ## Env vars this feature actually reads
 
 - `XAI_API_KEY` — slot A (default) team key for plate-still generation

@@ -246,3 +246,46 @@ describe("POST /api/skidmarks/archive", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("archives in the readable deck/ tree (2026-09-30)", () => {
+  beforeEach(() => {
+    listMock.mockReset();
+    putMock.mockReset();
+    delMock.mockReset();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("recovers an unlisted snapshot from a song's archive/ folder, and never duplicates a listed one", async () => {
+    const listedDeck = { ...goodSong, id: "song-9", snapshotUrl: "https://blob.example/deck/listed.json" };
+    listMock.mockImplementation(async ({ prefix }: { prefix: string }) => {
+      if (prefix === INDEX_PATHNAME) return { blobs: [{ pathname: INDEX_PATHNAME, url: "https://blob.example/index.json", uploadedAt: new Date() }] };
+      if (prefix === "deck/music-video/songs/") {
+        return {
+          blobs: [
+            { pathname: "deck/music-video/songs/crack-haul/archive/crack-haul-archive.json", url: "https://blob.example/deck/new.json", uploadedAt: new Date("2026-09-30T00:00:00Z") },
+            { pathname: "deck/music-video/songs/trapped/archive/trapped-archive.json", url: listedDeck.snapshotUrl, uploadedAt: new Date("2026-09-30T00:00:00Z") },
+            { pathname: "deck/music-video/songs/crack-haul/plates/crack-haul-clip-01a.jpg", url: "https://blob.example/deck/plate.jpg", uploadedAt: new Date() },
+          ],
+        };
+      }
+      return { blobs: [] };
+    });
+    putMock.mockResolvedValue({});
+    mockFetchResponses({
+      "https://blob.example/index.json": [listedDeck],
+      "https://blob.example/deck/new.json": {
+        band: { id: "band-3", name: "Stuballs" },
+        mp3: { fileName: "CRACK HAUL.mp3", durationSec: 120, segments: [] },
+      },
+    });
+    const { GET } = await importRoute();
+    const body = await (await GET()).json();
+    expect(body.songs).toHaveLength(2);
+    expect(body.songs.find((s: { fileName: string }) => s.fileName === "CRACK HAUL.mp3")).toMatchObject({
+      bandName: "Stuballs",
+      snapshotUrl: "https://blob.example/deck/new.json",
+    });
+  });
+});

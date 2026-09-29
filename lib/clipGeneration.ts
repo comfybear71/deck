@@ -140,7 +140,9 @@
  */
 
 import { getSkidmarksCharacterLock, shotPromptMentionsLockedCharacter } from "./plateGeneration";
+import { songMediaSlug, type DeckMediaProject } from "./deckMediaPaths";
 import {
+  getSkidmarksSnapshot,
   resolveInstrumentalVideoModel,
   type SkidmarksClipSentPayload,
   type SkidmarksInstrumentalVideoModel,
@@ -447,6 +449,10 @@ export interface ClipGenerationRequest {
    * (`components/SkidmarksClipRender.tsx`) always sends all of them. */
   segmentId?: string;
   plateId?: string;
+  /** The song this plate belongs to, so the server saves the render in
+   * that song's folder in the readable tree. Filled in by
+   * `generateSkidmarksClip` from the attached MP3; omitted → old path. */
+  mediaProject?: DeckMediaProject;
   /** This plate's 0-based position within its own clip's strip, and
    * that strip's total slot count — used only to letter the download
    * filename (`01a_...`, `01b_...`) once a clip has more than one
@@ -911,9 +917,20 @@ interface GenerateClipRouteSuccessBody {
  * render. */
 export const SIRAY_MAX_RESUMES = 3;
 
+/** The attached song as a project in the readable tree, when this
+ * request's clip is one of its segments. */
+function songProjectFor(request: ClipGenerationRequest): DeckMediaProject | undefined {
+  if (request.mediaProject || !request.segmentId) return request.mediaProject;
+  const mp3 = getSkidmarksSnapshot().session.mp3;
+  if (!mp3?.fileName || !mp3.segments.some((seg) => seg.id === request.segmentId)) return undefined;
+  return { genre: "music-video", slug: songMediaSlug(mp3.fileName) };
+}
+
 export async function generateSkidmarksClip(
   request: ClipGenerationRequest
 ): Promise<ClipGenerationOutcome> {
+  const mediaProject = songProjectFor(request);
+  if (mediaProject) request = { ...request, mediaProject };
   let current = request;
   for (let attempt = 0; ; attempt++) {
     const outcome = await postGenerateClip(current);
