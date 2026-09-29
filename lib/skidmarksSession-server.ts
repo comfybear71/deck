@@ -130,6 +130,28 @@ function toRevision(value: string | number | null | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
+/**
+ * Top-level parts of the saved studio that a save may never blank out
+ * (2026-09-29). The real failure: a phone holding an hours-old copy
+ * pushed it over the row, and because that copy had never seen the
+ * Sunnybank trainings, adult shorts or LoRA trainings, those came
+ * through as `null` and were wiped. The app itself never sets any of
+ * these back to `null` on purpose (only a brand-new empty studio starts
+ * that way), so a save that sends `null` or leaves one out keeps what
+ * the row already has. Deleting things inside them still works, because
+ * that sends a real, smaller value rather than `null`. Done inside the
+ * one UPDATE, so there is no extra round trip and no read/write race.
+ */
+export const SKIDMARKS_PROTECTED_STATE_KEYS = [
+  "bands",
+  "characterLoras",
+  "sunnyBanks",
+  "rosterExtras",
+  "adultShorts",
+  "skidmarksEpisodes",
+] as const;
+const PROTECTED_KEYS: string[] = [...SKIDMARKS_PROTECTED_STATE_KEYS];
+
 export type SaveSkidmarksSessionOutcome =
   | { ok: true; updatedAt: string; revision: number }
   /** The row moved on since the caller read it — another device (or
@@ -178,7 +200,13 @@ export async function saveSkidmarksSession(
         INSERT INTO skidmarks_sessions (owner_id, state, updated_at, revision)
         VALUES (${SKIDMARKS_STUDIO_OWNER_ID}, ${payload}::jsonb, now(), 1)
         ON CONFLICT (owner_id) DO UPDATE
-          SET state = EXCLUDED.state,
+          SET state = EXCLUDED.state || COALESCE((
+                SELECT jsonb_object_agg(e.key, e.value)
+                FROM jsonb_each(skidmarks_sessions.state) AS e(key, value)
+                WHERE e.key = ANY(${PROTECTED_KEYS}::text[])
+                  AND jsonb_typeof(e.value) <> 'null'
+                  AND COALESCE(jsonb_typeof(EXCLUDED.state -> e.key), 'null') = 'null'
+              ), '{}'::jsonb),
               updated_at = EXCLUDED.updated_at,
               revision = skidmarks_sessions.revision + 1
         RETURNING updated_at, revision
@@ -200,7 +228,14 @@ export async function saveSkidmarksSession(
           `) as { updated_at: string; revision: string | number }[])
         : ((await sql`
             UPDATE skidmarks_sessions
-            SET state = ${payload}::jsonb, updated_at = now(), revision = revision + 1
+            SET state = ${payload}::jsonb || COALESCE((
+                  SELECT jsonb_object_agg(e.key, e.value)
+                  FROM jsonb_each(skidmarks_sessions.state) AS e(key, value)
+                  WHERE e.key = ANY(${PROTECTED_KEYS}::text[])
+                    AND jsonb_typeof(e.value) <> 'null'
+                    AND COALESCE(jsonb_typeof(${payload}::jsonb -> e.key), 'null') = 'null'
+                ), '{}'::jsonb),
+                updated_at = now(), revision = revision + 1
             WHERE owner_id = ${SKIDMARKS_STUDIO_OWNER_ID} AND revision = ${expectedRevision}
             RETURNING updated_at, revision
           `) as { updated_at: string; revision: string | number }[]);
