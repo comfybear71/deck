@@ -2310,29 +2310,30 @@ export interface SkidmarksHydrationCandidates {
 export function resolveSkidmarksHydrationWinner(c: SkidmarksHydrationCandidates): "local" | "remote" {
   if (!c.remoteIsSubstantive) return c.localIsSubstantive ? "local" : "remote";
   if (!c.localIsSubstantive) return "remote";
-  if (c.editedDuringLoad) return "local";
 
-  // Revisions are server-assigned and monotonic, so when both sides
-  // know one there is nothing to guess: a mirror built from an older
-  // revision is definitively behind. This replaces the clock tie-break
-  // below for the case that actually bit (2026-09-18) — a second device
-  // opened the app and showed an older copy of the project, because the
-  // comparison was its own clock against the server's, and a
-  // second machine is exactly where two clocks disagree.
-  //
-  // `unsynced` still wins even against a newer row: that flag means
-  // this device holds edits the server never took, and silently
-  // throwing those away to show the newer copy would be its own data
-  // loss. `hydrateSkidmarksSessionOnce` surfaces that fork instead, so
-  // it is a visible choice rather than a silent one.
-  if (c.localRevision !== null && c.remoteRevision !== null) {
-    if (c.localRevision < c.remoteRevision) return c.localUnsynced ? "local" : "remote";
-    return "local";
+  // An older server build that sends no revision: keep the original
+  // clock-based rule, since there is nothing exact to compare.
+  if (c.remoteRevision === null) {
+    if (c.editedDuringLoad || c.localUnsynced) return "local";
+    if (c.localSavedAt !== null && (c.remoteUpdatedAt === null || c.localSavedAt > c.remoteUpdatedAt)) return "local";
+    return "remote";
   }
 
-  if (c.localUnsynced) return "local";
-  if (c.localSavedAt !== null && (c.remoteUpdatedAt === null || c.localSavedAt > c.remoteUpdatedAt)) return "local";
-  return "remote";
+  // Real, reported failure (2026-09-29): Stuart tapped a band on his
+  // iPhone while the app was still loading. The phone's own copy was
+  // hours old (it had never seen the Sunnybank trainings, adult shorts
+  // or the LoRA trainings done on the PC), but "an edit landed during
+  // the load" and "this mirror has unsent edits" both used to beat the
+  // server, so that stale copy was pushed over the newer row and wiped
+  // all of it. Stuart's rule since: the server's copy always wins, on
+  // every device, with no choice to make. This device keeps its own
+  // copy only when it is provably built from the server's current
+  // revision (level), so any edits on top of it are real and safe to
+  // send. A mirror with no revision, or an older one, is behind by
+  // definition and takes the server's copy; a tap or unsent edit made
+  // on top of an old copy is never worth more than the newer row.
+  if (c.localRevision === null) return "remote";
+  return c.localRevision >= c.remoteRevision ? "local" : "remote";
 }
 
 /** True when this device kept its own copy only because it holds unsent
@@ -2358,6 +2359,11 @@ export function isSkidmarksStaleLocalFork(c: SkidmarksHydrationCandidates): bool
  * hydrate settles. Always `true` outside a browser (tests, SSR), where
  * no hydrate ever runs and no push ever leaves the process anyway. */
 let hydrationSettled = false;
+
+/** Set when a save was refused because another device saved newer work
+ * (2026-09-29). The push's `finally` then loads the server's copy
+ * instead of sending anything queued on top of the older one. */
+let conflictNeedsServerCopy = false;
 
 function settleHydration(): void {
   if (hydrationSettled) return;
@@ -2616,24 +2622,6 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     };
     const winner = resolveSkidmarksHydrationWinner(candidates);
 
-    if (isSkidmarksStaleLocalFork(candidates)) {
-      // This device holds edits the server never took, AND the server
-      // has moved on since. Neither copy can be thrown away silently.
-      // Keep this device's (its edits are the ones nothing else has)
-      // and say so, with `loadSkidmarksSessionFromServerNow` as the
-      // one-tap way to take the newer copy instead.
-      noteContentObserved(local());
-      settleHydration();
-      setSessionSync({
-        status: "conflict",
-        error:
-          "This device has changes that were never saved, and a newer version was saved somewhere else. " +
-          "Nothing has been thrown away — choose which one you want.",
-        ...(Number.isNaN(fetchedUpdatedAt) ? {} : { remoteSavedAt: fetchedUpdatedAt }),
-      });
-      return;
-    }
-
     if (winner === "local") {
       // This phone holds the real/newer copy — make Neon match it.
       // Nothing to apply; `cachedState` is already what's on screen.
@@ -2840,22 +2828,16 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
         const body = (await res.json().catch(() => ({}))) as SessionPutRouteBody;
         if (res.status === 409 || body.conflict === true) {
           // Another device (or tab) saved since this page load read the
-          // row. Refusing is the point — retrying would be the
-          // overwrite. Adopt the server's revision so the next push
-          // after a reconcile isn't stuck failing forever, but leave
-          // the local state alone: this device's edits are still here,
-          // unsent, and a reload will show both sides honestly.
-          const conflictRevision = readRevision(body.revision);
-          if (conflictRevision !== null) remoteRevision = { known: true, revision: conflictRevision };
-          const remoteSavedAt = typeof body.updatedAt === "string" ? Date.parse(body.updatedAt) : NaN;
-          setSessionSync({
-            status: "conflict",
-            error:
-              typeof body.error === "string"
-                ? body.error
-                : "Not saved — a newer version was saved from somewhere else.",
-            ...(Number.isNaN(remoteSavedAt) ? {} : { remoteSavedAt }),
-          });
+          // row. Refusing is the point; retrying would be the overwrite.
+          //
+          // Real, reported failure (2026-09-29): this used to adopt the
+          // server's revision and keep the device's older copy on
+          // screen behind a yellow "load the latest?" box. The next tap
+          // then pushed that older copy through with the fresh revision
+          // and wiped newer work. Stuart's rule since: the server's copy
+          // always wins. Load it now, automatically, and never adopt a
+          // revision without also adopting the state that goes with it.
+          conflictNeedsServerCopy = true;
         } else if (!res.ok || body.ok !== true) {
           setSessionSync({
             status: body.configured === false ? "unconfigured" : "error",
@@ -2884,7 +2866,13 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
     });
   } finally {
     pushInFlight = false;
-    if (pushQueued) {
+    if (conflictNeedsServerCopy) {
+      // The server has newer work. Anything queued here was built on
+      // the older copy, so it must not go up; take the server's copy.
+      conflictNeedsServerCopy = false;
+      pushQueued = false;
+      void loadSkidmarksSessionFromServerNow();
+    } else if (pushQueued) {
       pushQueued = false;
       void pushSkidmarksSessionNow(keepalive);
     }

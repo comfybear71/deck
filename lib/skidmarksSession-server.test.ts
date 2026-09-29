@@ -220,3 +220,49 @@ describe("saveSkidmarksSession compare-and-swap (2026-09-18)", () => {
     expect(outcome.revision).not.toBe(SKIDMARKS_SESSION_NO_ROW_REVISION);
   });
 });
+
+describe("saveSkidmarksSession never blanks out saved work (2026-09-29)", () => {
+  /** The real wipe: an hours-old phone copy went up with
+   * `characterLoras`/`sunnyBanks`/`adultShorts` as `null`, replacing the
+   * trainings and Sunnybank work saved from the PC. */
+  async function withSchema() {
+    process.env.DATABASE_URL = "postgres://user:pass@host/db";
+    sqlMock.mockResolvedValueOnce([]); // CREATE TABLE
+    sqlMock.mockResolvedValueOnce([]); // ALTER TABLE
+    return await importModule();
+  }
+  function lastQueryText(): string {
+    const call = sqlMock.mock.calls[sqlMock.mock.calls.length - 1];
+    return (call[0] as TemplateStringsArray).join("?");
+  }
+  function lastQueryParams(): unknown[] {
+    return sqlMock.mock.calls[sqlMock.mock.calls.length - 1].slice(1);
+  }
+
+  it("the revision-checked save keeps any protected part the incoming copy sends as null or leaves out", async () => {
+    const { saveSkidmarksSession, SKIDMARKS_PROTECTED_STATE_KEYS } = await withSchema();
+    sqlMock.mockResolvedValueOnce([{ updated_at: "2026-09-29T13:30:00.000Z", revision: "1413" }]);
+    await saveSkidmarksSession({ bands: [], characterLoras: null }, 1412);
+    const text = lastQueryText();
+    expect(text).toMatch(/UPDATE skidmarks_sessions/);
+    expect(text).toMatch(/jsonb_each\(skidmarks_sessions\.state\)/);
+    expect(text).toMatch(/jsonb_typeof\(e\.value\) <> 'null'/);
+    expect(text).toMatch(/revision = \?/);
+    expect(lastQueryParams()).toContainEqual([...SKIDMARKS_PROTECTED_STATE_KEYS]);
+  });
+
+  it("the unconditional save has the same guard", async () => {
+    const { saveSkidmarksSession } = await withSchema();
+    sqlMock.mockResolvedValueOnce([{ updated_at: "2026-09-29T13:30:00.000Z", revision: 2 }]);
+    await saveSkidmarksSession({ bands: [] });
+    expect(lastQueryText()).toMatch(/EXCLUDED\.state \|\| COALESCE/);
+  });
+
+  it("protects exactly the parts that were wiped, plus bands and episodes", async () => {
+    const { SKIDMARKS_PROTECTED_STATE_KEYS } = await importModule();
+    expect([...SKIDMARKS_PROTECTED_STATE_KEYS].sort()).toEqual(
+      ["adultShorts", "bands", "characterLoras", "rosterExtras", "skidmarksEpisodes", "sunnyBanks"].sort()
+    );
+  });
+});
+

@@ -2081,22 +2081,21 @@ describe("resolveSkidmarksHydrationWinner", () => {
     expect(resolveSkidmarksHydrationWinner({ ...base, localIsSubstantive: false })).toBe("remote");
   });
 
-  it("keeps local when a real edit landed while the load was in flight", () => {
-    expect(resolveSkidmarksHydrationWinner({ ...base, editedDuringLoad: true })).toBe("local");
-  });
-
-  it("keeps local when the mirror still holds work Neon never confirmed, whatever the clocks say", () => {
-    expect(resolveSkidmarksHydrationWinner({ ...base, localUnsynced: true, localSavedAt: 1, remoteUpdatedAt: 999999 })).toBe("local");
-  });
-
-  it("keeps local when its own timestamp is newer than Neon's, or Neon's is unknown", () => {
-    expect(resolveSkidmarksHydrationWinner({ ...base, localSavedAt: 3000 })).toBe("local");
-    expect(resolveSkidmarksHydrationWinner({ ...base, remoteUpdatedAt: null })).toBe("local");
-  });
-
-  it("takes Neon's copy on an ordinary clean reopen (synced mirror, Neon at least as fresh)", () => {
-    expect(resolveSkidmarksHydrationWinner(base)).toBe("remote");
-    expect(resolveSkidmarksHydrationWinner({ ...base, localSavedAt: null })).toBe("remote");
+  describe("older server build with no revision (clock fallback)", () => {
+    it("keeps local when a real edit landed while the load was in flight", () => {
+      expect(resolveSkidmarksHydrationWinner({ ...base, editedDuringLoad: true })).toBe("local");
+    });
+    it("keeps local when the mirror still holds work the server never confirmed", () => {
+      expect(resolveSkidmarksHydrationWinner({ ...base, localUnsynced: true, localSavedAt: 1, remoteUpdatedAt: 999999 })).toBe("local");
+    });
+    it("keeps local when its own timestamp is newer, or the server's is unknown", () => {
+      expect(resolveSkidmarksHydrationWinner({ ...base, localSavedAt: 3000 })).toBe("local");
+      expect(resolveSkidmarksHydrationWinner({ ...base, remoteUpdatedAt: null })).toBe("local");
+    });
+    it("takes the server's copy on an ordinary clean reopen", () => {
+      expect(resolveSkidmarksHydrationWinner(base)).toBe("remote");
+      expect(resolveSkidmarksHydrationWinner({ ...base, localSavedAt: null })).toBe("remote");
+    });
   });
 
   it("with nothing real in Neon, keeps whatever real session this phone has", () => {
@@ -2104,36 +2103,44 @@ describe("resolveSkidmarksHydrationWinner", () => {
     expect(resolveSkidmarksHydrationWinner({ ...base, remoteIsSubstantive: false, localIsSubstantive: false })).toBe("remote");
   });
 
-  /** The reported 2026-09-18 failure: episodes are built on the phone,
-   * then opened on a PC purely to download them for Resolve — and the
-   * PC showed an older copy. Revisions are server-assigned and
-   * monotonic, so once both sides know one there is nothing to guess. */
-  describe("exact revision comparison (2026-09-18)", () => {
+  /** 2026-09-18: a PC showed an older copy because the rule compared
+   * clocks. 2026-09-29: an iPhone with an hours-old copy was tapped
+   * during the load and pushed it over the server, wiping the Sunnybank
+   * trainings, adult shorts and new LoRA trainings. The server's copy
+   * now always wins unless this device is provably level with it. */
+  describe("exact revision comparison: the server's copy always wins", () => {
     const withRevisions = { ...base, localRevision: 4, remoteRevision: 9 };
 
     it("a device built from an older revision takes the server's copy, whatever the clocks say", () => {
-      // The clock tie-break kept local here — and a second machine is
-      // exactly where two clocks disagree.
       expect(
         resolveSkidmarksHydrationWinner({ ...withRevisions, localSavedAt: 9_999_999, remoteUpdatedAt: 1 })
       ).toBe("remote");
     });
 
-    it("keeps local when it is level with the row it last saw", () => {
-      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, localRevision: 9 })).toBe("local");
+    it("2026-09-29 wipe: a tap during the load on an older copy never pushes it over the server", () => {
+      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, editedDuringLoad: true })).toBe("remote");
+      expect(
+        resolveSkidmarksHydrationWinner({ ...withRevisions, editedDuringLoad: true, localSavedAt: 9_999_999 })
+      ).toBe("remote");
     });
 
-    it("still keeps local when it holds edits the server never took, even against a newer row", () => {
-      // Silently dropping unsent work to show a newer copy would just
-      // be a different kind of data loss.
-      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, localUnsynced: true })).toBe("local");
+    it("unsent edits on an older copy do not beat the newer server row either", () => {
+      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, localUnsynced: true })).toBe("remote");
+      expect(
+        resolveSkidmarksHydrationWinner({ ...withRevisions, localUnsynced: true, editedDuringLoad: true })
+      ).toBe("remote");
     });
 
-    it("falls back to the clock tie-break when either side has no revision", () => {
+    it("a mirror with no revision at all is treated as behind", () => {
       expect(resolveSkidmarksHydrationWinner({ ...withRevisions, localRevision: null })).toBe("remote");
-      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, remoteRevision: null, localSavedAt: 3000 })).toBe(
-        "local"
-      );
+      expect(
+        resolveSkidmarksHydrationWinner({ ...withRevisions, localRevision: null, editedDuringLoad: true, localUnsynced: true, localSavedAt: 9_999_999 })
+      ).toBe("remote");
+    });
+
+    it("keeps local only when it is level with the row it last saw, so edits on top are real", () => {
+      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, localRevision: 9 })).toBe("local");
+      expect(resolveSkidmarksHydrationWinner({ ...withRevisions, localRevision: 9, editedDuringLoad: true })).toBe("local");
     });
   });
 
