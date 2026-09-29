@@ -321,10 +321,14 @@ export const LINK_UPDATE_SQL = `
   WITH input AS (
     SELECT * FROM jsonb_to_recordset($3::jsonb) AS x(kind text, item_id text, revision int, data jsonb)
   ),
+  -- The before-version of each row, read from the statement's snapshot.
+  -- No FOR UPDATE here: in the same statement as the UPDATE below it
+  -- sees the rows as "already updated by this command", skips them all,
+  -- and the guard then always failed (division by zero, nothing written).
+  -- The UPDATE's own revision check is the compare-and-swap.
   prior AS (
     SELECT d.* FROM deck_items d JOIN input x
       ON d.owner_id = $1 AND d.kind = x.kind AND d.item_id = x.item_id AND d.revision = x.revision
-    FOR UPDATE OF d
   ),
   items_written AS (
     UPDATE deck_items d SET data = x.data, revision = d.revision + 1, updated_at = now()
