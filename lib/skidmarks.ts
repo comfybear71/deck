@@ -185,6 +185,9 @@ import {
   liveFromSunnyBanksWorkspace,
   normalizeSunnyBanksStudio,
   buildEmptySunnyBanksLive,
+  defaultSunnyBanksLiveFingerprint,
+  emptySunnyBanksLiveFingerprint,
+  fingerprintWorkspace,
   pickSunnyBanksEpisodeMediaSlug,
   sunnyBanksStudioHasUserContent,
   upsertSunnyBanksWorkspace,
@@ -3566,13 +3569,57 @@ export function patchSunnyBanksLive(updater: (live: SunnyBanksLiveState) => Sunn
   const live: SunnyBanksLiveState = { ...next };
   if (!("episodeId" in next) && studio.live.episodeId) live.episodeId = studio.live.episodeId;
   if (!("mediaSlug" in next) && studio.live.mediaSlug) live.mediaSlug = studio.live.mediaSlug;
+  const autoSaved = autoSaveSunnyBanksLive(studio, live);
   persist({
     ...current,
-    sunnyBanks: {
-      ...studio,
-      live,
-    },
+    sunnyBanks: autoSaved,
   });
+  if (autoSaved.workspaces !== studio.workspaces) {
+    getSunnybankEpisodeItemSync()?.noteLocalChange(studio.workspaces, autoSaved.workspaces);
+  }
+}
+
+/**
+ * Auto-save (2026-09-30): the Save Episode button is gone, so every
+ * change to the live copy is written straight onto its card in the
+ * EPISODES row. The card is the one the live copy was opened from or
+ * last saved as (`episodeId`); a live copy with no card yet gets one
+ * the first time it holds real work (anything but the blank page or the
+ * untouched EP02 seed). An existing card is updated in place, so the row
+ * does not reshuffle while you type. Returns `studio` untouched (same
+ * `workspaces` array) when nothing needs saving.
+ */
+function autoSaveSunnyBanksLive(studio: SkidmarksSunnyBanksState, live: SunnyBanksLiveState): SkidmarksSunnyBanksState {
+  const fingerprint = fingerprintWorkspace(live);
+  const card = live.episodeId ? studio.workspaces.find((workspace) => workspace.id === live.episodeId) : undefined;
+  if (card) {
+    if (card.fingerprint === fingerprint) return { ...studio, live };
+  } else if (fingerprint === emptySunnyBanksLiveFingerprint() || fingerprint === defaultSunnyBanksLiveFingerprint()) {
+    return { ...studio, live };
+  }
+  const saveSeq = studio.saveSeq + 1;
+  const snapshot = buildSunnyBanksWorkspaceFromLive(live, Date.now(), saveSeq);
+  let saved: SunnyBanksWorkspaceSnapshot;
+  let workspaces: SunnyBanksWorkspaceSnapshot[];
+  if (card) {
+    // Same card, same id, same media folder; kept where it was in the row.
+    saved = { ...snapshot, id: card.id, mediaSlug: card.mediaSlug || snapshot.mediaSlug };
+    if (!saved.mediaSlug) delete saved.mediaSlug;
+    workspaces = studio.workspaces.map((workspace) => (workspace.id === card.id ? saved : workspace));
+  } else {
+    // A brand-new card, first in the row. Never matched to another card
+    // by name (unlike the old Save button): an automatic save must not
+    // overwrite a card nobody opened.
+    const mediaSlug = pickSunnyBanksEpisodeMediaSlug(
+      live.mediaSlug || snapshot.label,
+      studio.workspaces.map((workspace) => workspace.mediaSlug),
+    );
+    saved = { ...snapshot, mediaSlug };
+    workspaces = [saved, ...studio.workspaces];
+  }
+  const savedLive: SunnyBanksLiveState = { ...live, episodeId: saved.id };
+  if (saved.mediaSlug) savedLive.mediaSlug = saved.mediaSlug;
+  return { live: savedLive, workspaces, saveSeq };
 }
 
 /**

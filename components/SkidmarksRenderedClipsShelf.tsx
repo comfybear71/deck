@@ -89,9 +89,9 @@ function DownloadIcon() {
  * compact card (`w-44`, fixed-height video) in one `overflow-x-auto`
  * row, the exact same iOS-Safari-friendly pattern
  * `SkidmarksClipStub`'s own plate strip already uses one screen up:
- * `touch-pan-x` per card (blocks vertical/pinch so a `<video>` tap
- * doesn't fight the scroll, but still lets a horizontal drag reach the
- * next card) plus `overscroll-x-contain` + `-webkit-overflow-scrolling:
+ * `touch-pan-x touch-pan-y` per card (a horizontal drag reaches the
+ * next card, an up/down swipe still scrolls the page; `touch-pan-x`
+ * alone blocked that on iPhone until 2026-09-30) plus `overscroll-x-contain` + `-webkit-overflow-scrolling:
  * touch` on the row itself. Each card's own Download pill + the
  * "Download rendered clips (N)" zip control both stay put underneath
  * the strip — reading order is: horizontal player strip, then the
@@ -225,16 +225,17 @@ export function SkidmarksRenderedClipsShelf({ renders, onRemoved }: SkidmarksRen
             <p className="text-[11px] leading-relaxed text-white/35">Nothing rendered yet.</p>
           ) : (
             // Same horizontal-strip shape as `SkidmarksClipStub`'s plate
-            // strip: `touch-pan-x` on each card (not `touch-none`) keeps
-            // this scrollable by a horizontal drag on iOS Safari even
-            // when that drag starts on top of a `<video>` element.
+            // strip: `touch-pan-x touch-pan-y` on each card (not
+            // `touch-none`) keeps this scrollable sideways on iOS Safari
+            // even when the drag starts on a `<video>`, and still lets an
+            // up/down swipe scroll the page.
             <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch]">
               {list.map((render) => {
                 const key = persistedRenderKey(render.segmentId, render.plateId);
                 const removing = removingKey === key;
                 const removeError = removeErrors[key];
                 return (
-                  <div key={key} className="flex w-44 shrink-0 touch-pan-x flex-col gap-1.5">
+                  <div key={key} className="flex w-44 shrink-0 touch-pan-x touch-pan-y flex-col gap-1.5">
                     <video src={render.url} controls playsInline className="h-28 w-44 rounded-xl bg-black object-cover" />
                     <div className="flex items-center justify-end gap-1.5">
                       <a

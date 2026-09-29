@@ -369,7 +369,7 @@ export function CharacterLorasPanel({
             />
           </div>
           {c.trainingImageUrls.length > 0 && (
-            <div className="mt-2 flex touch-pan-x gap-1.5 overflow-x-auto pb-1">
+            <div className="mt-2 flex touch-pan-x touch-pan-y gap-1.5 overflow-x-auto pb-1">
               {c.trainingImageUrls.map((u, i) => (
                 <div key={`${u}-${i}`} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md bg-white/5">
                   {/* eslint-disable-next-line @next/next/no-img-element */}

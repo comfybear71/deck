@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { IOS_TEXTAREA_INSET_PX, isIosWebKit, overlayPadding } from "./textareaOverlayMirror";
+import {
+  autoGrowMinHeightPx,
+  IOS_TEXTAREA_INSET_PX,
+  isIosWebKit,
+  MIRRORED_TEXT_STYLE_PROPERTIES,
+  overlayPadding,
+} from "./textareaOverlayMirror";
 
 const base = {
   paddingLeft: 12,
@@ -43,5 +49,29 @@ describe("isIosWebKit", () => {
   it("ignores desktop Mac and Windows", () => {
     expect(isIosWebKit("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", "MacIntel", 0)).toBe(false);
     expect(isIosWebKit("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Win32", 0)).toBe(false);
+  });
+});
+
+describe("autoGrowMinHeightPx", () => {
+  const box = { lineHeight: 24, paddingTop: 8, paddingBottom: 8, borderTop: 0, borderBottom: 0, minRows: 12 };
+
+  it("never goes below the minimum number of lines", () => {
+    expect(autoGrowMinHeightPx({ ...box, scrollHeight: 40 })).toBe(12 * 24 + 16);
+  });
+
+  it("grows with the text so the box never scrolls inside itself", () => {
+    expect(autoGrowMinHeightPx({ ...box, scrollHeight: 1000.4 })).toBe(1001);
+  });
+
+  it("adds the border", () => {
+    expect(autoGrowMinHeightPx({ ...box, borderTop: 1, borderBottom: 1, scrollHeight: 500 })).toBe(502);
+  });
+});
+
+describe("MIRRORED_TEXT_STYLE_PROPERTIES", () => {
+  it("covers every style that moves a glyph, not just font and size", () => {
+    for (const prop of ["font-weight", "font-kerning", "font-variant-ligatures", "tab-size", "white-space", "overflow-wrap", "word-break"]) {
+      expect(MIRRORED_TEXT_STYLE_PROPERTIES).toContain(prop);
+    }
   });
 });

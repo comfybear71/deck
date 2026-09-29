@@ -150,9 +150,10 @@ export function buildDefaultSunnyBanksLive(): SunnyBanksLiveState {
  * Crash Lab EP02 demo seed, which is the opposite of blank. Same three
  * starting acts, nothing in them.
  *
- * The empty title is intentional: `resolvedWorkspaceTitle()` falls back
- * to a name derived from the script, so a new episode gets a sensible
- * name once it has lines, and Stuart can type over it any time.
+ * The empty title is intentional: the card's name falls back to the
+ * script's first line (`buildSunnyBanksWorkspaceFromLive`), so a new
+ * episode gets a sensible name once it has lines, and a `# EPISODE:`
+ * header in the script renames it.
  */
 export function buildEmptySunnyBanksLive(): SunnyBanksLiveState {
   const actIds = [...SUNNY_BANKS_INITIAL_ACTS];
@@ -476,6 +477,16 @@ export function defaultSunnyBanksLiveFingerprint(): string {
     defaultLiveFingerprint = fingerprintWorkspace(buildDefaultSunnyBanksLive());
   }
   return defaultLiveFingerprint;
+}
+
+let emptyLiveFingerprint: string | null = null;
+
+/** Fingerprint of the blank page New Episode starts from. */
+export function emptySunnyBanksLiveFingerprint(): string {
+  if (!emptyLiveFingerprint) {
+    emptyLiveFingerprint = fingerprintWorkspace(buildEmptySunnyBanksLive());
+  }
+  return emptyLiveFingerprint;
 }
 
 /** True when a named card exists, or the live copy is not the EP02 seed. */

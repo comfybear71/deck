@@ -1347,7 +1347,7 @@ export function CharacterRosterGrid({
               <div
                 className={
                   asRow
-                    ? "flex touch-pan-x items-start gap-3 overflow-x-auto pb-1 [scrollbar-width:thin]"
+                    ? "flex touch-pan-x touch-pan-y items-start gap-3 overflow-x-auto pb-1 [scrollbar-width:thin]"
                     : simple
                       ? "grid grid-cols-3 gap-3 sm:grid-cols-4"
                       : "grid grid-cols-4 gap-2 sm:grid-cols-6"
