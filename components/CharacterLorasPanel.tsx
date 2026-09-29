@@ -28,6 +28,7 @@ import {
   getSkidmarksSnapshot,
   patchCharacterLoras,
   readImageFileAsDataUrl,
+  removeCharacterLora,
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
 
@@ -136,7 +137,7 @@ export function CharacterLorasPanel({
   };
 
   const removeCharacter = (id: string) => {
-    patchCharacterLoras((s) => ({ characters: s.characters.filter((c) => c.id !== id) }));
+    removeCharacterLora(id);
     flushSkidmarksSessionNow();
     setArmedDeleteId(null);
   };
