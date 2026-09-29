@@ -433,6 +433,12 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     setPcRail("create");
   };
 
+  /** Library 18+ "Open in editor" — the short is already loaded; show its desk. */
+  const handleOpenAdultShortFromLibrary = () => {
+    selectProjectKind("adult-shorts");
+    setPcRail("create");
+  };
+
   const syncBanners = (
     <>
         {sessionSync.status === "loading" && (
@@ -756,6 +762,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             {pcRail === "library" && (
               <SkidmarksLibraryPage
                 onOpenInEditor={handleOpenInEditorFromLibrary}
+                onOpenAdultShort={handleOpenAdultShortFromLibrary}
                 refreshToken={archiveRefreshToken}
                 onArchiveMutated={() => setArchiveRefreshToken((n) => n + 1)}
                 playlists={playlists}
@@ -845,6 +852,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             <SkidmarksLibraryPage
               compact
               onOpenInEditor={handleOpenInEditorFromLibrary}
+              onOpenAdultShort={handleOpenAdultShortFromLibrary}
               refreshToken={archiveRefreshToken}
               onArchiveMutated={() => setArchiveRefreshToken((n) => n + 1)}
               playlists={playlists}

@@ -76,10 +76,11 @@ export const SIRAY_WAN_30_I2V_SIZE = "1080p";
 // FORCED 16:9 – do not change unless intentionally switching formats
 // ("adaptive" copied the plate's shape, so square plates became square clips).
 export const SIRAY_WAN_30_I2V_ASPECT_RATIO = FORCED_VIDEO_ASPECT_RATIO;
-/** Evidence: Siray model-verse `out_price` for this model id (USD per second).
- * Siray publishes one flat price for the model and doesn't say whether
- * 1080p bills higher, so treat this as a floor until a real 1080p invoice line confirms it. */
-export const SIRAY_WAN_30_I2V_COST_USD_PER_SEC = 0.045;
+/** Real billed rate at our forced 1080p (USD per second). Siray's
+ * model-verse `out_price` lists $0.045/s, but Stuart's Siray Logs on
+ * 2026-09-28 showed two 5s 1080p clips billed at $0.90 each ($0.18/s,
+ * 4x the list price). Use the billed figure so buttons show the real cost. */
+export const SIRAY_WAN_30_I2V_COST_USD_PER_SEC = 0.18;
 export const SIRAY_I2V_MIN_DURATION_SEC = 2;
 export const SIRAY_I2V_MAX_DURATION_SEC = 30;
 

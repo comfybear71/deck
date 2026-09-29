@@ -13,7 +13,11 @@ import {
   clampAdultShortsDuration,
   estimateAdultShortsClipCostUsd,
   formatUsd,
+  editorHasUnsavedChanges,
   resolveAdultShortsStartImage,
+  saveAdultShortToLibrary,
+  startNewAdultShort,
+  suggestAdultShortTitle,
   type AdultShortsShot,
 } from "@/lib/adultShorts";
 import { buildForceDownloadUrl } from "@/lib/clipRenders";
@@ -72,6 +76,28 @@ export function AdultShortsPanel() {
   const [refError, setRefError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [savingTitle, setSavingTitle] = useState<string | null>(null);
+  const [savedNote, setSavedNote] = useState<string | null>(null);
+  const [confirmNew, setConfirmNew] = useState(false);
+  const currentSaved = state.currentSavedId ? state.saved.find((x) => x.id === state.currentSavedId) ?? null : null;
+  const unsaved = editorHasUnsavedChanges(state);
+
+  const confirmSave = () => {
+    const title = (savingTitle ?? "").trim();
+    patchAdultShorts((s) => saveAdultShortToLibrary(s, new Date(), title));
+    flushSkidmarksSessionNow();
+    setSavingTitle(null);
+    setSavedNote("Saved to Library, under the 18+ tab.");
+  };
+
+  const newShort = (keepCharacter: boolean) => {
+    patchAdultShorts((s) => startNewAdultShort(s, keepCharacter));
+    flushSkidmarksSessionNow();
+    setConfirmNew(false);
+    setSavedNote(null);
+    setErrors({});
+    setArmedRenderId(null);
+  };
 
   const setShotError = (id: string, msg: string | null) =>
     setErrors((e) => {
@@ -477,6 +503,86 @@ export function AdultShortsPanel() {
             + Add shot
           </button>
         )}
+      </section>
+
+      <section className="rounded-2xl border border-white/10 bg-white/[0.02] p-4" aria-label="Save or start new">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-white/50">
+            {currentSaved
+              ? unsaved
+                ? `Editing “${currentSaved.title}”, with changes not saved yet.`
+                : `Saved in Library as “${currentSaved.title}”.`
+              : "Not in the Library yet."}
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => {
+                setSavedNote(null);
+                setConfirmNew(false);
+                setSavingTitle(currentSaved?.title ?? suggestAdultShortTitle(state, new Date()));
+              }}
+              className="rounded-md bg-white/90 px-3 py-1.5 text-xs font-medium text-black hover:bg-white disabled:opacity-40"
+            >
+              {currentSaved ? "Save changes" : "Save to Library"}
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => {
+                setSavingTitle(null);
+                setSavedNote(null);
+                setConfirmNew(true);
+              }}
+              className="rounded-md border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:text-white disabled:opacity-40"
+            >
+              New short
+            </button>
+          </div>
+        </div>
+
+        {savingTitle !== null && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <input
+              value={savingTitle}
+              onChange={(e) => setSavingTitle(e.target.value)}
+              placeholder="Title"
+              aria-label="Short title"
+              maxLength={80}
+              className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30"
+            />
+            <button type="button" onClick={confirmSave} className="rounded-md bg-emerald-500/80 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500">
+              Save
+            </button>
+            <button type="button" onClick={() => setSavingTitle(null)} className="rounded-md px-2 py-2 text-xs text-white/50 hover:text-white">
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {confirmNew && (
+          <div className="mt-3 flex flex-col gap-2 rounded-lg border border-white/10 bg-black/30 p-3">
+            <p className="text-xs text-white/60">
+              {unsaved
+                ? "This short has changes that aren't in the Library. Save first if you want to keep them."
+                : "Start a new short? This one stays in the Library."}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => newShort(true)} className="rounded-md bg-white/90 px-3 py-1.5 text-xs font-medium text-black hover:bg-white">
+                New short, same character
+              </button>
+              <button type="button" onClick={() => newShort(false)} className="rounded-md border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:text-white">
+                New short, new character
+              </button>
+              <button type="button" onClick={() => setConfirmNew(false)} className="rounded-md px-2 py-1.5 text-xs text-white/50 hover:text-white">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {savedNote && <p className="mt-2 text-xs text-emerald-300/80">{savedNote}</p>}
       </section>
     </div>
   );

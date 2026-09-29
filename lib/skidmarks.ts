@@ -3145,6 +3145,7 @@ export function patchAdultShorts(updater: (state: AdultShortsState) => AdultShor
       ...base,
       character: { ...base.character, referenceUrls: base.character.referenceUrls.slice() },
       shots: base.shots.map((s) => ({ ...s })),
+      saved: base.saved.slice(),
     }),
   });
 }
