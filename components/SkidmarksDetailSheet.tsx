@@ -539,23 +539,28 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {/* The pink members card is gone (Stuart, 2026-09-29): the band's
           people live in its Characters bar, and "+ Add a character" there
           adds them to this band. Only the band's name stays editable here. */}
-      {/* The name shows on the cover, so only a new band (no name yet)
-          asks for one here (Stuart, 2026-09-29). */}
-      {activeBand && (!activeBand.name.trim() || namingBandId === activeBand.id) && (
+      {/* The chosen band's name, shown (not edited) when you tap its album
+          (Stuart, 2026-09-29). Only a brand-new band with no name yet gets a
+          box to type one. */}
+      {activeBand && (
         <div ref={membersSectionRef} className="-mb-4 -mt-2">
-          <input
-            type="text"
-            value={activeBand.name}
-            onChange={(e) => renameBand(activeBand.id, e.target.value.slice(0, 60))}
-            onFocus={() => setNamingBandId(activeBand.id)}
-            onBlur={() => {
-              setNamingBandId(null);
-              flushSkidmarksSessionNow();
-            }}
-            placeholder="Name your band"
-            aria-label="Band name"
-            className="w-full truncate bg-transparent text-base font-bold text-rose-200 placeholder:text-rose-200/40 focus:outline-none"
-          />
+          {activeBand.name.trim() && namingBandId !== activeBand.id ? (
+            <p className="truncate text-base font-bold text-rose-200">{activeBand.name}</p>
+          ) : (
+            <input
+              type="text"
+              value={activeBand.name}
+              onChange={(e) => renameBand(activeBand.id, e.target.value.slice(0, 60))}
+              onFocus={() => setNamingBandId(activeBand.id)}
+              onBlur={() => {
+                setNamingBandId(null);
+                flushSkidmarksSessionNow();
+              }}
+              placeholder="Name your band"
+              aria-label="Band name"
+              className="w-full truncate bg-transparent text-base font-bold text-rose-200 placeholder:text-rose-200/40 focus:outline-none"
+            />
+          )}
         </div>
       )}
 
