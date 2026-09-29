@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildCharacterLoraEntry, SKYE_SEED } from "./characterLoras";
-import { formatCharacterSeedTree, planCharacterSeed } from "./deckItemsSeed";
+import { formatCharacterSeedTree, planCharacterSeed, planSunnybankEpisodeSeed } from "./deckItemsSeed";
+import { buildEmptySunnyBanksLive, buildSunnyBanksWorkspaceFromLive } from "./sunnyBanksWorkspace";
 
 const c = (id: string, name: string, sourceKey: string | null) => ({ ...buildCharacterLoraEntry(name, []), id, sourceKey });
 
@@ -40,5 +41,35 @@ describe("planCharacterSeed", () => {
     expect(tree).toContain("Sunnybank");
     expect(tree).toContain("Shazza  [clora_1, sb:shazza]");
     expect(tree).toContain("Skye  [clora_skye, asx:skye]");
+  });
+});
+
+describe("planSunnybankEpisodeSeed", () => {
+  const card = (id: string, label: string, extra: Record<string, unknown> = {}) => {
+    const live = { ...buildEmptySunnyBanksLive(), workspaceTitle: label };
+    return { ...buildSunnyBanksWorkspaceFromLive(live, 1_727_600_000_000, 1), id, ...extra };
+  };
+
+  it("one row per saved episode card, keyed by its own id, with a pinned media folder", () => {
+    const plan = planSunnybankEpisodeSeed({
+      live: { ...buildEmptySunnyBanksLive(), workspaceTitle: "Working copy" },
+      workspaces: [card("ws-1", "The Big Wet"), card("ws-2", "Drop Bears", { mediaSlug: "drop-bears" }), card("ws-3", "The Big Wet")],
+      saveSeq: 3,
+    });
+    expect(plan.rows.map((r) => [r.itemId, r.label, r.mediaSlug, r.mediaSlugNew])).toEqual([
+      ["ws-1", "The Big Wet", "the-big-wet", true],
+      ["ws-2", "Drop Bears", "drop-bears", false],
+      ["ws-3", "The Big Wet", "the-big-wet-2", true],
+    ]);
+    expect(plan.rows[0].data).toMatchObject({ id: "ws-1", mediaSlug: "the-big-wet" });
+    expect(plan.liveTitle).toBe("Working copy");
+    expect(plan.skipped).toEqual([]);
+  });
+
+  it("skips junk and duplicates, and reports a session with no Sunnybank at all", () => {
+    const plan = planSunnybankEpisodeSeed({ live: buildEmptySunnyBanksLive(), workspaces: [card("ws-1", "A"), card("ws-1", "B"), { nope: 1 }] });
+    expect(plan.rows.map((r) => r.itemId)).toEqual(["ws-1"]);
+    expect(plan.skipped).toHaveLength(2);
+    expect(planSunnybankEpisodeSeed(null)).toMatchObject({ sessionHasNoSunnybank: true, rows: [] });
   });
 });

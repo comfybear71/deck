@@ -1,4 +1,4 @@
-# Per-item saving (step 1: Characters)
+# Per-item saving (step 1: Characters, step 2: Sunnybank episodes)
 
 Plain English first, then the runbook.
 
@@ -57,11 +57,55 @@ Run 2 and 3 back to back: a card edited on a device between the seed's read
 and a reload of that device is still in the session copy, and gets its own
 row the next time it's edited.
 
+## Step 2: Sunnybank episodes
+
+Each saved Sunnybank episode (a card on the episode shelf / the Episodes
+row) is now also its own `deck_items` row: kind `sunnybank-episode`, folder
+`sunnybank`, item id = the card's own id (`ws-...`). The same rules as
+characters apply, word for word: the app never seeds, loading never writes,
+an episode missing from a device is never deleted because of it (only the
+card's ✕ deletes), a refused save (409) means this device takes the
+server's copy, and the whole-session save keeps running as a mirror. The
+live working copy (what is open on screen) is not an item; it still saves
+in the session as before.
+
+Stable ids and media folders:
+
+- A card's id never changes once it's made. The live copy now remembers
+  which card it was opened from or last saved as, so saving after a rename
+  updates that same card (before, a rename made a second card).
+- Each episode pins its media folder name once (`mediaSlug`), from its name
+  at the time: `deck/sunnybank/episodes/<mediaSlug>/`. A rename never moves
+  where new clips go. Neither field changes the "saved / not saved" check.
+
+Runbook (tables already exist from step 1):
+
+1. Dry run (the default; read-only transaction, writes nothing):
+
+   ```
+   DECK_DATABASE_URL=... npx vite-node scripts/seed-deck-items-sunnybank-episodes.ts
+   ```
+
+2. Seed for real (refuses if any episode rows already exist, if there are
+   no episodes, or if the session was saved between its read and its
+   insert):
+
+   ```
+   DECK_DATABASE_URL=... npx vite-node scripts/seed-deck-items-sunnybank-episodes.ts --write
+   ```
+
+3. Reload the app. From then on episode cards save per item.
+
+The seed needs at least one saved episode. Until it has run, episodes keep
+saving only the old way.
+
 ## Code map
 
 - `lib/deckItems.ts`: kinds, folders, shared types.
 - `lib/deckItems-server.ts`: the SQL (compare-and-swap writes, history, soft delete). Never DDL.
 - `app/api/deck/items/route.ts`: `GET ?kind=character`, `PUT`, `DELETE`.
-- `lib/characterItems.ts`: client engine (diff, debounce, overlay, 409 adopt).
-- `lib/skidmarks.ts`: wiring (`patchCharacterLoras`, `removeCharacterLora`, after each session load).
-- `lib/deckItemsSeed.ts` + `scripts/seed-deck-items-characters.ts`: the one-time seed.
+- `lib/characterItems.ts`: client engine for characters (diff, debounce, overlay, 409 adopt).
+- `lib/sunnybankEpisodeItems.ts`: the same engine for Sunnybank episode cards.
+- `lib/sunnyBanksWorkspace.ts`: stable card ids on save/rename, pinned `mediaSlug`.
+- `lib/skidmarks.ts`: wiring (`patchCharacterLoras`, `removeCharacterLora`, `saveSunnyBanksProjectWorkspace`, `deleteSunnyBanksWorkspace`, after each session load).
+- `lib/deckItemsSeed.ts` + `scripts/seed-deck-items-characters.ts` / `scripts/seed-deck-items-sunnybank-episodes.ts`: the one-time seeds.

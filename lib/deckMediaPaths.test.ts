@@ -151,14 +151,16 @@ describe("bands, songs, shorts, episodes", () => {
     );
   });
 
-  it("Sunnybank beats go under the episode name, or nowhere when it has none", () => {
+  it("Sunnybank beats go under the episode's pinned slug, or nowhere when it has none", () => {
     expect(
-      sunnybankBeatTarget({ episodeTitle: "The Big Wet", actId: "II", beatNumber: 3, characterName: "Shazza", kind: "speak" }),
+      sunnybankBeatTarget({ episodeSlug: "the-big-wet", actId: "II", beatNumber: 3, characterName: "Shazza", kind: "speak" }),
     ).toEqual({
       folder: "deck/sunnybank/episodes/the-big-wet/act-ii",
       name: "the-big-wet-act-ii-beat-03-shazza-speak",
     });
-    expect(sunnybankBeatTarget({ episodeTitle: "  ", actId: "I", beatNumber: 1, characterName: "Nan", kind: "hold" })).toBeNull();
+    expect(sunnybankBeatTarget({ episodeSlug: null, actId: "I", beatNumber: 1, characterName: "Nan", kind: "hold" })).toBeNull();
+    expect(sunnybankBeatTarget({ episodeSlug: "  ", actId: "I", beatNumber: 1, characterName: "Nan", kind: "hold" })).toBeNull();
+    expect(sunnybankBeatTarget({ episodeSlug: "The Big Wet", actId: "I", beatNumber: 1, characterName: "Nan", kind: "hold" })).toBeNull();
   });
 });
 

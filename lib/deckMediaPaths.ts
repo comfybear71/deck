@@ -316,18 +316,19 @@ export function adultShortTarget(shortSlug: string, role: "ref" | "plate" | "cli
 // ---- Sunnybank episodes --------------------------------------------------
 
 /** `deck/sunnybank/episodes/the-big-wet/act-i/the-big-wet-act-i-beat-03-shazza-speak`.
- * Episodes have no stable id yet (the shelf keys them by name), so this
- * uses the episode name at render time; blank name → `null` (old path). */
+ * `episodeSlug` is the episode's pinned `mediaSlug` (set once from its
+ * name, see `lib/sunnyBanksWorkspace.ts`), never the live name, so a
+ * rename never moves where its clips go. No slug (an episode with no
+ * name yet) → `null`, and the render keeps the old path. */
 export function sunnybankBeatTarget(args: {
-  episodeTitle: string;
+  episodeSlug: string | null | undefined;
   actId: string;
   beatNumber: number;
   characterName: string;
   kind: "speak" | "hold";
 }): DeckMediaTarget | null {
-  const title = args.episodeTitle.trim();
-  if (!title) return null;
-  const episode = deckMediaSlug(title, "episode");
+  if (!isSafeDeckMediaSlug(args.episodeSlug)) return null;
+  const episode = args.episodeSlug;
   const act = `act-${deckMediaSlug(args.actId, "1")}`;
   const who = deckMediaSlug(args.characterName, "crowd");
   const target = {

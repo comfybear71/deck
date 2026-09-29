@@ -42,6 +42,15 @@ describe("GET /api/deck/items", () => {
     });
   });
 
+  it("accepts the Sunnybank episode kind and passes it through", async () => {
+    listMock.mockResolvedValueOnce({ ok: true, items: [], deleted: [], seeded: false });
+    const { GET } = await route();
+    const res = await GET(new Request(url("?kind=sunnybank-episode")));
+    expect(res.status).toBe(200);
+    expect(listMock).toHaveBeenCalledWith("sunnybank-episode");
+    expect(await res.json()).toMatchObject({ ok: true, seeded: false, items: [] });
+  });
+
   it("503 with tableMissing when the migration hasn't run", async () => {
     listMock.mockResolvedValueOnce({ ok: false, reason: "table-missing", error: "missing" });
     const { GET } = await route();

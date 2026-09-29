@@ -30,8 +30,14 @@ describe("ids and kinds", () => {
     expect(isValidDeckItemId(5)).toBe(false);
   });
 
-  it("knows only the character kind in step 1", () => {
+  it("knows characters and Sunnybank episodes only", () => {
     expect(isDeckItemKind("character")).toBe(true);
+    expect(isDeckItemKind("sunnybank-episode")).toBe(true);
     expect(isDeckItemKind("episode")).toBe(false);
+    expect(isDeckItemKind("band")).toBe(false);
+  });
+
+  it("accepts a Sunnybank episode card id", () => {
+    expect(isValidDeckItemId("ws-1727600000000-3-0a1b2c3d")).toBe(true);
   });
 });

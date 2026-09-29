@@ -30,6 +30,7 @@ import {
 } from "@/lib/sunnyBanksGodScriptGuide";
 import {
   deleteSunnyBanksWorkspace,
+  ensureSunnyBanksEpisodeMediaSlug,
   getSkidmarksSnapshot,
   getSunnyBanksLiveOrDefault,
   openSunnyBanksWorkspace,
@@ -1579,9 +1580,10 @@ export function SkidmarksSunnyBanksPanel() {
             startImageDataUrl,
             action: row.chunk.action,
             appearanceModifier: row.chunk.appearanceModifier,
-            // Filed under this episode's name when it has one.
+            // Filed under this episode's pinned folder (set once from
+            // its name, so a rename never moves it) when it has one.
             mediaTarget: sunnybankBeatTarget({
-              episodeTitle: workspaceTitle,
+              episodeSlug: ensureSunnyBanksEpisodeMediaSlug(),
               actId: act,
               beatNumber: row.index + 1,
               characterName: lock?.name ?? row.characterName,
@@ -1728,6 +1730,14 @@ export function SkidmarksSunnyBanksPanel() {
       captureScriptUndo();
     }
     patchSunnyBanksLive((prev) => {
+      // A pasted script whose own title header names a different episode
+      // is a new episode, not a rename of the card that's open: Save then
+      // adds a card instead of overwriting this one (as it always did).
+      // Typing in the title box is still a rename of the same card.
+      const namesOtherEpisode =
+        typeof doc.episodeTitle === "string" &&
+        doc.episodeTitle.trim().toLowerCase() !== prev.workspaceTitle.trim().toLowerCase();
+      if (namesOtherEpisode) prev = { ...prev, episodeId: undefined, mediaSlug: undefined };
       if (!doc.hasActHeaders) {
         return {
           ...prev,
