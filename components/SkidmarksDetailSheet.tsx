@@ -25,6 +25,7 @@ import { SkidmarksClipTimeline } from "./SkidmarksClipTimeline";
 import { SkidmarksScriptSequencePanel } from "./SkidmarksScriptSequencePanel";
 import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
+import { SunnyBanksEpisodeRow } from "./SunnyBanksEpisodeRow";
 import { SkidmarksEpisodesPanel } from "./SkidmarksEpisodesPanel";
 import { AdultShortsPanel } from "./AdultShortsPanel";
 import { CharacterLorasPanel } from "./CharacterLorasPanel";
@@ -600,6 +601,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {/* Each project's own Characters bar (folded by default): that
           group's cast, tap a face to train their LoRA. */}
       {session.projectKind === "skidmarks" && <CharacterLorasPanel group="skidmarks" />}
+      {/* Sunny Banks episodes as a sideways row, straight under the
+          project tiles (Stuart, 2026-09-30). */}
+      {session.projectKind === "sunnybank" && <SunnyBanksEpisodeRow />}
       {session.projectKind === "sunnybank" && <CharacterLorasPanel group="sunny-banks" />}
       {session.projectKind === "adult-shorts" && <CharacterLorasPanel group="adult-shorts" />}
 

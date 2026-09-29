@@ -1275,6 +1275,10 @@ export function CharacterRosterGrid({
         const list = g.id === "music-video" ? onlyBandCharacters(roster[g.id], bandMemberIds) : roster[g.id];
         const done = list.filter((c) => entryForRosterCharacter(characters, c.sourceKey)?.status === "ready").length;
         const plan = groupPlan(list);
+        // Sunny Banks faces scroll sideways in one row with the dotted +
+        // tile on the far right (Stuart, 2026-09-30). Other screens keep
+        // the grid.
+        const asRow = simple && g.id === "sunny-banks";
         return (
           <div key={g.id}>
             <div className={simple ? "hidden" : "mb-2 flex items-center justify-between gap-2"}>
@@ -1321,7 +1325,16 @@ export function CharacterRosterGrid({
                 {g.id === "adult-shorts" && adultConfirmed ? "No characters yet. Tap + Add a character." : EMPTY_GROUP_TEXT[g.id]}
               </p>
             ) : (
-              <div className={simple ? "grid grid-cols-3 gap-3 sm:grid-cols-4" : "grid grid-cols-4 gap-2 sm:grid-cols-6"}>
+              <>
+              <div
+                className={
+                  asRow
+                    ? "flex touch-pan-x items-start gap-3 overflow-x-auto pb-1 [scrollbar-width:thin]"
+                    : simple
+                      ? "grid grid-cols-3 gap-3 sm:grid-cols-4"
+                      : "grid grid-cols-4 gap-2 sm:grid-cols-6"
+                }
+              >
                 {list.map((c) => {
                   const entry = entryForRosterCharacter(characters, c.sourceKey);
                   const face = entry?.referenceUrl ?? c.thumbUrl;
@@ -1331,7 +1344,10 @@ export function CharacterRosterGrid({
                     const opens = entry?.status === "ready" || entry?.status === "failed";
                     const toggle = () => setSelectedKey(isSel ? null : c.sourceKey);
                     return (
-                      <div key={c.sourceKey} className={`flex min-w-0 flex-col items-center gap-1 rounded-lg p-1 ${isSel ? "bg-emerald-500/10" : ""}`}>
+                      <div
+                        key={c.sourceKey}
+                        className={`flex flex-col items-center gap-1 rounded-lg p-1 ${asRow ? "w-24 shrink-0" : "min-w-0"} ${isSel ? "bg-emerald-500/10" : ""}`}
+                      >
                         <span
                           className={`relative block aspect-square w-full overflow-hidden rounded-lg bg-white/5 ${
                             c.blockedReason ? "opacity-40" : ""
@@ -1389,7 +1405,7 @@ export function CharacterRosterGrid({
                 {/* Simple mode: a dotted "+" tile after the faces adds another person
                     (Stuart, 2026-09-29: just the faces and a + tile, nothing else). */}
                 {simple && (g.id !== "adult-shorts" || adultConfirmed) && (
-                  <div className="flex min-w-0 flex-col items-center gap-1 p-1">
+                  <div className={`flex flex-col items-center gap-1 p-1 ${asRow ? "w-24 shrink-0" : "min-w-0"}`}>
                     <button
                       type="button"
                       onClick={() => (newCast.openGroup === g.id ? closeAddCast() : openAddCast(g.id))}
@@ -1404,12 +1420,21 @@ export function CharacterRosterGrid({
                     <span aria-hidden className="text-[11px]">&nbsp;</span>
                   </div>
                 )}
-                {simple && newCast.openGroup === g.id && <div className="col-span-full">{renderAddCharacter(g.id)}</div>}
-                {selected && selected.group === g.id && (simple ? renderSimpleSelected(selected) : renderSelected(selected))}
+                {!asRow && simple && newCast.openGroup === g.id && <div className="col-span-full">{renderAddCharacter(g.id)}</div>}
+                {!asRow && selected && selected.group === g.id && (simple ? renderSimpleSelected(selected) : renderSelected(selected))}
                 {!simple && selected && selected.group === g.id && renderEntryCard && selectedEntry && (
                   <div className="col-span-full">{renderEntryCard(selectedEntry)}</div>
                 )}
               </div>
+              {/* In the sideways row, the add form and an opened face sit
+                  under the row instead of inside it. */}
+              {asRow && (newCast.openGroup === g.id || (selected && selected.group === g.id)) && (
+                <div className="mt-2 flex flex-col gap-2">
+                  {newCast.openGroup === g.id && renderAddCharacter(g.id)}
+                  {selected && selected.group === g.id && renderSimpleSelected(selected)}
+                </div>
+              )}
+              </>
             )}
           </div>
         );
