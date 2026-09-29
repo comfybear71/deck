@@ -1,7 +1,7 @@
 "use client";
 
 import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
-import { useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { triggerBlobDownload } from "@/lib/clipRenders";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
@@ -19,6 +19,7 @@ import {
   type SunnyBanksLocationId,
 } from "@/lib/sunnyBanks";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
+import { setSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
 import {
   buildSunnyBanksGodScriptPrompt,
   listSunnyBanksLocationIds,
@@ -1377,6 +1378,12 @@ export function SkidmarksSunnyBanksPanel() {
   const parsed = parseSunnyBanksScriptBlock(scriptText);
   const remappedRuntime = preserveRenderedRuntimes(parsed, runtimeMapByAct[activeAct] ?? {});
   const running = runningKind !== null;
+  // Tell the episode row above (outside this panel) not to swap episodes
+  // while a clip renders or a zip builds.
+  useEffect(() => {
+    setSunnyBanksBusy(running || bundleBusy);
+  }, [running, bundleBusy]);
+  useEffect(() => () => setSunnyBanksBusy(false), []);
 
   const runtimeFor = (index: number, raw: string): RowRuntime => {
     return remappedRuntime[index] ?? { lineKey: raw, status: "idle" };
