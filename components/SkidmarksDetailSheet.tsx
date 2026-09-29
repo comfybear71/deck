@@ -97,6 +97,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const activeBand = bands.find((b) => b.id === session.bandId);
   const [openMemberId, setOpenMemberId] = useState<string | null>(null);
   const [pendingBandId, setPendingBandId] = useState<string | null>(null);
+  const [namingBandId, setNamingBandId] = useState<string | null>(null);
   const openMember = activeBand?.members.find((m) => m.id === openMemberId);
 
   const { renders, addRender, removeRender } = useSkidmarksClipRenders(session.mp3?.segments ?? []);
@@ -538,17 +539,28 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {/* The pink members card is gone (Stuart, 2026-09-29): the band's
           people live in its Characters bar, and "+ Add a character" there
           adds them to this band. Only the band's name stays editable here. */}
+      {/* The chosen band's name, shown (not edited) when you tap its album
+          (Stuart, 2026-09-29). Only a brand-new band with no name yet gets a
+          box to type one. */}
       {activeBand && (
         <div ref={membersSectionRef} className="-mb-4 -mt-2">
-          <input
-            type="text"
-            value={activeBand.name}
-            onChange={(e) => renameBand(activeBand.id, e.target.value.slice(0, 60))}
-            onBlur={() => flushSkidmarksSessionNow()}
-            placeholder="Name your band"
-            aria-label="Band name"
-            className="w-full truncate bg-transparent text-base font-bold text-rose-200 placeholder:text-rose-200/40 focus:outline-none"
-          />
+          {activeBand.name.trim() && namingBandId !== activeBand.id ? (
+            <p className="truncate text-base font-bold text-rose-200">{activeBand.name}</p>
+          ) : (
+            <input
+              type="text"
+              value={activeBand.name}
+              onChange={(e) => renameBand(activeBand.id, e.target.value.slice(0, 60))}
+              onFocus={() => setNamingBandId(activeBand.id)}
+              onBlur={() => {
+                setNamingBandId(null);
+                flushSkidmarksSessionNow();
+              }}
+              placeholder="Name your band"
+              aria-label="Band name"
+              className="w-full truncate bg-transparent text-base font-bold text-rose-200 placeholder:text-rose-200/40 focus:outline-none"
+            />
+          )}
         </div>
       )}
 
