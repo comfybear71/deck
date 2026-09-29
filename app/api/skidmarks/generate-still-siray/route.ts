@@ -1,5 +1,6 @@
-import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { parseDeckMediaTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
+import { putDeckMediaOrLegacy } from "@/lib/deckMediaPut";
 import {
   resolveSirayCredentials,
   siraySubmitStillImage,
@@ -45,6 +46,10 @@ function isReferenceDataUrl(value: unknown): value is string {
 interface GenerateStillSirayRequestBody {
   prompt?: unknown;
   referenceImageDataUrls?: unknown;
+  /** Optional `{ folder, name }` in the readable `deck/` tree
+   * (`lib/deckMediaPaths.ts`). Off-shape or missing → the old
+   * `skidmarks/plate-stills/siray-…` path. */
+  mediaTarget?: unknown;
 }
 
 export async function POST(request: Request) {
@@ -122,22 +127,31 @@ export async function POST(request: Request) {
   // Generate plates run mid-way and lost every plate. Save it to Blob
   // server-side and return the small https URL instead; fall back to the
   // data: URL only when no Blob store is connected.
-  const saved = await saveStillToBlob(downloadResult.bytes, downloadResult.contentType);
+  const saved = await saveStillToBlob(
+    downloadResult.bytes,
+    downloadResult.contentType,
+    parseDeckMediaTarget(body.mediaTarget),
+  );
   if (saved) return NextResponse.json({ dataUrl: saved, url: saved });
 
   const dataUrl = `data:${downloadResult.contentType};base64,${Buffer.from(downloadResult.bytes).toString("base64")}`;
   return NextResponse.json({ dataUrl });
 }
 
-async function saveStillToBlob(bytes: ArrayBuffer | Uint8Array, contentType: string): Promise<string | null> {
+async function saveStillToBlob(
+  bytes: ArrayBuffer | Uint8Array,
+  contentType: string,
+  target: DeckMediaTarget | null,
+): Promise<string | null> {
   if (!process.env.BLOB_READ_WRITE_TOKEN) return null;
   const ext = contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : contentType.includes("webp") ? "webp" : "png";
-  const pathname = `skidmarks/plate-stills/siray-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+  const legacyPathname = `skidmarks/plate-stills/siray-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
   try {
-    const blob = await put(pathname, Buffer.from(bytes as ArrayBuffer), {
-      access: "public",
+    const blob = await putDeckMediaOrLegacy(Buffer.from(bytes as ArrayBuffer), {
+      target,
+      ext,
       contentType,
-      addRandomSuffix: false,
+      legacyPathname,
     });
     return blob.url;
   } catch {

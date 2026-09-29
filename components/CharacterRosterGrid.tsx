@@ -22,6 +22,12 @@ import {
   toTrainingPicture,
 } from "@/lib/characterAutoLora";
 import {
+  characterPlateTargetFor,
+  characterReferenceCandidateTargetFor,
+  characterReferenceTargetFor,
+  rosterPictureTargetFor,
+} from "@/lib/deckMediaTargets";
+import {
   ROSTER_GROUPS,
   buildCharacterRoster,
   onlyBandCharacters,
@@ -318,6 +324,7 @@ export function CharacterRosterGrid({
             const clean = await makeSirayPicture(
               buildCleanReferencePrompt({ ...withStyle, subjectWord: e.subjectWord }, Boolean(refData)),
               refData,
+              characterReferenceTargetFor(e),
             );
             patchEntry(entryId, { referenceUrl: clean, cleanReferenceApproved: true, cleanCandidateUrl: null });
             flushSkidmarksSessionNow();
@@ -341,7 +348,7 @@ export function CharacterRosterGrid({
           let ref: string | null = null;
           for (const s of starts) {
             try {
-              ref = await ensureTrainingPicture(s);
+              ref = await ensureTrainingPicture(s, characterReferenceTargetFor(e));
               break;
             } catch {
               /* try the next picture */
@@ -384,7 +391,9 @@ export function CharacterRosterGrid({
           have,
           e.pictureRound ?? 0,
         );
-        const results = await Promise.allSettled(prompts.map((p) => makeSirayPicture(p, refData!)));
+        const results = await Promise.allSettled(
+          prompts.map((p, i) => makeSirayPicture(p, refData!, characterPlateTargetFor(e, have + i + 1))),
+        );
         const made = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
         if (made.length > 0) {
           failedRounds = 0;
@@ -555,7 +564,11 @@ export function CharacterRosterGrid({
         refData = refCache.current.get(src) ?? (await referenceDataUrlFor(src));
         refCache.current.set(src, refData);
       }
-      const url = await makeSirayPicture(buildCleanReferencePrompt({ ...char, style }, Boolean(refData)), refData);
+      const url = await makeSirayPicture(
+        buildCleanReferencePrompt({ ...char, style }, Boolean(refData)),
+        refData,
+        characterReferenceCandidateTargetFor(entry),
+      );
       const fresh = findEntry(entry.id) ?? entry;
       patchEntry(entry.id, {
         cleanCandidateUrl: url,
@@ -1013,9 +1026,14 @@ export function CharacterRosterGrid({
     try {
       for (const u of castUploads) {
         const urls: string[] = [];
+        // Pictures joining someone already here number on from theirs.
+        const existingKey = addGroupKeyByName.get(slugifyCharacterName(u.name));
+        const existingChar = existingKey ? roster[addGroup].find((c) => c.sourceKey === existingKey) : undefined;
+        const already = existingChar ? (existingChar.thumbUrl ? 1 : 0) + existingChar.extraPictureUrls.length : 0;
         for (let i = 0; i < u.previews.length; i++) {
           setCastUploadBusy(`Saving ${u.name.trim()}, picture ${i + 1} of ${u.previews.length}…`);
-          urls.push(await toTrainingPicture(u.previews[i]));
+          const target = rosterPictureTargetFor(addGroup, u.name, existingKey, already + i + 1, addToBandId);
+          urls.push(await toTrainingPicture(u.previews[i], target));
         }
         lastKey = saveCharacter(addGroup, u.name, "", urls, u.isAnimal) || lastKey;
         flushSkidmarksSessionNow();

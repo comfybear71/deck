@@ -43,6 +43,7 @@ import {
   computePlateDurationSec,
   computeSirayPlateDurationSec,
 } from "@/lib/clipGeneration";
+import { songPlateTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import { SkidmarksClipRender } from "./SkidmarksClipRender";
 import type { PersistedClipRender } from "@/lib/clipRenders";
@@ -532,6 +533,9 @@ function SkidmarksPlateLightbox({
 
 interface SkidmarksPlateBoxProps {
   plate: SkidmarksClipPlateSlot;
+  /** The clip this plate belongs to — only used to file a new still in
+   * the song's folder in the Blob tree (`lib/deckMediaTargets.ts`). */
+  segmentId?: string;
   previousStill?: SkidmarksPlateStill;
   shotPrompt: string;
   negativePrompt: string;
@@ -680,6 +684,7 @@ function SkidmarksPlateSelectControl({
  */
 function SkidmarksPlateBox({
   plate,
+  segmentId,
   previousStill,
   shotPrompt,
   negativePrompt,
@@ -715,6 +720,9 @@ function SkidmarksPlateBox({
   }, []);
 
   const hasStill = !!plate.still;
+  /** Where a new still for this plate goes in the Blob tree (song folder),
+   * or `null` for the old flat folder. */
+  const stillTarget = () => (segmentId ? songPlateTargetFor(segmentId, plate.id) : null);
 
   const closeMenu = () => {
     setMenuOpen(false);
@@ -823,7 +831,7 @@ function SkidmarksPlateBox({
       // wants) so the session's Neon PUT only ever stores this still's
       // URL, not its full bytes — see `lib/plateStillBlob.ts`'s module
       // doc comment for the real 413 this fixes.
-      const outcome = await uploadSkidmarksPlateStill(file);
+      const outcome = await uploadSkidmarksPlateStill(file, stillTarget());
       if (!outcome.ok) {
         setError(outcome.message);
         return;
@@ -947,7 +955,7 @@ function SkidmarksPlateBox({
         // now, just won't survive a save until regenerated) rather than
         // losing it.
         setBusyLabel("Saving…");
-        const uploadOutcome = await uploadSkidmarksPlateStill(dataUrl);
+        const uploadOutcome = await uploadSkidmarksPlateStill(dataUrl, stillTarget());
         onSetStill({
           dataUrl: uploadOutcome.ok ? uploadOutcome.url : dataUrl,
           source: "generated",
@@ -1028,7 +1036,7 @@ function SkidmarksPlateBox({
         // Keep the original — same as Generate.
       }
       setBusyLabel("Saving\u2026");
-      const uploadOutcome = await uploadSkidmarksPlateStill(dataUrl);
+      const uploadOutcome = await uploadSkidmarksPlateStill(dataUrl, stillTarget());
       onSetStill({
         dataUrl: uploadOutcome.ok ? uploadOutcome.url : dataUrl,
         source: "generated",
@@ -1452,6 +1460,7 @@ export function SkidmarksClipStub({
           <SkidmarksPlateBox
             key={plate.id}
             plate={plate}
+            segmentId={segment.id}
             previousStill={i > 0 ? segment.plates[i - 1].still : previousStill}
             shotPrompt={segment.shotPrompt}
             negativePrompt={segment.negativePrompt}

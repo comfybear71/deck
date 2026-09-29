@@ -11,6 +11,7 @@ import {
   type SkidmarksMember,
   type SkidmarksMemberLockCard,
 } from "@/lib/skidmarks";
+import { memberAvatarTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 
 interface SkidmarksMembersModuleProps {
@@ -373,7 +374,7 @@ export function SkidmarksMembersModule({
       // URL. Falls back to the inline `data:` URL on a Blob hiccup so
       // the picked photo is never just dropped — usable this session
       // either way.
-      const uploadOutcome = await uploadSkidmarksMemberPhoto(dataUrl);
+      const uploadOutcome = await uploadSkidmarksMemberPhoto(dataUrl, memberAvatarTargetFor(band.id, memberId));
       onSetMemberAvatarImage(memberId, uploadOutcome.ok ? uploadOutcome.url : dataUrl);
       flushSkidmarksSessionNow();
     } catch {

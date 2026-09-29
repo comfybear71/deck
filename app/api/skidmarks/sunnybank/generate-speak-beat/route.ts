@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { put } from "@vercel/blob";
+import { parseDeckMediaTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
+import { putDeckMediaOrLegacy } from "@/lib/deckMediaPut";
 import { decodeDataUrl } from "@/lib/dataUrl";
 import { synthesizeSunnyBanksLine } from "@/lib/elevenLabsSpeech";
 import { estimateMp3DurationSec } from "@/lib/mp3Slice";
@@ -156,6 +157,11 @@ interface GenerateSpeakBeatRequestBody {
    * beat's timing: see the no-settle note in this module's doc comment.
    */
   appearanceModifier?: unknown;
+  /** Optional `{ folder, name }` in the readable tree, e.g.
+   * `deck/sunnybank/episodes/<episode>/act-i` +
+   * `<episode>-act-i-beat-03-shazza-speak` (`lib/deckMediaPaths.ts`'s
+   * `sunnybankBeatTarget`). Missing → the old `sunnybanks/…-beats/` path. */
+  mediaTarget?: unknown;
 }
 
 function parseBeatKind(value: unknown): BeatKind {
@@ -333,6 +339,7 @@ export async function POST(request: Request) {
     audioContentType,
     startImageDataUrl: plateDataUrl,
     creds,
+    mediaTarget: parseDeckMediaTarget(body.mediaTarget),
   });
 }
 
@@ -350,6 +357,7 @@ async function runLtxAndPersist(args: {
   audioContentType: string;
   startImageDataUrl: string;
   creds: NonNullable<ReturnType<typeof resolveComfyCloudCredentials>>;
+  mediaTarget: DeckMediaTarget | null;
 }) {
   const decodedImage = decodeDataUrl(args.startImageDataUrl);
   if (!decodedImage) {
@@ -421,10 +429,11 @@ async function runLtxAndPersist(args: {
       ? buildSunnyBanksHoldBeatPathname(args.characterName, Date.now())
       : buildSunnyBanksSpeakBeatPathname(args.characterName, Date.now());
   try {
-    const blob = await put(pathname, Buffer.from(videoBytes), {
-      access: "public",
+    const blob = await putDeckMediaOrLegacy(Buffer.from(videoBytes), {
+      target: args.mediaTarget,
+      ext: "mp4",
       contentType: "video/mp4",
-      addRandomSuffix: false,
+      legacyPathname: pathname,
     });
     return NextResponse.json({
       videoUrl: blob.url,

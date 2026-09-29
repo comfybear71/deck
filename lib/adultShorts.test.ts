@@ -145,3 +145,32 @@ describe("adult shorts Library save / new / open", () => {
     expect(old?.currentSavedId).toBeNull();
   });
 });
+
+describe("adult shorts Blob folder tag", () => {
+  const withTag = (tag: string): AdultShortsState => ({
+    ...emptyAdultShortsState(),
+    ageConfirmed: true,
+    character,
+    shots: [{ ...buildAdultShortsShot("shot_1"), prompt: "On the couch" }],
+    mediaTag: tag,
+  });
+
+  it("survives a reload and rides along into the Library copy", () => {
+    const saved = saveAdultShortToLibrary(withTag("3f9a2c"), new Date("2026-09-30T00:00:00Z"), "Test");
+    expect(saved.saved[0].mediaTag).toBe("3f9a2c");
+    const reloaded = normalizeAdultShortsState(JSON.parse(JSON.stringify(saved)))!;
+    expect(reloaded.mediaTag).toBe("3f9a2c");
+    expect(reloaded.saved[0].mediaTag).toBe("3f9a2c");
+  });
+
+  it("drops a junk tag on load", () => {
+    expect(normalizeAdultShortsState({ ...withTag("3f9a2c"), mediaTag: "../x" })!.mediaTag).toBeUndefined();
+  });
+
+  it("a new short starts without one; opening a saved short brings its own back", () => {
+    const saved = saveAdultShortToLibrary(withTag("3f9a2c"), new Date("2026-09-30T00:00:00Z"), "Test");
+    const fresh = startNewAdultShort(saved, false);
+    expect(fresh.mediaTag).toBeUndefined();
+    expect(openSavedAdultShort(fresh, saved.saved[0].id).mediaTag).toBe("3f9a2c");
+  });
+});

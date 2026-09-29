@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { coverGradientClass, flushSkidmarksSessionNow, readImageFileAsDataUrl, type SkidmarksBand } from "@/lib/skidmarks";
+import { bandCoverTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 
 interface SkidmarksBandPickerProps {
@@ -110,7 +111,7 @@ function BandTile({
       // `lib/memberPhotoBlob.ts`'s module doc comment for the real
       // session-save 413 this closes. Falls back to the inline `data:`
       // URL on a Blob hiccup so the picked photo is never just dropped.
-      const uploadOutcome = await uploadSkidmarksMemberPhoto(dataUrl);
+      const uploadOutcome = await uploadSkidmarksMemberPhoto(dataUrl, bandCoverTargetFor(band.id));
       onSetCoverImage(uploadOutcome.ok ? uploadOutcome.url : dataUrl);
       flushSkidmarksSessionNow();
     } catch {

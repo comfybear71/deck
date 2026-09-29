@@ -19,6 +19,7 @@ import {
   type SunnyBanksLocationId,
 } from "@/lib/sunnyBanks";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
+import { sunnybankBeatTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
 import { setSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
 import {
   buildSunnyBanksGodScriptPrompt,
@@ -1466,12 +1467,15 @@ export function SkidmarksSunnyBanksPanel() {
     startImageDataUrl: string;
     action?: string;
     appearanceModifier?: string;
+    /** Where the finished clip goes in the Blob tree; `null` = old path. */
+    mediaTarget?: DeckMediaTarget | null;
   }): Promise<
     | { ok: true; videoUrl: string; durationSec: number; audioMuxed?: boolean }
     | { ok: false; message: string }
   > => {
     const action = args.action?.trim() ?? "";
     const appearanceModifier = args.appearanceModifier?.trim() ?? "";
+    const mediaTarget = args.mediaTarget ? { mediaTarget: args.mediaTarget } : {};
     // `action` and `appearanceModifier` travel as two separate fields —
     // the route itself merges them into the motion prompt (2026-09-18).
     // Previously this client pre-merged them into one `action` string,
@@ -1491,6 +1495,7 @@ export function SkidmarksSunnyBanksPanel() {
               locationImage: args.locationImage,
               startImageDataUrl: args.startImageDataUrl,
               ...(action ? { action } : {}),
+              ...mediaTarget,
             }
           : {
               characterName: args.characterName,
@@ -1500,6 +1505,7 @@ export function SkidmarksSunnyBanksPanel() {
               locationImage: args.locationImage,
               startImageDataUrl: args.startImageDataUrl,
               ...(action ? { action } : {}),
+              ...mediaTarget,
             }
       ),
     });
@@ -1573,6 +1579,14 @@ export function SkidmarksSunnyBanksPanel() {
             startImageDataUrl,
             action: row.chunk.action,
             appearanceModifier: row.chunk.appearanceModifier,
+            // Filed under this episode's name when it has one.
+            mediaTarget: sunnybankBeatTarget({
+              episodeTitle: workspaceTitle,
+              actId: act,
+              beatNumber: row.index + 1,
+              characterName: lock?.name ?? row.characterName,
+              kind: row.kind,
+            }),
           });
           if (!result.ok) {
             writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: result.message });

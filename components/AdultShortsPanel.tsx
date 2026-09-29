@@ -21,6 +21,8 @@ import {
   type AdultShortsShot,
 } from "@/lib/adultShorts";
 import { buildForceDownloadUrl } from "@/lib/clipRenders";
+import type { DeckMediaTarget } from "@/lib/deckMediaPaths";
+import { adultShortTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
@@ -59,9 +61,9 @@ function friendlyError(err: unknown, fallback: string): string {
 
 type Busy = { shotId: string; kind: "plate" | "clip" } | null;
 
-async function persistImageUrl(dataOrHttps: string): Promise<string> {
+async function persistImageUrl(dataOrHttps: string, target?: DeckMediaTarget | null): Promise<string> {
   if (!dataOrHttps.startsWith("data:")) return dataOrHttps;
-  const up = await uploadSkidmarksMemberPhoto(dataOrHttps);
+  const up = await uploadSkidmarksMemberPhoto(dataOrHttps, target);
   // No Blob store (local dev) — keep the downscaled data URL so the flow still works.
   return up.ok ? up.url : dataOrHttps;
 }
@@ -143,7 +145,8 @@ export function AdultShortsPanel() {
       const urls: string[] = [];
       for (const file of picked) {
         const dataUrl = await readImageFileAsDataUrl(file, REFERENCE_MAX_DIMENSION);
-        urls.push(await persistImageUrl(dataUrl));
+        const refNumber = character.referenceUrls.length + urls.length + 1;
+        urls.push(await persistImageUrl(dataUrl, adultShortTargetFor("ref", refNumber)));
       }
       patchAdultShorts((s) => ({
         ...s,
@@ -186,14 +189,19 @@ export function AdultShortsPanel() {
     setBusy({ shotId: shot.id, kind: "plate" });
     try {
       const refData = await resolvePlateReferenceDataUrl(ref);
+      const plateTarget = adultShortTargetFor("plate", shots.findIndex((x) => x.id === shot.id) + 1);
       const res = await fetch("/api/skidmarks/generate-still-siray", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: buildAdultShortsStillPrompt(character, shot), referenceImageDataUrls: [refData] }),
+        body: JSON.stringify({
+          prompt: buildAdultShortsStillPrompt(character, shot),
+          referenceImageDataUrls: [refData],
+          mediaTarget: plateTarget,
+        }),
       });
       const json = (await res.json().catch(() => ({}))) as { dataUrl?: string; url?: string; error?: string };
       if (!res.ok || !(json.url || json.dataUrl)) throw new Error(json.error || `Siray still failed (HTTP ${res.status}).`);
-      const plateUrl = await persistImageUrl(json.url || json.dataUrl!);
+      const plateUrl = await persistImageUrl(json.url || json.dataUrl!, plateTarget);
       patchShot(shot.id, { plateUrl });
       flushSkidmarksSessionNow();
     } catch (err) {
@@ -218,6 +226,8 @@ export function AdultShortsPanel() {
     setBusy({ shotId: shot.id, kind: "clip" });
     let taskId = shot.sirayTaskId;
     let networkRetries = 0;
+    // Same name on every poll: the server saves the clip on the last one.
+    const clipTarget = adultShortTargetFor("clip", index + 1);
     try {
       for (let attempt = 0; attempt <= MAX_PENDING_POLLS; ) {
         let res: Response;
@@ -230,6 +240,7 @@ export function AdultShortsPanel() {
               startImageUrl,
               durationSec: shot.durationSec,
               ...(taskId ? { sirayTaskId: taskId } : {}),
+              mediaTarget: clipTarget,
             }),
           });
         } catch (err) {

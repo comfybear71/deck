@@ -16,6 +16,8 @@
  * images are uploaded to Blob first, so the row only ever holds URLs.
  */
 
+import { isDeckMediaTag } from "./deckMediaPaths";
+
 export const ADULT_SHORTS_MAX_REFERENCES = 3;
 export const ADULT_SHORTS_MAX_SHOTS = 10;
 export const ADULT_SHORTS_MIN_SHOT_SEC = 2;
@@ -72,6 +74,10 @@ export interface AdultShortsSaved {
   savedAt: string;
   character: AdultShortsCharacter;
   shots: AdultShortsShot[];
+  /** Random tag naming this short's folder in the readable Blob tree
+   * (`deck/shorts/shorts/short-<tag>/`, `lib/deckMediaPaths.ts`),
+   * so its paths can't be guessed. Absent on shorts from before. */
+  mediaTag?: string;
 }
 
 export interface AdultShortsState {
@@ -84,6 +90,9 @@ export interface AdultShortsState {
   /** The saved short the editor was opened from / last saved as. Saving
    * again updates that entry instead of adding a duplicate. */
   currentSavedId: string | null;
+  /** The open short's Blob folder tag (see `AdultShortsSaved.mediaTag`).
+   * Set the first time it makes a file; carried into its Library copy. */
+  mediaTag?: string;
 }
 
 export function mintAdultShortsId(prefix = "shot"): string {
@@ -184,6 +193,7 @@ function normalizeSaved(value: unknown): AdultShortsSaved[] {
       savedAt: str(r.savedAt) || new Date(0).toISOString(),
       character: normalizeCharacter(r.character),
       shots,
+      ...(isDeckMediaTag(r.mediaTag) ? { mediaTag: r.mediaTag } : {}),
     });
   }
   return out;
@@ -201,6 +211,7 @@ export function normalizeAdultShortsState(value: unknown): AdultShortsState | nu
     shots: shots.length ? shots : [buildAdultShortsShot("shot_1")],
     saved,
     currentSavedId: saved.some((x) => x.id === currentSavedId) ? currentSavedId : null,
+    ...(isDeckMediaTag(v.mediaTag) ? { mediaTag: v.mediaTag } : {}),
   };
 }
 
@@ -243,15 +254,19 @@ export function saveAdultShortToLibrary(state: AdultShortsState, now: Date, titl
     savedAt: now.toISOString(),
     character: cloneCharacter(state.character),
     shots: cloneShots(state.shots).map((s) => ({ ...s, sirayTaskId: null })),
+    ...((state.mediaTag ?? existing?.mediaTag) ? { mediaTag: state.mediaTag ?? existing?.mediaTag } : {}),
   };
   const rest = state.saved.filter((x) => x.id !== entry.id);
   return { ...state, saved: [entry, ...rest].slice(0, ADULT_SHORTS_MAX_SAVED), currentSavedId: entry.id };
 }
 
-/** Clear the editor for a fresh short. The Library is untouched. */
+/** Clear the editor for a fresh short. The Library is untouched. A new
+ * short gets its own Blob folder tag when it makes its first file. */
 export function startNewAdultShort(state: AdultShortsState, keepCharacter: boolean): AdultShortsState {
+  const rest: AdultShortsState = { ...state };
+  delete rest.mediaTag;
   return {
-    ...state,
+    ...rest,
     character: keepCharacter ? cloneCharacter(state.character) : { name: "", look: "", referenceUrls: [] },
     shots: [buildAdultShortsShot(mintAdultShortsId())],
     currentSavedId: null,
@@ -262,7 +277,15 @@ export function startNewAdultShort(state: AdultShortsState, keepCharacter: boole
 export function openSavedAdultShort(state: AdultShortsState, id: string): AdultShortsState {
   const entry = state.saved.find((x) => x.id === id);
   if (!entry) return state;
-  return { ...state, character: cloneCharacter(entry.character), shots: cloneShots(entry.shots), currentSavedId: entry.id };
+  const rest: AdultShortsState = { ...state };
+  delete rest.mediaTag;
+  return {
+    ...rest,
+    character: cloneCharacter(entry.character),
+    shots: cloneShots(entry.shots),
+    currentSavedId: entry.id,
+    ...(entry.mediaTag ? { mediaTag: entry.mediaTag } : {}),
+  };
 }
 
 export function deleteSavedAdultShort(state: AdultShortsState, id: string): AdultShortsState {
