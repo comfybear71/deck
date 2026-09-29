@@ -17,9 +17,27 @@
  * app creates them.
  */
 
-/** The kinds this build saves per item. Later steps add more. */
-export const DECK_ITEM_KINDS = ["character", "sunnybank-episode"] as const;
+/** The kinds this build saves per item. Later steps add more.
+ * `music-video-band` and `music-video-song` are Music video (see
+ * `lib/musicVideoItemData.ts`). */
+export const DECK_ITEM_KINDS = ["character", "sunnybank-episode", "music-video-band", "music-video-song"] as const;
 export type DeckItemKind = (typeof DECK_ITEM_KINDS)[number];
+
+/**
+ * Kinds that one seed script puts in together. A kind counts as seeded
+ * (per-item saving switched on) once any row of any kind in its group
+ * exists, so Music video songs switch on with its bands even when no
+ * song was on the desk the day the seed ran.
+ */
+export function deckItemSeedKinds(kind: DeckItemKind): DeckItemKind[] {
+  switch (kind) {
+    case "music-video-band":
+    case "music-video-song":
+      return ["music-video-band", "music-video-song"];
+    default:
+      return [kind];
+  }
+}
 
 export function isDeckItemKind(value: unknown): value is DeckItemKind {
   return typeof value === "string" && (DECK_ITEM_KINDS as readonly string[]).includes(value);
@@ -94,7 +112,8 @@ export interface DeckItemTombstone {
 }
 
 /** Item ids are app-made (`clora_<uuid>`, `clora_skye`, an episode's
- * `ws-<savedAt>-<seq>-<fingerprint>`); anything else is refused. */
+ * `ws-<savedAt>-<seq>-<fingerprint>`, a band's `band_<uuid>` or
+ * `jack-ash`, a song's `mp3_<uuid>`); anything else is refused. */
 export function isValidDeckItemId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(value);
 }

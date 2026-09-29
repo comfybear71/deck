@@ -33,11 +33,13 @@ import {
   DECK_ITEM_NEW_REVISION,
   DECK_ITEMS_TABLE_MISSING_MESSAGE,
   characterFolder,
+  deckItemSeedKinds,
   isValidDeckItemId,
   type DeckItemKind,
   type DeckItemRecord,
   type DeckItemTombstone,
 } from "./deckItems";
+import { MUSIC_VIDEO_ITEM_FOLDER, cleanBandRowData, cleanSongItem } from "./musicVideoItemData";
 import { SKIDMARKS_STUDIO_OWNER_ID } from "./skidmarksSession-server";
 
 type Sql = NonNullable<ReturnType<typeof getSkidmarksSql>>;
@@ -54,8 +56,9 @@ export type ListDeckItemsOutcome =
       items: DeckItemRecord[];
       deleted: DeckItemTombstone[];
       /** At least one row of this kind exists for the owner (live or deleted),
-       * i.e. the one-time seed has run. Until then the client keeps the old
-       * whole-session behaviour. */
+       * or of a kind seeded with it (`deckItemSeedKinds`), i.e. the one-time
+       * seed has run. Until then the client keeps the old whole-session
+       * behaviour. */
       seeded: boolean;
     }
   | DeckItemsFailure;
@@ -142,6 +145,20 @@ export function prepareDeckItemData(
       if (JSON.stringify(episode).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That episode is too big to save." };
       return { ok: true, data: episode as unknown as Record<string, unknown>, folder: "sunnybank" };
     }
+    case "music-video-band": {
+      const band = cleanBandRowData(data);
+      if (!band) return { ok: false, error: "That isn't a band." };
+      if (band.id !== itemId) return { ok: false, error: "The band's id doesn't match the item id." };
+      if (JSON.stringify(band).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That band is too big to save." };
+      return { ok: true, data: band as unknown as Record<string, unknown>, folder: MUSIC_VIDEO_ITEM_FOLDER };
+    }
+    case "music-video-song": {
+      const song = cleanSongItem(data);
+      if (!song) return { ok: false, error: "That isn't a song." };
+      if (song.id !== itemId) return { ok: false, error: "The song's id doesn't match the item id." };
+      if (JSON.stringify(song).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That song is too big to save." };
+      return { ok: true, data: song as unknown as Record<string, unknown>, folder: MUSIC_VIDEO_ITEM_FOLDER };
+    }
   }
 }
 
@@ -184,11 +201,23 @@ export async function listDeckItems(kind: DeckItemKind, ownerId: string = SKIDMA
       ORDER BY data->>'createdAt' ASC NULLS LAST, item_id ASC
     `) as Row[];
     const records = rows.map(toRecord);
+    let seeded = records.length > 0;
+    // A kind seeded together with others (Music video bands and songs)
+    // counts as seeded once any of them has a row.
+    const seedKinds = deckItemSeedKinds(kind);
+    if (!seeded && seedKinds.length > 1) {
+      const found = (await sql`
+        SELECT EXISTS (
+          SELECT 1 FROM deck_items WHERE owner_id = ${ownerId} AND kind = ANY(${seedKinds})
+        ) AS seeded
+      `) as { seeded: boolean }[];
+      seeded = found[0]?.seeded === true;
+    }
     return {
       ok: true,
       items: records.filter((r) => r.deletedAt === null),
       deleted: records.filter((r) => r.deletedAt !== null).map((r) => ({ itemId: r.itemId, revision: r.revision })),
-      seeded: records.length > 0,
+      seeded,
     };
   } catch (err) {
     return failure(err, "Could not read saved items.");
