@@ -21,6 +21,8 @@ export const ADULT_SHORTS_MAX_SHOTS = 10;
 export const ADULT_SHORTS_MIN_SHOT_SEC = 2;
 export const ADULT_SHORTS_MAX_SHOT_SEC = 10;
 export const ADULT_SHORTS_DEFAULT_SHOT_SEC = 5;
+/** Saved shorts kept in the 18+ Library tab (URLs only, so this stays small). */
+export const ADULT_SHORTS_MAX_SAVED = 50;
 
 /** Siray Seedream 4.5 spicy still, per image (matches `lib/sirayClient.ts`). */
 export const ADULT_SHORTS_STILL_COST_USD = 0.04;
@@ -58,11 +60,30 @@ export interface AdultShortsShot {
   chainFromPrevious: boolean;
 }
 
+/**
+ * A short saved to the Library (2026-09-29, Stuart's ask: "save this to
+ * the library and also create a new one"). A frozen copy of the editor's
+ * character + shots; clips are the same Blob URLs, nothing is re-uploaded.
+ */
+export interface AdultShortsSaved {
+  id: string;
+  title: string;
+  /** ISO timestamp of the latest save. */
+  savedAt: string;
+  character: AdultShortsCharacter;
+  shots: AdultShortsShot[];
+}
+
 export interface AdultShortsState {
   /** One-time "I'm 18+ and this character is an adult" confirm per session row. */
   ageConfirmed: boolean;
   character: AdultShortsCharacter;
   shots: AdultShortsShot[];
+  /** Newest first. */
+  saved: AdultShortsSaved[];
+  /** The saved short the editor was opened from / last saved as. Saving
+   * again updates that entry instead of adding a duplicate. */
+  currentSavedId: string | null;
 }
 
 export function mintAdultShortsId(prefix = "shot"): string {
@@ -92,6 +113,8 @@ export function emptyAdultShortsState(): AdultShortsState {
     ageConfirmed: false,
     character: { name: "", look: "", referenceUrls: [] },
     shots: [buildAdultShortsShot("shot_1")],
+    saved: [],
+    currentSavedId: null,
   };
 }
 
@@ -108,14 +131,16 @@ function urlOrNull(v: unknown): string | null {
   return typeof v === "string" && /^(https:|data:image\/|data:video\/)/.test(v) ? v : null;
 }
 
-export function normalizeAdultShortsState(value: unknown): AdultShortsState | null {
-  if (!value || typeof value !== "object") return null;
-  const v = value as Record<string, unknown>;
-  const c = (v.character && typeof v.character === "object" ? v.character : {}) as Record<string, unknown>;
+function normalizeCharacter(value: unknown): AdultShortsCharacter {
+  const c = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
   const refs = Array.isArray(c.referenceUrls)
     ? c.referenceUrls.filter((u): u is string => typeof u === "string" && /^(https:|data:image\/)/.test(u)).slice(0, ADULT_SHORTS_MAX_REFERENCES)
     : [];
-  const shotsRaw = Array.isArray(v.shots) ? v.shots : [];
+  return { name: str(c.name), look: str(c.look), referenceUrls: refs };
+}
+
+function normalizeShots(value: unknown): AdultShortsShot[] {
+  const shotsRaw = Array.isArray(value) ? value : [];
   const shots: AdultShortsShot[] = [];
   const seen = new Set<string>();
   for (const raw of shotsRaw.slice(0, ADULT_SHORTS_MAX_SHOTS)) {
@@ -137,17 +162,131 @@ export function normalizeAdultShortsState(value: unknown): AdultShortsState | nu
       chainFromPrevious: s.chainFromPrevious === true,
     });
   }
+  return shots;
+}
+
+function normalizeSaved(value: unknown): AdultShortsSaved[] {
+  if (!Array.isArray(value)) return [];
+  const out: AdultShortsSaved[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (out.length >= ADULT_SHORTS_MAX_SAVED) break;
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const id = str(r.id);
+    if (!id || seen.has(id)) continue;
+    const shots = normalizeShots(r.shots).map((s) => ({ ...s, sirayTaskId: null }));
+    if (!shots.length) continue;
+    seen.add(id);
+    out.push({
+      id,
+      title: str(r.title).trim() || "Untitled short",
+      savedAt: str(r.savedAt) || new Date(0).toISOString(),
+      character: normalizeCharacter(r.character),
+      shots,
+    });
+  }
+  return out;
+}
+
+export function normalizeAdultShortsState(value: unknown): AdultShortsState | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const shots = normalizeShots(v.shots);
+  const saved = normalizeSaved(v.saved);
+  const currentSavedId = str(v.currentSavedId);
   return {
     ageConfirmed: v.ageConfirmed === true,
-    character: { name: str(c.name), look: str(c.look), referenceUrls: refs },
+    character: normalizeCharacter(v.character),
     shots: shots.length ? shots : [buildAdultShortsShot("shot_1")],
+    saved,
+    currentSavedId: saved.some((x) => x.id === currentSavedId) ? currentSavedId : null,
   };
 }
 
 export function adultShortsHaveUserContent(state: AdultShortsState | null | undefined): boolean {
   if (!state) return false;
   if (state.character.name.trim() || state.character.look.trim() || state.character.referenceUrls.length) return true;
+  if (state.saved?.length) return true;
+  return editorHasContent(state);
+}
+
+/** Anything worth saving in the editor right now (ignores the Library). */
+export function editorHasContent(state: Pick<AdultShortsState, "character" | "shots">): boolean {
+  if (state.character.name.trim() || state.character.look.trim() || state.character.referenceUrls.length) return true;
   return state.shots.some((s) => s.prompt.trim() || s.plateUrl || s.clipUrl);
+}
+
+/** Default Library title: "<name> · <first shot words>", or the date. */
+export function suggestAdultShortTitle(state: Pick<AdultShortsState, "character" | "shots">, now: Date): string {
+  const name = state.character.name.trim();
+  const firstPrompt = state.shots.find((s) => s.prompt.trim())?.prompt.trim() ?? "";
+  const words = firstPrompt.split(/\s+/).slice(0, 5).join(" ").replace(/[.,;:!]+$/, "");
+  const bits = [name, words].filter(Boolean);
+  if (bits.length) return bits.join(" · ").slice(0, 80);
+  return `Short ${now.toISOString().slice(0, 10)}`;
+}
+
+const cloneShots = (shots: readonly AdultShortsShot[]) => shots.map((s) => ({ ...s }));
+const cloneCharacter = (c: AdultShortsCharacter): AdultShortsCharacter => ({ ...c, referenceUrls: c.referenceUrls.slice() });
+
+/**
+ * Save the editor to the Library. Updates the entry the editor came from
+ * (`currentSavedId`) or adds a new one at the top. Shots still waiting on
+ * Siray keep their task id in the editor but not in the saved copy.
+ */
+export function saveAdultShortToLibrary(state: AdultShortsState, now: Date, title?: string, id: string = mintAdultShortsId("short")): AdultShortsState {
+  const existing = state.currentSavedId ? state.saved.find((x) => x.id === state.currentSavedId) : undefined;
+  const entry: AdultShortsSaved = {
+    id: existing?.id ?? id,
+    title: (title ?? "").trim() || existing?.title || suggestAdultShortTitle(state, now),
+    savedAt: now.toISOString(),
+    character: cloneCharacter(state.character),
+    shots: cloneShots(state.shots).map((s) => ({ ...s, sirayTaskId: null })),
+  };
+  const rest = state.saved.filter((x) => x.id !== entry.id);
+  return { ...state, saved: [entry, ...rest].slice(0, ADULT_SHORTS_MAX_SAVED), currentSavedId: entry.id };
+}
+
+/** Clear the editor for a fresh short. The Library is untouched. */
+export function startNewAdultShort(state: AdultShortsState, keepCharacter: boolean): AdultShortsState {
+  return {
+    ...state,
+    character: keepCharacter ? cloneCharacter(state.character) : { name: "", look: "", referenceUrls: [] },
+    shots: [buildAdultShortsShot(mintAdultShortsId())],
+    currentSavedId: null,
+  };
+}
+
+/** Load a saved short back into the editor. */
+export function openSavedAdultShort(state: AdultShortsState, id: string): AdultShortsState {
+  const entry = state.saved.find((x) => x.id === id);
+  if (!entry) return state;
+  return { ...state, character: cloneCharacter(entry.character), shots: cloneShots(entry.shots), currentSavedId: entry.id };
+}
+
+export function deleteSavedAdultShort(state: AdultShortsState, id: string): AdultShortsState {
+  return {
+    ...state,
+    saved: state.saved.filter((x) => x.id !== id),
+    currentSavedId: state.currentSavedId === id ? null : state.currentSavedId,
+  };
+}
+
+/**
+ * True when the editor holds work the Library doesn't have yet: never
+ * saved, or changed since the last save. Used to warn before "New short"
+ * or "Open" would replace it.
+ */
+export function editorHasUnsavedChanges(state: AdultShortsState): boolean {
+  if (!editorHasContent(state)) return false;
+  const entry = state.currentSavedId ? state.saved.find((x) => x.id === state.currentSavedId) : undefined;
+  if (!entry) return true;
+  const strip = (shots: readonly AdultShortsShot[]) => shots.map((s) => ({ ...s, sirayTaskId: null }));
+  return (
+    JSON.stringify(entry.character) !== JSON.stringify(state.character) ||
+    JSON.stringify(strip(entry.shots)) !== JSON.stringify(strip(state.shots))
+  );
 }
 
 function characterLine(character: AdultShortsCharacter): string {

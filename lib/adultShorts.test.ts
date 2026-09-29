@@ -11,6 +11,12 @@ import {
   estimateAdultShortsClipCostUsd,
   normalizeAdultShortsState,
   resolveAdultShortsStartImage,
+  saveAdultShortToLibrary,
+  startNewAdultShort,
+  openSavedAdultShort,
+  deleteSavedAdultShort,
+  editorHasUnsavedChanges,
+  type AdultShortsState,
 } from "./adultShorts";
 
 const character = { name: "Skye", look: "wavy blonde hair, gold necklaces", referenceUrls: ["https://x.test/a.jpg"] };
@@ -71,5 +77,71 @@ describe("adult shorts state", () => {
     expect(
       resolveAdultShortsStartImage([{ ...a, lastFrameUrl: null }, { ...b, chainFromPrevious: true }], 1)
     ).toBe("https://p/b.jpg");
+  });
+});
+
+describe("adult shorts Library save / new / open", () => {
+  const now = new Date("2026-09-29T00:10:00Z");
+  const withWork = (): AdultShortsState => {
+    const st = emptyAdultShortsState();
+    st.character = { name: "Skye", look: "wavy blonde hair", referenceUrls: ["https://b/ref1.png"] };
+    st.shots = [
+      { ...buildAdultShortsShot("s1"), prompt: "Sitting in a white wicker chair on a terrace", clipUrl: "https://b/c1.mp4" },
+      { ...buildAdultShortsShot("s2"), prompt: "She stands up", sirayTaskId: "task_9" },
+    ];
+    return st;
+  };
+
+  it("saves a copy with a suggested title and marks the editor as that entry", () => {
+    const saved = saveAdultShortToLibrary(withWork(), now, "", "short_a");
+    expect(saved.saved).toHaveLength(1);
+    expect(saved.saved[0]).toMatchObject({ id: "short_a", title: "Skye · Sitting in a white wicker", savedAt: now.toISOString() });
+    expect(saved.saved[0].shots[1].sirayTaskId).toBeNull();
+    expect(saved.shots[1].sirayTaskId).toBe("task_9");
+    expect(saved.currentSavedId).toBe("short_a");
+    expect(editorHasUnsavedChanges(saved)).toBe(false);
+  });
+
+  it("saving again updates the same entry instead of duplicating", () => {
+    let st = saveAdultShortToLibrary(withWork(), now, "First", "short_a");
+    st = { ...st, shots: st.shots.map((s, i) => (i === 1 ? { ...s, clipUrl: "https://b/c2.mp4" } : s)) };
+    expect(editorHasUnsavedChanges(st)).toBe(true);
+    st = saveAdultShortToLibrary(st, now, "", "short_b");
+    expect(st.saved.map((x) => x.id)).toEqual(["short_a"]);
+    expect(st.saved[0].title).toBe("First");
+    expect(st.saved[0].shots[1].clipUrl).toBe("https://b/c2.mp4");
+  });
+
+  it("new short clears the editor, keeps the Library, and can keep the character", () => {
+    const st = saveAdultShortToLibrary(withWork(), now, "One", "short_a");
+    const same = startNewAdultShort(st, true);
+    expect(same.shots).toHaveLength(1);
+    expect(same.shots[0].prompt).toBe("");
+    expect(same.character.name).toBe("Skye");
+    expect(same.saved).toHaveLength(1);
+    expect(same.currentSavedId).toBeNull();
+    const fresh = startNewAdultShort(st, false);
+    expect(fresh.character).toEqual({ name: "", look: "", referenceUrls: [] });
+  });
+
+  it("opens a saved short back into the editor and deletes cleanly", () => {
+    const st = startNewAdultShort(saveAdultShortToLibrary(withWork(), now, "One", "short_a"), false);
+    const opened = openSavedAdultShort(st, "short_a");
+    expect(opened.character.name).toBe("Skye");
+    expect(opened.shots[0].clipUrl).toBe("https://b/c1.mp4");
+    expect(opened.currentSavedId).toBe("short_a");
+    const gone = deleteSavedAdultShort(opened, "short_a");
+    expect(gone.saved).toHaveLength(0);
+    expect(gone.currentSavedId).toBeNull();
+  });
+
+  it("round-trips saved shorts through normalize (old rows without saved still load)", () => {
+    const st = saveAdultShortToLibrary(withWork(), now, "One", "short_a");
+    const back = normalizeAdultShortsState(JSON.parse(JSON.stringify(st)));
+    expect(back?.saved[0].title).toBe("One");
+    expect(back?.currentSavedId).toBe("short_a");
+    const old = normalizeAdultShortsState({ ageConfirmed: true, character: { name: "X" }, shots: [] });
+    expect(old?.saved).toEqual([]);
+    expect(old?.currentSavedId).toBeNull();
   });
 });

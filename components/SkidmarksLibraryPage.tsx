@@ -10,7 +10,20 @@ import {
   type SkidmarksArchivedSong,
 } from "@/lib/skidmarksArchive";
 import { buildForceDownloadUrl, triggerBlobDownload } from "@/lib/clipRenders";
-import { formatDuration, getAdultShortsState, getSkidmarksSnapshot, subscribeSkidmarks } from "@/lib/skidmarks";
+import {
+  flushSkidmarksSessionNow,
+  formatDuration,
+  getAdultShortsState,
+  getSkidmarksSnapshot,
+  patchAdultShorts,
+  subscribeSkidmarks,
+} from "@/lib/skidmarks";
+import {
+  deleteSavedAdultShort,
+  editorHasUnsavedChanges,
+  openSavedAdultShort,
+  type AdultShortsSaved,
+} from "@/lib/adultShorts";
 import {
   entryForSong,
   playlistHasSong,
@@ -35,6 +48,8 @@ interface SkidmarksLibraryPageProps {
   onSelectPlaylist?: (playlistId: string | null) => void;
   /** Phone layout: tighter padding, stacked row buttons. */
   compact?: boolean;
+  /** 18+ tab "Open in editor": the short is already loaded; show the Adult shorts desk. */
+  onOpenAdultShort?: () => void;
 }
 
 type LibraryTab = "songs" | "playlists" | "stills" | "episodes" | "adult";
@@ -66,6 +81,7 @@ export function SkidmarksLibraryPage({
   activePlaylistId = null,
   onSelectPlaylist,
   compact = false,
+  onOpenAdultShort,
 }: SkidmarksLibraryPageProps) {
   const playlistsEnabled = Boolean(playlists && onMutatePlaylists);
   const [songs, setSongs] = useState<SkidmarksArchivedSong[] | null>(null);
@@ -75,13 +91,25 @@ export function SkidmarksLibraryPage({
   const [pendingDelete, setPendingDelete] = useState<SkidmarksArchivedSong | null>(null);
   const [chosenTab, setTab] = useState<LibraryTab>("songs");
   const skidmarksSnapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
+  const adultState = getAdultShortsState(skidmarksSnapshot);
+  const adultSaved = adultState.saved;
+  // Clips in the editor that the Library doesn't hold yet (never saved, or changed since).
   const adultClips = useMemo(() => {
     const adult = getAdultShortsState(skidmarksSnapshot);
+    if (!editorHasUnsavedChanges(adult)) return [];
     const who = adult.character.name.trim() || "Adult short";
     return adult.shots.flatMap((shot, i) =>
       shot.clipUrl ? [{ id: shot.id, url: shot.clipUrl, label: `${who} · shot ${i + 1}` }] : []
     );
   }, [skidmarksSnapshot]);
+  const [pendingAdultDelete, setPendingAdultDelete] = useState<AdultShortsSaved | null>(null);
+  const [pendingAdultOpen, setPendingAdultOpen] = useState<AdultShortsSaved | null>(null);
+  const openAdultShort = (entry: AdultShortsSaved) => {
+    patchAdultShorts((st) => openSavedAdultShort(st, entry.id));
+    flushSkidmarksSessionNow();
+    setPendingAdultOpen(null);
+    onOpenAdultShort?.();
+  };
   // Opening a playlist from the menu always shows the Playlists tab.
   const tab: LibraryTab = activePlaylistId && playlistsEnabled ? "playlists" : chosenTab;
   const [query, setQuery] = useState("");
@@ -204,7 +232,7 @@ export function SkidmarksLibraryPage({
     { id: "stills", label: "Stills", live: false },
     { id: "episodes", label: "Episodes", live: false },
     // Adult shorts' finished clips (2026-09-28), kept apart from songs.
-    ...(adultClips.length ? [{ id: "adult" as const, label: "18+", live: true }] : []),
+    ...(adultClips.length || adultSaved.length ? [{ id: "adult" as const, label: "18+", live: true }] : []),
   ];
 
   return (
@@ -444,21 +472,87 @@ export function SkidmarksLibraryPage({
       )}
 
       {tab === "adult" && (
-        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          {adultClips.map((clip) => (
-            <li key={clip.id} className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
-              <video src={clip.url} controls playsInline preload="metadata" className="aspect-video w-full bg-black object-cover" />
-              <div className="flex items-center justify-between gap-2 px-2.5 py-2 text-xs text-white/60">
-                <span className="truncate">{clip.label}</span>
-                {clip.url.startsWith("https:") && (
-                  <a href={buildForceDownloadUrl(clip.url)} className="shrink-0 text-white/70 hover:text-white">
-                    Download
-                  </a>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
+        <div className="flex flex-col gap-6">
+          {adultClips.length > 0 && (
+            <section className="flex flex-col gap-2">
+              <p className="text-xs text-white/45">In the editor, not saved to the Library yet</p>
+              <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                {adultClips.map((clip) => (
+                  <li key={clip.id} className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+                    <video src={clip.url} controls playsInline preload="metadata" className="aspect-video w-full bg-black object-cover" />
+                    <div className="flex items-center justify-between gap-2 px-2.5 py-2 text-xs text-white/60">
+                      <span className="truncate">{clip.label}</span>
+                      {clip.url.startsWith("https:") && (
+                        <a href={buildForceDownloadUrl(clip.url)} className="shrink-0 text-white/70 hover:text-white">
+                          Download
+                        </a>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {adultSaved.length > 0 && (
+            <ul className="flex flex-col gap-4" aria-label="Saved adult shorts">
+              {adultSaved.map((entry) => {
+                const clips = entry.shots.flatMap((shot, i) => (shot.clipUrl ? [{ id: shot.id, url: shot.clipUrl, n: i + 1 }] : []));
+                const isOpen = adultState.currentSavedId === entry.id;
+                return (
+                  <li key={entry.id} className="rounded-2xl border border-white/10 bg-white/[0.02] p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-white">{entry.title}</p>
+                        <p className="text-xs text-white/45">
+                          {entry.shots.length} {entry.shots.length === 1 ? "shot" : "shots"} · {clips.length} {clips.length === 1 ? "clip" : "clips"} · saved {formatArchivedAt(Date.parse(entry.savedAt))}
+                          {isOpen ? " · open in editor" : ""}
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            !isOpen && editorHasUnsavedChanges(adultState) ? setPendingAdultOpen(entry) : openAdultShort(entry)
+                          }
+                          className="rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 hover:text-white"
+                        >
+                          Open in editor
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPendingAdultDelete(entry)}
+                          className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/50 hover:text-red-200"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                    {clips.length > 0 ? (
+                      <ul className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                        {clips.map((clip) => (
+                          <li key={clip.id} className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                            <video src={clip.url} controls playsInline preload="metadata" className="aspect-video w-full bg-black object-cover" />
+                            <div className="flex items-center justify-between gap-2 px-2 py-1.5 text-[11px] text-white/55">
+                              <span>Shot {clip.n}</span>
+                              {clip.url.startsWith("https:") && (
+                                <a href={buildForceDownloadUrl(clip.url)} className="text-white/70 hover:text-white">
+                                  Download
+                                </a>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-xs text-white/35">No clips rendered yet.</p>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       )}
 
       {(tab === "stills" || tab === "episodes") && (
@@ -632,6 +726,40 @@ export function SkidmarksLibraryPage({
           )}
         </>
       )}
+
+      <SkidmarksConfirmDialog
+        open={pendingAdultDelete !== null}
+        title="Delete this saved short?"
+        body={
+          pendingAdultDelete
+            ? `“${pendingAdultDelete.title}” comes out of the Library. Anything you already downloaded is not touched, and neither is the Adult shorts editor.`
+            : ""
+        }
+        confirmLabel="Delete short"
+        onCancel={() => setPendingAdultDelete(null)}
+        onConfirm={() => {
+          const entry = pendingAdultDelete;
+          setPendingAdultDelete(null);
+          if (!entry) return;
+          patchAdultShorts((st) => deleteSavedAdultShort(st, entry.id));
+          flushSkidmarksSessionNow();
+        }}
+      />
+
+      <SkidmarksConfirmDialog
+        open={pendingAdultOpen !== null}
+        title="Replace what's in the editor?"
+        body={
+          pendingAdultOpen
+            ? `The Adult shorts editor has changes that aren't saved to the Library. Opening “${pendingAdultOpen.title}” replaces them.`
+            : ""
+        }
+        confirmLabel="Open anyway"
+        onCancel={() => setPendingAdultOpen(null)}
+        onConfirm={() => {
+          if (pendingAdultOpen) openAdultShort(pendingAdultOpen);
+        }}
+      />
 
       <SkidmarksConfirmDialog
         open={pendingPlaylistDelete !== null}
