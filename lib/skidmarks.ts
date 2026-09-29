@@ -195,12 +195,15 @@ import {
   emptySkidmarksEpisodesState,
   normalizeSkidmarksEpisodesState,
   skidmarksEpisodesHaveUserContent,
+  type SkidmarksEpisode,
   type SkidmarksEpisodesState,
 } from "./skidmarksEpisodes";
 import {
   adultShortsHaveUserContent,
+  deleteSavedAdultShort,
   emptyAdultShortsState,
   normalizeAdultShortsState,
+  type AdultShortsSaved,
   type AdultShortsState,
 } from "./adultShorts";
 import {
@@ -217,6 +220,9 @@ import {
   type CharacterLorasState,
 } from "./characterLoras";
 import { createCharacterItemSync, type CharacterItemSync } from "./characterItems";
+import { createDeckItemSync, type DeckItemSync } from "./deckItemSync";
+import { SKIDMARKS_EPISODE_ITEMS } from "./skidmarksEpisodeItems";
+import { ADULT_SHORT_ITEMS } from "./adultShortItems";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -2664,7 +2670,13 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
         // Keep the character cards currently on screen: the per-item
         // overlay may have landed while the images were uploading, and
         // this migration never touches characters anyway.
-        cachedState = { ...migrated, characterLoras: cachedState?.characterLoras ?? migrated.characterLoras };
+        cachedState = {
+          ...migrated,
+          characterLoras: cachedState?.characterLoras ?? migrated.characterLoras,
+          // Same for the per-item Skidmarks episodes and shorts.
+          skidmarksEpisodes: cachedState?.skidmarksEpisodes ?? migrated.skidmarksEpisodes,
+          adultShorts: cachedState?.adultShorts ?? migrated.adultShorts,
+        };
         writeLocalMirror(migrated);
         notify();
         void pushSkidmarksSessionNow();
@@ -2690,6 +2702,9 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     // the session load just put on screen (items win). Read-only; it
     // never writes an item by itself. See `lib/characterItems.ts`.
     void getCharacterItemSync()?.refreshFromServer();
+    // Same for Skidmarks episodes and shorts (`lib/deckItemSync.ts`).
+    void getSkidmarksEpisodeItemSync()?.refreshFromServer();
+    void getAdultShortItemSync()?.refreshFromServer();
   }
 }
 
@@ -2806,7 +2821,13 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
       // Same as the hydrate path: never roll the character cards back to
       // the pre-upload snapshot (a per-item overlay or 409 adopt may have
       // landed meanwhile); this migration never touches them.
-      cachedState = { ...migrated, characterLoras: cachedState?.characterLoras ?? migrated.characterLoras };
+      cachedState = {
+        ...migrated,
+        characterLoras: cachedState?.characterLoras ?? migrated.characterLoras,
+        // Same for the per-item Skidmarks episodes and shorts.
+        skidmarksEpisodes: cachedState?.skidmarksEpisodes ?? migrated.skidmarksEpisodes,
+        adultShorts: cachedState?.adultShorts ?? migrated.adultShorts,
+      };
       writeLocalMirror(migrated);
       notify();
     }
@@ -2953,6 +2974,8 @@ export function flushSkidmarksSessionNow(keepalive = false): void {
   void pushSkidmarksSessionNow(keepalive);
   // Any character card waiting on its own debounce goes now too.
   characterItemSync?.flush(keepalive);
+  skidmarksEpisodeItemSync?.flush(keepalive);
+  adultShortItemSync?.flush(keepalive);
 }
 
 /**
@@ -3004,6 +3027,8 @@ export async function loadSkidmarksSessionFromServerNow(): Promise<boolean> {
     // The session copy just replaced everything on screen; lay the
     // server's character cards back over it (items win). Read-only.
     void getCharacterItemSync()?.refreshFromServer();
+    void getSkidmarksEpisodeItemSync()?.refreshFromServer();
+    void getAdultShortItemSync()?.refreshFromServer();
     return true;
   } catch (err) {
     setSessionSync({
@@ -3048,7 +3073,13 @@ function ensureSessionPersistenceWired(): void {
   // what actually extends how long this app keeps trying before that
   // becomes a real, final failure.
   window.addEventListener("beforeunload", (e) => {
-    if (sessionSync.status === "saving" || sessionSync.status === "error" || characterItemSync?.hasUnsavedWork()) {
+    if (
+      sessionSync.status === "saving" ||
+      sessionSync.status === "error" ||
+      characterItemSync?.hasUnsavedWork() ||
+      skidmarksEpisodeItemSync?.hasUnsavedWork() ||
+      adultShortItemSync?.hasUnsavedWork()
+    ) {
       e.preventDefault();
       e.returnValue = "";
     }
@@ -3197,10 +3228,23 @@ export function getSkidmarksEpisodesState(state: SkidmarksState = getSkidmarksSn
 export function patchSkidmarksEpisodes(updater: (state: SkidmarksEpisodesState) => SkidmarksEpisodesState): void {
   const current = getSkidmarksSnapshot();
   const base = getSkidmarksEpisodesState(current);
-  persist({
-    ...current,
-    skidmarksEpisodes: updater({ episodes: base.episodes.slice(), cast: base.cast.slice() }),
-  });
+  const next = updater({ episodes: base.episodes.slice(), cast: base.cast.slice() });
+  persist({ ...current, skidmarksEpisodes: next });
+  // Per-item saving: only the episodes that really changed are sent, one
+  // debounced PUT each. An episode missing from `next` is never a delete;
+  // only `removeSkidmarksEpisode` (a real delete tap) deletes.
+  getSkidmarksEpisodeItemSync()?.noteLocalChange(base.episodes, next.episodes);
+}
+
+/**
+ * The one real delete for a Skidmarks episode, called only from its
+ * delete tap. Removes it here (and from the whole-session save, as
+ * before) and soft-deletes its `deck_items` row.
+ */
+export function removeSkidmarksEpisode(id: string): void {
+  const before = getSkidmarksEpisodesState().episodes.find((e) => e.id === id) ?? null;
+  patchSkidmarksEpisodes((s) => ({ ...s, episodes: s.episodes.filter((e) => e.id !== id) }));
+  getSkidmarksEpisodeItemSync()?.deleteItem(id, before);
 }
 
 /** Adult shorts — empty until the first edit. */
@@ -3211,15 +3255,28 @@ export function getAdultShortsState(state: SkidmarksState = getSkidmarksSnapshot
 export function patchAdultShorts(updater: (state: AdultShortsState) => AdultShortsState): void {
   const current = getSkidmarksSnapshot();
   const base = getAdultShortsState(current);
-  persist({
-    ...current,
-    adultShorts: updater({
-      ...base,
-      character: { ...base.character, referenceUrls: base.character.referenceUrls.slice() },
-      shots: base.shots.map((s) => ({ ...s })),
-      saved: base.saved.slice(),
-    }),
+  const next = updater({
+    ...base,
+    character: { ...base.character, referenceUrls: base.character.referenceUrls.slice() },
+    shots: base.shots.map((s) => ({ ...s })),
+    saved: base.saved.slice(),
   });
+  persist({ ...current, adultShorts: next });
+  // Per-item saving: only the saved shorts that really changed are sent,
+  // one debounced PUT each. A short missing from `next.saved` is never a
+  // delete; only `removeSavedAdultShort` (a real delete tap) deletes.
+  getAdultShortItemSync()?.noteLocalChange(base.saved, next.saved);
+}
+
+/**
+ * The one real delete for a saved short, called only from its delete
+ * tap in the Library. Removes it here (and from the whole-session save,
+ * as before) and soft-deletes its `deck_items` row.
+ */
+export function removeSavedAdultShort(id: string): void {
+  const before = getAdultShortsState().saved.find((x) => x.id === id) ?? null;
+  patchAdultShorts((s) => deleteSavedAdultShort(s, id));
+  getAdultShortItemSync()?.deleteItem(id, before);
 }
 
 /** Character LoRAs — the Skye seed until the first edit. */
@@ -3280,6 +3337,72 @@ function getCharacterItemSync(): CharacterItemSync | null {
 function applyServerCharacterLoras(characters: CharacterLoraEntry[]): void {
   const current = getSkidmarksSnapshot();
   cachedState = { ...current, characterLoras: { characters } };
+  noteContentObserved(cachedState);
+  notify();
+}
+
+/* --------------------------------------------------------------------
+ * Per-item saving for Skidmarks episodes and shorts (2026-09-30). The
+ * same engine and rules as characters, one instance per kind
+ * (`lib/deckItemSync.ts`); this is only the wiring into the in-memory
+ * store, done exactly the way characters are wired above. Browser only.
+ * The whole-session save keeps running as a mirror.
+ * -------------------------------------------------------------------- */
+let skidmarksEpisodeItemSync: DeckItemSync<SkidmarksEpisode> | null = null;
+
+function getSkidmarksEpisodeItemSync(): DeckItemSync<SkidmarksEpisode> | null {
+  if (!isBrowser()) return null;
+  if (!skidmarksEpisodeItemSync) {
+    skidmarksEpisodeItemSync = createDeckItemSync(SKIDMARKS_EPISODE_ITEMS, {
+      fetch: (input, init) => fetch(input, init),
+      getEntries: () => getSkidmarksEpisodesState().episodes,
+      applyServerEntries: applyServerSkidmarksEpisodes,
+      onProblem: (message) => console.warn(`[deck items] ${message}`),
+    });
+  }
+  return skidmarksEpisodeItemSync;
+}
+
+/** Puts server episodes on screen. A load, not an edit: never `persist()`
+ * and never `patchSkidmarksEpisodes` (see `applyServerCharacterLoras`). */
+function applyServerSkidmarksEpisodes(episodes: SkidmarksEpisode[]): void {
+  const current = getSkidmarksSnapshot();
+  cachedState = { ...current, skidmarksEpisodes: { ...getSkidmarksEpisodesState(current), episodes } };
+  noteContentObserved(cachedState);
+  notify();
+}
+
+let adultShortItemSync: DeckItemSync<AdultShortsSaved> | null = null;
+
+function getAdultShortItemSync(): DeckItemSync<AdultShortsSaved> | null {
+  if (!isBrowser()) return null;
+  if (!adultShortItemSync) {
+    adultShortItemSync = createDeckItemSync(ADULT_SHORT_ITEMS, {
+      fetch: (input, init) => fetch(input, init),
+      getEntries: () => getAdultShortsState().saved,
+      applyServerEntries: applyServerAdultShorts,
+      onProblem: (message) => console.warn(`[deck items] ${message}`),
+    });
+  }
+  return adultShortItemSync;
+}
+
+/** Puts server shorts in the Library. A load, not an edit: never
+ * `persist()` and never `patchAdultShorts` (see `applyServerCharacterLoras`).
+ * The open editor is left exactly as it is; only the Library list changes. */
+function applyServerAdultShorts(saved: AdultShortsSaved[]): void {
+  const current = getSkidmarksSnapshot();
+  const base = getAdultShortsState(current);
+  cachedState = {
+    ...current,
+    adultShorts: {
+      ...base,
+      saved,
+      // Same rule the session loader applies: a Library link to a short
+      // that is gone is cleared, never pointed at something else.
+      currentSavedId: base.currentSavedId && saved.some((x) => x.id === base.currentSavedId) ? base.currentSavedId : null,
+    },
+  };
   noteContentObserved(cachedState);
   notify();
 }
