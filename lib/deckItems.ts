@@ -23,9 +23,34 @@
  * `character`: one character card (`SkidmarksState.characterLoras.characters[]`).
  * `sunnybank-episode`: one saved Sunnybank episode card.
  * `skidmarks-episode`: one Skidmarks episode (`SkidmarksState.skidmarksEpisodes.episodes[]`).
- * `adult-short`: one saved short from the Shorts Library (`SkidmarksState.adultShorts.saved[]`). */
-export const DECK_ITEM_KINDS = ["character", "sunnybank-episode", "skidmarks-episode", "adult-short"] as const;
+ * `adult-short`: one saved short from the Shorts Library (`SkidmarksState.adultShorts.saved[]`).
+ * `music-video-band` / `music-video-song`: one Music video band, and the
+ * song on the desk (see `lib/musicVideoItemData.ts`). */
+export const DECK_ITEM_KINDS = [
+  "character",
+  "sunnybank-episode",
+  "skidmarks-episode",
+  "adult-short",
+  "music-video-band",
+  "music-video-song",
+] as const;
 export type DeckItemKind = (typeof DECK_ITEM_KINDS)[number];
+
+/**
+ * Kinds that one seed script puts in together. A kind counts as seeded
+ * (per-item saving switched on) once any row of any kind in its group
+ * exists, so Music video songs switch on with its bands even when no
+ * song was on the desk the day the seed ran.
+ */
+export function deckItemSeedKinds(kind: DeckItemKind): DeckItemKind[] {
+  switch (kind) {
+    case "music-video-band":
+    case "music-video-song":
+      return ["music-video-band", "music-video-song"];
+    default:
+      return [kind];
+  }
+}
 
 export function isDeckItemKind(value: unknown): value is DeckItemKind {
   return typeof value === "string" && (DECK_ITEM_KINDS as readonly string[]).includes(value);
@@ -112,7 +137,8 @@ export interface DeckItemTombstone {
 
 /** Item ids are app-made (`clora_<uuid>`, `clora_skye`, a Sunnybank
  * episode's `ws-<savedAt>-<seq>-<fingerprint>`, a Skidmarks episode's
- * `ep_<uuid>`, a short's `short_<time>_<rand>`); anything else is refused. */
+ * `ep_<uuid>`, a short's `short_<time>_<rand>`, a band's `band_<uuid>` or
+ * `jack-ash`, a song's `mp3_<uuid>`); anything else is refused. */
 export function isValidDeckItemId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(value);
 }

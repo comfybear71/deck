@@ -1203,6 +1203,20 @@ kind is a small kind file (kind + cleaner, like
   route returns an honest `missing_api_key`/`unconfigured` outcome
   instead. If you add a new real API call, match that shape.
 
+## Per-item saving (Music video bands and songs, 2026-09-30)
+
+Music video bands (`kind = "music-video-band"`) and the desk's song
+(`kind = "music-video-song"`, id = the MP3 `attachId`) also save one row
+each in `deck_items` through the shared engine `lib/deckItemSync.ts`, the same way as characters, and those rows win over the
+session copy on load. Same hard rules: the client never seeds
+(`scripts/seed-deck-items-music-video.ts`, run by hand, reads only
+`DECK_DATABASE_URL`), loading never writes, and a band or song missing
+from a list is never a delete; only `removeSkidmarksBand` (the trash
+tap) and `clearSkidmarksMp3` (the MP3 card's remove tap) delete. Band
+members point at their character row by id (`characterId`); never copy
+character data into a band row. Every band/song edit must go through
+`persist()`. See `docs/deck/PER_ITEM_SAVING_MUSIC_VIDEO.md`.
+
 ## PR process
 
 - Branch naming: `cursor/<descriptive-name>-<suffix>` (see `git log

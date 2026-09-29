@@ -66,6 +66,12 @@ export interface DeckItemKindConfig<T extends DeckItemEntry> {
    * out, they keep the server's order.
    */
   orderMissing?: (a: T, b: T) => number;
+  /**
+   * What goes up as `data` in the PUT. Defaults to the entry itself.
+   * Music video bands use it to add each member's `characterId`
+   * reference, which is worked out at save time and never compared.
+   */
+  toData?: (entry: T) => unknown;
 }
 
 /* ------------------------------------------------------------------ */
@@ -408,7 +414,7 @@ export function createDeckItemSync<T extends DeckItemEntry>(config: DeckItemKind
       res = await deps.fetch(DECK_ITEMS_ENDPOINT, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: config.kind, itemId: id, expectedRevision, data: sent }),
+        body: JSON.stringify({ kind: config.kind, itemId: id, expectedRevision, data: config.toData ? config.toData(sent) : sent }),
         keepalive,
       });
       body = ((await res.json().catch(() => ({}))) ?? {}) as WriteBody;
