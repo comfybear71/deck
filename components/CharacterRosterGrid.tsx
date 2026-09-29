@@ -1096,6 +1096,11 @@ export function CharacterRosterGrid({
    * factor everywhere). Skidmarks characters go to the Skidmarks cast list
    * so the episodes can use them; the others go to that group's list.
    */
+  const openAddCast = (group: RosterGroup) => {
+    clearCastUploads();
+    setNewCast({ name: "", look: "", adult: false, openGroup: group });
+  };
+
   const renderAddCharacter = (group: RosterGroup) =>
     newCast.openGroup === group ? (
       <div className="mb-2 flex flex-col gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2">
@@ -1178,13 +1183,10 @@ export function CharacterRosterGrid({
           </button>
         </div>
       </div>
-    ) : (
+    ) : simple ? null : (
       <button
         type="button"
-        onClick={() => {
-          clearCastUploads();
-          setNewCast({ name: "", look: "", adult: false, openGroup: group });
-        }}
+        onClick={() => openAddCast(group)}
         disabled={Boolean(castUploadBusy)}
         className="mb-2 rounded-md border border-white/20 px-2.5 py-1 text-[11px] text-white/80 disabled:opacity-40"
       >
@@ -1275,7 +1277,7 @@ export function CharacterRosterGrid({
         const plan = groupPlan(list);
         return (
           <div key={g.id}>
-            <div className="mb-2 flex items-center justify-between gap-2">
+            <div className={simple ? "hidden" : "mb-2 flex items-center justify-between gap-2"}>
               {onlyGroup ? <span /> : <p className="text-xs font-semibold uppercase tracking-wide text-white/60">{g.label}</p>}
               {list.length > 0 && (
                 <div className="flex items-center gap-2">
@@ -1313,8 +1315,8 @@ export function CharacterRosterGrid({
                 {plan.needFace > 0 && ` ${plan.needFace} ${plan.needFace === 1 ? "is" : "are"} skipped until you make and okay their clean picture.`}
               </p>
             )}
-            {(g.id !== "adult-shorts" || adultConfirmed) && renderAddCharacter(g.id)}
-            {list.length === 0 ? (
+            {!simple && (g.id !== "adult-shorts" || adultConfirmed) && renderAddCharacter(g.id)}
+            {list.length === 0 && !(simple && (g.id !== "adult-shorts" || adultConfirmed)) ? (
               <p className="text-[11px] text-white/35">
                 {g.id === "adult-shorts" && adultConfirmed ? "No characters yet. Tap + Add a character." : EMPTY_GROUP_TEXT[g.id]}
               </p>
@@ -1384,6 +1386,25 @@ export function CharacterRosterGrid({
                     </button>
                   );
                 })}
+                {/* Simple mode: a dotted "+" tile after the faces adds another person
+                    (Stuart, 2026-09-29: just the faces and a + tile, nothing else). */}
+                {simple && (g.id !== "adult-shorts" || adultConfirmed) && (
+                  <div className="flex min-w-0 flex-col items-center gap-1 p-1">
+                    <button
+                      type="button"
+                      onClick={() => (newCast.openGroup === g.id ? closeAddCast() : openAddCast(g.id))}
+                      disabled={Boolean(castUploadBusy)}
+                      aria-label="Add a character"
+                      className={`flex aspect-square w-full touch-manipulation items-center justify-center rounded-lg border-2 border-dashed text-3xl font-light disabled:opacity-40 ${
+                        newCast.openGroup === g.id ? "border-sky-400/70 text-sky-300" : "border-white/25 text-white/50 hover:border-white/40"
+                      }`}
+                    >
+                      +
+                    </button>
+                    <span aria-hidden className="text-[11px]">&nbsp;</span>
+                  </div>
+                )}
+                {simple && newCast.openGroup === g.id && <div className="col-span-full">{renderAddCharacter(g.id)}</div>}
                 {selected && selected.group === g.id && (simple ? renderSimpleSelected(selected) : renderSelected(selected))}
                 {!simple && selected && selected.group === g.id && renderEntryCard && selectedEntry && (
                   <div className="col-span-full">{renderEntryCard(selectedEntry)}</div>

@@ -108,7 +108,7 @@ export function SkidmarksLandingTiles({ activeKind, onSelect }: SkidmarksLanding
       <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-white/40">
         Start a project
       </p>
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {SKIDMARKS_PROJECT_KINDS.map((k) => {
           const accent = KIND_ACCENT[k.kind];
           const active = activeKind === k.kind;

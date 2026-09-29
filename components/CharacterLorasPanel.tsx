@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   AUTO_PICTURE_TARGET,
   CHARACTER_LORA_ESTIMATED_COST_USD,
@@ -20,7 +20,7 @@ import {
 } from "@/lib/characterLoras";
 import { startCharacterTraining } from "@/lib/characterAutoLora";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
-import { buildCharacterRoster, onlyBandCharacters, type RosterGroup } from "@/lib/characterRoster";
+import { type RosterGroup } from "@/lib/characterRoster";
 import { CharacterRosterGrid } from "./CharacterRosterGrid";
 import {
   flushSkidmarksSessionNow,
@@ -113,8 +113,6 @@ export function CharacterLorasPanel({
   const [armedDeleteId, setArmedDeleteId] = useState<string | null>(null);
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const polling = useRef(false);
-  const [open, setOpen] = useState(Boolean(group));
-  const roster = useMemo(() => buildCharacterRoster(snapshot), [snapshot]);
 
   const setError = (id: string, msg: string | null) =>
     setErrors((e) => {
@@ -481,36 +479,17 @@ export function CharacterLorasPanel({
   const simple = Boolean(group);
 
   if (group) {
-    const groupChars = group === "music-video" ? onlyBandCharacters(roster[group], bandMemberIds) : roster[group];
-    const done = groupChars.filter((ch) => characters.find((e) => e.sourceKey === ch.sourceKey)?.status === "ready").length;
+    // Just the faces and a dotted + tile (Stuart, 2026-09-29): no heading,
+    // no count, no help text. Every project screen looks the same.
     return (
-      <section className="rounded-2xl border border-white/10 bg-white/[0.02]">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          aria-expanded={open}
-          className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left"
-        >
-          <span className="text-sm font-semibold text-white">Characters</span>
-          <span className="flex items-center gap-2 text-[11px] text-white/45">
-            {groupChars.length === 0 ? "none yet" : `${done} of ${groupChars.length} trained`}
-            <span aria-hidden className={`text-white/40 transition-transform ${open ? "rotate-90" : ""}`}>
-              {"\u203a"}
-            </span>
-          </span>
-        </button>
-        {/* Kept mounted while folded so a running "Make pictures" keeps going. */}
-        {(
-          <div className={open ? "border-t border-white/10 px-4 pb-4 pt-3" : "hidden"}>
-            <p className="mb-3 text-xs leading-relaxed text-white/55">
-              {simple
-                ? "Tap the circle on a face to train them. A tick means they're ready. Tap a ticked face to see their pictures."
-                : "Tap a face to train them: okay one clean picture, make pictures, check them, then Train. Everything for that character opens under their face."}
-            </p>
-            <CharacterRosterGrid snapshot={snapshot} onlyGroup={group} renderEntryCard={renderCard} simple={simple} bandMemberIds={bandMemberIds} addToBandId={addToBandId} />
-          </div>
-        )}
-      </section>
+      <CharacterRosterGrid
+        snapshot={snapshot}
+        onlyGroup={group}
+        renderEntryCard={renderCard}
+        simple={simple}
+        bandMemberIds={bandMemberIds}
+        addToBandId={addToBandId}
+      />
     );
   }
 
