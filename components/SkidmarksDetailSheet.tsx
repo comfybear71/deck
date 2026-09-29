@@ -227,20 +227,6 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     setChainNote({ ok: true, message: "Filled the next clip's first plate from this one's last frame." });
   };
 
-  /**
-   * "Clear" tap on the green Saved banner (2026-09-17, Stuart's own
-   * ask) — purely a local dismiss, never touches `sessionSync` itself
-   * or the real save it's reporting. Keyed to the exact save it was
-   * shown for (`sessionSync.lastSavedAt`, or the literal string
-   * `"no-timestamp"` for the rare case a save landed with no timestamp)
-   * so dismissing today's "Saved ✓ 10:53 am" can't also silently hide
-   * a genuinely new save that lands later — the banner reappears the
-   * moment `lastSavedAt` moves on.
-   */
-  const [dismissedSavedBannerFor, setDismissedSavedBannerFor] = useState<number | "no-timestamp" | null>(null);
-  const savedBannerKey = sessionSync.lastSavedAt ?? "no-timestamp";
-  const showSavedBanner = sessionSync.status === "synced" && dismissedSavedBannerFor !== savedBannerKey;
-
   /** One in-app confirm for the destructive taps that live at this
    * level (band trash, member trash). See `SkidmarksConfirmDialog`. */
   const [pendingConfirm, setPendingConfirm] = useState<{ title: string; body: string; confirmLabel: string; run: () => void } | null>(null);
@@ -447,44 +433,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
   const syncBanners = (
     <>
-        {sessionSync.status === "loading" && (
-          <p role="status" className="mx-4 mb-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] leading-snug text-white/60">
-            Showing this phone{"\u2019"}s copy {"\u2014"} checking the server for anything newer{"\u2026"}
-          </p>
-        )}
-
-        {showSavedBanner && (
-          <p
-            role="status"
-            className="mx-4 mb-2 flex items-start justify-between gap-2 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1.5 text-[10px] leading-snug text-emerald-200/80"
-          >
-            <span>
-              {sessionSync.lastSavedAt
-                ? `Saved \u2713 ${new Date(sessionSync.lastSavedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} \u2014 safe to lock the phone or close Safari.`
-                : "Saved \u2713 \u2014 this is the latest copy on the server."}
-            </span>
-            <button
-              type="button"
-              onClick={() => setDismissedSavedBannerFor(savedBannerKey)}
-              aria-label="Dismiss saved notice"
-              className="shrink-0 rounded-full p-0.5 text-emerald-200/70 transition-colors hover:bg-emerald-400/15 hover:text-emerald-100"
-            >
-              <svg viewBox="0 0 20 20" fill="none" className="h-3 w-3">
-                <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
-            </button>
-          </p>
-        )}
-
-        {sessionSync.status === "saving" && (
-          <p
-            role="status"
-            className="mx-4 mb-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] leading-snug text-white/60"
-          >
-            Saving{"\u2026"} hold on before refreshing.
-          </p>
-        )}
-
+        {/* No routine save notices (Stuart, 2026-09-29): "checking the
+            server", "Saving…" and the green "Saved ✓" bar are gone. Saving
+            still runs quietly; only a real NOT SAVED problem shows below. */}
         {sessionSync.status === "conflict" && (
           <p
             role="alert"
