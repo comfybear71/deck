@@ -20,7 +20,7 @@ import {
 } from "@/lib/characterLoras";
 import { startCharacterTraining } from "@/lib/characterAutoLora";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
-import { buildCharacterRoster, type RosterGroup } from "@/lib/characterRoster";
+import { buildCharacterRoster, onlyBandCharacters, type RosterGroup } from "@/lib/characterRoster";
 import { CharacterRosterGrid } from "./CharacterRosterGrid";
 import {
   flushSkidmarksSessionNow,
@@ -99,7 +99,10 @@ function CopyRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function CharacterLorasPanel({ group }: { group?: RosterGroup } = {}) {
+export function CharacterLorasPanel({
+  group,
+  bandMemberIds,
+}: { group?: RosterGroup; bandMemberIds?: readonly string[] } = {}) {
   const snapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const { characters } = getCharacterLorasState(snapshot);
   const [newName, setNewName] = useState("");
@@ -477,7 +480,7 @@ export function CharacterLorasPanel({ group }: { group?: RosterGroup } = {}) {
   const simple = Boolean(group);
 
   if (group) {
-    const groupChars = roster[group];
+    const groupChars = group === "music-video" ? onlyBandCharacters(roster[group], bandMemberIds) : roster[group];
     const done = groupChars.filter((ch) => characters.find((e) => e.sourceKey === ch.sourceKey)?.status === "ready").length;
     return (
       <section className="rounded-2xl border border-white/10 bg-white/[0.02]">
@@ -503,7 +506,7 @@ export function CharacterLorasPanel({ group }: { group?: RosterGroup } = {}) {
                 ? "Tap the circle on a face to train them. A tick means they're ready. Tap a ticked face to see their pictures."
                 : "Tap a face to train them: okay one clean picture, make pictures, check them, then Train. Everything for that character opens under their face."}
             </p>
-            <CharacterRosterGrid snapshot={snapshot} onlyGroup={group} renderEntryCard={renderCard} simple={simple} />
+            <CharacterRosterGrid snapshot={snapshot} onlyGroup={group} renderEntryCard={renderCard} simple={simple} bandMemberIds={bandMemberIds} />
           </div>
         )}
       </section>

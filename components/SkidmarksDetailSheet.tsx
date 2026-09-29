@@ -71,6 +71,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     removeBand,
     addMember,
     removeMember,
+    moveMember,
     renameMember,
     setMemberLock,
     renameBand,
@@ -545,6 +546,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
                 run: () => removeMember(activeBand.id, memberId),
               });
             }}
+            onMoveMember={(memberId, delta) => moveMember(activeBand.id, memberId, delta)}
             onSetMemberLock={(memberId, lock) => setMemberLock(activeBand.id, memberId, lock)}
             onSetMemberAvatarImage={(memberId, dataUrl) =>
               setMemberAvatarImage(activeBand.id, memberId, dataUrl)
@@ -552,6 +554,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             onRenameBand={(name) => renameBand(activeBand.id, name)}
           />
         </div>
+      )}
+
+      {/* The chosen band's own Characters bar: just the people in this band. */}
+      {activeBand && (
+        <CharacterLorasPanel group="music-video" bandMemberIds={activeBand.members.map((m) => m.id)} />
       )}
     </>
   );
@@ -651,7 +658,6 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
       {/* Each project's own Characters bar (folded by default): that
           group's cast, tap a face to train their LoRA. */}
-      {session.projectKind === "music-video" && <CharacterLorasPanel group="music-video" />}
       {session.projectKind === "skidmarks" && <CharacterLorasPanel group="skidmarks" />}
       {session.projectKind === "sunnybank" && <CharacterLorasPanel group="sunny-banks" />}
       {session.projectKind === "adult-shorts" && <CharacterLorasPanel group="adult-shorts" />}
@@ -662,13 +668,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
       {session.projectKind === "adult-shorts" && <AdultShortsPanel />}
 
-      {session.projectKind === "characters" && <CharacterLorasPanel />}
-
       {session.projectKind === "music-video" &&
         (layout === "pc" ? (
           <div className="grid grid-cols-2 items-start gap-10">
             <div className="flex min-w-0 flex-col gap-8">
-              {artistBlock("Artist")}
+              {artistBlock("Choose a band")}
               {mp3Block}
             </div>
             <div className="flex min-w-0 flex-col gap-8">

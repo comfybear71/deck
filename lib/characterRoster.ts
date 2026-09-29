@@ -205,6 +205,17 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
   return out;
 }
 
+/**
+ * Music video shows only the chosen band's people (Stuart, 2026-09-29).
+ * Characters added with "+ Add a character" belong to no band, so they
+ * always stay. `memberIds` undefined means no filter.
+ */
+export function onlyBandCharacters(list: RosterCharacter[], memberIds: readonly string[] | undefined): RosterCharacter[] {
+  if (!memberIds) return list;
+  const keep = new Set(memberIds.map((id) => `mv:${id}`));
+  return list.filter((c) => !c.sourceKey.startsWith("mv:") || keep.has(c.sourceKey));
+}
+
 /** Why a Sunny Banks regular can't be put in an episode yet (no voice, no start picture), or `null`. */
 export function sunnyBanksNotReadyReason(c: (typeof SUNNY_BANKS_CAST)[string]): string | null {
   const missing = [!c.voiceId ? "a voice" : null, !resolveSunnyBanksStartImage(c) ? "a start picture" : null].filter(Boolean);

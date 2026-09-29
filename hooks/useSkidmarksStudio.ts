@@ -27,6 +27,7 @@ import {
   removeSkidmarksBand,
   removeSkidmarksClipPlate,
   removeSkidmarksMember,
+  moveSkidmarksMember,
   renameSkidmarksBand,
   renameSkidmarksMember,
   resetSkidmarksSessionAfterArchive,
@@ -141,6 +142,10 @@ export function useSkidmarksStudio() {
   const addMember = useCallback((bandId: string) => addSkidmarksMember(bandId), []);
   const removeMember = useCallback(
     (bandId: string, memberId: string) => removeSkidmarksMember(bandId, memberId),
+    []
+  );
+  const moveMember = useCallback(
+    (bandId: string, memberId: string, delta: -1 | 1) => moveSkidmarksMember(bandId, memberId, delta),
     []
   );
   /** A member's own editable lock card — see `setSkidmarksMemberLock`. */
@@ -411,6 +416,7 @@ export function useSkidmarksStudio() {
     removeBand,
     addMember,
     removeMember,
+    moveMember,
     renameMember,
     setMemberLock,
     renameBand,

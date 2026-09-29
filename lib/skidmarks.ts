@@ -244,8 +244,8 @@ export const SKIDMARKS_PROJECT_KINDS: SkidmarksProjectKindMeta[] = [
   { kind: "sunnybank", label: "Sunnybank", icon: "sun", enabled: true },
   // Adult shorts (2026-09-28) — 18+ photoreal clips, see `lib/adultShorts.ts`.
   { kind: "adult-shorts", label: "Adult shorts", icon: "adult", enabled: true },
-  // Characters (2026-09-29) — one card per character + Train LoRA, see `lib/characterLoras.ts`.
-  { kind: "characters", label: "Characters", icon: "face", enabled: true },
+  // The separate Characters tile was removed (Stuart, 2026-09-29): every
+  // project screen has its own Characters bar now.
 ];
 
 /** One generated "look" for a member — a stand-in for a real render.
@@ -1847,10 +1847,13 @@ function normalizeState(parsed: unknown): SkidmarksState {
     bands,
     removedSeedBandIds,
     session: {
+      // A session saved on the old Characters tile opens on Music video.
       projectKind:
-        typeof session.projectKind === "string"
-          ? (session.projectKind as SkidmarksProjectKind)
-          : null,
+        session.projectKind === "characters"
+          ? "music-video"
+          : typeof session.projectKind === "string"
+            ? (session.projectKind as SkidmarksProjectKind)
+            : null,
       bandId: stillHasBand ? bandId : null,
       mp3: stillHasBand ? mp3 : null,
       scriptSequenceDraft: stillHasBand ? scriptSequenceDraft : null,
@@ -3396,6 +3399,20 @@ export function removeSkidmarksMember(bandId: string, memberId: string): void {
       : b
   );
   persist({ ...current, bands });
+}
+
+/** Moves a member one place up (-1) or down (+1) in their band. Only the
+ * listed order changes (the first one is the original artist). */
+export function moveSkidmarksMember(bandId: string, memberId: string, delta: -1 | 1): void {
+  const current = getSkidmarksSnapshot();
+  const band = current.bands.find((b) => b.id === bandId);
+  if (!band) return;
+  const from = band.members.findIndex((m) => m.id === memberId);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= band.members.length) return;
+  const members = [...band.members];
+  [members[from], members[to]] = [members[to], members[from]];
+  persist({ ...current, bands: current.bands.map((b) => (b.id === bandId ? { ...b, members } : b)) });
 }
 
 /** Sets a member's display name — how a blank "+ Add member" row gets
