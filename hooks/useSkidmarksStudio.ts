@@ -3,6 +3,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import { analyzeVocalActivity } from "@/lib/audioAnalysis";
 import { transcribeAudio } from "@/lib/transcription";
+import { songAudioTarget, songMediaSlug } from "@/lib/deckMediaPaths";
 import { uploadSkidmarksMp3Audio } from "@/lib/mp3Blob";
 import {
   addSkidmarksClipPlate,
@@ -222,7 +223,7 @@ export function useSkidmarksStudio() {
     // refresh." Runs in the background alongside analysis/
     // transcription; a slow or failed upload never blocks anything else
     // about this attach.
-    uploadSkidmarksMp3Audio(file).then((outcome) => {
+    uploadSkidmarksMp3Audio(file, songAudioTarget(songMediaSlug(file.name))).then((outcome) => {
       if (analysisTokenRef.current !== token) return; // superseded — drop it
       if (outcome.ok) {
         setSkidmarksMp3AudioUrl(attachId, outcome.url);

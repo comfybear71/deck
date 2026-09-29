@@ -246,7 +246,7 @@ export const SKIDMARKS_PROJECT_KINDS: SkidmarksProjectKindMeta[] = [
   { kind: "skidmarks", label: "Skidmarks", icon: "tire", enabled: true },
   { kind: "sunnybank", label: "Sunnybank", icon: "sun", enabled: true },
   // Adult shorts (2026-09-28) — 18+ photoreal clips, see `lib/adultShorts.ts`.
-  { kind: "adult-shorts", label: "Adult shorts", icon: "adult", enabled: true },
+  { kind: "adult-shorts", label: "Shorts", icon: "adult", enabled: true },
   // The separate Characters tile was removed (Stuart, 2026-09-29): every
   // project screen has its own Characters bar now.
 ];

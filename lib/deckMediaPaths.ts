@@ -285,6 +285,11 @@ export function songMediaSlug(fileName: string): string {
   return deckMediaSlug(fileName.replace(/\.[a-z0-9]{2,4}$/i, ""), "song");
 }
 
+/** The song's own audio: `deck/music-video/songs/crack-haul/crack-haul.mp3`. */
+export function songAudioTarget(songSlug: string): DeckMediaTarget {
+  return { folder: deckProjectFolder("music-video", songSlug), name: songSlug };
+}
+
 /** `deck/music-video/songs/crack-haul/plates/crack-haul-clip-03b` —
  * clip number is 1-based, plate letter 0 → `a` (matches the render
  * file names Resolve already gets). */

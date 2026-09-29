@@ -16,6 +16,7 @@ import {
   memberMediaOwner,
   parseDeckMediaTarget,
   sirayOriginalTarget,
+  songAudioTarget,
   songMediaSlug,
   songPlateTarget,
   sunnybankBeatTarget,
@@ -128,6 +129,12 @@ describe("bands, songs, shorts, episodes", () => {
     );
     expect(buildDeckMediaPathname(memberLookTarget("stuie", 2), "png")).toBe(
       "deck/music-video/characters/stuie/looks/stuie-look-02.png",
+    );
+  });
+
+  it("song audio goes in the song's own folder", () => {
+    expect(buildDeckMediaPathname(songAudioTarget(songMediaSlug("CRACK HAUL.mp3")), "mp3")).toBe(
+      "deck/music-video/songs/crack-haul/crack-haul.mp3",
     );
   });
 

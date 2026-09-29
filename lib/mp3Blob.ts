@@ -16,6 +16,8 @@
  */
 
 import { upload } from "@vercel/blob/client";
+import type { DeckMediaTarget } from "./deckMediaPaths";
+import { uploadToDeckTreeOrLegacy } from "./deckMediaUpload";
 
 const MP3_AUDIO_PATH_PREFIX = "skidmarks/mp3-audio/";
 const HANDLE_UPLOAD_URL = "/api/skidmarks/blob-upload";
@@ -48,14 +50,23 @@ const UNCONFIGURED_MESSAGE_RE = /token|credentials/i;
  * that happen to share a filename should never overwrite each other's
  * saved audio.
  */
-export async function uploadSkidmarksMp3Audio(file: File | Blob): Promise<UploadMp3AudioOutcome> {
-  const pathname = `${MP3_AUDIO_PATH_PREFIX}${generateMp3AudioId()}.mp3`;
+export async function uploadSkidmarksMp3Audio(
+  file: File | Blob,
+  target?: DeckMediaTarget | null,
+): Promise<UploadMp3AudioOutcome> {
+  const legacyPathname = () => `${MP3_AUDIO_PATH_PREFIX}${generateMp3AudioId()}.mp3`;
   try {
-    const result = await upload(pathname, file, {
-      access: "public",
-      handleUploadUrl: HANDLE_UPLOAD_URL,
-      contentType: "audio/mpeg",
-    });
+    // With a target (the song's own folder, `lib/deckMediaPaths.ts`) the
+    // audio goes to `deck/music-video/songs/<song>/<song>.mp3`; a second
+    // song with the same name gets `-v2`, never an overwrite. Anything
+    // else keeps the old random `skidmarks/mp3-audio/` path.
+    const result = target
+      ? await uploadToDeckTreeOrLegacy(file, "audio/mpeg", "mp3", target, legacyPathname)
+      : await upload(legacyPathname(), file, {
+          access: "public",
+          handleUploadUrl: HANDLE_UPLOAD_URL,
+          contentType: "audio/mpeg",
+        });
     return { ok: true, url: result.url };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not upload the audio file.";

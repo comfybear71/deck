@@ -22,7 +22,7 @@ import {
 } from "@/lib/adultShorts";
 import { buildForceDownloadUrl } from "@/lib/clipRenders";
 import type { DeckMediaTarget } from "@/lib/deckMediaPaths";
-import { adultShortTargetFor } from "@/lib/deckMediaTargets";
+import { adultShortCharacterPictureTargetFor, adultShortTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
@@ -115,7 +115,7 @@ export function AdultShortsPanel() {
   if (!state.ageConfirmed) {
     return (
       <section className="rounded-2xl border border-red-400/30 bg-red-500/[0.04] p-5">
-        <p className="text-sm font-semibold text-white">Adult shorts are 18+ only</p>
+        <p className="text-sm font-semibold text-white">Shorts are 18+ only</p>
         <p className="mt-2 text-sm leading-relaxed text-white/60">
           Everything made here must show a made-up, AI-created adult who is clearly over 25 and isn&apos;t based on a real
           person&apos;s face or photo. Spicy and nudity are fine, but no sex acts. Every prompt gets those rules added
@@ -146,7 +146,7 @@ export function AdultShortsPanel() {
       for (const file of picked) {
         const dataUrl = await readImageFileAsDataUrl(file, REFERENCE_MAX_DIMENSION);
         const refNumber = character.referenceUrls.length + urls.length + 1;
-        urls.push(await persistImageUrl(dataUrl, adultShortTargetFor("ref", refNumber)));
+        urls.push(await persistImageUrl(dataUrl, adultShortCharacterPictureTargetFor(refNumber)));
       }
       patchAdultShorts((s) => ({
         ...s,

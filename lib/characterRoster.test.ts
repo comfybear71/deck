@@ -291,7 +291,8 @@ describe("Adult shorts group", () => {
     const r = buildCharacterRoster(
       adultState(true, char("Roxy", ["https://x.com/r1.jpg", "https://x.com/r2.jpg"]), [char("Roxy"), char("Vera"), char("")]),
     )["adult-shorts"];
-    expect(r.map((c) => c.name)).toEqual(["Roxy", "Vera"]);
+    // Skye (the built-in Shorts character) gets her tile like everyone else.
+    expect(r.map((c) => c.name)).toEqual(["Roxy", "Vera", "Skye"]);
     expect(r[0]).toMatchObject({ sourceKey: "as:roxy", thumbUrl: "https://x.com/r1.jpg", extraPictureUrls: ["https://x.com/r2.jpg"], style: "photo" });
     expect(r[1].thumbUrl).toBeNull();
   });
@@ -348,7 +349,10 @@ describe("Added characters (+ Add a character in every group)", () => {
     const shown = buildCharacterRoster(
       stateWith({ rosterExtras: extras, adultShorts: { ...base, ageConfirmed: true } as unknown as SkidmarksState["adultShorts"] }),
     );
-    expect(shown["adult-shorts"]).toEqual([expect.objectContaining({ sourceKey: "asx:c", name: "Vera", style: "photo" })]);
+    expect(shown["adult-shorts"]).toEqual([
+      expect.objectContaining({ sourceKey: "asx:c", name: "Vera", style: "photo" }),
+      expect.objectContaining({ sourceKey: "asx:skye", name: "Skye", style: "photo" }),
+    ]);
   });
 
   it("animals say animal and aren't blocked by the word list", () => {
@@ -414,5 +418,16 @@ describe("Sunny Banks not ready", () => {
   });
   it("a character with no voice says so", () => {
     expect(sunnyBanksNotReadyReason({ ...SUNNY_BANKS_CAST.Shazza, voiceId: undefined })).toMatch(/a voice/);
+  });
+});
+
+describe("Skye is a Shorts character", () => {
+  it("shows in Shorts (once 18+ is ticked), linked to her card, and nowhere else", () => {
+    const base = { character: { name: "", look: "", referenceUrls: [] }, shots: [], saved: [] };
+    const hidden = buildCharacterRoster(stateWith({ adultShorts: { ...base, ageConfirmed: false } as unknown as SkidmarksState["adultShorts"] }));
+    expect(Object.values(hidden).flat().some((c) => c.name === "Skye")).toBe(false);
+    const shown = buildCharacterRoster(stateWith({ adultShorts: { ...base, ageConfirmed: true } as unknown as SkidmarksState["adultShorts"] }));
+    expect(shown["adult-shorts"]).toEqual([expect.objectContaining({ sourceKey: "asx:skye", name: "Skye", group: "adult-shorts" })]);
+    expect(["music-video", "sunny-banks", "skidmarks"].every((g) => !shown[g as "skidmarks"].some((c) => c.name === "Skye"))).toBe(true);
   });
 });

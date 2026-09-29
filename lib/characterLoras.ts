@@ -125,7 +125,9 @@ export const SKYE_SEED: CharacterLoraEntry = {
   trainedAt: "2026-09-29T04:06:00.000Z",
   importedToComfy: true,
   createdAt: "2026-09-29T04:00:00.000Z",
-  sourceKey: null,
+  // A Shorts character, like every genre's characters (not a special
+  // one at the Deck root). Matches her deck_items row (2026-09-30).
+  sourceKey: "asx:skye",
   trainingStyle: "photo",
   referenceUrl: null,
   autoPictureTarget: null,

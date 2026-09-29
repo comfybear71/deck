@@ -17,6 +17,7 @@ import {
   CHARACTER_LORA_ESTIMATED_COST_USD,
   CHARACTER_LORA_MAX_IMAGES,
   SIRAY_PICTURE_COST_USD,
+  emptyCharacterLorasState,
   slugifyCharacterName,
   type CharacterLoraEntry,
   type CharacterTrainingStyle,
@@ -35,7 +36,7 @@ export const ROSTER_GROUPS: { id: RosterGroup; label: string }[] = [
   { id: "music-video", label: "Music video" },
   { id: "sunny-banks", label: "Sunny Banks" },
   { id: "skidmarks", label: "Skidmarks" },
-  { id: "adult-shorts", label: "Adult shorts" },
+  { id: "adult-shorts", label: "Shorts" },
 ];
 
 export interface RosterCharacter {
@@ -199,6 +200,31 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
         style: EXTRA_STYLE[g],
         subjectWord: x.isAnimal ? "animal" : g === "sunny-banks" ? "character" : "person",
         blockedReason: x.isAnimal ? null : minorBlockReason(`${x.name} ${x.look}`),
+      });
+    }
+  }
+  // Shorts characters that live only as a LoRA card (Skye, `asx:skye`):
+  // one tile each, the same as any other genre's characters, once the
+  // 18+ confirm is ticked. Anyone already shown above is skipped.
+  if (adult?.ageConfirmed) {
+    const cards = (state.characterLoras ?? emptyCharacterLorasState()).characters;
+    for (const card of cards) {
+      const key = card.sourceKey ?? "";
+      if (!/^asx?:/.test(key) || out["adult-shorts"].some((c) => c.sourceKey === key)) continue;
+      const slug = slugifyCharacterName(card.name);
+      if (out["adult-shorts"].some((c) => slugifyCharacterName(c.name) === slug)) continue;
+      const pictures = [card.referenceUrl, ...card.trainingImageUrls].filter((u): u is string => Boolean(u));
+      out["adult-shorts"].push({
+        sourceKey: key,
+        group: "adult-shorts",
+        name: card.name.trim() || "Unnamed",
+        thumbUrl: pictures[0] ?? null,
+        extraPictureUrls: pictures.slice(1, CHARACTER_LORA_MAX_IMAGES),
+        look: "",
+        neverShow: "",
+        style: card.trainingStyle,
+        subjectWord: card.subjectWord || "person",
+        blockedReason: minorBlockReason(card.name),
       });
     }
   }

@@ -97,7 +97,7 @@ export function SkidmarksLibraryPage({
   const adultClips = useMemo(() => {
     const adult = getAdultShortsState(skidmarksSnapshot);
     if (!editorHasUnsavedChanges(adult)) return [];
-    const who = adult.character.name.trim() || "Adult short";
+    const who = adult.character.name.trim() || "Short";
     return adult.shots.flatMap((shot, i) =>
       shot.clipUrl ? [{ id: shot.id, url: shot.clipUrl, label: `${who} · shot ${i + 1}` }] : []
     );
@@ -495,7 +495,7 @@ export function SkidmarksLibraryPage({
           )}
 
           {adultSaved.length > 0 && (
-            <ul className="flex flex-col gap-4" aria-label="Saved adult shorts">
+            <ul className="flex flex-col gap-4" aria-label="Saved shorts">
               {adultSaved.map((entry) => {
                 const clips = entry.shots.flatMap((shot, i) => (shot.clipUrl ? [{ id: shot.id, url: shot.clipUrl, n: i + 1 }] : []));
                 const isOpen = adultState.currentSavedId === entry.id;
@@ -732,7 +732,7 @@ export function SkidmarksLibraryPage({
         title="Delete this saved short?"
         body={
           pendingAdultDelete
-            ? `“${pendingAdultDelete.title}” comes out of the Library. Anything you already downloaded is not touched, and neither is the Adult shorts editor.`
+            ? `“${pendingAdultDelete.title}” comes out of the Library. Anything you already downloaded is not touched, and neither is the Shorts editor.`
             : ""
         }
         confirmLabel="Delete short"
@@ -751,7 +751,7 @@ export function SkidmarksLibraryPage({
         title="Replace what's in the editor?"
         body={
           pendingAdultOpen
-            ? `The Adult shorts editor has changes that aren't saved to the Library. Opening “${pendingAdultOpen.title}” replaces them.`
+            ? `The Shorts editor has changes that aren't saved to the Library. Opening “${pendingAdultOpen.title}” replaces them.`
             : ""
         }
         confirmLabel="Open anyway"

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  adultShortCharacterPictureTargetFor,
   adultShortTargetFor,
   bandCoverTargetFor,
   characterPlateTargetFor,
@@ -122,5 +123,15 @@ describe("Skye", () => {
         name: "skye-plate-03",
       });
     }
+  });
+});
+
+describe("a short's character", () => {
+  it("files its pictures with the other Shorts characters", () => {
+    patchAdultShorts((s) => ({ ...s, ageConfirmed: true, character: { ...s.character, name: "BLONDE GIRL _1" } }));
+    expect(adultShortCharacterPictureTargetFor(2)).toEqual({
+      folder: "deck/shorts/characters/blonde-girl-1/pictures",
+      name: "blonde-girl-1-picture-02",
+    });
   });
 });
