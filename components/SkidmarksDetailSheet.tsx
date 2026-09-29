@@ -668,8 +668,6 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
       {session.projectKind === "adult-shorts" && <AdultShortsPanel />}
 
-      {session.projectKind === "characters" && <CharacterLorasPanel />}
-
       {session.projectKind === "music-video" &&
         (layout === "pc" ? (
           <div className="grid grid-cols-2 items-start gap-10">
