@@ -322,6 +322,16 @@ function normalizeEntry(raw: unknown): CharacterLoraEntry | null {
   };
 }
 
+/**
+ * One card, cleaned the same way a session load cleans it (fixed key
+ * order, defaults filled in). Per-item saving (`lib/characterItems.ts`)
+ * uses it to compare two copies of a card and to clean a card read back
+ * from `deck_items`. `null` for anything that isn't a usable card.
+ */
+export function normalizeCharacterLoraEntry(raw: unknown): CharacterLoraEntry | null {
+  return normalizeEntry(raw);
+}
+
 /** Missing (older sessions) reads as `null`, which the getter turns into the Skye seed. */
 export function normalizeCharacterLorasState(raw: unknown): CharacterLorasState | null {
   if (!raw || typeof raw !== "object") return null;
