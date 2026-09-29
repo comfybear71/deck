@@ -211,6 +211,7 @@ export async function saveSkidmarksSession(
               revision = skidmarks_sessions.revision + 1
         RETURNING updated_at, revision
       `) as { updated_at: string; revision: string | number }[];
+      await backupSkidmarksSession(sql, toRevision(rows[0]?.revision));
       return {
         ok: true,
         updatedAt: rows[0]?.updated_at ?? new Date().toISOString(),
@@ -241,6 +242,7 @@ export async function saveSkidmarksSession(
           `) as { updated_at: string; revision: string | number }[]);
 
     if (written.length > 0) {
+      await backupSkidmarksSession(sql, toRevision(written[0].revision));
       return {
         ok: true,
         updatedAt: written[0].updated_at ?? new Date().toISOString(),
@@ -269,5 +271,55 @@ export async function saveSkidmarksSession(
       configured: true,
       error: err instanceof Error ? err.message : "Could not save the Skidmarks session to Neon.",
     };
+  }
+}
+
+/** How many past saves to keep. One save is about 15 KB, so 500 is
+ * roughly 7.5 MB, and at tonight's pace (about 25 saves an hour) it
+ * covers well over a day of work. */
+export const SKIDMARKS_SESSION_BACKUP_KEEP = 500;
+
+let backupSchemaEnsured = false;
+
+/**
+ * Backup copy of every save (2026-09-30). The row above is one single
+ * copy with no history, so when an old phone copy wiped the trainings
+ * on 2026-09-29 there was nothing to roll back to. After each save that
+ * actually wrote, this copies the row as it now stands into
+ * `skidmarks_session_history`, then trims to the newest
+ * `SKIDMARKS_SESSION_BACKUP_KEEP`. It never fails or slows the save's
+ * outcome: any error here is swallowed, because a missed backup must not
+ * turn a good save into a reported failure.
+ */
+async function backupSkidmarksSession(sql: NonNullable<ReturnType<typeof getSkidmarksSql>>, revision: number): Promise<void> {
+  try {
+    if (!backupSchemaEnsured) {
+      await sql`
+        CREATE TABLE IF NOT EXISTS skidmarks_session_history (
+          id BIGSERIAL PRIMARY KEY,
+          owner_id TEXT NOT NULL,
+          revision BIGINT NOT NULL,
+          state JSONB NOT NULL,
+          saved_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
+      backupSchemaEnsured = true;
+    }
+    await sql`
+      INSERT INTO skidmarks_session_history (owner_id, revision, state)
+      SELECT owner_id, revision, state FROM skidmarks_sessions
+      WHERE owner_id = ${SKIDMARKS_STUDIO_OWNER_ID} AND revision = ${revision}
+    `;
+    await sql`
+      DELETE FROM skidmarks_session_history
+      WHERE owner_id = ${SKIDMARKS_STUDIO_OWNER_ID}
+        AND id < COALESCE((
+          SELECT id FROM skidmarks_session_history
+          WHERE owner_id = ${SKIDMARKS_STUDIO_OWNER_ID}
+          ORDER BY id DESC OFFSET ${SKIDMARKS_SESSION_BACKUP_KEEP - 1} LIMIT 1
+        ), 0)
+    `;
+  } catch {
+    // Deliberately silent: see the doc comment.
   }
 }

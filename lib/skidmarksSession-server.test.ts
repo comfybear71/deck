@@ -231,12 +231,18 @@ describe("saveSkidmarksSession never blanks out saved work (2026-09-29)", () => 
     sqlMock.mockResolvedValueOnce([]); // ALTER TABLE
     return await importModule();
   }
+  // The save itself, not the backup queries that follow it (2026-09-30).
+  function saveCall(): unknown[] {
+    const calls = sqlMock.mock.calls.filter(
+      (c) => !/skidmarks_session_history/.test((c[0] as TemplateStringsArray).join("?"))
+    );
+    return calls[calls.length - 1];
+  }
   function lastQueryText(): string {
-    const call = sqlMock.mock.calls[sqlMock.mock.calls.length - 1];
-    return (call[0] as TemplateStringsArray).join("?");
+    return (saveCall()[0] as TemplateStringsArray).join("?");
   }
   function lastQueryParams(): unknown[] {
-    return sqlMock.mock.calls[sqlMock.mock.calls.length - 1].slice(1);
+    return saveCall().slice(1);
   }
 
   it("the revision-checked save keeps any protected part the incoming copy sends as null or leaves out", async () => {
@@ -266,3 +272,42 @@ describe("saveSkidmarksSession never blanks out saved work (2026-09-29)", () => 
   });
 });
 
+
+describe("every save keeps a backup copy (2026-09-30)", () => {
+  async function withSchema() {
+    process.env.DATABASE_URL = "postgres://user:pass@host/db";
+    sqlMock.mockResolvedValueOnce([]); // CREATE TABLE
+    sqlMock.mockResolvedValueOnce([]); // ALTER TABLE
+    return await importModule();
+  }
+  const texts = () => sqlMock.mock.calls.map((c) => (c[0] as TemplateStringsArray).join("?"));
+
+  it("copies the row into the history table after a save that wrote", async () => {
+    const { saveSkidmarksSession } = await withSchema();
+    sqlMock.mockResolvedValueOnce([{ updated_at: "2026-09-30T00:00:00.000Z", revision: "1438" }]);
+    const outcome = await saveSkidmarksSession({ bands: [] }, 1437);
+    expect(outcome).toEqual({ ok: true, updatedAt: "2026-09-30T00:00:00.000Z", revision: 1438 });
+    const all = texts();
+    expect(all.some((q) => /CREATE TABLE IF NOT EXISTS skidmarks_session_history/.test(q))).toBe(true);
+    const insert = sqlMock.mock.calls.find((c) => /INSERT INTO skidmarks_session_history/.test((c[0] as TemplateStringsArray).join("?")));
+    expect(insert).toBeDefined();
+    expect(insert!.slice(1)).toContain(1438);
+    expect(all.some((q) => /DELETE FROM skidmarks_session_history/.test(q))).toBe(true);
+  });
+
+  it("does not back up a refused (conflict) save", async () => {
+    const { saveSkidmarksSession } = await withSchema();
+    sqlMock.mockResolvedValueOnce([]);
+    sqlMock.mockResolvedValueOnce([{ state: {}, updated_at: "2026-09-30T00:00:00.000Z", revision: "9" }]);
+    await saveSkidmarksSession({ bands: [] }, 3);
+    expect(texts().some((q) => /skidmarks_session_history/.test(q))).toBe(false);
+  });
+
+  it("a failing backup never turns a good save into a failure", async () => {
+    const { saveSkidmarksSession } = await withSchema();
+    sqlMock.mockResolvedValueOnce([{ updated_at: "2026-09-30T00:00:00.000Z", revision: 5 }]);
+    sqlMock.mockRejectedValueOnce(new Error("history table down"));
+    const outcome = await saveSkidmarksSession({ bands: [] });
+    expect(outcome).toEqual({ ok: true, updatedAt: "2026-09-30T00:00:00.000Z", revision: 5 });
+  });
+});
