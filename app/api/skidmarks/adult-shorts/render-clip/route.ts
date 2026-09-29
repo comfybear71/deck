@@ -122,7 +122,7 @@ export async function POST(request: Request) {
   }
   if (!/adult woman, clearly over 25/i.test(prompt)) {
     return NextResponse.json(
-      { error: "Adult shorts prompts must carry the adult character lock.", code: "invalid_request" },
+      { error: "Shorts prompts must carry the adult character lock.", code: "invalid_request" },
       { status: 400 }
     );
   }

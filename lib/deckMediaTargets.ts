@@ -20,6 +20,7 @@ import {
   characterPlateTarget,
   characterReferenceCandidateTarget,
   characterReferenceTarget,
+  deckCharacterOwner,
   deckMediaSlug,
   isSafeDeckMediaSlug,
   memberAvatarTarget,
@@ -164,4 +165,14 @@ function pinAdultShortMediaSlug(): string {
 /** `blonde-girl-1-plate-02` etc. for the open short; `n` is 1-based. */
 export function adultShortTargetFor(role: "ref" | "plate" | "clip", n: number): DeckMediaTarget {
   return adultShortTarget(pinAdultShortMediaSlug(), role, n);
+}
+
+/** A picture of the open short's character, filed with the other Shorts
+ * characters (`deck/shorts/characters/blonde-girl-1/pictures/
+ * blonde-girl-1-picture-01`) the same way every genre files its cast.
+ * No name yet → the short's own folder. `n` is 1-based. */
+export function adultShortCharacterPictureTargetFor(n: number): DeckMediaTarget {
+  const name = getAdultShortsState().character.name.trim();
+  if (!name) return adultShortTargetFor("ref", n);
+  return characterPictureTarget(deckCharacterOwner("shorts", deckMediaSlug(name, "character")), n);
 }

@@ -10,12 +10,12 @@ describe("planCharacterSeed", () => {
       characters: [SKYE_SEED, c("clora_1", "Shazza", "sb:shazza"), c("clora_2", "Jack Ash", "mv:jack"), c("clora_3", "Big Sexy", "as:big")],
     });
     expect(plan.rows.map((r) => [r.itemId, r.folder])).toEqual([
-      ["clora_skye", "deck"],
+      ["clora_skye", "adult-shorts"],
       ["clora_1", "sunnybank"],
       ["clora_2", "music-video"],
       ["clora_3", "adult-shorts"],
     ]);
-    expect(plan.perFolder).toEqual({ deck: 1, sunnybank: 1, "music-video": 1, skidmarks: 0, "adult-shorts": 1 });
+    expect(plan.perFolder).toEqual({ deck: 0, sunnybank: 1, "music-video": 1, skidmarks: 0, "adult-shorts": 2 });
     expect(plan.skipped).toEqual([]);
   });
 
@@ -39,6 +39,6 @@ describe("planCharacterSeed", () => {
     const tree = formatCharacterSeedTree(planCharacterSeed({ characters: [SKYE_SEED, c("clora_1", "Shazza", "sb:shazza")] }));
     expect(tree).toContain("Sunnybank");
     expect(tree).toContain("Shazza  [clora_1, sb:shazza]");
-    expect(tree).toContain("Skye  [clora_skye]");
+    expect(tree).toContain("Skye  [clora_skye, asx:skye]");
   });
 });

@@ -35,7 +35,7 @@ export const DECK_FOLDER_LABELS: Record<DeckFolder, string> = {
   sunnybank: "Sunnybank",
   "music-video": "Music video",
   skidmarks: "Skidmarks",
-  "adult-shorts": "Adult shorts",
+  "adult-shorts": "Shorts",
 };
 
 /**
@@ -43,7 +43,8 @@ export const DECK_FOLDER_LABELS: Record<DeckFolder, string> = {
  * `lib/characterRoster.ts` and `lib/rosterExtras.ts`'s
  * `rosterExtraSourceKey`): `sb:`/`sbx:` Sunnybank, `mv:`/`mvx:` Music
  * video, `sk:` Skidmarks, `as:`/`asx:` Adult shorts. A card with no
- * `sourceKey` (Skye, anyone added by hand) sits at the Deck root.
+ * `sourceKey` (anyone added by hand on the LoRA cards list) sits at the
+ * Deck root. Skye is a Shorts character (`asx:skye`) like any other.
  */
 export function characterFolder(sourceKey: string | null | undefined): DeckFolder {
   const prefix = typeof sourceKey === "string" ? sourceKey.split(":", 1)[0] : "";
