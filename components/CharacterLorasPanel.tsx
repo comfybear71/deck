@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
+  AUTO_PICTURE_TARGET,
   CHARACTER_LORA_ESTIMATED_COST_USD,
   CHARACTER_LORA_MAX_IMAGES,
   CHARACTER_LORA_RECOMMENDED,
@@ -13,10 +14,13 @@ import {
   loraFileNames,
   nextTrainingVersion,
   trainBlocker,
+  type CharacterTrainingStyle,
   trainBlockerMessage,
   type CharacterLoraEntry,
 } from "@/lib/characterLoras";
+import { startCharacterTraining } from "@/lib/characterAutoLora";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
+import { CharacterRosterGrid } from "./CharacterRosterGrid";
 import {
   flushSkidmarksSessionNow,
   getCharacterLorasState,
@@ -39,13 +43,22 @@ import {
 
 const TRAINING_PICTURE_MAX_DIMENSION = 1600;
 const POLL_EVERY_MS = 20_000;
-const SUBJECT_WORDS = ["woman", "man", "person"];
+const SUBJECT_WORDS = ["woman", "man", "person", "character"];
+const STYLE_OPTIONS: { value: CharacterTrainingStyle; label: string }[] = [
+  { value: "photo", label: "Real-looking face" },
+  { value: "cartoon", label: "Cartoon" },
+  { value: "faceless", label: "Face hidden" },
+];
 
 type Busy = { id: string; kind: "upload" | "train" | "check" } | null;
 
 function StatusChip({ entry }: { entry: CharacterLoraEntry }) {
   const map: Record<CharacterLoraEntry["status"], [string, string]> = {
     draft: ["Not trained", "border-white/15 text-white/50"],
+    making: [
+      `Making pictures ${entry.trainingImageUrls.length}/${entry.autoPictureTarget ?? "?"}`,
+      "border-amber-400/40 text-amber-200",
+    ],
     training: ["Training…", "border-amber-400/40 text-amber-200"],
     finishing: ["Saving…", "border-amber-400/40 text-amber-200"],
     ready: [entry.importedToComfy ? "Ready in Comfy" : "Trained", "border-emerald-400/40 text-emerald-200"],
@@ -167,28 +180,8 @@ export function CharacterLorasPanel() {
     }
     setError(entry.id, null);
     setBusy({ id: entry.id, kind: "train" });
-    const version = nextTrainingVersion(entry);
     try {
-      const res = await fetch("/api/skidmarks/character-lora/train", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: entry.name,
-          slug: entry.slug,
-          subjectWord: entry.subjectWord,
-          imageUrls: entry.trainingImageUrls,
-          fictionalAdultConfirmed: entry.fictionalAdultConfirmed,
-        }),
-      });
-      const json = (await res.json().catch(() => ({}))) as { trainingId?: string; error?: string };
-      if (!res.ok || !json.trainingId) throw new Error(json.error || `Training didn't start (HTTP ${res.status}).`);
-      patchEntry(entry.id, {
-        status: "training",
-        version,
-        replicateTrainingId: json.trainingId,
-        error: null,
-        importedToComfy: false,
-      });
+      patchEntry(entry.id, await startCharacterTraining(entry));
       flushSkidmarksSessionNow();
     } catch (err) {
       setError(entry.id, err instanceof Error ? err.message : "Training didn't start.");
@@ -297,6 +290,16 @@ export function CharacterLorasPanel() {
         </div>
       </div>
 
+      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+        <p className="text-sm font-semibold text-white">Your cast</p>
+        <p className="mb-3 mt-1 text-xs leading-relaxed text-white/55">
+          Tap a face, then Make pictures. Siray draws about {AUTO_PICTURE_TARGET} pictures of them from it. You check them
+          and tap Train, and it trains and saves the Comfy files by itself. A tick means done.
+        </p>
+        <CharacterRosterGrid snapshot={snapshot} />
+      </div>
+
+      <p className="px-1 text-xs font-semibold uppercase tracking-wide text-white/50">LoRA cards</p>
       {characters.length === 0 && <p className="text-xs text-white/40">No characters yet.</p>}
 
       {characters.map((c) => {
@@ -306,7 +309,7 @@ export function CharacterLorasPanel() {
         const snippet = comfyPromptSnippet(c);
         const nextFiles = loraFileNames(c.slug, nextTrainingVersion(c));
         return (
-          <div key={c.id} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+          <div key={c.id} id={`clora-card-${c.id}`} className="scroll-mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
             <div className="flex items-center gap-2">
               <input
                 value={c.name}
@@ -439,6 +442,23 @@ export function CharacterLorasPanel() {
                 </select>
               </label>
               <label className="flex items-center gap-1.5 text-xs text-white/60">
+                Style
+                <select
+                  value={c.trainingStyle}
+                  onChange={(e) => {
+                    patchEntry(c.id, { trainingStyle: e.target.value as CharacterTrainingStyle });
+                    flushSkidmarksSessionNow();
+                  }}
+                  className="rounded border border-white/15 bg-black/40 px-1.5 py-0.5 text-xs text-white"
+                >
+                  {STYLE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-white/60">
                 <input
                   type="checkbox"
                   checked={c.fictionalAdultConfirmed}
@@ -451,7 +471,7 @@ export function CharacterLorasPanel() {
               </label>
             </div>
 
-            {c.status !== "training" && c.status !== "finishing" && (
+            {c.status !== "making" && c.status !== "training" && c.status !== "finishing" && (
               <div className="mt-3">
                 <button
                   type="button"

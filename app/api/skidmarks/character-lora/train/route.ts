@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import {
   CHARACTER_LORA_MAX_IMAGES,
   CHARACTER_LORA_MIN_IMAGES,
+  CHARACTER_TRAINING_STYLES,
   isAllowedTrainingImageUrl,
+  type CharacterTrainingStyle,
   replicateModelName,
   slugifyCharacterName,
 } from "@/lib/characterLoras";
@@ -39,6 +41,7 @@ interface Body {
   subjectWord?: unknown;
   imageUrls?: unknown;
   fictionalAdultConfirmed?: unknown;
+  trainingStyle?: unknown;
 }
 
 function extFor(mime: string): string {
@@ -86,6 +89,9 @@ export async function POST(req: Request) {
   }
   const slug = slugifyCharacterName(typeof body.slug === "string" && body.slug ? body.slug : name);
   const subjectWord = typeof body.subjectWord === "string" ? body.subjectWord.slice(0, 20) : "person";
+  const style: CharacterTrainingStyle = CHARACTER_TRAINING_STYLES.includes(body.trainingStyle as CharacterTrainingStyle)
+    ? (body.trainingStyle as CharacterTrainingStyle)
+    : "photo";
   const urls = Array.isArray(body.imageUrls) ? body.imageUrls.filter((u): u is string => typeof u === "string") : [];
   if (urls.length < CHARACTER_LORA_MIN_IMAGES || urls.length > CHARACTER_LORA_MAX_IMAGES) {
     return NextResponse.json(
@@ -109,7 +115,7 @@ export async function POST(req: Request) {
     const training = await startSdxlTraining(
       token,
       `${owner}/${model}`,
-      buildSdxlTrainingInput({ inputImagesUrl, subjectWord }),
+      buildSdxlTrainingInput({ inputImagesUrl, subjectWord, style }),
     );
     return NextResponse.json({ trainingId: training.id, status: training.status });
   } catch (err) {

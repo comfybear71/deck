@@ -11,6 +11,8 @@
  * the first run — Replicate requires a destination model.
  */
 
+import { captionPrefix, type CharacterTrainingStyle } from "./characterLoras";
+
 const API = "https://api.replicate.com/v1";
 
 /** `stability-ai/sdxl` trainer version the Skye pilot used. */
@@ -83,17 +85,24 @@ export interface SdxlTrainingInput {
   inputImagesUrl: string;
   /** The word after the trigger in every caption, e.g. "woman". */
   subjectWord: string;
+  style?: CharacterTrainingStyle;
 }
 
 /** The trainer input, kept pure so the exact settings are unit tested. */
-export function buildSdxlTrainingInput({ inputImagesUrl, subjectWord }: SdxlTrainingInput): Record<string, unknown> {
-  const word = subjectWord.trim().toLowerCase() || "person";
+export function buildSdxlTrainingInput({
+  inputImagesUrl,
+  subjectWord,
+  style = "photo",
+}: SdxlTrainingInput): Record<string, unknown> {
   return {
     input_images: inputImagesUrl,
     input_images_filetype: "zip",
     token_string: "TOK",
-    caption_prefix: `a photo of TOK ${word}, `,
-    use_face_detection_instead: true,
+    caption_prefix: captionPrefix(style, "TOK", subjectWord),
+    // Face detection crops around a real face. A cartoon or a
+    // shadow-faced silhouette has none to find, so it trains on the
+    // whole picture instead.
+    use_face_detection_instead: style === "photo",
     is_lora: true,
     resolution: 1024,
     max_train_steps: 1000,

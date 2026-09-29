@@ -29,7 +29,22 @@ export const CHARACTER_LORA_RECOMMENDED = "12 to 20";
 export const CHARACTER_LORA_ESTIMATED_COST_USD = 0.3;
 export const CHARACTER_LORA_DEFAULT_REPO = "comfybear71/deck-loras";
 
-export type CharacterLoraStatus = "draft" | "training" | "finishing" | "ready" | "failed";
+export type CharacterLoraStatus = "draft" | "making" | "training" | "finishing" | "ready" | "failed";
+
+/**
+ * How the trainer should treat the pictures. `photo` crops around the
+ * face (the SDXL trainer's face detection) and captions "a photo of";
+ * `cartoon` (Sunny Banks) and `faceless` (Jack Ash's shadowed fedora)
+ * switch face detection off, since there's no real face to find, and
+ * caption "a cartoon of" / "a photo of" respectively.
+ */
+export type CharacterTrainingStyle = "photo" | "cartoon" | "faceless";
+export const CHARACTER_TRAINING_STYLES: CharacterTrainingStyle[] = ["photo", "cartoon", "faceless"];
+
+/** Pictures the one-tap flow aims for (existing pictures plus Siray-made ones). */
+export const AUTO_PICTURE_TARGET = 15;
+/** Siray Seedream 4.5 is a flat US$0.04 a picture (`lib/sirayClient.ts`). */
+export const SIRAY_PICTURE_COST_USD = 0.04;
 
 export interface CharacterLoraEntry {
   id: string;
@@ -56,6 +71,19 @@ export interface CharacterLoraEntry {
   /** Stuart ticked "imported into Comfy" after pasting both links. */
   importedToComfy: boolean;
   createdAt: string;
+  /**
+   * Which existing Deck character this card belongs to, e.g.
+   * `mv:jack-ash-frontman`, `sb:shazza`, `sk:<cast id>` (see
+   * `lib/characterRoster.ts`). `null` for a card added by hand.
+   */
+  sourceKey: string | null;
+  trainingStyle: CharacterTrainingStyle;
+  /** The one picture Siray copies the character from in the one-tap flow. */
+  referenceUrl: string | null;
+  /** While `status` is `making`: how many pictures to reach before it stops for a look. */
+  autoPictureTarget: number | null;
+  /** Siray has finished the pictures; waiting for Stuart to check them and tap Train. */
+  awaitingReview: boolean;
 }
 
 export interface CharacterLorasState {
@@ -81,6 +109,11 @@ export const SKYE_SEED: CharacterLoraEntry = {
   trainedAt: "2026-09-29T04:06:00.000Z",
   importedToComfy: true,
   createdAt: "2026-09-29T04:00:00.000Z",
+  sourceKey: null,
+  trainingStyle: "photo",
+  referenceUrl: null,
+  autoPictureTarget: null,
+  awaitingReview: false,
 };
 
 export function emptyCharacterLorasState(): CharacterLorasState {
@@ -132,16 +165,22 @@ export function comfyEmbeddingToken(repo: string, embeddingFile: string): string
   return `embedding:${comfyImportedName(repo, embeddingFile).replace(/\.safetensors$/, "")}`;
 }
 
+/** Caption opener, used both for training captions (`TOK`) and the Comfy prompt (the embedding token). */
+export function captionPrefix(style: CharacterTrainingStyle, token: string, subjectWord: string): string {
+  const word = subjectWord.trim().toLowerCase() || (style === "cartoon" ? "character" : "person");
+  return `${style === "cartoon" ? "a cartoon of" : "a photo of"} ${token} ${word}, `;
+}
+
 /** The prompt opener that switches the character on in Comfy. */
 export function comfyPromptSnippet(entry: CharacterLoraEntry): string | null {
   if (!entry.hfRepo || !entry.embeddingFile) return null;
-  return `a photo of ${comfyEmbeddingToken(entry.hfRepo, entry.embeddingFile)} ${entry.subjectWord || "person"}, `;
+  return captionPrefix(entry.trainingStyle, comfyEmbeddingToken(entry.hfRepo, entry.embeddingFile), entry.subjectWord);
 }
 
 export type TrainBlocker = "name" | "images-few" | "images-many" | "confirm" | "busy" | null;
 
 export function trainBlocker(entry: CharacterLoraEntry): TrainBlocker {
-  if (entry.status === "training" || entry.status === "finishing") return "busy";
+  if (entry.status === "making" || entry.status === "training" || entry.status === "finishing") return "busy";
   if (!entry.name.trim()) return "name";
   if (entry.trainingImageUrls.length < CHARACTER_LORA_MIN_IMAGES) return "images-few";
   if (entry.trainingImageUrls.length > CHARACTER_LORA_MAX_IMAGES) return "images-many";
@@ -175,6 +214,7 @@ export function buildCharacterLoraEntry(
   name: string,
   taken: Iterable<string>,
   now: Date = new Date(),
+  extra: Partial<Pick<CharacterLoraEntry, "sourceKey" | "trainingStyle" | "referenceUrl" | "subjectWord">> = {},
 ): CharacterLoraEntry {
   const trimmed = name.trim();
   return {
@@ -195,6 +235,12 @@ export function buildCharacterLoraEntry(
     trainedAt: null,
     importedToComfy: false,
     createdAt: now.toISOString(),
+    sourceKey: null,
+    trainingStyle: "photo",
+    referenceUrl: null,
+    autoPictureTarget: null,
+    awaitingReview: false,
+    ...extra,
   };
 }
 
@@ -203,7 +249,7 @@ export function nextTrainingVersion(entry: CharacterLoraEntry): number {
   return Math.max(0, entry.version) + 1;
 }
 
-const STATUSES: CharacterLoraStatus[] = ["draft", "training", "finishing", "ready", "failed"];
+const STATUSES: CharacterLoraStatus[] = ["draft", "making", "training", "finishing", "ready", "failed"];
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
@@ -237,6 +283,16 @@ function normalizeEntry(raw: unknown): CharacterLoraEntry | null {
     trainedAt: str(r.trainedAt),
     importedToComfy: r.importedToComfy === true,
     createdAt: str(r.createdAt) ?? new Date(0).toISOString(),
+    sourceKey: str(r.sourceKey),
+    trainingStyle: CHARACTER_TRAINING_STYLES.includes(r.trainingStyle as CharacterTrainingStyle)
+      ? (r.trainingStyle as CharacterTrainingStyle)
+      : "photo",
+    referenceUrl: typeof r.referenceUrl === "string" && /^(https:|data:image\/|\/)/.test(r.referenceUrl) ? r.referenceUrl : null,
+    autoPictureTarget:
+      typeof r.autoPictureTarget === "number" && r.autoPictureTarget > 0
+        ? Math.min(CHARACTER_LORA_MAX_IMAGES, Math.floor(r.autoPictureTarget))
+        : null,
+    awaitingReview: r.awaitingReview === true,
   };
 }
 
@@ -260,7 +316,8 @@ export function formatCostUsd(n: number): string {
   return `US$${n.toFixed(2)}`;
 }
 
-const BLOB_SUFFIX = ".public.blob.vercel-storage.com";
+export const CHARACTER_LORA_BLOB_HOST_SUFFIX = ".public.blob.vercel-storage.com";
+const BLOB_SUFFIX = CHARACTER_LORA_BLOB_HOST_SUFFIX;
 
 /**
  * Training pictures the server is allowed to fetch: Deck's own Vercel
