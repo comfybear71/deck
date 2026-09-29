@@ -985,6 +985,14 @@ run by hand), loading never writes, and a card missing from a list is
 never a delete; only `removeCharacterLora` (the delete tap) deletes. See
 `docs/deck/PER_ITEM_SAVING.md`.
 
+Skidmarks episodes (kind `skidmarks-episode`) and saved shorts (kind
+`adult-short`, folder `adult-shorts`) follow exactly the same rules through
+the same engine (`lib/deckItemSync.ts`). Their only deletes are
+`removeSkidmarksEpisode` and `removeSavedAdultShort` (the delete taps);
+their only seeders are `scripts/seed-deck-items-skidmarks-episodes.ts` and
+`scripts/seed-deck-items-adult-shorts.ts`, run by hand with
+`DECK_DATABASE_URL` (never `DATABASE_URL`).
+
 ## Env vars this feature actually reads
 
 - `XAI_API_KEY` — slot A (default) team key for plate-still generation

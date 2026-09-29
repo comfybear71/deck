@@ -65,3 +65,59 @@ row the next time it's edited.
 - `lib/characterItems.ts`: client engine (diff, debounce, overlay, 409 adopt).
 - `lib/skidmarks.ts`: wiring (`patchCharacterLoras`, `removeCharacterLora`, after each session load).
 - `lib/deckItemsSeed.ts` + `scripts/seed-deck-items-characters.ts`: the one-time seed.
+
+# Step 2: Skidmarks episodes and shorts
+
+Same idea, same steps, same rules as characters, for two more things:
+
+- **Skidmarks episodes**: each episode is one `deck_items` row, kind
+  `skidmarks-episode`, folder `skidmarks`, keeping its own `ep_…` id. The
+  cast list stays in the session save for now.
+- **Shorts**: each saved short in the Library is one row, kind
+  `adult-short`, folder `adult-shorts` (the key the database and code
+  already use), keeping its own `short_…` id. The open editor (character,
+  shot list, the 18+ confirm) stays in the session save, as before.
+
+Nothing about how they look or work changes. Opening the app loads the
+session, then lays the saved episodes and shorts over it (the rows win),
+without writing. Editing one sends only that one, about a second later.
+Only the episode's delete button and the Library's "Delete short" delete a
+row (soft delete, with history). One missing from a device is never
+deleted because of it. A 409 means this device takes the server's copy.
+The whole-session save carries on as a mirror.
+
+No new tables: the same `deck_items` and `deck_item_history`. No
+migration to run.
+
+## Runbook (by hand)
+
+Each seed reads **only `DECK_DATABASE_URL`** (never `DATABASE_URL`).
+
+```
+# Read-only look (READ ONLY transaction, writes nothing):
+DECK_DATABASE_URL=... npx vite-node scripts/seed-deck-items-skidmarks-episodes.ts --dry-run
+DECK_DATABASE_URL=... npx vite-node scripts/seed-deck-items-adult-shorts.ts --dry-run
+
+# Really insert, once each, after checking the dry run:
+DECK_DATABASE_URL=... npx vite-node scripts/seed-deck-items-skidmarks-episodes.ts --write
+DECK_DATABASE_URL=... npx vite-node scripts/seed-deck-items-adult-shorts.ts --write
+```
+
+Same guards as the character seed: refuses if rows of that kind already
+exist, if there is nothing to seed, or if the session was saved between
+its read and its insert. Until a kind is seeded, that kind keeps saving
+the old way only (the app never seeds). A kind with nothing in it yet
+(no episodes) can't be seeded; it stays on the session save until there
+is at least one and the seed is run.
+
+## Code map (step 2)
+
+- `lib/deckItemSync.ts`: the client engine, `lib/characterItems.ts` with
+  the kind and its cleaner passed in, so every kind follows the same steps.
+- `lib/skidmarksEpisodeItems.ts`, `lib/adultShortItems.ts`: which kind,
+  which cleaner (`normalizeSkidmarksEpisode`, `normalizeAdultShortsSavedEntry`).
+- `lib/deckItems.ts`, `lib/deckItems-server.ts`: the two new kinds and their folders.
+- `lib/skidmarks.ts`: wiring (`patchSkidmarksEpisodes`, `removeSkidmarksEpisode`,
+  `patchAdultShorts`, `removeSavedAdultShort`, after each session load).
+- `lib/deckItemSeedPlan.ts`, `scripts/seedDeckItemsKind.ts`,
+  `scripts/seed-deck-items-skidmarks-episodes.ts`, `scripts/seed-deck-items-adult-shorts.ts`: the one-time seeds.
