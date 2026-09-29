@@ -11,8 +11,10 @@ import {
   signatureLine,
   startingPictures,
   stripHeldProps,
+  sunnyBanksNotReadyReason,
 } from "./characterRoster";
 import { buildSdxlTrainingInput } from "./replicateTrainer";
+import { SUNNY_BANKS_CAST } from "./sunnyBanks";
 import { getSkidmarksSnapshot, type SkidmarksState } from "./skidmarks";
 import { buildSkidmarksCastMember } from "./skidmarksEpisodes";
 import {
@@ -384,5 +386,33 @@ describe("rosterExtras state", () => {
     expect(
       rosterExtrasHaveUserContent({ "music-video": [buildRosterExtraCharacter("A", "")], "sunny-banks": [], "adult-shorts": [] }),
     ).toBe(true);
+  });
+});
+
+describe("Redo rounds (one-button faces, 2026-09-29)", () => {
+  const shazza = { name: "Shazza", look: "60s woman, curlers", neverShow: "", style: "cartoon" as const, subjectWord: "character" };
+  it("round 0 keeps the fixed poses, a Redo gives different ones", () => {
+    const first = buildTrainingPicturePrompts(shazza, 15, 0, 0);
+    const redo1 = buildTrainingPicturePrompts(shazza, 15, 0, 1);
+    const redo2 = buildTrainingPicturePrompts(shazza, 15, 0, 2);
+    expect(first).toEqual(buildTrainingPicturePrompts(shazza, 15, 0));
+    expect(redo1.filter((p) => first.includes(p))).toHaveLength(0);
+    expect(redo2).not.toEqual(redo1);
+    expect(new Set(redo1).size).toBe(15);
+  });
+  it("Redo pictures still keep empty hands and the made-up adult line", () => {
+    for (const p of buildTrainingPicturePrompts(shazza, 15, 0, 3)) {
+      expect(p).toContain("Nothing in the hands");
+      expect(p).toContain("clearly over 25");
+    }
+  });
+});
+
+describe("Sunny Banks not ready", () => {
+  it("regulars with a voice and a start picture are ready", () => {
+    expect(sunnyBanksNotReadyReason(SUNNY_BANKS_CAST.Shazza)).toBeNull();
+  });
+  it("a character with no voice says so", () => {
+    expect(sunnyBanksNotReadyReason({ ...SUNNY_BANKS_CAST.Shazza, voiceId: undefined })).toMatch(/a voice/);
   });
 });
