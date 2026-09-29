@@ -974,6 +974,17 @@ the request, and validate length against `shotPrompt` only.
   confirm step still gates the real cost (the xAI call itself), not any
   save that follows it.
 
+## Per-item saving (characters, 2026-09-30)
+
+Character cards also save one row each in `deck_items` (history in
+`deck_item_history`), via `/api/deck/items`, and those rows win over the
+session copy on load. Hard rules: the app never creates those tables
+(`db/migrations/2026-09-30_deck_items.sql` is run by hand), the client
+never seeds (`scripts/seed-deck-items-characters.ts` is the only seeder,
+run by hand), loading never writes, and a card missing from a list is
+never a delete; only `removeCharacterLora` (the delete tap) deletes. See
+`docs/deck/PER_ITEM_SAVING.md`.
+
 ## Env vars this feature actually reads
 
 - `XAI_API_KEY` — slot A (default) team key for plate-still generation
