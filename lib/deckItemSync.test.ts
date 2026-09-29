@@ -417,3 +417,21 @@ function suite<T extends DeckItemEntry>(fx: KindFixture<T>) {
 
 suite(episodes);
 suite(shorts);
+
+describe("orderMissing: shorts this device didn't have go in newest first, after its own", () => {
+  it("orders only the added ones, by savedAt, newest first", () => {
+    const mine = { ...shorts.make("short_mine", "Mine"), savedAt: "2026-09-01T00:00:00.000Z" };
+    const older = { ...shorts.make("short_old", "Old"), savedAt: "2026-09-10T00:00:00.000Z" };
+    const newer = { ...shorts.make("short_new", "New"), savedAt: "2026-09-20T00:00:00.000Z" };
+    const rec = (e: AdultShortsSaved, revision = 1): DeckItemRecord => ({ itemId: e.id, folder: "adult-shorts", data: e, revision, updatedAt: null, deletedAt: null });
+    const out = overlayDeckItems(ADULT_SHORT_ITEMS, [mine], [rec(older), rec(mine), rec(newer)], []);
+    expect(out.entries.map((e) => e.id)).toEqual(["short_mine", "short_new", "short_old"]);
+  });
+
+  it("a kind with no orderMissing keeps the server's order (Skidmarks episodes)", () => {
+    const a = episodes.make("ep_a", "A");
+    const b = episodes.make("ep_b", "B");
+    const rec = (e: SkidmarksEpisode): DeckItemRecord => ({ itemId: e.id, folder: "skidmarks", data: e, revision: 1, updatedAt: null, deletedAt: null });
+    expect(overlayDeckItems(SKIDMARKS_EPISODE_ITEMS, [], [rec(b), rec(a)], []).entries.map((e) => e.id)).toEqual(["ep_b", "ep_a"]);
+  });
+});

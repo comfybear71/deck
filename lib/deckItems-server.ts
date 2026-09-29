@@ -26,6 +26,7 @@
  */
 import { normalizeAdultShortsSavedEntry } from "./adultShorts";
 import { normalizeCharacterLoraEntry } from "./characterLoras";
+import { normalizeSunnyBanksWorkspace } from "./sunnyBanksWorkspace";
 import { DATABASE_UNCONFIGURED_MESSAGE, getSkidmarksSql } from "./db";
 import {
   DECK_ITEM_HISTORY_KEEP,
@@ -136,6 +137,13 @@ export function prepareDeckItemData(
       if (entry.id !== itemId) return { ok: false, error: "The card's id doesn't match the item id." };
       if (JSON.stringify(entry).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That card is too big to save." };
       return { ok: true, data: entry as unknown as Record<string, unknown>, folder: characterFolder(entry.sourceKey) };
+    }
+    case "sunnybank-episode": {
+      const episode = normalizeSunnyBanksWorkspace(data);
+      if (!episode) return { ok: false, error: "That isn't a Sunnybank episode." };
+      if (episode.id !== itemId) return { ok: false, error: "The episode's id doesn't match the item id." };
+      if (JSON.stringify(episode).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That episode is too big to save." };
+      return { ok: true, data: episode as unknown as Record<string, unknown>, folder: DECK_ITEM_KIND_FOLDERS[kind] ?? "sunnybank" };
     }
     case "skidmarks-episode": {
       const entry = normalizeSkidmarksEpisode(data);

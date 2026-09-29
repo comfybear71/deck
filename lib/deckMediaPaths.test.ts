@@ -15,8 +15,8 @@ import {
   memberLookTarget,
   memberMediaOwner,
   parseDeckMediaTarget,
-  randomDeckMediaTag,
   sirayOriginalTarget,
+  songAudioTarget,
   songMediaSlug,
   songPlateTarget,
   sunnybankBeatTarget,
@@ -67,11 +67,11 @@ describe("character folders", () => {
     // No top-level character folder: Skye (no section prefix) is a Shorts character.
     expect(characterMediaOwner(card("skye", "Skye", null), noMember)).toMatchObject({
       folder: "deck/shorts/characters/skye",
-      tagged: true,
+      fileSlug: "skye",
     });
     expect(characterMediaOwner(card("blonde", "Blonde", "asx:1"), noMember)).toMatchObject({
       folder: "deck/shorts/characters/blonde",
-      tagged: true,
+      fileSlug: "blonde",
     });
   });
 
@@ -113,12 +113,11 @@ describe("character folders", () => {
     });
   });
 
-  it("gives every Adult shorts character file its own random tag", () => {
-    const owner = characterMediaOwner(card("blonde", "Blonde", "as:1"), noMember);
-    const a = characterPlateTarget(owner, 1).name;
-    const b = characterPlateTarget(owner, 1).name;
-    expect(a).toMatch(/^blonde-[0-9a-f]{6}-plate-01$/);
-    expect(a).not.toBe(b);
+  it("names Shorts character files readably, exactly like every other genre", () => {
+    const owner = characterMediaOwner(card("skye", "Skye", null), noMember);
+    expect(buildDeckMediaPathname(characterPlateTarget(owner, 3), "jpg")).toBe(
+      "deck/shorts/characters/skye/plates/skye-plate-03.jpg",
+    );
   });
 });
 
@@ -133,6 +132,12 @@ describe("bands, songs, shorts, episodes", () => {
     );
   });
 
+  it("song audio goes in the song's own folder", () => {
+    expect(buildDeckMediaPathname(songAudioTarget(songMediaSlug("CRACK HAUL.mp3")), "mp3")).toBe(
+      "deck/music-video/songs/crack-haul/crack-haul.mp3",
+    );
+  });
+
   it("song plates", () => {
     expect(songMediaSlug("CRACK HAUL.mp3")).toBe("crack-haul");
     expect(buildDeckMediaPathname(songPlateTarget("crack-haul", 3, 1), "jpg")).toBe(
@@ -140,21 +145,22 @@ describe("bands, songs, shorts, episodes", () => {
     );
   });
 
-  it("adult shorts use the short's random tag in folder and names", () => {
-    expect(buildDeckMediaPathname(adultShortTarget("3f9a2c", "plate", 2), "jpg")).toBe(
-      "deck/shorts/shorts/short-3f9a2c/short-3f9a2c-plate-02.jpg",
+  it("shorts have readable folder and file names", () => {
+    expect(buildDeckMediaPathname(adultShortTarget("blonde-girl-1", "plate", 2), "jpg")).toBe(
+      "deck/shorts/shorts/blonde-girl-1/blonde-girl-1-plate-02.jpg",
     );
-    expect(randomDeckMediaTag()).toMatch(/^[0-9a-f]{6}$/);
   });
 
-  it("Sunnybank beats go under the episode name, or nowhere when it has none", () => {
+  it("Sunnybank beats go under the episode's pinned slug, or nowhere when it has none", () => {
     expect(
-      sunnybankBeatTarget({ episodeTitle: "The Big Wet", actId: "II", beatNumber: 3, characterName: "Shazza", kind: "speak" }),
+      sunnybankBeatTarget({ episodeSlug: "the-big-wet", actId: "II", beatNumber: 3, characterName: "Shazza", kind: "speak" }),
     ).toEqual({
       folder: "deck/sunnybank/episodes/the-big-wet/act-ii",
       name: "the-big-wet-act-ii-beat-03-shazza-speak",
     });
-    expect(sunnybankBeatTarget({ episodeTitle: "  ", actId: "I", beatNumber: 1, characterName: "Nan", kind: "hold" })).toBeNull();
+    expect(sunnybankBeatTarget({ episodeSlug: null, actId: "I", beatNumber: 1, characterName: "Nan", kind: "hold" })).toBeNull();
+    expect(sunnybankBeatTarget({ episodeSlug: "  ", actId: "I", beatNumber: 1, characterName: "Nan", kind: "hold" })).toBeNull();
+    expect(sunnybankBeatTarget({ episodeSlug: "The Big Wet", actId: "I", beatNumber: 1, characterName: "Nan", kind: "hold" })).toBeNull();
   });
 });
 

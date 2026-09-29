@@ -3,7 +3,7 @@
  * character's plate, a band's cover, a short's clip…) belongs in the
  * readable Blob tree, reading the live studio state. Paths themselves
  * come from `lib/deckMediaPaths.ts`; this only looks things up and pins
- * a band/member folder name or a short's tag the first time it's needed.
+ * a band/member or short folder name the first time it's needed.
  *
  * Every function returns `null` when the owner can't be found (a blank
  * new band, a song with no MP3 attached…); callers pass that straight to
@@ -20,13 +20,12 @@ import {
   characterPlateTarget,
   characterReferenceCandidateTarget,
   characterReferenceTarget,
+  deckCharacterOwner,
   deckMediaSlug,
-  isDeckMediaTag,
   isSafeDeckMediaSlug,
   memberAvatarTarget,
   memberLookTarget,
   memberMediaOwner,
-  randomDeckMediaTag,
   songMediaSlug,
   songPlateTarget,
   uniqueDeckMediaSlug,
@@ -146,16 +145,34 @@ export function songPlateTargetFor(segmentId: string, plateId: string): DeckMedi
 
 // ---- Adult shorts -----------------------------------------------------------
 
-/** The open short's random folder tag, set (and saved) on first use. */
-function pinAdultShortMediaTag(): string {
-  const existing = getAdultShortsState().mediaTag;
-  if (isDeckMediaTag(existing)) return existing;
-  const tag = randomDeckMediaTag();
-  patchAdultShorts((s) => (isDeckMediaTag(s.mediaTag) ? s : { ...s, mediaTag: tag }));
-  return getAdultShortsState().mediaTag ?? tag;
+/** The open short's folder name: pinned (and saved) the first time it
+ * makes a file, from its Library title or else its character's name,
+ * with `-2`, `-3`… if another saved short already uses it. */
+function pinAdultShortMediaSlug(): string {
+  const state = getAdultShortsState();
+  if (isSafeDeckMediaSlug(state.mediaSlug)) return state.mediaSlug;
+  const title = state.saved.find((x) => x.id === state.currentSavedId)?.title ?? "";
+  const base = deckMediaSlug(title || state.character.name, "short");
+  const taken = state.saved
+    .filter((x) => x.id !== state.currentSavedId)
+    .map((x) => x.mediaSlug)
+    .filter((slug): slug is string => isSafeDeckMediaSlug(slug));
+  const slug = uniqueDeckMediaSlug(base, taken);
+  patchAdultShorts((s) => (isSafeDeckMediaSlug(s.mediaSlug) ? s : { ...s, mediaSlug: slug }));
+  return getAdultShortsState().mediaSlug ?? slug;
 }
 
-/** `short-3f9a2c-plate-02` etc. for the open short; `n` is 1-based. */
+/** `blonde-girl-1-plate-02` etc. for the open short; `n` is 1-based. */
 export function adultShortTargetFor(role: "ref" | "plate" | "clip", n: number): DeckMediaTarget {
-  return adultShortTarget(pinAdultShortMediaTag(), role, n);
+  return adultShortTarget(pinAdultShortMediaSlug(), role, n);
+}
+
+/** A picture of the open short's character, filed with the other Shorts
+ * characters (`deck/shorts/characters/blonde-girl-1/pictures/
+ * blonde-girl-1-picture-01`) the same way every genre files its cast.
+ * No name yet → the short's own folder. `n` is 1-based. */
+export function adultShortCharacterPictureTargetFor(n: number): DeckMediaTarget {
+  const name = getAdultShortsState().character.name.trim();
+  if (!name) return adultShortTargetFor("ref", n);
+  return characterPictureTarget(deckCharacterOwner("shorts", deckMediaSlug(name, "character")), n);
 }

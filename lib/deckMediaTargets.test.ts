@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  adultShortCharacterPictureTargetFor,
   adultShortTargetFor,
   bandCoverTargetFor,
   characterPlateTargetFor,
@@ -98,21 +99,39 @@ describe("sections, songs, shorts", () => {
     expect(songPlateTargetFor("nope", "nope")).toBeNull();
   });
 
-  it("an Adult short keeps one random tag for all its files", () => {
-    patchAdultShorts((s) => ({ ...s, ageConfirmed: true, mediaTag: undefined }));
+  it("an Adult short gets one readable folder, pinned so a rename doesn't move it", () => {
+    patchAdultShorts((s) => ({
+      ...s,
+      ageConfirmed: true,
+      mediaSlug: undefined,
+      currentSavedId: null,
+      character: { ...s.character, name: "BLONDE GIRL _1" },
+    }));
     const plate = adultShortTargetFor("plate", 2);
-    const clip = adultShortTargetFor("clip", 2);
-    const tag = getAdultShortsState().mediaTag!;
-    expect(tag).toMatch(/^[0-9a-f]{6}$/);
-    expect(plate).toEqual({ folder: `deck/shorts/shorts/short-${tag}`, name: `short-${tag}-plate-02` });
-    expect(clip.folder).toBe(plate.folder);
+    expect(plate).toEqual({ folder: "deck/shorts/shorts/blonde-girl-1", name: "blonde-girl-1-plate-02" });
+    patchAdultShorts((s) => ({ ...s, character: { ...s.character, name: "Someone else" } }));
+    expect(adultShortTargetFor("clip", 2)).toEqual({ folder: "deck/shorts/shorts/blonde-girl-1", name: "blonde-girl-1-clip-02" });
+    expect(getAdultShortsState().mediaSlug).toBe("blonde-girl-1");
   });
 });
 
 describe("Skye", () => {
-  it("is filed under Shorts with a random tag on each file name", () => {
-    const t = characterPlateTargetFor({ slug: "skye", name: "Skye", sourceKey: null }, 3)!;
-    expect(t.folder).toBe("deck/shorts/characters/skye/plates");
-    expect(t.name).toMatch(/^skye-[0-9a-f]{6}-plate-03$/);
+  it("is a Shorts character with readable names, before and after her row says so", () => {
+    for (const sourceKey of [null, "asx:skye"]) {
+      expect(characterPlateTargetFor({ slug: "skye", name: "Skye", sourceKey }, 3)).toEqual({
+        folder: "deck/shorts/characters/skye/plates",
+        name: "skye-plate-03",
+      });
+    }
+  });
+});
+
+describe("a short's character", () => {
+  it("files its pictures with the other Shorts characters", () => {
+    patchAdultShorts((s) => ({ ...s, ageConfirmed: true, character: { ...s.character, name: "BLONDE GIRL _1" } }));
+    expect(adultShortCharacterPictureTargetFor(2)).toEqual({
+      folder: "deck/shorts/characters/blonde-girl-1/pictures",
+      name: "blonde-girl-1-picture-02",
+    });
   });
 });

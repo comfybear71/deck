@@ -10,15 +10,21 @@
  * changes, with its own revision, so a stale device can at worst be
  * refused on the one card it touched, never wipe the rest.
  *
- * Step 1 covers **characters only** (`kind = "character"`). The tables
- * are created by `db/migrations/2026-09-30_deck_items.sql`, run by hand.
- * Nothing in the app creates them.
+ * Step 1 covered characters (`kind = "character"`). Step 2 adds Sunnybank
+ * episodes (`kind = "sunnybank-episode"`, one row per saved episode card,
+ * folder `sunnybank`), Skidmarks episodes (`skidmarks-episode`, folder
+ * `skidmarks`) and saved shorts (`adult-short`, folder `adult-shorts`).
+ * The tables are created by
+ * `db/migrations/2026-09-30_deck_items.sql`, run by hand. Nothing in the
+ * app creates them.
  */
 
 /** The kinds this build saves per item. Later steps add more.
+ * `character`: one character card (`SkidmarksState.characterLoras.characters[]`).
+ * `sunnybank-episode`: one saved Sunnybank episode card.
  * `skidmarks-episode`: one Skidmarks episode (`SkidmarksState.skidmarksEpisodes.episodes[]`).
  * `adult-short`: one saved short from the Shorts Library (`SkidmarksState.adultShorts.saved[]`). */
-export const DECK_ITEM_KINDS = ["character", "skidmarks-episode", "adult-short"] as const;
+export const DECK_ITEM_KINDS = ["character", "sunnybank-episode", "skidmarks-episode", "adult-short"] as const;
 export type DeckItemKind = (typeof DECK_ITEM_KINDS)[number];
 
 export function isDeckItemKind(value: unknown): value is DeckItemKind {
@@ -37,7 +43,7 @@ export const DECK_FOLDER_LABELS: Record<DeckFolder, string> = {
   sunnybank: "Sunnybank",
   "music-video": "Music video",
   skidmarks: "Skidmarks",
-  "adult-shorts": "Adult shorts",
+  "adult-shorts": "Shorts",
 };
 
 /**
@@ -45,7 +51,8 @@ export const DECK_FOLDER_LABELS: Record<DeckFolder, string> = {
  * `lib/characterRoster.ts` and `lib/rosterExtras.ts`'s
  * `rosterExtraSourceKey`): `sb:`/`sbx:` Sunnybank, `mv:`/`mvx:` Music
  * video, `sk:` Skidmarks, `as:`/`asx:` Adult shorts. A card with no
- * `sourceKey` (Skye, anyone added by hand) sits at the Deck root.
+ * `sourceKey` (anyone added by hand on the LoRA cards list) sits at the
+ * Deck root. Skye is a Shorts character (`asx:skye`) like any other.
  */
 export function characterFolder(sourceKey: string | null | undefined): DeckFolder {
   const prefix = typeof sourceKey === "string" ? sourceKey.split(":", 1)[0] : "";
@@ -72,6 +79,7 @@ export function characterFolder(sourceKey: string | null | undefined): DeckFolde
  * Shorts keep the `adult-shorts` key the database and code already use.
  */
 export const DECK_ITEM_KIND_FOLDERS: Partial<Record<DeckItemKind, DeckFolder>> = {
+  "sunnybank-episode": "sunnybank",
   "skidmarks-episode": "skidmarks",
   "adult-short": "adult-shorts",
 };
@@ -102,8 +110,9 @@ export interface DeckItemTombstone {
   revision: number;
 }
 
-/** Item ids are app-made (`clora_<uuid>`, `clora_skye`, `ep_<uuid>`,
- * `short_<time>_<rand>`); anything else is refused. */
+/** Item ids are app-made (`clora_<uuid>`, `clora_skye`, a Sunnybank
+ * episode's `ws-<savedAt>-<seq>-<fingerprint>`, a Skidmarks episode's
+ * `ep_<uuid>`, a short's `short_<time>_<rand>`); anything else is refused. */
 export function isValidDeckItemId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(value);
 }

@@ -14,4 +14,7 @@ export const ADULT_SHORT_ITEMS: DeckItemKindConfig<AdultShortsSaved> = {
   kind: "adult-short",
   normalize: normalizeAdultShortsSavedEntry,
   noun: "short",
+  // The Library is newest first, so shorts this device didn't have go
+  // after its own, newest of them first (same rule as the Sunnybank shelf).
+  orderMissing: (x, y) => (x.savedAt < y.savedAt ? 1 : x.savedAt > y.savedAt ? -1 : 0),
 };

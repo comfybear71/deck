@@ -1,15 +1,18 @@
 /**
- * Per-item saving, the client engine every kind uses beyond characters
- * (Skidmarks episodes, shorts; 2026-09-30). This is `lib/characterItems.ts`
- * with the card type, its cleaner and its `kind` passed in instead of
- * fixed, so every genre follows exactly the same steps and rules. It works
+ * Per-item saving: the ONE client engine every kind uses (characters,
+ * Sunnybank episodes, Skidmarks episodes, shorts; 2026-09-30). The card
+ * type, its cleaner and its `kind` are passed in (a `DeckItemKindConfig`,
+ * one small file per kind), so every genre follows exactly the same steps
+ * and rules through the same code. It works
  * out which items really changed, sends one debounced
  * `PUT /api/deck/items` per changed item, lays the server's items over
  * whatever a session load put on screen, and adopts the server's copy
  * whenever a save is refused (409).
  *
  * The rules this file exists to keep, each covered by a test
- * (`lib/deckItemSync.test.ts`, run once per kind):
+ * (`lib/deckItemSync.test.ts` run once per kind, plus
+ * `lib/characterItems.test.ts` and `lib/sunnybankEpisodeItems.test.ts`
+ * through their kind wrappers):
  *
  * - **Only a real change writes.** The store's patch function hands
  *   every edit here with the before/after lists; only items that are new
@@ -56,6 +59,13 @@ export interface DeckItemKindConfig<T extends DeckItemEntry> {
   normalize: (value: unknown) => T | null;
   /** Word used in a problem message ("episode", "short"). */
   noun: string;
+  /**
+   * Where server items this device didn't have go in its list. They are
+   * always added after the device's own items; this only orders them
+   * among themselves (e.g. newest first for a newest-first shelf). Left
+   * out, they keep the server's order.
+   */
+  orderMissing?: (a: T, b: T) => number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -107,7 +117,8 @@ export function entryFromDeckItem<T extends DeckItemEntry>(config: DeckItemKindC
  * on their way up, or items it is deleting). Items the server has
  * deleted are dropped. Items the server doesn't know at all are kept as
  * they are, never removed. Server items this device doesn't have are
- * added at the end. Order otherwise follows this device's list.
+ * added at the end (ordered by the kind's `orderMissing`, if it has one).
+ * Order otherwise follows this device's list.
  */
 export function overlayDeckItems<T extends DeckItemEntry>(
   config: DeckItemKindConfig<T>,
@@ -142,11 +153,14 @@ export function overlayDeckItems<T extends DeckItemEntry>(
       out.push(c);
     }
   }
+  const missing: T[] = [];
   for (const [id, s] of server) {
     if (placed.has(id) || keepLocal.has(id)) continue;
-    out.push(s);
+    missing.push(s);
     changed = true;
   }
+  if (config.orderMissing) missing.sort(config.orderMissing);
+  out.push(...missing);
   return { entries: changed ? out : local.slice(), changed };
 }
 

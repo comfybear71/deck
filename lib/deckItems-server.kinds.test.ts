@@ -41,7 +41,13 @@ describe("kinds", () => {
     expect(isDeckItemKind("skidmarks-episode")).toBe(true);
     expect(isDeckItemKind("adult-short")).toBe(true);
     expect(isDeckItemKind("adult-shorts")).toBe(false);
-    expect(DECK_ITEM_KIND_FOLDERS).toEqual({ "skidmarks-episode": "skidmarks", "adult-short": "adult-shorts" });
+    expect(isDeckItemKind("sunnybank-episode")).toBe(true);
+    expect(isDeckItemKind("character")).toBe(true);
+    expect(DECK_ITEM_KIND_FOLDERS).toEqual({
+      "sunnybank-episode": "sunnybank",
+      "skidmarks-episode": "skidmarks",
+      "adult-short": "adult-shorts",
+    });
   });
 });
 

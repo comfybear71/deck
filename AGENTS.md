@@ -985,6 +985,13 @@ run by hand), loading never writes, and a card missing from a list is
 never a delete; only `removeCharacterLora` (the delete tap) deletes. See
 `docs/deck/PER_ITEM_SAVING.md`.
 
+Sunnybank episode cards (step 2) follow the same rules as kind
+`sunnybank-episode` (`lib/sunnybankEpisodeItems.ts`); the only seeder is
+`scripts/seed-deck-items-sunnybank-episodes.ts` (dry run by default) and
+only `deleteSunnyBanksWorkspace` (the ✕ tap) deletes. A card's `id` never
+changes and its `mediaSlug` (media folder) is pinned once; never derive
+either from the live episode name.
+
 Skidmarks episodes (kind `skidmarks-episode`) and saved shorts (kind
 `adult-short`, folder `adult-shorts`) follow exactly the same rules through
 the same engine (`lib/deckItemSync.ts`). Their only deletes are
@@ -992,6 +999,11 @@ the same engine (`lib/deckItemSync.ts`). Their only deletes are
 their only seeders are `scripts/seed-deck-items-skidmarks-episodes.ts` and
 `scripts/seed-deck-items-adult-shorts.ts`, run by hand with
 `DECK_DATABASE_URL` (never `DATABASE_URL`).
+
+Every kind goes through ONE client engine, `lib/deckItemSync.ts`. A new
+kind is a small kind file (kind + cleaner, like
+`lib/skidmarksEpisodeItems.ts`) plus the same wiring lines in
+`lib/skidmarks.ts`; never a copy of the engine.
 
 ## Env vars this feature actually reads
 
@@ -1134,12 +1146,13 @@ their only seeders are `scripts/seed-deck-items-skidmarks-episodes.ts` and
   <project>/...`. Band members are ordinary Music video characters
   (`deck/music-video/characters/<member>/`); only a band's cover has its
   own `deck/music-video/bands/<band>/` folder. A character with no
-  genre prefix (Skye, anyone added by hand) is a Shorts character. The
-  only genre difference: Shorts file names get a short random tag
-  (`skye-7b1e04-plate-03.jpg`). A taken name becomes `-v2`, `-v3`… and
+  genre prefix (Skye, anyone added by hand) is a Shorts character. No
+  random tags anywhere, Shorts included (`deck/shorts/characters/skye/
+  plates/skye-plate-03.jpg`, `deck/shorts/shorts/blonde-girl-1/
+  blonde-girl-1-plate-02.jpg`). A taken name becomes `-v2`, `-v3`… and
   `deck/` uploads are always `allowOverwrite: false`. Folder names are
   pinned the first time (a card's own `slug`, a band's or member's
-  `mediaSlug`, a short's `mediaTag`) and never follow a rename. Anything
+  `mediaSlug`, a short's `mediaSlug`) and never follow a rename. Anything
   without a known folder, or an upload that fails for any reason other
   than a taken name, falls back to its old `skidmarks/...` path. DB and
   UI names are unchanged (the folder id is still `adult-shorts`; the old

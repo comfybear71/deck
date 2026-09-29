@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildStarterEpisode } from "./skidmarksEpisodes";
 import { buildAdultShortsShot } from "./adultShorts";
+import { DECK_FOLDER_LABELS } from "./deckItems";
 import { formatDeckItemSeedTree, planDeckItemSeed } from "./deckItemSeedPlan";
 import { SKIDMARKS_EPISODE_ITEMS } from "./skidmarksEpisodeItems";
 import { ADULT_SHORT_ITEMS } from "./adultShortItems";
@@ -58,7 +59,7 @@ describe("planDeckItemSeed: shorts", () => {
 
   it("draws a folder tree", () => {
     const tree = formatDeckItemSeedTree(planShorts([short("short_1", "Skye · beach")]), "Shorts");
-    expect(tree).toContain("Adult shorts");
+    expect(tree).toContain(`└── ${DECK_FOLDER_LABELS["adult-shorts"]}`);
     expect(tree).toContain("Shorts (1)");
     expect(tree).toContain("Skye · beach  [short_1]");
   });
