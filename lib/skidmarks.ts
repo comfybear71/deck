@@ -212,8 +212,10 @@ import {
   characterLorasHaveUserContent,
   emptyCharacterLorasState,
   normalizeCharacterLorasState,
+  type CharacterLoraEntry,
   type CharacterLorasState,
 } from "./characterLoras";
+import { createCharacterItemSync, type CharacterItemSync } from "./characterItems";
 
 /** Cap on how many bands "New" can pile up before we start dropping the
  * oldest — this is a v0 stub roster, not a real catalog. */
@@ -2649,7 +2651,10 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
       void migrateInlineSessionImagesToBlob(fetched).then(({ state: migrated, changed }) => {
         if (!changed) return;
         if (!shouldApplyHydratedSkidmarksSession(editsAtApply, localEditCount)) return;
-        cachedState = migrated;
+        // Keep the character cards currently on screen: the per-item
+        // overlay may have landed while the images were uploading, and
+        // this migration never touches characters anyway.
+        cachedState = { ...migrated, characterLoras: cachedState?.characterLoras ?? migrated.characterLoras };
         writeLocalMirror(migrated);
         notify();
         void pushSkidmarksSessionNow();
@@ -2671,6 +2676,10 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     });
   } finally {
     settleHydration();
+    // Per-item saving: lay the server's character cards over whatever
+    // the session load just put on screen (items win). Read-only; it
+    // never writes an item by itself. See `lib/characterItems.ts`.
+    void getCharacterItemSync()?.refreshFromServer();
   }
 }
 
@@ -2784,7 +2793,10 @@ async function pushSkidmarksSessionNow(keepalive = false): Promise<void> {
   if (!keepalive && snapshot) {
     const { state: migrated, changed } = await migrateInlineSessionImagesToBlob(snapshot);
     if (changed) {
-      cachedState = migrated;
+      // Same as the hydrate path: never roll the character cards back to
+      // the pre-upload snapshot (a per-item overlay or 409 adopt may have
+      // landed meanwhile); this migration never touches them.
+      cachedState = { ...migrated, characterLoras: cachedState?.characterLoras ?? migrated.characterLoras };
       writeLocalMirror(migrated);
       notify();
     }
@@ -2929,6 +2941,8 @@ export function flushSkidmarksSessionNow(keepalive = false): void {
     pushTimer = null;
   }
   void pushSkidmarksSessionNow(keepalive);
+  // Any character card waiting on its own debounce goes now too.
+  characterItemSync?.flush(keepalive);
 }
 
 /**
@@ -2977,6 +2991,9 @@ export async function loadSkidmarksSessionFromServerNow(): Promise<boolean> {
     writeLocalMirror(fetched, false);
     notify();
     setSessionSync({ status: "synced" });
+    // The session copy just replaced everything on screen; lay the
+    // server's character cards back over it (items win). Read-only.
+    void getCharacterItemSync()?.refreshFromServer();
     return true;
   } catch (err) {
     setSessionSync({
@@ -3021,7 +3038,7 @@ function ensureSessionPersistenceWired(): void {
   // what actually extends how long this app keeps trying before that
   // becomes a real, final failure.
   window.addEventListener("beforeunload", (e) => {
-    if (sessionSync.status === "saving" || sessionSync.status === "error") {
+    if (sessionSync.status === "saving" || sessionSync.status === "error" || characterItemSync?.hasUnsavedWork()) {
       e.preventDefault();
       e.returnValue = "";
     }
@@ -3203,12 +3220,58 @@ export function getCharacterLorasState(state: SkidmarksState = getSkidmarksSnaps
 export function patchCharacterLoras(updater: (state: CharacterLorasState) => CharacterLorasState): void {
   const current = getSkidmarksSnapshot();
   const base = getCharacterLorasState(current);
-  persist({
-    ...current,
-    characterLoras: updater({
-      characters: base.characters.map((c) => ({ ...c, trainingImageUrls: c.trainingImageUrls.slice() })),
-    }),
+  const next = updater({
+    characters: base.characters.map((c) => ({ ...c, trainingImageUrls: c.trainingImageUrls.slice() })),
   });
+  persist({ ...current, characterLoras: next });
+  // Per-item saving: only the cards that really changed are sent, one
+  // debounced PUT each. A card missing from `next` is never a delete;
+  // only `removeCharacterLora` (a real delete tap) deletes.
+  getCharacterItemSync()?.noteLocalChange(base.characters, next.characters);
+}
+
+/**
+ * The one real delete for a character card, called only from its delete
+ * tap. Removes it here (and from the whole-session save, as before) and
+ * soft-deletes its `deck_items` row.
+ */
+export function removeCharacterLora(id: string): void {
+  const before = getCharacterLorasState().characters.find((c) => c.id === id) ?? null;
+  patchCharacterLoras((s) => ({ characters: s.characters.filter((c) => c.id !== id) }));
+  getCharacterItemSync()?.deleteCharacter(id, before);
+}
+
+/* --------------------------------------------------------------------
+ * Per-item saving for characters (2026-09-30, step 1). The engine and
+ * its rules live in `lib/characterItems.ts`; this is only the wiring
+ * into the in-memory store. Browser only. The whole-session save above
+ * keeps running as a mirror; the `deck_items` rows are the source of
+ * truth for characters once the seed has run.
+ * -------------------------------------------------------------------- */
+let characterItemSync: CharacterItemSync | null = null;
+
+function getCharacterItemSync(): CharacterItemSync | null {
+  if (!isBrowser()) return null;
+  if (!characterItemSync) {
+    characterItemSync = createCharacterItemSync({
+      fetch: (input, init) => fetch(input, init),
+      getCharacters: () => getCharacterLorasState().characters,
+      applyServerCharacters: applyServerCharacterLoras,
+      onProblem: (message) => console.warn(`[deck items] ${message}`),
+    });
+  }
+  return characterItemSync;
+}
+
+/** Puts server cards on screen. Deliberately not `persist()` and not
+ * `patchCharacterLoras`: this is a load, so it must never count as an
+ * edit or write anything back (items or session). The next real edit
+ * mirrors it into the session save as usual. */
+function applyServerCharacterLoras(characters: CharacterLoraEntry[]): void {
+  const current = getSkidmarksSnapshot();
+  cachedState = { ...current, characterLoras: { characters } };
+  noteContentObserved(cachedState);
+  notify();
 }
 
 function resolvedSunnyBanks(state: SkidmarksState): SkidmarksSunnyBanksState {
