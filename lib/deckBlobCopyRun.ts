@@ -1,19 +1,21 @@
 /**
  * Network + database half of the one-time "copy the old flat Blob
- * pictures into the readable deck/ tree" job. Shared, line for line, by
- * the CLI (`scripts/copy-blob-to-deck-tree.ts`) and the ONE-OFF route
- * (`app/api/deck/admin/copy-blob-tree/route.ts`), so both run exactly the
- * same checks, the same copy loop and the same single SQL statement. The
- * pure half (CSV, layout checks, link rewriting, the SQL text) stays in
- * `lib/deckBlobCopyPlan.ts`.
+ * pictures into the readable deck/ tree" job, used by the CLI
+ * (`scripts/copy-blob-to-deck-tree.ts`). It was also used by the one-off
+ * route `/api/deck/admin/copy-blob-tree`, which ran the copy on
+ * 2026-09-30 (207 files, 1 session row, 15 deck_items rows) and was
+ * removed afterwards. The pure half (CSV, layout checks, link
+ * rewriting, the SQL text) stays in `lib/deckBlobCopyPlan.ts`.
  *
  * Nothing in here deletes a file, ever, and every copy is
- * `allowOverwrite: false`. The only database write is `commitLinks`,
+ * `allowOverwrite: false`. Note: on the 2026-09-30 re-run the Blob API
+ * still accepted `copy()` onto names that already held the (identical)
+ * copies from the first run and reported them as "copied", so don't
+ * rely on `allowOverwrite: false` alone to protect a name. The only database write is `commitLinks`,
  * one compare-and-swap statement that fails as a whole if anything was
  * saved after it was read.
  *
- * Remove together with the route once the copy has been run (the CLI
- * can keep using it, or go too — it is also a one-time script).
+ * Can go together with the CLI script, which is also one-time.
  */
 import { createHash } from "node:crypto";
 import type { NeonQueryFunction } from "@neondatabase/serverless";
