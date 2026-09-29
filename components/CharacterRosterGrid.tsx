@@ -132,23 +132,23 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
           (e.sourceKey && charByKey.get(e.sourceKey)) || { name: e.name, look: "", neverShow: "", style: e.trainingStyle };
         const withStyle = { ...char, style: e.trainingStyle };
 
-        if (e.trainingImageUrls.length === 0) {
+        // Their existing picture is only Siray's reference, never a training
+        // picture: thumbnails often show a held prop (Shazza's cigarette, Nan's
+        // bat) and anything in the training set gets baked into the LoRA.
+        if (!e.referenceUrl) {
           const starts =
-            "sourceKey" in char && char.sourceKey
-              ? startingPictures(char as RosterCharacter, e)
-              : e.referenceUrl
-                ? [e.referenceUrl]
-                : [];
-          const urls: string[] = [];
+            "sourceKey" in char && char.sourceKey ? startingPictures(char as RosterCharacter, e) : e.trainingImageUrls.slice(0, 1);
+          let ref: string | null = null;
           for (const s of starts) {
             try {
-              urls.push(await ensureTrainingPicture(s));
+              ref = await ensureTrainingPicture(s);
+              break;
             } catch {
-              /* skip a picture that won't load; Siray fills the gap */
+              /* try the next picture */
             }
           }
-          if (urls.length === 0) return fail(entryId, "Couldn't load their picture to start from.");
-          patchEntry(entryId, { trainingImageUrls: urls, referenceUrl: e.referenceUrl ?? urls[0] });
+          if (!ref) return fail(entryId, "Couldn't load their picture to start from.");
+          patchEntry(entryId, { referenceUrl: ref });
           flushSkidmarksSessionNow();
           continue;
         }
@@ -162,7 +162,7 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
           return;
         }
 
-        const refSrc = e.referenceUrl ?? e.trainingImageUrls[0];
+        const refSrc = e.referenceUrl;
         let refData = refCache.current.get(refSrc);
         if (!refData) {
           refData = await referenceDataUrlFor(refSrc);
@@ -260,7 +260,7 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
         continue;
       }
       ready.push(c);
-      const starting = entry && entry.trainingImageUrls.length > 0 ? entry.trainingImageUrls.length : startingPictures(c, entry).length;
+      const starting = entry?.trainingImageUrls.length ?? 0;
       totalUsd += oneTapCost(starting).totalUsd;
     }
     return { ready, needFace, totalUsd: Math.round(totalUsd * 100) / 100 };
@@ -308,7 +308,7 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
     const entry = entryForRosterCharacter(characters, char.sourceKey);
     const face = entry?.referenceUrl ?? char.thumbUrl;
     const style = styleFor(char, entry);
-    const starting = entry && entry.trainingImageUrls.length > 0 ? entry.trainingImageUrls.length : startingPictures(char, entry).length;
+    const starting = entry?.trainingImageUrls.length ?? 0;
     const cost = oneTapCost(starting);
     const busy = busyKey === char.sourceKey;
     const status = entry?.status;
@@ -402,7 +402,7 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
                   </>
                 ) : (
                   <p className="text-xs text-white/60">
-                    Siray makes {cost.sirayPictures} more pictures of {char.name} from this one (
+                    Siray makes {cost.sirayPictures} pictures of {char.name} based on this one, all with empty hands (
                     {formatCostUsd(cost.sirayPictures * SIRAY_PICTURE_COST_USD)}). You check them, then training is about{" "}
                     {formatCostUsd(CHARACTER_LORA_ESTIMATED_COST_USD)}. Tapping confirms {char.name} is made up, clearly an
                     adult, and not a real person.
