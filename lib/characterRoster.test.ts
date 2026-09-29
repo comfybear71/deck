@@ -4,9 +4,12 @@ import {
   buildCharacterRoster,
   buildFacePrompt,
   buildTrainingPicturePrompts,
+  EMPTY_HANDS_LINE,
   minorBlockReason,
   oneTapCost,
+  signatureLine,
   startingPictures,
+  stripHeldProps,
 } from "./characterRoster";
 import { buildSdxlTrainingInput } from "./replicateTrainer";
 import { getSkidmarksSnapshot, type SkidmarksState } from "./skidmarks";
@@ -24,7 +27,7 @@ describe("buildCharacterRoster", () => {
     expect(jack.thumbUrl).toBe("/skidmarks/jack-ash-reference.jpg");
     expect(r["music-video"].find((c) => c.name === "Nova")!.thumbUrl).toBeNull();
     expect(r["sunny-banks"].map((c) => c.name)).toEqual(
-      expect.arrayContaining(["Shazza", "Dazza", "Nan", "Hans", "Nuggets", "Ranger Bazza", "Unit 4S"]),
+      expect.arrayContaining(["Shazza", "Dazza", "Nan", "Nuggets", "Ranger Bazza", "Unit 4S"]),
     );
     expect(r.skidmarks).toEqual([]);
   });
@@ -94,6 +97,7 @@ describe("prompts", () => {
 
 describe("one-tap sums", () => {
   it("prices the Siray top-up plus training", () => {
+    expect(oneTapCost(0)).toEqual({ sirayPictures: 15, totalUsd: 0.9 });
     expect(oneTapCost(1)).toEqual({ sirayPictures: 14, totalUsd: 0.86 });
     expect(oneTapCost(20)).toEqual({ sirayPictures: 0, totalUsd: 0.3 });
   });
@@ -122,3 +126,50 @@ describe("trainer input by style", () => {
     });
   });
 });
+
+describe("empty hands in training pictures", () => {
+  it("strips held props from a look but keeps the rest", () => {
+    expect(stripHeldProps("tiny elderly woman, hair bun, round glasses, purple housecoat, teacup, cricket bat")).toBe(
+      "tiny elderly woman, hair bun, round glasses, purple housecoat",
+    );
+    expect(stripHeldProps("big blonde hair, leopard-print top, cigarette, arms folded")).toBe(
+      "big blonde hair, leopard-print top, arms folded",
+    );
+    expect(stripHeldProps("short purple alien, antennae, teal bucket hat, holding a pair of thongs, bare feet")).toBe(
+      "short purple alien, antennae, teal bucket hat, bare feet",
+    );
+  });
+
+  it("tells Siray to keep hands empty on every training and face prompt", () => {
+    const char = { name: "Nan", look: "tiny elderly woman, teacup, cricket bat", neverShow: "", style: "cartoon" as const };
+    for (const p of buildTrainingPicturePrompts(char, 15)) {
+      expect(p).toContain(EMPTY_HANDS_LINE);
+      expect(p).not.toMatch(/cricket bat,|teacup,/);
+      expect(p).not.toMatch(/holding a microphone/);
+    }
+    expect(buildFacePrompt(char)).toContain(EMPTY_HANDS_LINE);
+  });
+
+  it("leaves Hans off the grid", () => {
+    const roster = buildCharacterRoster(stateWith());
+    expect(roster["sunny-banks"].map((c) => c.name)).not.toContain("Hans");
+  });
+});
+
+describe("Jack's neon blue lips", () => {
+  it("asks for the glowing lips in every one of Jack's training pictures and keeps them in his look", () => {
+    const jack = buildCharacterRoster(stateWith())["music-video"].find((c) => c.name === "Jack Ash")!;
+    const prompts = buildTrainingPicturePrompts(jack, 15);
+    expect(prompts).toHaveLength(15);
+    for (const p of prompts) {
+      expect(p).toContain("neon blue and are clearly visible");
+      expect(p.length).toBeLessThanOrEqual(1900);
+    }
+    expect(stripHeldProps(jack.look)).toMatch(/lips glow a vivid neon blue/);
+  });
+
+  it("adds nothing for characters without the lips", () => {
+    expect(signatureLine("big blonde hair, leopard-print top")).toBe("");
+  });
+});
+

@@ -68,6 +68,9 @@ function firstNonEmpty(...values: (string | null | undefined)[]): string | null 
   return null;
 }
 
+/** Characters Stuart has taken off the LoRA cast grid. They stay everywhere else in the app. */
+export const ROSTER_HIDDEN_NAMES: ReadonlySet<string> = new Set(["hans"]);
+
 export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup, RosterCharacter[]> {
   const out: Record<RosterGroup, RosterCharacter[]> = { "music-video": [], "sunny-banks": [], skidmarks: [] };
 
@@ -96,6 +99,7 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
   }
 
   for (const c of Object.values(SUNNY_BANKS_CAST)) {
+    if (ROSTER_HIDDEN_NAMES.has(c.name.trim().toLowerCase())) continue;
     out["sunny-banks"].push({
       sourceKey: `sb:${slugifyCharacterName(c.name)}`,
       group: "sunny-banks",
@@ -139,7 +143,7 @@ export function entryForRosterCharacter(
   return characters.find((c) => c.sourceKey === sourceKey) ?? null;
 }
 
-/** Pictures the one-tap flow starts from: the thumbnail (or approved face) plus any kept stills. */
+/** Candidate reference pictures for Siray, best first: the approved face, the thumbnail, then kept stills. Never used as training pictures themselves. */
 export function startingPictures(char: RosterCharacter, entry: CharacterLoraEntry | null): string[] {
   const first = entry?.referenceUrl ?? char.thumbUrl;
   const all = [first, ...char.extraPictureUrls].filter((u): u is string => Boolean(u));
@@ -179,19 +183,19 @@ const PHOTO_VARIATIONS = [
 const FACELESS_VARIATIONS = [
   "full body standing, three-quarter view, desert road at dusk",
   "waist-up, side profile, hat brim throwing the face into shadow, neon sign glow behind",
-  "full body walking away down a wet city street at night",
+  "full body, three-quarter view, walking down a wet city street at night, glowing lips visible under the brim",
   "waist-up, three-quarter view, leaning on a bar, smoky low light",
-  "full body silhouette against a bright sunset",
-  "head-and-shoulders from a low angle, face lost in shadow under the brim, moody backlight",
+  "full body silhouette against a bright sunset, turned three-quarter so the glowing lips still show",
+  "head-and-shoulders from a low angle, face lost in shadow under the brim except the glowing lips, moody backlight",
   "sitting on the hood of an old car, full body, dusty roadside, harsh noon sun",
-  "waist-up, holding a microphone stand, stage spotlight from above",
+  "waist-up on a small stage, arms loose at the sides, spotlight from above",
   "full body in a doorway, light behind, long shadow on the floor",
   "three-quarter view, waist-up, rain, streetlight from the side",
   "side profile, head-and-shoulders, plain dark studio background, one rim light",
   "full body, standing in tall dry grass, overcast sky",
-  "waist-up, walking toward the camera, face hidden in shadow, alley at night",
+  "waist-up, walking toward the camera at an angle, face hidden in shadow except the glowing lips, alley at night",
   "high angle, full body, standing on a cracked desert floor",
-  "waist-up, back three-quarter view looking over the shoulder, face still in shadow, motel neon",
+  "waist-up, looking over the shoulder, face still in shadow except the glowing lips, motel neon",
 ];
 
 const CARTOON_VARIATIONS = [
@@ -219,6 +223,24 @@ function variationsFor(style: CharacterTrainingStyle): string[] {
 }
 
 const MAX_LOOK_CHARS = 1100;
+
+// Anything held in a training picture gets learned as part of the
+// character and turns up in every later render, so training pictures
+// are always empty-handed. Props go in per-shot prompts instead.
+const HELD_PROP_RE =
+  /\b(holding|holds|carrying|carries|clutching|gripping|wielding|cigarettes?|smok(e|es|ing)|vape|pipe|pies?|tea ?cups?|cups?|mugs?|glass(es)? of|cricket bat|bats?|thongs|beers?|beer cans?|stubb(y|ies)|tinnies|cans?|bottles?|coins|hair ?dryer|cameras?|whistles?|phones?|microphones?|mic|guitars?|instruments?|drinks?|guns?|rifles?|knife|knives|tools?|umbrella|bags?|tins?)\b/i;
+
+/** The look with any held-prop clauses taken out (clauses split on commas, semicolons and dashes). */
+export function stripHeldProps(look: string): string {
+  return look
+    .split(/\s*(?:,|;|—|–|\s-\s)\s*/)
+    .map((part) => part.trim())
+    .filter((part) => part && !HELD_PROP_RE.test(part))
+    .join(", ");
+}
+
+export const EMPTY_HANDS_LINE =
+  "Hands empty and relaxed: not holding anything, no props, no cigarette, no drink, no phone, no tools, no weapons, no instrument. If the reference shows them holding something, leave it out.";
 const MAX_PROMPT_CHARS = 1900; // the Siray route refuses over 2000
 
 function clip(text: string, max: number): string {
@@ -229,6 +251,15 @@ function clip(text: string, max: number): string {
 function styleLine(style: CharacterTrainingStyle): string {
   if (style === "cartoon") return `Keep the exact same cartoon style as the reference: ${SUNNY_BANKS_STYLE_LOCK}.`;
   return "Photographic, realistic light and skin, sharp focus.";
+}
+
+const NEON_LIPS_RE = /neon[- ]blue lips|lips glow[^.]*neon blue/i;
+
+/** The one feature that must show in every picture, when the look has one (Jack's neon blue lips). */
+export function signatureLine(look: string): string {
+  return NEON_LIPS_RE.test(look)
+    ? "Must show: his lips glow a vivid neon blue and are clearly visible in this picture, the only lit feature of his shadowed face."
+    : "";
 }
 
 /**
@@ -251,8 +282,10 @@ export function buildTrainingPicturePrompts(
     const parts = [
       `The same ${who} as in the reference image (${char.name}), ${same}.`,
       `${variation}.`,
-      char.look ? clip(char.look, MAX_LOOK_CHARS) : "",
+      signatureLine(char.look),
+      char.look ? clip(stripHeldProps(char.look), MAX_LOOK_CHARS) : "",
       styleLine(char.style),
+      EMPTY_HANDS_LINE,
       `Only this one ${who} in the picture, a made-up adult, fully clothed, no text, no watermark.`,
       char.neverShow ? `Do not show: ${clip(char.neverShow, 300)}.` : "",
     ];
@@ -267,8 +300,9 @@ export function buildFacePrompt(char: Pick<RosterCharacter, "name" | "look" | "s
       ? "Waist-up, three-quarter view, face hidden in shadow, plain dark background, one soft key light."
       : "Head-and-shoulders character reference portrait, facing the camera, neutral expression, even soft light, plain light grey background.";
   const parts = [
-    `${char.name}: ${clip(char.look || "an original made-up character", MAX_LOOK_CHARS)}.`,
+    `${char.name}: ${clip(stripHeldProps(char.look) || "an original made-up character", MAX_LOOK_CHARS)}.`,
     framing,
+    EMPTY_HANDS_LINE,
     char.style === "cartoon" ? `${SUNNY_BANKS_STYLE_LOCK}.` : "Photographic, realistic.",
     "A made-up adult, clearly over 25, not resembling any real person, fully clothed, one person only, no text.",
   ];
