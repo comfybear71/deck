@@ -1420,7 +1420,7 @@ const SEED_BANDS: SkidmarksBand[] = [
   {
     id: "jack-ash",
     name: "Jack Ash",
-    tagline: "Dirt roads & bad decisions",
+    tagline: "",
     coverSeed: 1,
     editIcon: "pencil",
     members: [
@@ -1448,8 +1448,8 @@ const SEED_BANDS: SkidmarksBand[] = [
   },
   {
     id: "solar-rebel",
-    name: "Solar Rebel",
-    tagline: "Ignite the static",
+    name: "Soul Rebel",
+    tagline: "",
     coverSeed: 2,
     editIcon: "camera",
     members: [
@@ -1692,6 +1692,18 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
   };
 }
 
+/**
+ * The old demo seed band "Solar Rebel" became Stuart's Soul Rebel band
+ * (2026-09-29). A saved copy is renamed only while it still carries the
+ * untouched demo name, so a name Stuart typed himself is never changed.
+ */
+export function renameLegacySeedBand(band: SkidmarksBand): SkidmarksBand {
+  if (band && band.id === "solar-rebel" && band.name === "Solar Rebel") {
+    return { ...band, name: "Soul Rebel" };
+  }
+  return band;
+}
+
 function normalizeState(parsed: unknown): SkidmarksState {
   const p = (parsed ?? {}) as Partial<SkidmarksState>;
   const removedSeedBandIds = Array.isArray(p.removedSeedBandIds)
@@ -1707,7 +1719,8 @@ function normalizeState(parsed: unknown): SkidmarksState {
     ),
     ...extraBands,
   ];
-  const bands = bandsRaw.map((band) => {
+  const bands = bandsRaw.map((rawBand) => {
+    const band = renameLegacySeedBand(rawBand);
     if (!band || !Array.isArray(band.members)) return band;
     const members = band.members.map((member) => {
       if (!member || typeof member !== "object") return member;
