@@ -323,3 +323,96 @@ async function backupSkidmarksSession(sql: NonNullable<ReturnType<typeof getSkid
     // Deliberately silent: see the doc comment.
   }
 }
+
+/** One past save, as listed in "Restore an earlier save". */
+export interface SkidmarksSessionBackupSummary {
+  id: number;
+  revision: number;
+  savedAt: string;
+  characters: number;
+  episodes: number;
+  bands: number;
+  hasAdultShorts: boolean;
+}
+
+export type ListSkidmarksSessionBackupsOutcome =
+  | { ok: true; configured: true; backups: SkidmarksSessionBackupSummary[] }
+  | { ok: false; configured: boolean; error: string };
+
+/**
+ * The newest past saves, newest first, with a few counts so each one
+ * can be told apart ("10 characters, 3 episodes"). Read-only. The
+ * history table may not exist yet on a fresh database, which reads as
+ * "no backups", not an error.
+ */
+export async function listSkidmarksSessionBackups(limit = 60): Promise<ListSkidmarksSessionBackupsOutcome> {
+  const sql = getSkidmarksSql();
+  if (!sql) return { ok: false, configured: false, error: DATABASE_UNCONFIGURED_MESSAGE };
+  const take = Math.max(1, Math.min(200, Math.floor(limit)));
+  try {
+    const exists = (await sql`SELECT to_regclass('skidmarks_session_history') AS t`) as { t: string | null }[];
+    if (!exists[0]?.t) return { ok: true, configured: true, backups: [] };
+    const rows = (await sql`
+      SELECT id, revision, saved_at,
+        CASE WHEN jsonb_typeof(state -> 'characterLoras' -> 'characters') = 'array'
+          THEN jsonb_array_length(state -> 'characterLoras' -> 'characters') ELSE 0 END AS characters,
+        CASE WHEN jsonb_typeof(state -> 'sunnyBanks' -> 'workspaces') = 'array'
+          THEN jsonb_array_length(state -> 'sunnyBanks' -> 'workspaces') ELSE 0 END AS episodes,
+        CASE WHEN jsonb_typeof(state -> 'bands') = 'array'
+          THEN jsonb_array_length(state -> 'bands') ELSE 0 END AS bands,
+        COALESCE(jsonb_typeof(state -> 'adultShorts'), 'null') <> 'null' AS has_adult_shorts
+      FROM skidmarks_session_history
+      WHERE owner_id = ${SKIDMARKS_STUDIO_OWNER_ID}
+      ORDER BY id DESC
+      LIMIT ${take}
+    `) as {
+      id: string | number;
+      revision: string | number;
+      saved_at: string;
+      characters: string | number;
+      episodes: string | number;
+      bands: string | number;
+      has_adult_shorts: boolean;
+    }[];
+    return {
+      ok: true,
+      configured: true,
+      backups: rows.map((row) => ({
+        id: Number(row.id),
+        revision: toRevision(row.revision),
+        savedAt: typeof row.saved_at === "string" ? row.saved_at : new Date(row.saved_at).toISOString(),
+        characters: Number(row.characters) || 0,
+        episodes: Number(row.episodes) || 0,
+        bands: Number(row.bands) || 0,
+        hasAdultShorts: Boolean(row.has_adult_shorts),
+      })),
+    };
+  } catch (err) {
+    return { ok: false, configured: true, error: err instanceof Error ? err.message : "Could not list past saves." };
+  }
+}
+
+/**
+ * Put one past save back (2026-09-30, "Undo"). It is written as a brand
+ * new save on top, never a rewind: the save it replaces is itself
+ * already in the history, so restoring can always be undone by
+ * restoring again. Goes through `saveSkidmarksSession`, so the same
+ * never-wipe guard applies (a part missing from the old save keeps
+ * today's copy rather than being blanked).
+ */
+export async function restoreSkidmarksSessionBackup(id: number): Promise<SaveSkidmarksSessionOutcome> {
+  const sql = getSkidmarksSql();
+  if (!sql) return { ok: false, configured: false, error: DATABASE_UNCONFIGURED_MESSAGE };
+  try {
+    const rows = (await sql`
+      SELECT state FROM skidmarks_session_history
+      WHERE owner_id = ${SKIDMARKS_STUDIO_OWNER_ID} AND id = ${id}
+    `) as { state: unknown }[];
+    if (!rows[0] || !rows[0].state || typeof rows[0].state !== "object") {
+      return { ok: false, configured: true, error: "That earlier save wasn't found." };
+    }
+    return await saveSkidmarksSession(rows[0].state);
+  } catch (err) {
+    return { ok: false, configured: true, error: err instanceof Error ? err.message : "Could not restore that save." };
+  }
+}

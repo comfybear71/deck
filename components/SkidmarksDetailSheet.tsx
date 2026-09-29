@@ -26,6 +26,7 @@ import { SkidmarksScriptSequencePanel } from "./SkidmarksScriptSequencePanel";
 import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
 import { SunnyBanksEpisodeRow } from "./SunnyBanksEpisodeRow";
+import { SkidmarksRestoreSaves } from "./SkidmarksRestoreSaves";
 import { SkidmarksEpisodesPanel } from "./SkidmarksEpisodesPanel";
 import { AdultShortsPanel } from "./AdultShortsPanel";
 import { CharacterLorasPanel } from "./CharacterLorasPanel";
@@ -644,6 +645,10 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             </button>
           </>
         ))}
+
+      {/* The app's Undo (Stuart, 2026-09-30): put back any of the last
+          saves the server kept. On every project screen. */}
+      <SkidmarksRestoreSaves />
     </div>
   );
 

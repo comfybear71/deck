@@ -311,3 +311,58 @@ describe("every save keeps a backup copy (2026-09-30)", () => {
     expect(outcome).toEqual({ ok: true, updatedAt: "2026-09-30T00:00:00.000Z", revision: 5 });
   });
 });
+
+describe("restore an earlier save (2026-09-30)", () => {
+  const withDb = async () => {
+    process.env.DATABASE_URL = "postgres://user:pass@host/db";
+    return await importModule();
+  };
+  const texts = () => sqlMock.mock.calls.map((c) => (c[0] as TemplateStringsArray).join("?"));
+
+  it("lists no backups, without erroring, before the history table exists", async () => {
+    const { listSkidmarksSessionBackups } = await withDb();
+    sqlMock.mockResolvedValueOnce([{ t: null }]);
+    expect(await listSkidmarksSessionBackups()).toEqual({ ok: true, configured: true, backups: [] });
+  });
+
+  it("lists backups newest first with their counts", async () => {
+    const { listSkidmarksSessionBackups } = await withDb();
+    sqlMock.mockResolvedValueOnce([{ t: "skidmarks_session_history" }]);
+    sqlMock.mockResolvedValueOnce([
+      { id: "9", revision: "1443", saved_at: "2026-09-29T15:10:00.000Z", characters: "10", episodes: "0", bands: "4", has_adult_shorts: true },
+    ]);
+    const outcome = await listSkidmarksSessionBackups();
+    expect(outcome).toEqual({
+      ok: true,
+      configured: true,
+      backups: [
+        { id: 9, revision: 1443, savedAt: "2026-09-29T15:10:00.000Z", characters: 10, episodes: 0, bands: 4, hasAdultShorts: true },
+      ],
+    });
+    expect(texts().some((q) => /ORDER BY id DESC/.test(q))).toBe(true);
+  });
+
+  it("writes the old save back as a new save on top, which is backed up too", async () => {
+    const { restoreSkidmarksSessionBackup } = await withDb();
+    sqlMock.mockResolvedValueOnce([{ state: { bands: [], characterLoras: { characters: [] } } }]); // SELECT backup
+    sqlMock.mockResolvedValueOnce([]); // CREATE TABLE
+    sqlMock.mockResolvedValueOnce([]); // ALTER TABLE
+    sqlMock.mockResolvedValueOnce([{ updated_at: "2026-09-30T00:50:00.000Z", revision: "1450" }]); // upsert
+    sqlMock.mockResolvedValue([]); // history writes
+    const outcome = await restoreSkidmarksSessionBackup(9);
+    expect(outcome).toEqual({ ok: true, updatedAt: "2026-09-30T00:50:00.000Z", revision: 1450 });
+    const select = sqlMock.mock.calls[0];
+    expect((select[0] as TemplateStringsArray).join("?")).toMatch(/FROM skidmarks_session_history/);
+    expect(select.slice(1)).toContain(9);
+    expect(texts().some((q) => /revision = skidmarks_sessions.revision \+ 1/.test(q))).toBe(true);
+    expect(texts().some((q) => /INSERT INTO skidmarks_session_history/.test(q))).toBe(true);
+  });
+
+  it("says so plainly when the backup isn't there, and writes nothing", async () => {
+    const { restoreSkidmarksSessionBackup } = await withDb();
+    sqlMock.mockResolvedValueOnce([]);
+    const outcome = await restoreSkidmarksSessionBackup(12345);
+    expect(outcome).toEqual({ ok: false, configured: true, error: "That earlier save wasn't found." });
+    expect(sqlMock).toHaveBeenCalledTimes(1);
+  });
+});
