@@ -203,6 +203,12 @@ import {
   type AdultShortsState,
 } from "./adultShorts";
 import {
+  emptyRosterExtrasState,
+  normalizeRosterExtrasState,
+  rosterExtrasHaveUserContent,
+  type RosterExtrasState,
+} from "./rosterExtras";
+import {
   characterLorasHaveUserContent,
   emptyCharacterLorasState,
   normalizeCharacterLorasState,
@@ -1389,6 +1395,12 @@ export interface SkidmarksState {
    * `lib/characterLoras.ts`. `null` reads as the Skye seed.
    */
   characterLoras?: CharacterLorasState | null;
+  /**
+   * Characters added with "+ Add a character" in Music video, Sunnybank
+   * and Adult shorts (2026-09-29), same Neon session row, see
+   * `lib/rosterExtras.ts`. URLs only, never bytes.
+   */
+  rosterExtras?: RosterExtrasState | null;
 }
 
 function isBrowser(): boolean {
@@ -1455,6 +1467,7 @@ function emptyState(): SkidmarksState {
     skidmarksEpisodes: null,
     adultShorts: null,
     characterLoras: null,
+    rosterExtras: null,
   };
 }
 
@@ -1846,6 +1859,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
     skidmarksEpisodes: normalizeSkidmarksEpisodesState(p.skidmarksEpisodes),
     adultShorts: normalizeAdultShortsState(p.adultShorts),
     characterLoras: normalizeCharacterLorasState(p.characterLoras),
+    rosterExtras: normalizeRosterExtrasState(p.rosterExtras),
   };
 }
 
@@ -2066,8 +2080,16 @@ export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
   const hasEpisodes = skidmarksEpisodesHaveUserContent(state.skidmarksEpisodes);
   const hasAdultShorts = adultShortsHaveUserContent(state.adultShorts);
   const hasCharacterLoras = characterLorasHaveUserContent(state.characterLoras);
+  const hasRosterExtras = rosterExtrasHaveUserContent(state.rosterExtras);
   return (
-    hasRealBand || hasMp3 || hasTaggedSegments || hasSunnyBanks || hasEpisodes || hasAdultShorts || hasCharacterLoras
+    hasRealBand ||
+    hasMp3 ||
+    hasTaggedSegments ||
+    hasSunnyBanks ||
+    hasEpisodes ||
+    hasAdultShorts ||
+    hasCharacterLoras ||
+    hasRosterExtras
   );
 }
 
@@ -4780,4 +4802,22 @@ export function skidmarksGlance(state: SkidmarksState): {
     return { status: "in-progress", label: "Choosing a band\u2026" };
   }
   return { status: "idle", label: "No project yet" };
+}
+
+/** Added characters (Music video, Sunnybank, Adult shorts) — empty until the first add. */
+export function getRosterExtrasState(state: SkidmarksState = getSkidmarksSnapshot()): RosterExtrasState {
+  return state.rosterExtras ?? emptyRosterExtrasState();
+}
+
+export function patchRosterExtras(updater: (state: RosterExtrasState) => RosterExtrasState): void {
+  const current = getSkidmarksSnapshot();
+  const base = getRosterExtrasState(current);
+  persist({
+    ...current,
+    rosterExtras: updater({
+      "music-video": base["music-video"].slice(),
+      "sunny-banks": base["sunny-banks"].slice(),
+      "adult-shorts": base["adult-shorts"].slice(),
+    }),
+  });
 }

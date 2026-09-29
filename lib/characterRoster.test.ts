@@ -15,6 +15,13 @@ import {
 import { buildSdxlTrainingInput } from "./replicateTrainer";
 import { getSkidmarksSnapshot, type SkidmarksState } from "./skidmarks";
 import { buildSkidmarksCastMember } from "./skidmarksEpisodes";
+import {
+  addPicturesToRosterExtra,
+  buildRosterExtraCharacter,
+  normalizeRosterExtrasState,
+  ROSTER_EXTRA_MAX_PICTURES,
+  rosterExtrasHaveUserContent,
+} from "./rosterExtras";
 
 function stateWith(extra: Partial<SkidmarksState> = {}): SkidmarksState {
   return { ...getSkidmarksSnapshot(), ...extra };
@@ -290,5 +297,92 @@ describe("Adult shorts group", () => {
   it("still refuses under-18 wording", () => {
     const r = buildCharacterRoster(adultState(true, { name: "Kid", look: "a teen girl", referenceUrls: [] }))["adult-shorts"];
     expect(r[0].blockedReason).toMatch(/under 18/);
+  });
+});
+
+describe("Added characters (+ Add a character in every group)", () => {
+  const extra = (id: string, name: string, pictureUrls: string[] = [], isAnimal = false) =>
+    buildRosterExtraCharacter(name, "", { pictureUrls, isAnimal }, 1, id);
+
+  it("adds new tiles to Music video and Sunnybank in that group's style", () => {
+    const r = buildCharacterRoster(
+      stateWith({
+        rosterExtras: {
+          "music-video": [extra("a", "Dazza", ["https://x.com/d1.jpg", "https://x.com/d2.jpg"])],
+          "sunny-banks": [extra("b", "Mrs Pike", ["https://x.com/p1.jpg"])],
+          "adult-shorts": [],
+        },
+      }),
+    );
+    const dazza = r["music-video"].find((c) => c.name === "Dazza")!;
+    expect(dazza).toMatchObject({
+      sourceKey: "mvx:a",
+      thumbUrl: "https://x.com/d1.jpg",
+      extraPictureUrls: ["https://x.com/d2.jpg"],
+      style: "photo",
+      subjectWord: "person",
+      blockedReason: null,
+    });
+    expect(r["sunny-banks"].find((c) => c.name === "Mrs Pike")).toMatchObject({ sourceKey: "sbx:b", style: "cartoon" });
+  });
+
+  it("a name already in the group gets the pictures, not a second tile", () => {
+    const r = buildCharacterRoster(
+      stateWith({ rosterExtras: { "music-video": [extra("a", "nova", ["https://x.com/n1.jpg"])], "sunny-banks": [], "adult-shorts": [] } }),
+    );
+    const novas = r["music-video"].filter((c) => c.name.toLowerCase() === "nova");
+    expect(novas).toHaveLength(1);
+    expect(novas[0].sourceKey).toBe("mv:solar-rebel-vocals");
+    expect([novas[0].thumbUrl, ...novas[0].extraPictureUrls]).toContain("https://x.com/n1.jpg");
+  });
+
+  it("Adult shorts added characters stay hidden until the 18+ confirm, then show as photo", () => {
+    const extras = { "music-video": [], "sunny-banks": [], "adult-shorts": [extra("c", "Vera", ["https://x.com/v.jpg"])] };
+    const base = { character: { name: "", look: "", referenceUrls: [] }, shots: [], saved: [] };
+    const hidden = buildCharacterRoster(
+      stateWith({ rosterExtras: extras, adultShorts: { ...base, ageConfirmed: false } as unknown as SkidmarksState["adultShorts"] }),
+    );
+    expect(hidden["adult-shorts"]).toEqual([]);
+    const shown = buildCharacterRoster(
+      stateWith({ rosterExtras: extras, adultShorts: { ...base, ageConfirmed: true } as unknown as SkidmarksState["adultShorts"] }),
+    );
+    expect(shown["adult-shorts"]).toEqual([expect.objectContaining({ sourceKey: "asx:c", name: "Vera", style: "photo" })]);
+  });
+
+  it("animals say animal and aren't blocked by the word list", () => {
+    const r = buildCharacterRoster(
+      stateWith({ rosterExtras: { "music-video": [], "sunny-banks": [extra("d", "Baby magpie", [], true)], "adult-shorts": [] } }),
+    );
+    expect(r["sunny-banks"].find((c) => c.name === "Baby magpie")).toMatchObject({ subjectWord: "animal", blockedReason: null });
+  });
+});
+
+describe("rosterExtras state", () => {
+  it("drops anything not confirmed made-up adult and keeps only https/data pictures", () => {
+    const s = normalizeRosterExtrasState({
+      "music-video": [
+        { id: "a", name: "Ok", look: "", pictureUrls: ["https://x.com/1.jpg", "javascript:bad", "https://x.com/1.jpg"], fictionalAdultConfirmed: true, createdAt: 1 },
+        { id: "b", name: "Nope", look: "", pictureUrls: [], createdAt: 1 },
+      ],
+      "adult-shorts": "junk",
+    })!;
+    expect(s["music-video"].map((c) => c.name)).toEqual(["Ok"]);
+    expect(s["music-video"][0].pictureUrls).toEqual(["https://x.com/1.jpg"]);
+    expect(s["adult-shorts"]).toEqual([]);
+    expect(s["sunny-banks"]).toEqual([]);
+  });
+
+  it("adding pictures keeps the 12 cap", () => {
+    const c = buildRosterExtraCharacter("Dazza", "", { pictureUrls: Array.from({ length: 10 }, (_, i) => `https://x.com/${i}.jpg`) });
+    const more = addPicturesToRosterExtra(c, Array.from({ length: 5 }, (_, i) => `https://y.com/${i}.jpg`));
+    expect(more.pictureUrls).toHaveLength(ROSTER_EXTRA_MAX_PICTURES);
+  });
+
+  it("counts as real content for the session", () => {
+    expect(rosterExtrasHaveUserContent(null)).toBe(false);
+    expect(rosterExtrasHaveUserContent({ "music-video": [], "sunny-banks": [], "adult-shorts": [] })).toBe(false);
+    expect(
+      rosterExtrasHaveUserContent({ "music-video": [buildRosterExtraCharacter("A", "")], "sunny-banks": [], "adult-shorts": [] }),
+    ).toBe(true);
   });
 });

@@ -22,6 +22,7 @@ import {
   type CharacterTrainingStyle,
 } from "./characterLoras";
 import { normalizeAdultShortsState } from "./adultShorts";
+import { ROSTER_EXTRA_GROUPS, normalizeRosterExtrasState, rosterExtraSourceKey, type RosterExtraGroup } from "./rosterExtras";
 import { resolveMemberStillSleeve } from "./memberStillSleeve";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
 import type { SkidmarksState } from "./skidmarks";
@@ -162,8 +163,47 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
       blockedReason: minorBlockReason(`${ac.name} ${ac.look}`),
     });
   }
+
+  // Characters added with "+ Add a character" (see `lib/rosterExtras.ts`).
+  // Same name as one already in the group: their pictures go to that
+  // character instead of making a second tile.
+  const extras = normalizeRosterExtrasState(state.rosterExtras);
+  for (const g of ROSTER_EXTRA_GROUPS) {
+    // Adult shorts stay hidden until the 18+ confirm is ticked, like the editor character.
+    if (g === "adult-shorts" && !adult?.ageConfirmed) continue;
+    for (const x of extras?.[g] ?? []) {
+      const slug = slugifyCharacterName(x.name);
+      const existing = out[g].find((c) => slugifyCharacterName(c.name) === slug);
+      if (existing) {
+        const pics = [...new Set([existing.thumbUrl, ...existing.extraPictureUrls, ...x.pictureUrls].filter((u): u is string => Boolean(u)))];
+        existing.thumbUrl = pics[0] ?? null;
+        existing.extraPictureUrls = pics.slice(1, CHARACTER_LORA_MAX_IMAGES);
+        if (!existing.look.trim() && x.look.trim()) existing.look = x.look;
+        continue;
+      }
+      out[g].push({
+        sourceKey: rosterExtraSourceKey(g, x.id),
+        group: g,
+        name: x.name,
+        thumbUrl: x.pictureUrls[0] ?? null,
+        extraPictureUrls: x.pictureUrls.slice(1),
+        look: x.look,
+        neverShow: "",
+        style: EXTRA_STYLE[g],
+        subjectWord: x.isAnimal ? "animal" : g === "sunny-banks" ? "character" : "person",
+        blockedReason: x.isAnimal ? null : minorBlockReason(`${x.name} ${x.look}`),
+      });
+    }
+  }
   return out;
 }
+
+/** The style an added character trains in, same as the rest of their group. */
+const EXTRA_STYLE: Record<RosterExtraGroup, CharacterTrainingStyle> = {
+  "music-video": "photo",
+  "sunny-banks": "cartoon",
+  "adult-shorts": "photo",
+};
 
 /** The LoRA card for a roster character, if one exists. */
 export function entryForRosterCharacter(

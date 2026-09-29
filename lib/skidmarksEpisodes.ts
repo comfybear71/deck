@@ -158,7 +158,7 @@ export function buildSkidmarksCastMember(
 /** At most this many uploaded pictures are kept per cast member. */
 export const SKIDMARKS_CAST_MAX_PICTURES = 12;
 
-function cleanPictureUrls(value: unknown): string[] {
+export function cleanPictureUrls(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const out: string[] = [];
   for (const u of value) {

@@ -11,6 +11,7 @@ import {
   formatCostUsd,
   type CharacterLoraEntry,
   type CharacterTrainingStyle,
+  slugifyCharacterName,
 } from "@/lib/characterLoras";
 import {
   AutoLoraError,
@@ -35,10 +36,20 @@ import {
 import {
   flushSkidmarksSessionNow,
   getCharacterLorasState,
+  getRosterExtrasState,
   patchCharacterLoras,
+  patchRosterExtras,
   patchSkidmarksEpisodes,
   type SkidmarksState,
 } from "@/lib/skidmarks";
+import { normalizeAdultShortsState } from "@/lib/adultShorts";
+import {
+  addPicturesToRosterExtra,
+  buildRosterExtraCharacter,
+  isRosterExtraGroup,
+  rosterExtraSourceKey,
+  type RosterExtraGroup,
+} from "@/lib/rosterExtras";
 import { SKIDMARKS_CAST_MAX_PICTURES, buildSkidmarksCastMember, castNameFromFileName } from "@/lib/skidmarksEpisodes";
 
 /**
@@ -65,10 +76,18 @@ const STYLE_LABELS: Record<CharacterTrainingStyle, string> = {
 };
 
 const EMPTY_GROUP_TEXT: Record<RosterGroup, string> = {
-  "music-video": "No band members yet. Add one to a band and they show up here.",
-  "sunny-banks": "No characters yet.",
-  skidmarks: "No Skidmarks characters yet.",
-  "adult-shorts": "No character yet. Tick the 18+ confirm and name your character in the editor, and they show up here.",
+  "music-video": "No characters yet. Add a band member, or tap + Add a character.",
+  "sunny-banks": "No characters yet. Tap + Add a character.",
+  skidmarks: "No Skidmarks characters yet. Tap + Add a character.",
+  "adult-shorts": "No characters yet. Tick the 18+ confirm below, then tap + Add a character.",
+};
+
+/** Example look in the "+ Add a character" box, per group. */
+const LOOK_PLACEHOLDER: Record<RosterGroup, string> = {
+  "music-video": "Their look, e.g. early-30s guitarist, shaved head, sleeve tattoos, black denim jacket",
+  "sunny-banks": "Their look, e.g. 60s neighbour, curlers, floral dressing gown, thongs",
+  skidmarks: "Their look, e.g. late-40s bloke, sunburnt, wild grey mullet, faded hi-vis shirt, stubby shorts",
+  "adult-shorts": "Their look, e.g. early-30s woman, long auburn hair, green eyes, freckles",
 };
 
 interface CastUpload {
@@ -140,7 +159,12 @@ export function CharacterRosterGrid({
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [message, setMessage] = useState<Record<string, string>>({});
   const [armedGroup, setArmedGroup] = useState<string | null>(null);
-  const [newCast, setNewCast] = useState({ name: "", look: "", adult: false, open: false });
+  const [newCast, setNewCast] = useState<{ name: string; look: string; adult: boolean; openGroup: RosterGroup | null }>({
+    name: "",
+    look: "",
+    adult: false,
+    openGroup: null,
+  });
   // Picked picture files, grouped by name ("Clive 1.jpg", "Clive 2.jpg" are one character).
   const [castUploads, setCastUploads] = useState<CastUpload[]>([]);
   const [castUploadBusy, setCastUploadBusy] = useState<string | null>(null);
@@ -150,6 +174,7 @@ export function CharacterRosterGrid({
   const running = useRef(new Set<string>());
   const refCache = useRef(new Map<string, string>());
 
+  const adultConfirmed = Boolean(normalizeAdultShortsState(snapshot.adultShorts)?.ageConfirmed);
   const allChars = useMemo(() => ROSTER_GROUPS.flatMap((g) => roster[g.id]), [roster]);
   const charByKey = useMemo(() => new Map(allChars.map((c) => [c.sourceKey, c])), [allChars]);
 
@@ -619,8 +644,10 @@ export function CharacterRosterGrid({
   const canAddCast = hasUploads
     ? newCast.adult && !uploadsBlocked && !castUploadBusy && castUploads.every((u) => u.name.trim().length > 0)
     : newCast.name.trim().length > 0 && newCast.look.trim().length > 0 && newCast.adult && !newCastBlocked;
-  const skidmarksCastByName = new Map(
-    allChars.filter((c) => c.group === "skidmarks").map((c) => [c.name.trim().toLowerCase(), c.sourceKey.replace(/^sk:/, "")]),
+  const addGroup = newCast.openGroup;
+  /** Names already in the group being added to, so a picture with that name adds to them. */
+  const addGroupKeyByName = new Map(
+    (addGroup ? roster[addGroup] : []).map((c) => [slugifyCharacterName(c.name), c.sourceKey]),
   );
 
   const clearCastUploads = () => {
@@ -633,7 +660,7 @@ export function CharacterRosterGrid({
   const closeAddCast = () => {
     clearCastUploads();
     setCastUploadBusy(null);
-    setNewCast({ name: "", look: "", adult: false, open: false });
+    setNewCast({ name: "", look: "", adult: false, openGroup: null });
   };
 
   const pickCastFiles = (files: FileList | null) => {
@@ -657,14 +684,64 @@ export function CharacterRosterGrid({
     });
   };
 
-  const addSkidmarksCast = async () => {
-    if (!canAddCast) return;
-    if (!hasUploads) {
-      const member = buildSkidmarksCastMember(newCast.name, newCast.look);
+  /**
+   * Saves one character (or a batch from pictures) to the open group.
+   * Skidmarks goes to its cast list (the episodes read it); every other
+   * group goes to its added-characters list. A name already in the group
+   * gets the pictures added instead of a second character.
+   */
+  const saveCharacter = (
+    group: RosterGroup,
+    name: string,
+    look: string,
+    urls: string[],
+    isAnimal: boolean,
+  ): string => {
+    const slug = slugifyCharacterName(name);
+    if (group === "skidmarks") {
+      const existingKey = addGroupKeyByName.get(slug);
+      const existingId = existingKey?.startsWith("sk:") ? existingKey.slice(3) : null;
+      if (existingId) {
+        patchSkidmarksEpisodes((st) => ({
+          ...st,
+          cast: st.cast.map((c) =>
+            c.id === existingId
+              ? {
+                  ...c,
+                  pictureUrls: [...new Set([...(c.pictureUrls ?? []), ...urls])].slice(0, SKIDMARKS_CAST_MAX_PICTURES),
+                  ...(isAnimal ? { isAnimal: true } : {}),
+                }
+              : c,
+          ),
+        }));
+        return existingKey as string;
+      }
+      const member = buildSkidmarksCastMember(name, look, "supporting", Date.now(), undefined, { pictureUrls: urls, isAnimal });
       patchSkidmarksEpisodes((st) => ({ ...st, cast: [...st.cast, member] }));
+      return `sk:${member.id}`;
+    }
+    if (!isRosterExtraGroup(group)) return "";
+    const g: RosterExtraGroup = group;
+    const already = getRosterExtrasState()[g].find((x) => slugifyCharacterName(x.name) === slug);
+    if (already) {
+      patchRosterExtras((st) => ({ ...st, [g]: st[g].map((x) => (x.id === already.id ? addPicturesToRosterExtra(x, urls, isAnimal) : x)) }));
+    } else {
+      const c = buildRosterExtraCharacter(name, look, { pictureUrls: urls, isAnimal });
+      patchRosterExtras((st) => ({ ...st, [g]: [...st[g], c] }));
+      // A built-in character with this name (a band member, a Sunnybank
+      // regular) keeps their own tile; the pictures just join them.
+      return addGroupKeyByName.get(slug) ?? rosterExtraSourceKey(g, c.id);
+    }
+    return addGroupKeyByName.get(slug) ?? rosterExtraSourceKey(g, already.id);
+  };
+
+  const addCharacters = async () => {
+    if (!canAddCast || !addGroup) return;
+    if (!hasUploads) {
+      const key = saveCharacter(addGroup, newCast.name, newCast.look, [], false);
       flushSkidmarksSessionNow();
       closeAddCast();
-      setSelectedKey(`sk:${member.id}`);
+      if (key) setSelectedKey(key);
       return;
     }
     let lastKey: string | null = null;
@@ -675,29 +752,7 @@ export function CharacterRosterGrid({
           setCastUploadBusy(`Saving ${u.name.trim()}, picture ${i + 1} of ${u.previews.length}…`);
           urls.push(await toTrainingPicture(u.previews[i]));
         }
-        const existingId = skidmarksCastByName.get(u.name.trim().toLowerCase());
-        if (existingId) {
-          patchSkidmarksEpisodes((st) => ({
-            ...st,
-            cast: st.cast.map((c) =>
-              c.id === existingId
-                ? {
-                    ...c,
-                    pictureUrls: [...new Set([...(c.pictureUrls ?? []), ...urls])].slice(0, SKIDMARKS_CAST_MAX_PICTURES),
-                    ...(u.isAnimal ? { isAnimal: true } : {}),
-                  }
-                : c,
-            ),
-          }));
-          lastKey = `sk:${existingId}`;
-        } else {
-          const member = buildSkidmarksCastMember(u.name, "", "supporting", Date.now(), undefined, {
-            pictureUrls: urls,
-            isAnimal: u.isAnimal,
-          });
-          patchSkidmarksEpisodes((st) => ({ ...st, cast: [...st.cast, member] }));
-          lastKey = `sk:${member.id}`;
-        }
+        lastKey = saveCharacter(addGroup, u.name, "", urls, u.isAnimal) || lastKey;
         flushSkidmarksSessionNow();
       }
       closeAddCast();
@@ -715,7 +770,7 @@ export function CharacterRosterGrid({
     hasUploads ? (
       <div className="flex flex-col gap-2">
         {castUploads.map((u, i) => {
-          const existing = skidmarksCastByName.has(u.name.trim().toLowerCase());
+          const existing = addGroupKeyByName.has(slugifyCharacterName(u.name));
           return (
             <div key={u.key} className="flex flex-col gap-1.5 rounded-md border border-white/10 bg-black/30 p-1.5">
               <div className="flex gap-1 overflow-x-auto">
@@ -734,17 +789,19 @@ export function CharacterRosterGrid({
                   maxLength={60}
                   className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/40 px-2 py-1 text-xs text-white"
                 />
-                <label className="flex items-center gap-1 text-[11px] text-white/60">
-                  <input
-                    type="checkbox"
-                    checked={u.isAnimal}
-                    onChange={(e) => {
-                      const isAnimal = e.target.checked;
-                      setCastUploads((list) => list.map((x, j) => (j === i ? { ...x, isAnimal } : x)));
-                    }}
-                  />
-                  Animal
-                </label>
+                {addGroup !== "adult-shorts" && (
+                  <label className="flex items-center gap-1 text-[11px] text-white/60">
+                    <input
+                      type="checkbox"
+                      checked={u.isAnimal}
+                      onChange={(e) => {
+                        const isAnimal = e.target.checked;
+                        setCastUploads((list) => list.map((x, j) => (j === i ? { ...x, isAnimal } : x)));
+                      }}
+                    />
+                    Animal
+                  </label>
+                )}
                 <button
                   type="button"
                   onClick={() =>
@@ -769,9 +826,13 @@ export function CharacterRosterGrid({
       </div>
     ) : null;
 
-  /** Add a Skidmarks character: saved to the Skidmarks cast list, so the episodes can use them too. */
-  const renderAddSkidmarksCast = () =>
-    newCast.open ? (
+  /**
+   * The same "+ Add a character" box in every group (Stuart: one form
+   * factor everywhere). Skidmarks characters go to the Skidmarks cast list
+   * so the episodes can use them; the others go to that group's list.
+   */
+  const renderAddCharacter = (group: RosterGroup) =>
+    newCast.openGroup === group ? (
       <div className="mb-2 flex flex-col gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2">
         <input
           ref={castFileInput}
@@ -809,7 +870,7 @@ export function CharacterRosterGrid({
             <textarea
               value={newCast.look}
               onChange={(e) => setNewCast((c) => ({ ...c, look: e.target.value }))}
-              placeholder="Their look, e.g. late-40s bloke, sunburnt, wild grey mullet, faded hi-vis shirt, stubby shorts"
+              placeholder={LOOK_PLACEHOLDER[group]}
               rows={2}
               maxLength={600}
               className="rounded-md border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white placeholder:text-white/30"
@@ -836,7 +897,7 @@ export function CharacterRosterGrid({
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => void addSkidmarksCast()}
+            onClick={() => void addCharacters()}
             disabled={!canAddCast}
             className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
           >
@@ -855,10 +916,14 @@ export function CharacterRosterGrid({
     ) : (
       <button
         type="button"
-        onClick={() => setNewCast((c) => ({ ...c, open: true }))}
-        className="mb-2 rounded-md border border-white/20 px-2.5 py-1 text-[11px] text-white/80"
+        onClick={() => {
+          clearCastUploads();
+          setNewCast({ name: "", look: "", adult: false, openGroup: group });
+        }}
+        disabled={Boolean(castUploadBusy)}
+        className="mb-2 rounded-md border border-white/20 px-2.5 py-1 text-[11px] text-white/80 disabled:opacity-40"
       >
-        + Add a Skidmarks character
+        + Add a character
       </button>
     );
 
@@ -981,9 +1046,11 @@ export function CharacterRosterGrid({
                 {plan.needFace > 0 && ` ${plan.needFace} ${plan.needFace === 1 ? "is" : "are"} skipped until you make and okay their clean picture.`}
               </p>
             )}
-            {g.id === "skidmarks" && renderAddSkidmarksCast()}
+            {(g.id !== "adult-shorts" || adultConfirmed) && renderAddCharacter(g.id)}
             {list.length === 0 ? (
-              <p className="text-[11px] text-white/35">{EMPTY_GROUP_TEXT[g.id]}</p>
+              <p className="text-[11px] text-white/35">
+                {g.id === "adult-shorts" && adultConfirmed ? "No characters yet. Tap + Add a character." : EMPTY_GROUP_TEXT[g.id]}
+              </p>
             ) : (
               <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
                 {list.map((c) => {
