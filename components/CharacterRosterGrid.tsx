@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   AUTO_PICTURE_TARGET,
@@ -30,6 +30,7 @@ import {
   oneTapCost,
   startingPictures,
   type RosterCharacter,
+  type RosterGroup,
 } from "@/lib/characterRoster";
 import {
   flushSkidmarksSessionNow,
@@ -61,6 +62,13 @@ const STYLE_LABELS: Record<CharacterTrainingStyle, string> = {
   cartoon: "Cartoon",
   faceless: "Face hidden",
   render3d: "3D cartoon",
+};
+
+const EMPTY_GROUP_TEXT: Record<RosterGroup, string> = {
+  "music-video": "No band members yet. Add one to a band and they show up here.",
+  "sunny-banks": "No characters yet.",
+  skidmarks: "No Skidmarks characters yet.",
+  "adult-shorts": "No character yet. Tick the 18+ confirm and name your character in the editor, and they show up here.",
 };
 
 interface CastUpload {
@@ -114,7 +122,17 @@ function Badge({ char, entry }: { char: RosterCharacter; entry: CharacterLoraEnt
   return null;
 }
 
-export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) {
+export function CharacterRosterGrid({
+  snapshot,
+  onlyGroup,
+  renderEntryCard,
+}: {
+  snapshot: SkidmarksState;
+  /** Show just this group (the Characters bar on each project screen). */
+  onlyGroup?: RosterGroup;
+  /** The character's LoRA card (pictures, Train, Comfy links), shown inside their panel. */
+  renderEntryCard?: (entry: CharacterLoraEntry) => ReactNode;
+}) {
   const roster = useMemo(() => buildCharacterRoster(snapshot), [snapshot]);
   const { characters } = getCharacterLorasState(snapshot);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -412,6 +430,7 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
   };
 
   const selected = selectedKey ? charByKey.get(selectedKey) ?? null : null;
+  const selectedEntry = selected ? entryForRosterCharacter(characters, selected.sourceKey) : null;
 
   const renderSelected = (char: RosterCharacter) => {
     const entry = entryForRosterCharacter(characters, char.sourceKey);
@@ -918,19 +937,21 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
   return (
     <div className="flex flex-col gap-4">
       {renderViewer()}
-      {ROSTER_GROUPS.map((g) => {
+      {ROSTER_GROUPS.filter((g) => !onlyGroup || g.id === onlyGroup).map((g) => {
         const list = roster[g.id];
         const done = list.filter((c) => entryForRosterCharacter(characters, c.sourceKey)?.status === "ready").length;
         const plan = groupPlan(list);
         return (
           <div key={g.id}>
             <div className="mb-2 flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-white/60">{g.label}</p>
+              {onlyGroup ? <span /> : <p className="text-xs font-semibold uppercase tracking-wide text-white/60">{g.label}</p>}
               {list.length > 0 && (
                 <div className="flex items-center gap-2">
-                  <p className="text-[11px] text-white/35">
-                    {done} of {list.length} trained
-                  </p>
+                  {!onlyGroup && (
+                    <p className="text-[11px] text-white/35">
+                      {done} of {list.length} trained
+                    </p>
+                  )}
                   {plan.ready.length > 0 && (
                     <button
                       type="button"
@@ -962,7 +983,7 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
             )}
             {g.id === "skidmarks" && renderAddSkidmarksCast()}
             {list.length === 0 ? (
-              <p className="text-[11px] text-white/35">{g.id === "skidmarks" ? "No Skidmarks characters yet." : "No characters yet."}</p>
+              <p className="text-[11px] text-white/35">{EMPTY_GROUP_TEXT[g.id]}</p>
             ) : (
               <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
                 {list.map((c) => {
@@ -994,6 +1015,9 @@ export function CharacterRosterGrid({ snapshot }: { snapshot: SkidmarksState }) 
                   );
                 })}
                 {selected && selected.group === g.id && renderSelected(selected)}
+                {selected && selected.group === g.id && renderEntryCard && selectedEntry && (
+                  <div className="col-span-full">{renderEntryCard(selectedEntry)}</div>
+                )}
               </div>
             )}
           </div>
