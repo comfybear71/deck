@@ -109,7 +109,7 @@ export function CharacterLorasPanel({ group }: { group?: RosterGroup } = {}) {
   const [armedDeleteId, setArmedDeleteId] = useState<string | null>(null);
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const polling = useRef(false);
-  const [open, setOpen] = useState(group === "sunny-banks");
+  const [open, setOpen] = useState(Boolean(group));
   const roster = useMemo(() => buildCharacterRoster(snapshot), [snapshot]);
 
   const setError = (id: string, msg: string | null) =>
@@ -471,9 +471,10 @@ export function CharacterLorasPanel({ group }: { group?: RosterGroup } = {}) {
     );
   };
 
-  // One-button faces are Sunny Banks first (Stuart, 2026-09-29); the other
-  // project screens move over one at a time.
-  const simple = group === "sunny-banks";
+  // Every project screen uses the same one-button faces (Stuart, 2026-09-29:
+  // "all genres should have the same process"). Each group still trains in
+  // its own style, picked by the roster.
+  const simple = Boolean(group);
 
   if (group) {
     const groupChars = roster[group];
