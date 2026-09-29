@@ -649,6 +649,13 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     <div className="flex flex-col gap-8 pt-2">
       <SkidmarksLandingTiles activeKind={session.projectKind} onSelect={selectProjectKind} />
 
+      {/* Each project's own Characters bar (folded by default): that
+          group's cast, tap a face to train their LoRA. */}
+      {session.projectKind === "music-video" && <CharacterLorasPanel group="music-video" />}
+      {session.projectKind === "skidmarks" && <CharacterLorasPanel group="skidmarks" />}
+      {session.projectKind === "sunnybank" && <CharacterLorasPanel group="sunny-banks" />}
+      {session.projectKind === "adult-shorts" && <CharacterLorasPanel group="adult-shorts" />}
+
       {session.projectKind === "sunnybank" && <SkidmarksSunnyBanksPanel />}
 
       {session.projectKind === "skidmarks" && <SkidmarksEpisodesPanel onOpenLibrary={() => setPcRail("library")} />}

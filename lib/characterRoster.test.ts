@@ -261,3 +261,34 @@ describe("Skidmarks pictures, 3D cartoon and animals", () => {
     expect(buildFacePrompt(c)).toMatch(/3D animated caricature/);
   });
 });
+
+describe("Adult shorts group", () => {
+  const char = (name: string, refs: string[] = []) => ({ name, look: "tall, auburn hair, 30s", referenceUrls: refs });
+  const adultState = (ageConfirmed: boolean, current: ReturnType<typeof char>, saved: ReturnType<typeof char>[] = []) =>
+    stateWith({
+      adultShorts: {
+        ageConfirmed,
+        character: current,
+        shots: [],
+        saved: saved.map((c, i) => ({ id: `s${i}`, title: `Short ${i}`, savedAt: "2026-09-29T00:00:00Z", character: c, shots: [{ id: `sh${i}`, action: "walks in" }] })),
+      } as unknown as SkidmarksState["adultShorts"],
+    });
+
+  it("is empty until the 18+ confirm is ticked", () => {
+    expect(buildCharacterRoster(adultState(false, char("Roxy")))["adult-shorts"]).toEqual([]);
+  });
+
+  it("lists the editor character plus every saved short's character, one tile per name", () => {
+    const r = buildCharacterRoster(
+      adultState(true, char("Roxy", ["https://x.com/r1.jpg", "https://x.com/r2.jpg"]), [char("Roxy"), char("Vera"), char("")]),
+    )["adult-shorts"];
+    expect(r.map((c) => c.name)).toEqual(["Roxy", "Vera"]);
+    expect(r[0]).toMatchObject({ sourceKey: "as:roxy", thumbUrl: "https://x.com/r1.jpg", extraPictureUrls: ["https://x.com/r2.jpg"], style: "photo" });
+    expect(r[1].thumbUrl).toBeNull();
+  });
+
+  it("still refuses under-18 wording", () => {
+    const r = buildCharacterRoster(adultState(true, { name: "Kid", look: "a teen girl", referenceUrls: [] }))["adult-shorts"];
+    expect(r[0].blockedReason).toMatch(/under 18/);
+  });
+});

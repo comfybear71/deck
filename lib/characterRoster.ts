@@ -21,18 +21,20 @@ import {
   type CharacterLoraEntry,
   type CharacterTrainingStyle,
 } from "./characterLoras";
+import { normalizeAdultShortsState } from "./adultShorts";
 import { resolveMemberStillSleeve } from "./memberStillSleeve";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
 import type { SkidmarksState } from "./skidmarks";
 import { normalizeSkidmarksEpisodesState } from "./skidmarksEpisodes";
 import { SUNNY_BANKS_CAST, SUNNY_BANKS_STYLE_LOCK } from "./sunnyBanks";
 
-export type RosterGroup = "music-video" | "sunny-banks" | "skidmarks";
+export type RosterGroup = "music-video" | "sunny-banks" | "skidmarks" | "adult-shorts";
 
 export const ROSTER_GROUPS: { id: RosterGroup; label: string }[] = [
   { id: "music-video", label: "Music video" },
   { id: "sunny-banks", label: "Sunny Banks" },
   { id: "skidmarks", label: "Skidmarks" },
+  { id: "adult-shorts", label: "Adult shorts" },
 ];
 
 export interface RosterCharacter {
@@ -72,7 +74,7 @@ function firstNonEmpty(...values: (string | null | undefined)[]): string | null 
 export const ROSTER_HIDDEN_NAMES: ReadonlySet<string> = new Set(["hans"]);
 
 export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup, RosterCharacter[]> {
-  const out: Record<RosterGroup, RosterCharacter[]> = { "music-video": [], "sunny-banks": [], skidmarks: [] };
+  const out: Record<RosterGroup, RosterCharacter[]> = { "music-video": [], "sunny-banks": [], skidmarks: [], "adult-shorts": [] };
 
   const seenMembers = new Set<string>();
   for (const band of state.bands ?? []) {
@@ -132,6 +134,32 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
       style: "render3d",
       subjectWord: c.isAnimal ? "animal" : "person",
       blockedReason: c.fictionalAdultConfirmed === true ? minorBlockReason(`${c.name} ${c.look}`) : "Not marked as a made-up adult.",
+    });
+  }
+
+  // Adult shorts: the character currently in the editor, once the 18+
+  // confirm is ticked. Trained like any real-looking character, and the
+  // training pictures stay fully clothed (see the prompt builders).
+  // Every character from the saved shorts too (newest first), one tile per name.
+  const adult = normalizeAdultShortsState(state.adultShorts);
+  const adultChars = adult?.ageConfirmed ? [adult.character, ...adult.saved.map((sv) => sv.character)] : [];
+  const seenAdult = new Set<string>();
+  for (const ac of adultChars) {
+    if (!ac?.name.trim()) continue;
+    const slug = slugifyCharacterName(ac.name);
+    if (seenAdult.has(slug)) continue;
+    seenAdult.add(slug);
+    out["adult-shorts"].push({
+      sourceKey: `as:${slug}`,
+      group: "adult-shorts",
+      name: ac.name.trim(),
+      thumbUrl: ac.referenceUrls[0] ?? null,
+      extraPictureUrls: ac.referenceUrls.slice(1),
+      look: ac.look,
+      neverShow: "",
+      style: "photo",
+      subjectWord: "person",
+      blockedReason: minorBlockReason(`${ac.name} ${ac.look}`),
     });
   }
   return out;

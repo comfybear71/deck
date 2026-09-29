@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   AUTO_PICTURE_TARGET,
   CHARACTER_LORA_ESTIMATED_COST_USD,
@@ -20,6 +20,7 @@ import {
 } from "@/lib/characterLoras";
 import { startCharacterTraining } from "@/lib/characterAutoLora";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
+import { buildCharacterRoster, type RosterGroup } from "@/lib/characterRoster";
 import { CharacterRosterGrid } from "./CharacterRosterGrid";
 import {
   flushSkidmarksSessionNow,
@@ -98,7 +99,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function CharacterLorasPanel() {
+export function CharacterLorasPanel({ group }: { group?: RosterGroup } = {}) {
   const snapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const { characters } = getCharacterLorasState(snapshot);
   const [newName, setNewName] = useState("");
@@ -108,6 +109,8 @@ export function CharacterLorasPanel() {
   const [armedDeleteId, setArmedDeleteId] = useState<string | null>(null);
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const polling = useRef(false);
+  const [open, setOpen] = useState(false);
+  const roster = useMemo(() => buildCharacterRoster(snapshot), [snapshot]);
 
   const setError = (id: string, msg: string | null) =>
     setErrors((e) => {
@@ -261,6 +264,246 @@ export function CharacterLorasPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trainingKey]);
 
+  /** One character's LoRA card: pictures, Train, and the Comfy links once trained. */
+  const renderCard = (c: CharacterLoraEntry) => {
+    const isBusy = busy?.id === c.id;
+    const blocker = trainBlocker(c);
+    const retrain = c.status === "ready" || c.status === "failed";
+    const snippet = comfyPromptSnippet(c);
+    const nextFiles = loraFileNames(c.slug, nextTrainingVersion(c));
+    return (
+      <div key={c.id} id={`clora-card-${c.id}`} className="scroll-mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+        <div className="flex items-center gap-2">
+          <input
+            value={c.name}
+            onChange={(e) => patchEntry(c.id, { name: e.target.value })}
+            onBlur={() => flushSkidmarksSessionNow()}
+            className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-white outline-none"
+            aria-label="Character name"
+          />
+          <StatusChip entry={c} />
+          <button
+            type="button"
+            onClick={() => (armedDeleteId === c.id ? removeCharacter(c.id) : setArmedDeleteId(c.id))}
+            onBlur={() => setArmedDeleteId(null)}
+            className="rounded-md px-1.5 text-sm text-red-300/80 hover:text-red-300"
+            title="Remove this card (the files stay on Hugging Face)"
+          >
+            {armedDeleteId === c.id ? "Remove?" : "✕"}
+          </button>
+        </div>
+
+        {c.status === "ready" && c.hfRepo && c.loraFile && c.embeddingFile && (
+          <div className="mt-3 flex flex-col gap-2.5 rounded-xl border border-emerald-400/20 bg-emerald-500/[0.04] p-3">
+            <p className="text-xs text-white/70">
+              Trained{c.costUsd != null ? ` for ${formatCostUsd(c.costUsd)}` : ""}. In Comfy Cloud open Models, then
+              Model Library, then Import, and paste each link:
+            </p>
+            <CopyRow label="LoRA (type: loras)" value={hfResolveLink(c.hfRepo, c.loraFile)} />
+            <CopyRow label="Trigger (type: embeddings)" value={hfResolveLink(c.hfRepo, c.embeddingFile)} />
+            <p className="text-[11px] leading-relaxed text-white/50">
+              Comfy needs your Hugging Face token under Settings, then Secrets, to fetch them. In a workflow, pick{" "}
+              <span className="font-mono text-white/70">{comfyImportedName(c.hfRepo, c.loraFile)}</span> in Load
+              LoRA and start the prompt with:
+            </p>
+            {snippet && <CopyRow label="Prompt start" value={snippet} />}
+            <label className="flex items-center gap-2 text-xs text-white/70">
+              <input
+                type="checkbox"
+                checked={c.importedToComfy}
+                onChange={(e) => {
+                  patchEntry(c.id, { importedToComfy: e.target.checked });
+                  flushSkidmarksSessionNow();
+                }}
+              />
+              I&apos;ve imported both into Comfy Cloud
+            </label>
+          </div>
+        )}
+
+        {(c.status === "training" || c.status === "finishing") && (
+          <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-amber-400/20 bg-amber-500/[0.04] p-3">
+            <p className="text-xs text-amber-100/80">
+              Training on Replicate, usually about 5 minutes. This card checks every 20 seconds while it&apos;s open.
+            </p>
+            <button
+              type="button"
+              onClick={() => check(c)}
+              disabled={isBusy}
+              className="shrink-0 rounded-md border border-white/15 px-2.5 py-1 text-xs text-white/80 disabled:opacity-40"
+            >
+              {isBusy && busy?.kind === "check" ? "Checking…" : "Check now"}
+            </button>
+          </div>
+        )}
+
+        {c.status === "failed" && c.error && <p className="mt-3 text-xs text-red-300">{c.error}</p>}
+
+        <div className="mt-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] text-white/50">
+              Training pictures: {c.trainingImageUrls.length} (best {CHARACTER_LORA_RECOMMENDED})
+            </p>
+            <button
+              type="button"
+              onClick={() => fileRefs.current[c.id]?.click()}
+              disabled={isBusy || c.trainingImageUrls.length >= CHARACTER_LORA_MAX_IMAGES}
+              className="rounded-md border border-white/15 px-2.5 py-1 text-xs text-white/80 hover:border-white/30 disabled:opacity-40"
+            >
+              {isBusy && busy?.kind === "upload" ? "Uploading…" : "Add pictures"}
+            </button>
+            <input
+              ref={(el) => {
+                fileRefs.current[c.id] = el;
+              }}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => addPictures(c, e.target.files)}
+            />
+          </div>
+          {c.trainingImageUrls.length > 0 && (
+            <div className="mt-2 flex touch-pan-x gap-1.5 overflow-x-auto pb-1">
+              {c.trainingImageUrls.map((u, i) => (
+                <div key={`${u}-${i}`} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md bg-white/5">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={u} alt="" className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => removePicture(c, i)}
+                    className="absolute right-0.5 top-0.5 rounded bg-black/70 px-1 text-[10px] text-red-300"
+                    aria-label="Remove picture"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {c.status === "ready" && c.trainingImageUrls.length === 0 && (
+            <p className="mt-1 text-[11px] text-white/35">Trained outside Deck, so no pictures are stored here.</p>
+          )}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-1.5 text-xs text-white/60">
+            They&apos;re a
+            <select
+              value={c.subjectWord}
+              onChange={(e) => {
+                patchEntry(c.id, { subjectWord: e.target.value });
+                flushSkidmarksSessionNow();
+              }}
+              className="rounded border border-white/15 bg-black/40 px-1.5 py-0.5 text-xs text-white"
+            >
+              {SUBJECT_WORDS.map((w) => (
+                <option key={w} value={w}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-white/60">
+            Style
+            <select
+              value={c.trainingStyle}
+              onChange={(e) => {
+                patchEntry(c.id, { trainingStyle: e.target.value as CharacterTrainingStyle });
+                flushSkidmarksSessionNow();
+              }}
+              className="rounded border border-white/15 bg-black/40 px-1.5 py-0.5 text-xs text-white"
+            >
+              {STYLE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-white/60">
+            <input
+              type="checkbox"
+              checked={c.fictionalAdultConfirmed}
+              onChange={(e) => {
+                patchEntry(c.id, { fictionalAdultConfirmed: e.target.checked });
+                flushSkidmarksSessionNow();
+              }}
+            />
+            Made up, clearly an adult, not a real person
+          </label>
+        </div>
+
+        {c.status !== "making" && c.status !== "training" && c.status !== "finishing" && (
+          <div className="mt-3">
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={() => {
+                if (blocker) {
+                  setError(c.id, trainBlockerMessage(blocker, c));
+                  return;
+                }
+                if (armedTrainId === c.id) void train(c);
+                else setArmedTrainId(c.id);
+              }}
+              onBlur={() => setArmedTrainId(null)}
+              className={`rounded-md px-3 py-2 text-sm font-medium text-white disabled:opacity-40 ${
+                armedTrainId === c.id ? "bg-sky-500" : "bg-sky-500/60 hover:bg-sky-500/80"
+              }`}
+            >
+              {isBusy && busy?.kind === "train"
+                ? "Starting…"
+                : armedTrainId === c.id
+                  ? `Tap again to train (~${formatCostUsd(CHARACTER_LORA_ESTIMATED_COST_USD)})`
+                  : `${retrain ? "Retrain" : "Train"} LoRA · ~${formatCostUsd(CHARACTER_LORA_ESTIMATED_COST_USD)}`}
+            </button>
+            {retrain && (
+              <p className="mt-1 text-[11px] text-white/35">
+                A retrain saves as {nextFiles.loraFile}, so the current version keeps working.
+              </p>
+            )}
+          </div>
+        )}
+
+        {errors[c.id] && <p className="mt-2 text-xs text-red-300">{errors[c.id]}</p>}
+      </div>
+    );
+  };
+
+  if (group) {
+    const groupChars = roster[group];
+    const done = groupChars.filter((ch) => characters.find((e) => e.sourceKey === ch.sourceKey)?.status === "ready").length;
+    return (
+      <section className="rounded-2xl border border-white/10 bg-white/[0.02]">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left"
+        >
+          <span className="text-sm font-semibold text-white">Characters</span>
+          <span className="flex items-center gap-2 text-[11px] text-white/45">
+            {groupChars.length === 0 ? "none yet" : `${done} of ${groupChars.length} trained`}
+            <span aria-hidden className={`text-white/40 transition-transform ${open ? "rotate-90" : ""}`}>
+              {"\u203a"}
+            </span>
+          </span>
+        </button>
+        {/* Kept mounted while folded so a running "Make pictures" keeps going. */}
+        {(
+          <div className={open ? "border-t border-white/10 px-4 pb-4 pt-3" : "hidden"}>
+            <p className="mb-3 text-xs leading-relaxed text-white/55">
+              Tap a face to train them: okay one clean picture, make pictures, check them, then Train. Everything for that
+              character opens under their face.
+            </p>
+            <CharacterRosterGrid snapshot={snapshot} onlyGroup={group} renderEntryCard={renderCard} />
+          </div>
+        )}
+      </section>
+    );
+  }
+
   return (
     <section className="flex flex-col gap-4">
       <div className="rounded-2xl border border-sky-400/25 bg-sky-500/[0.04] p-4">
@@ -304,211 +547,7 @@ export function CharacterLorasPanel() {
       <p className="px-1 text-xs font-semibold uppercase tracking-wide text-white/50">LoRA cards</p>
       {characters.length === 0 && <p className="text-xs text-white/40">No characters yet.</p>}
 
-      {characters.map((c) => {
-        const isBusy = busy?.id === c.id;
-        const blocker = trainBlocker(c);
-        const retrain = c.status === "ready" || c.status === "failed";
-        const snippet = comfyPromptSnippet(c);
-        const nextFiles = loraFileNames(c.slug, nextTrainingVersion(c));
-        return (
-          <div key={c.id} id={`clora-card-${c.id}`} className="scroll-mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-            <div className="flex items-center gap-2">
-              <input
-                value={c.name}
-                onChange={(e) => patchEntry(c.id, { name: e.target.value })}
-                onBlur={() => flushSkidmarksSessionNow()}
-                className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-white outline-none"
-                aria-label="Character name"
-              />
-              <StatusChip entry={c} />
-              <button
-                type="button"
-                onClick={() => (armedDeleteId === c.id ? removeCharacter(c.id) : setArmedDeleteId(c.id))}
-                onBlur={() => setArmedDeleteId(null)}
-                className="rounded-md px-1.5 text-sm text-red-300/80 hover:text-red-300"
-                title="Remove this card (the files stay on Hugging Face)"
-              >
-                {armedDeleteId === c.id ? "Remove?" : "✕"}
-              </button>
-            </div>
-
-            {c.status === "ready" && c.hfRepo && c.loraFile && c.embeddingFile && (
-              <div className="mt-3 flex flex-col gap-2.5 rounded-xl border border-emerald-400/20 bg-emerald-500/[0.04] p-3">
-                <p className="text-xs text-white/70">
-                  Trained{c.costUsd != null ? ` for ${formatCostUsd(c.costUsd)}` : ""}. In Comfy Cloud open Models, then
-                  Model Library, then Import, and paste each link:
-                </p>
-                <CopyRow label="LoRA (type: loras)" value={hfResolveLink(c.hfRepo, c.loraFile)} />
-                <CopyRow label="Trigger (type: embeddings)" value={hfResolveLink(c.hfRepo, c.embeddingFile)} />
-                <p className="text-[11px] leading-relaxed text-white/50">
-                  Comfy needs your Hugging Face token under Settings, then Secrets, to fetch them. In a workflow, pick{" "}
-                  <span className="font-mono text-white/70">{comfyImportedName(c.hfRepo, c.loraFile)}</span> in Load
-                  LoRA and start the prompt with:
-                </p>
-                {snippet && <CopyRow label="Prompt start" value={snippet} />}
-                <label className="flex items-center gap-2 text-xs text-white/70">
-                  <input
-                    type="checkbox"
-                    checked={c.importedToComfy}
-                    onChange={(e) => {
-                      patchEntry(c.id, { importedToComfy: e.target.checked });
-                      flushSkidmarksSessionNow();
-                    }}
-                  />
-                  I&apos;ve imported both into Comfy Cloud
-                </label>
-              </div>
-            )}
-
-            {(c.status === "training" || c.status === "finishing") && (
-              <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-amber-400/20 bg-amber-500/[0.04] p-3">
-                <p className="text-xs text-amber-100/80">
-                  Training on Replicate, usually about 5 minutes. This card checks every 20 seconds while it&apos;s open.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => check(c)}
-                  disabled={isBusy}
-                  className="shrink-0 rounded-md border border-white/15 px-2.5 py-1 text-xs text-white/80 disabled:opacity-40"
-                >
-                  {isBusy && busy?.kind === "check" ? "Checking…" : "Check now"}
-                </button>
-              </div>
-            )}
-
-            {c.status === "failed" && c.error && <p className="mt-3 text-xs text-red-300">{c.error}</p>}
-
-            <div className="mt-3">
-              <div className="flex items-center justify-between">
-                <p className="text-[11px] text-white/50">
-                  Training pictures: {c.trainingImageUrls.length} (best {CHARACTER_LORA_RECOMMENDED})
-                </p>
-                <button
-                  type="button"
-                  onClick={() => fileRefs.current[c.id]?.click()}
-                  disabled={isBusy || c.trainingImageUrls.length >= CHARACTER_LORA_MAX_IMAGES}
-                  className="rounded-md border border-white/15 px-2.5 py-1 text-xs text-white/80 hover:border-white/30 disabled:opacity-40"
-                >
-                  {isBusy && busy?.kind === "upload" ? "Uploading…" : "Add pictures"}
-                </button>
-                <input
-                  ref={(el) => {
-                    fileRefs.current[c.id] = el;
-                  }}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  hidden
-                  onChange={(e) => addPictures(c, e.target.files)}
-                />
-              </div>
-              {c.trainingImageUrls.length > 0 && (
-                <div className="mt-2 flex touch-pan-x gap-1.5 overflow-x-auto pb-1">
-                  {c.trainingImageUrls.map((u, i) => (
-                    <div key={`${u}-${i}`} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md bg-white/5">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={u} alt="" className="h-full w-full object-cover" />
-                      <button
-                        type="button"
-                        onClick={() => removePicture(c, i)}
-                        className="absolute right-0.5 top-0.5 rounded bg-black/70 px-1 text-[10px] text-red-300"
-                        aria-label="Remove picture"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {c.status === "ready" && c.trainingImageUrls.length === 0 && (
-                <p className="mt-1 text-[11px] text-white/35">Trained outside Deck, so no pictures are stored here.</p>
-              )}
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-1.5 text-xs text-white/60">
-                They&apos;re a
-                <select
-                  value={c.subjectWord}
-                  onChange={(e) => {
-                    patchEntry(c.id, { subjectWord: e.target.value });
-                    flushSkidmarksSessionNow();
-                  }}
-                  className="rounded border border-white/15 bg-black/40 px-1.5 py-0.5 text-xs text-white"
-                >
-                  {SUBJECT_WORDS.map((w) => (
-                    <option key={w} value={w}>
-                      {w}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex items-center gap-1.5 text-xs text-white/60">
-                Style
-                <select
-                  value={c.trainingStyle}
-                  onChange={(e) => {
-                    patchEntry(c.id, { trainingStyle: e.target.value as CharacterTrainingStyle });
-                    flushSkidmarksSessionNow();
-                  }}
-                  className="rounded border border-white/15 bg-black/40 px-1.5 py-0.5 text-xs text-white"
-                >
-                  {STYLE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex items-center gap-1.5 text-xs text-white/60">
-                <input
-                  type="checkbox"
-                  checked={c.fictionalAdultConfirmed}
-                  onChange={(e) => {
-                    patchEntry(c.id, { fictionalAdultConfirmed: e.target.checked });
-                    flushSkidmarksSessionNow();
-                  }}
-                />
-                Made up, clearly an adult, not a real person
-              </label>
-            </div>
-
-            {c.status !== "making" && c.status !== "training" && c.status !== "finishing" && (
-              <div className="mt-3">
-                <button
-                  type="button"
-                  disabled={isBusy}
-                  onClick={() => {
-                    if (blocker) {
-                      setError(c.id, trainBlockerMessage(blocker, c));
-                      return;
-                    }
-                    if (armedTrainId === c.id) void train(c);
-                    else setArmedTrainId(c.id);
-                  }}
-                  onBlur={() => setArmedTrainId(null)}
-                  className={`rounded-md px-3 py-2 text-sm font-medium text-white disabled:opacity-40 ${
-                    armedTrainId === c.id ? "bg-sky-500" : "bg-sky-500/60 hover:bg-sky-500/80"
-                  }`}
-                >
-                  {isBusy && busy?.kind === "train"
-                    ? "Starting…"
-                    : armedTrainId === c.id
-                      ? `Tap again to train (~${formatCostUsd(CHARACTER_LORA_ESTIMATED_COST_USD)})`
-                      : `${retrain ? "Retrain" : "Train"} LoRA · ~${formatCostUsd(CHARACTER_LORA_ESTIMATED_COST_USD)}`}
-                </button>
-                {retrain && (
-                  <p className="mt-1 text-[11px] text-white/35">
-                    A retrain saves as {nextFiles.loraFile}, so the current version keeps working.
-                  </p>
-                )}
-              </div>
-            )}
-
-            {errors[c.id] && <p className="mt-2 text-xs text-red-300">{errors[c.id]}</p>}
-          </div>
-        );
-      })}
+      {characters.map(renderCard)}
     </section>
   );
 }
