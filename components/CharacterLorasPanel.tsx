@@ -102,7 +102,8 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 export function CharacterLorasPanel({
   group,
   bandMemberIds,
-}: { group?: RosterGroup; bandMemberIds?: readonly string[] } = {}) {
+  addToBandId,
+}: { group?: RosterGroup; bandMemberIds?: readonly string[]; addToBandId?: string } = {}) {
   const snapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const { characters } = getCharacterLorasState(snapshot);
   const [newName, setNewName] = useState("");
@@ -506,7 +507,7 @@ export function CharacterLorasPanel({
                 ? "Tap the circle on a face to train them. A tick means they're ready. Tap a ticked face to see their pictures."
                 : "Tap a face to train them: okay one clean picture, make pictures, check them, then Train. Everything for that character opens under their face."}
             </p>
-            <CharacterRosterGrid snapshot={snapshot} onlyGroup={group} renderEntryCard={renderCard} simple={simple} bandMemberIds={bandMemberIds} />
+            <CharacterRosterGrid snapshot={snapshot} onlyGroup={group} renderEntryCard={renderCard} simple={simple} bandMemberIds={bandMemberIds} addToBandId={addToBandId} />
           </div>
         )}
       </section>

@@ -20,7 +20,6 @@ import {
 } from "@/lib/skidmarksArchive";
 import { SkidmarksLandingTiles } from "./SkidmarksLandingTiles";
 import { SkidmarksBandPicker } from "./SkidmarksBandPicker";
-import { SkidmarksMembersModule } from "./SkidmarksMembersModule";
 import { SkidmarksGeneratePopup } from "./SkidmarksGeneratePopup";
 import { SkidmarksMp3Card } from "./SkidmarksMp3Card";
 import { SkidmarksClipTimeline } from "./SkidmarksClipTimeline";
@@ -69,11 +68,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     selectBand,
     createBand,
     removeBand,
-    addMember,
-    removeMember,
-    moveMember,
     renameMember,
-    setMemberLock,
     renameBand,
     setBandCoverImage,
     setMemberAvatarImage,
@@ -101,6 +96,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
   const activeBand = bands.find((b) => b.id === session.bandId);
   const [openMemberId, setOpenMemberId] = useState<string | null>(null);
+  const [pendingBandId, setPendingBandId] = useState<string | null>(null);
   const openMember = activeBand?.members.find((m) => m.id === openMemberId);
 
   const { renders, addRender, removeRender } = useSkidmarksClipRenders(session.mp3?.segments ?? []);
@@ -377,8 +373,15 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     // MP3 you'd just attached. Selecting a band you're already on is a
     // no-op, not a reset.
     if (bandId === activeBand?.id || archiving) return;
-    if (!(await archiveBeforeSwitch())) return;
-    selectBand(bandId);
+    // Show the tap straight away: saving the current song first can take
+    // a few seconds, and a cover that did nothing got tapped again and again.
+    setPendingBandId(bandId);
+    try {
+      if (!(await archiveBeforeSwitch())) return;
+      selectBand(bandId);
+    } finally {
+      setPendingBandId(null);
+    }
   };
 
   const handleCreateBand = async () => {
@@ -528,37 +531,34 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
           onCreateBand={handleCreateBand}
           onSetCoverImage={setBandCoverImage}
           onRemoveBand={handleRemoveBand}
+          pendingBandId={pendingBandId}
         />
       </div>
 
+      {/* The pink members card is gone (Stuart, 2026-09-29): the band's
+          people live in its Characters bar, and "+ Add a character" there
+          adds them to this band. Only the band's name stays editable here. */}
       {activeBand && (
-        <div ref={membersSectionRef}>
-          <SkidmarksMembersModule
-            band={activeBand}
-            onOpenMember={setOpenMemberId}
-            onAddMember={() => addMember(activeBand.id)}
-            onRemoveMember={(memberId) => {
-              const member = activeBand.members.find((m) => m.id === memberId);
-              setPendingConfirm({
-                title: `Remove ${member?.name?.trim() || "this member"}?`,
-                body: "Their photo, looks and lock card go with them. Clips already rendered stay on the shelf.",
-                confirmLabel: "Remove member",
-                run: () => removeMember(activeBand.id, memberId),
-              });
-            }}
-            onMoveMember={(memberId, delta) => moveMember(activeBand.id, memberId, delta)}
-            onSetMemberLock={(memberId, lock) => setMemberLock(activeBand.id, memberId, lock)}
-            onSetMemberAvatarImage={(memberId, dataUrl) =>
-              setMemberAvatarImage(activeBand.id, memberId, dataUrl)
-            }
-            onRenameBand={(name) => renameBand(activeBand.id, name)}
+        <div ref={membersSectionRef} className="-mb-4 -mt-2">
+          <input
+            type="text"
+            value={activeBand.name}
+            onChange={(e) => renameBand(activeBand.id, e.target.value.slice(0, 60))}
+            onBlur={() => flushSkidmarksSessionNow()}
+            placeholder="Name your band"
+            aria-label="Band name"
+            className="w-full truncate bg-transparent text-base font-bold text-rose-200 placeholder:text-rose-200/40 focus:outline-none"
           />
         </div>
       )}
 
       {/* The chosen band's own Characters bar: just the people in this band. */}
       {activeBand && (
-        <CharacterLorasPanel group="music-video" bandMemberIds={activeBand.members.map((m) => m.id)} />
+        <CharacterLorasPanel
+          group="music-video"
+          bandMemberIds={activeBand.members.map((m) => m.id)}
+          addToBandId={activeBand.id}
+        />
       )}
     </>
   );

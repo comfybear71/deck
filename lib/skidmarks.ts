@@ -3401,6 +3401,48 @@ export function removeSkidmarksMember(bandId: string, memberId: string): void {
   persist({ ...current, bands });
 }
 
+/**
+ * "+ Add a character" on a chosen band (Stuart, 2026-09-29): adds a named
+ * member with their pictures, first picture as their photo, the rest in
+ * their still sleeve. A name already in the band gets the pictures instead.
+ * Returns the member's id, or `null` if the band is already full.
+ */
+export function addSkidmarksMemberWithPictures(
+  bandId: string,
+  name: string,
+  look: string,
+  pictureUrls: readonly string[],
+): string | null {
+  const current = getSkidmarksSnapshot();
+  const band = current.bands.find((b) => b.id === bandId);
+  const trimmed = name.trim();
+  if (!band || !trimmed) return null;
+  const key = trimmed.toLowerCase();
+  const existing = band.members.find((m) => m.name.trim().toLowerCase() === key);
+  const urls = [...new Set(pictureUrls.filter(Boolean))];
+  if (existing) {
+    const photo = existing.avatarImage ?? urls[0];
+    let next: SkidmarksMember = { ...existing, ...(photo ? { avatarImage: photo } : {}) };
+    for (const u of urls) {
+      if (u === photo) continue;
+      next = { ...next, stillSleeve: appendKeptStillToSleeve(next, u, () => generateId("sleeve")) };
+    }
+    if (look.trim() && !existing.lock?.lookRules.trim()) next = { ...next, lock: { lookRules: look.trim(), neverShow: existing.lock?.neverShow ?? "" } };
+    persist({ ...current, bands: current.bands.map((b) => (b.id === bandId ? { ...b, members: b.members.map((m) => (m.id === existing.id ? next : m)) } : b)) });
+    return existing.id;
+  }
+  if (band.members.length >= MAX_MEMBERS_PER_BAND) return null;
+  let member: SkidmarksMember = {
+    ...buildBlankMember(),
+    name: trimmed,
+    ...(urls[0] ? { avatarImage: urls[0] } : {}),
+    ...(look.trim() ? { lock: { lookRules: look.trim(), neverShow: "" } } : {}),
+  };
+  for (const u of urls.slice(1)) member = { ...member, stillSleeve: appendKeptStillToSleeve(member, u, () => generateId("sleeve")) };
+  persist({ ...current, bands: current.bands.map((b) => (b.id === bandId ? { ...b, members: [...b.members, member] } : b)) });
+  return member.id;
+}
+
 /** Moves a member one place up (-1) or down (+1) in their band. Only the
  * listed order changes (the first one is the original artist). */
 export function moveSkidmarksMember(bandId: string, memberId: string, delta: -1 | 1): void {

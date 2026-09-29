@@ -11,6 +11,8 @@ interface SkidmarksBandPickerProps {
   onCreateBand: () => void;
   onSetCoverImage: (bandId: string, dataUrl: string) => void;
   onRemoveBand: (bandId: string) => void;
+  /** The band just tapped while the switch is still going. */
+  pendingBandId?: string | null;
 }
 
 /** Native file picker's accept list — jpg/png/webp only, matches what a
@@ -76,12 +78,15 @@ function NewBandTile({ onClick }: { onClick: () => void }) {
 function BandTile({
   band,
   active,
+  pending = false,
   onSelect,
   onSetCoverImage,
   onRemove,
 }: {
   band: SkidmarksBand;
   active: boolean;
+  /** Tapped and still switching (saving the current song first). */
+  pending?: boolean;
   onSelect: () => void;
   onSetCoverImage: (dataUrl: string) => void;
   onRemove: () => void;
@@ -123,14 +128,20 @@ function BandTile({
         aria-pressed={active}
         aria-label={`Choose band ${displayName}`}
         className={[
-          "relative flex h-28 w-28 shrink-0 overflow-hidden rounded-2xl transition-transform active:scale-[0.98]",
+          // `touch-manipulation`: the first tap counts on iPhone (no double-tap-zoom wait).
+          "relative flex h-28 w-28 shrink-0 touch-manipulation select-none overflow-hidden rounded-2xl transition-transform active:scale-[0.96]",
           band.coverImage ? "bg-zinc-900" : `bg-gradient-to-br ${coverGradientClass(band.coverSeed)}`,
           // `ring-inset`, not `ring-offset` — an offset ring draws *outside*
           // the box (via an extra box-shadow layer), which a scrolling
           // ancestor's `overflow` can clip clean off; an inset ring draws
           // inside the box's own edge, so no ancestor overflow can ever
           // clip it, no matter how tight the scroll row's padding is.
-          active ? "ring-2 ring-inset ring-rose-400" : "ring-1 ring-inset ring-white/10 hover:ring-white/25",
+          // Chosen: a thick bright border you can't miss (Stuart, 2026-09-29).
+          active
+            ? "ring-4 ring-inset ring-rose-400"
+            : pending
+              ? "animate-pulse ring-4 ring-inset ring-white/70"
+              : "ring-1 ring-inset ring-white/10 hover:ring-white/25",
         ].join(" ")}
       >
         {band.coverImage ? (
@@ -166,6 +177,19 @@ function BandTile({
             <span className="line-clamp-2 text-[10px] leading-tight text-white/70">
               {band.tagline}
             </span>
+          </span>
+        )}
+        {active && (
+          <span
+            aria-hidden
+            className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-rose-400 text-[12px] font-bold text-white shadow"
+          >
+            ✓
+          </span>
+        )}
+        {pending && !active && (
+          <span className="absolute inset-0 flex items-center justify-center bg-black/55 text-[11px] font-medium text-white">
+            Saving song…
           </span>
         )}
       </button>
@@ -226,6 +250,7 @@ export function SkidmarksBandPicker({
   onCreateBand,
   onSetCoverImage,
   onRemoveBand,
+  pendingBandId = null,
 }: SkidmarksBandPickerProps) {
   return (
     // A previous fix tried to out-pad the active tile's `ring-offset`
@@ -243,6 +268,7 @@ export function SkidmarksBandPicker({
           key={band.id}
           band={band}
           active={band.id === activeBandId}
+          pending={band.id === pendingBandId}
           onSelect={() => onSelectBand(band.id)}
           onSetCoverImage={(dataUrl) => onSetCoverImage(band.id, dataUrl)}
           onRemove={() => onRemoveBand(band.id)}
