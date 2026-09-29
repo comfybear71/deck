@@ -49,9 +49,9 @@ describe("buildCharacterRoster", () => {
     expect(shazza.style).toBe("cartoon");
   });
 
-  it("locks Nuggets (written as a teen) and leaves the adults open", () => {
+  it("leaves the whole Sunnybank cast open, Nuggets included (a grown adult)", () => {
     const sb = buildCharacterRoster(stateWith())["sunny-banks"];
-    expect(sb.find((c) => c.name === "Nuggets")!.blockedReason).toMatch(/under 18/);
+    expect(sb.find((c) => c.name === "Nuggets")!.blockedReason).toBeNull();
     expect(sb.find((c) => c.name === "Nan")!.blockedReason).toBeNull();
     expect(sb.find((c) => c.name === "Unit 4S")!.blockedReason).toBeNull();
   });

@@ -167,7 +167,8 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   },
   Nuggets: {
     name: "Nuggets",
-    look: "skinny teen, buzz cut, blue and yellow jersey, meat pie",
+    // Stuart (2026-09-29): Nuggets is a grown adult, just drawn cartoonish.
+    look: "skinny adult bloke in his late twenties, buzz cut, blue and yellow jersey, meat pie",
     voiceId: "URQwIuGxmxWfCgwXuDxA",
     referenceImage: "/skidmarks/sunnybanks/nuggets-reference.jpg",
     // Front-left full figure with pie. Extract { left: 30, top: 8, width: 280, height: 500 }.
