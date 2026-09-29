@@ -5,7 +5,7 @@ vi.mock("@vercel/blob", () => ({ put: (...a: unknown[]) => putMock(...a) }));
 
 import { putDeckMediaOrLegacy } from "./deckMediaPut";
 
-const target = { folder: "deck/shorts/shorts/short-3f9a2c", name: "short-3f9a2c-clip-02" };
+const target = { folder: "deck/shorts/shorts/blonde-girl-1", name: "blonde-girl-1-clip-02" };
 const exists = () => new Error("Vercel Blob: This blob already exists, use `allowOverwrite: true` if you want to overwrite it.");
 
 beforeEach(() => putMock.mockReset());
@@ -14,7 +14,7 @@ describe("putDeckMediaOrLegacy", () => {
   it("saves at the readable name with overwrite off", async () => {
     putMock.mockImplementation(async (pathname: string) => ({ url: `https://b/${pathname}`, pathname }));
     const out = await putDeckMediaOrLegacy(Buffer.from("x"), { target, ext: "mp4", contentType: "video/mp4", legacyPathname: "skidmarks/adult-shorts/1.mp4" });
-    expect(out.pathname).toBe("deck/shorts/shorts/short-3f9a2c/short-3f9a2c-clip-02.mp4");
+    expect(out.pathname).toBe("deck/shorts/shorts/blonde-girl-1/blonde-girl-1-clip-02.mp4");
     expect(putMock).toHaveBeenCalledWith(out.pathname, expect.anything(), expect.objectContaining({ allowOverwrite: false, addRandomSuffix: false }));
   });
 
@@ -24,7 +24,7 @@ describe("putDeckMediaOrLegacy", () => {
       .mockRejectedValueOnce(exists())
       .mockImplementation(async (pathname: string) => ({ url: `https://b/${pathname}`, pathname }));
     const out = await putDeckMediaOrLegacy(Buffer.from("x"), { target, ext: "mp4", contentType: "video/mp4", legacyPathname: "legacy.mp4" });
-    expect(out.pathname).toBe("deck/shorts/shorts/short-3f9a2c/short-3f9a2c-clip-02-v3.mp4");
+    expect(out.pathname).toBe("deck/shorts/shorts/blonde-girl-1/blonde-girl-1-clip-02-v3.mp4");
     for (const call of putMock.mock.calls) expect(call[2]).toMatchObject({ allowOverwrite: false });
   });
 

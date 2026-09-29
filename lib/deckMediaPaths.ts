@@ -5,8 +5,8 @@
  *   deck/sunnybank/characters/shazza/plates/shazza-plate-07.jpg
  *   deck/music-video/characters/big-sexy/big-sexy-avatar.jpg
  *   deck/music-video/songs/crack-haul/plates/crack-haul-clip-03a.jpg
- *   deck/shorts/shorts/short-3f9a2c/short-3f9a2c-plate-02.jpg
- *   deck/shorts/characters/skye/plates/skye-7b1e04-plate-03.jpg
+ *   deck/shorts/shorts/blonde-girl-1/blonde-girl-1-plate-02.jpg
+ *   deck/shorts/characters/skye/plates/skye-plate-03.jpg
  *
  * Pure: no network, no store. Shared by the browser upload helpers
  * (`lib/memberPhotoBlob.ts`, `lib/plateStillBlob.ts`), the server
@@ -23,8 +23,7 @@
  * - Nothing is overwritten: if a name is taken the next try is `-v2`,
  *   then `-v3`… (`buildDeckMediaPathname`), and `deck/` uploads are
  *   always `allowOverwrite: false`.
- * - Everything under `deck/shorts/` (the Adult shorts section, and Skye)
- *   carries a short random tag so the paths can't be guessed from a name.
+ * - Every genre, Shorts included, is fully readable: no random tags.
  * - There is no top-level character folder: a character with no section
  *   (Skye, anyone added by hand) is filed under Shorts.
  * - Anything without a known folder keeps its old `skidmarks/...` path.
@@ -119,7 +118,7 @@ export function buildDeckMediaPathname(target: DeckMediaTarget, ext: DeckMediaEx
   return `${target.folder}/${target.name}${suffix}.${ext}`;
 }
 
-/** The file name without folder or extension, e.g. `short-3f9a2c-clip-02-v2`. */
+/** The file name without folder or extension, e.g. `blonde-girl-1-clip-02-v2`. */
 export function deckMediaStem(pathname: string): string {
   const file = pathname.slice(pathname.lastIndexOf("/") + 1);
   const dot = file.lastIndexOf(".");
@@ -139,23 +138,6 @@ export function extensionForImageContentType(contentType: string): "jpg" | "png"
   return "jpg";
 }
 
-/** Short random hex tag for Adult shorts names (privacy). */
-export function randomDeckMediaTag(length = 6): string {
-  const bytes = new Uint8Array(Math.ceil(length / 2));
-  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, length);
-}
-
-export function isDeckMediaTag(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{4,12}$/.test(value);
-}
-
 function twoDigits(n: number): string {
   return String(Math.max(1, Math.floor(n))).padStart(2, "0");
 }
@@ -164,8 +146,6 @@ function twoDigits(n: number): string {
 export interface DeckMediaOwner {
   folder: string;
   fileSlug: string;
-  /** Adult shorts: every file name gets its own random tag. */
-  tagged: boolean;
 }
 
 // ---- One shared shape for every genre ----------------------------------------
@@ -181,17 +161,11 @@ export const DECK_GENRE_PROJECTS_FOLDER: Record<DeckGenre, string> = {
   shorts: "shorts",
 };
 
-/** The only genre difference: Shorts file names carry a random tag. */
-export function deckGenreTagsNames(genre: DeckGenre): boolean {
-  return genre === "shorts";
-}
-
 /** `deck/<genre>/characters/<char>` — the same for every genre. */
 export function deckCharacterOwner(genre: DeckGenre, characterSlug: string): DeckMediaOwner {
   return {
     folder: `${DECK_MEDIA_ROOT}/${genre}/characters/${characterSlug}`,
     fileSlug: characterSlug,
-    tagged: deckGenreTagsNames(genre),
   };
 }
 
@@ -245,8 +219,7 @@ export function characterMediaOwner(
 }
 
 function ownerName(owner: DeckMediaOwner, role: string): string {
-  const tag = owner.tagged ? `-${randomDeckMediaTag()}` : "";
-  return `${owner.fileSlug}${tag}-${role}`;
+  return `${owner.fileSlug}-${role}`;
 }
 
 /** `…/plates/shazza-plate-07` — `n` is the plate's 1-based place in the list. */
@@ -325,14 +298,14 @@ export function songPlateTarget(songSlug: string, clipNumber: number, plateLette
 
 // ---- Adult shorts ----------------------------------------------------------
 
-/** `deck/shorts/shorts/short-3f9a2c` — the tag is random, pinned on the short. */
-export function adultShortFolder(tag: string): string {
-  return deckProjectFolder("shorts", `short-${tag}`);
+/** `deck/shorts/shorts/blonde-girl-1` — the short's own pinned folder name. */
+export function adultShortFolder(shortSlug: string): string {
+  return deckProjectFolder("shorts", shortSlug);
 }
 
-/** `short-3f9a2c-plate-02`, `short-3f9a2c-clip-02`, `short-3f9a2c-ref-01`. */
-export function adultShortTarget(tag: string, role: "ref" | "plate" | "clip", n: number): DeckMediaTarget {
-  return { folder: adultShortFolder(tag), name: `short-${tag}-${role}-${twoDigits(n)}` };
+/** `blonde-girl-1-plate-02`, `blonde-girl-1-clip-02`, `blonde-girl-1-ref-01`. */
+export function adultShortTarget(shortSlug: string, role: "ref" | "plate" | "clip", n: number): DeckMediaTarget {
+  return { folder: adultShortFolder(shortSlug), name: `${shortSlug}-${role}-${twoDigits(n)}` };
 }
 
 // ---- Sunnybank episodes --------------------------------------------------
