@@ -24,6 +24,7 @@ import {
   type SunnyBanksLocationLock,
 } from "@/lib/sunnyBanks";
 import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
+import { isAllowedTrainingImageUrl } from "@/lib/characterLoras";
 
 const XAI_IMAGE_MODEL_ENV_VAR = "XAI_IMAGE_MODEL";
 const XAI_EDITS_URL = "https://api.x.ai/v1/images/edits";
@@ -85,6 +86,32 @@ export async function readSunnyBanksPublicImageDataUrl(publicPath: string): Prom
   }
 }
 
+/** Biggest character picture fetched from Blob for the overlay. */
+const MAX_BLOB_HERO_BYTES = 8 * 1024 * 1024;
+
+/**
+ * A character's picture as a data URL for the overlay: a locked public
+ * still (above), or (2026-09-30) a picture from Deck's own Vercel Blob
+ * store, for a character added on the Sunnybank bar or Hans's added
+ * face. Only Deck's Blob host is ever fetched (https, no credentials, no
+ * port, `isAllowedTrainingImageUrl`); anything else is `null`.
+ */
+export async function readSunnyBanksHeroImageDataUrl(src: string): Promise<string | null> {
+  if (src.startsWith("/")) return readSunnyBanksPublicImageDataUrl(src);
+  if (src.startsWith("data:") || !isAllowedTrainingImageUrl(src)) return null;
+  try {
+    const res = await fetch(src, { signal: AbortSignal.timeout(20_000) });
+    if (!res.ok) return null;
+    const type = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (!/^image\/(jpeg|jpg|png|webp)$/.test(type)) return null;
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.length === 0 || bytes.length > MAX_BLOB_HERO_BYTES) return null;
+    return `data:${type};base64,${bytes.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
 function resolveLocationLock(locationId: string): SunnyBanksLocationLock {
   return getSunnyBanksLocation(locationId) ?? SUNNY_BANKS_LOCATIONS[SUNNY_BANKS_DEFAULT_LOCATION_ID];
 }
@@ -128,7 +155,7 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   }
   const apiKey = resolvedKey.key;
 
-  const heroDataUrl = await readSunnyBanksPublicImageDataUrl(heroPath);
+  const heroDataUrl = await readSunnyBanksHeroImageDataUrl(heroPath);
   if (!heroDataUrl) {
     return {
       ok: false,

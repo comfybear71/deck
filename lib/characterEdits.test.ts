@@ -310,3 +310,67 @@ describe("rename and delete, saved per item", () => {
     expect(page.calls.filter((c) => c.url.startsWith("/api/deck/items") && c.method !== "GET")).toEqual([]);
   }, 15000);
 });
+
+describe("voice id, saved per item", () => {
+  const VOICE = "21m00Tcm4TlvDq8ikWAM";
+  const HANS = { ...ARSGL, name: "Hans" };
+
+  it("saves a voice on the card's own row, gives a card-less face one, survives a reload, and clears", async () => {
+    const server = {
+      session: { bands: [], removedSeedBandIds: [], session: { projectKind: "sunnybank", bandId: null, mp3: null, scriptSequenceDraft: null }, rosterExtras: { "music-video": [], "sunny-banks": [HANS], "adult-shorts": [] } },
+      rows: [structuredClone(SHAZZA_CARD)],
+    };
+    let page = await boot(server);
+    const puts = () => page.calls.filter((c) => c.method === "PUT" && c.url.startsWith("/api/deck/items"));
+
+    // A bad id: plain error, nothing sent.
+    const bad = page.edits.setCharacterVoiceId(page.tileNamed("sunny-banks", "Hans")!, "not a voice");
+    expect(bad.ok).toBe(false);
+    await wait(100);
+    expect(puts()).toEqual([]);
+
+    // Shazza (built-in) already has a card: one update on it.
+    expect(page.edits.setCharacterVoiceId(page.tileNamed("sunny-banks", "Shazza")!, ` ${VOICE} `).ok).toBe(true);
+    // Hans (added face, no card yet): a new card with the voice.
+    expect(page.edits.setCharacterVoiceId(page.tileNamed("sunny-banks", "Hans")!, VOICE).ok).toBe(true);
+    await wait(100);
+    expect(puts().map((p) => p.body)).toMatchObject([
+      { kind: "character", itemId: "clora_shazza", expectedRevision: 2, data: { id: "clora_shazza", name: "Shazza", voiceId: VOICE } },
+      { kind: "character", expectedRevision: 0, data: { name: "Hans", sourceKey: "sbx:chr_arsgl", voiceId: VOICE } },
+    ]);
+
+    // Reload: both voices are back, and Hans now speaks.
+    page = await boot(server);
+    const cards = page.sk.getCharacterLorasState().characters;
+    expect(cards.find((c) => c.sourceKey === "sb:shazza")?.voiceId).toBe(VOICE);
+    expect(cards.find((c) => c.sourceKey === "sbx:chr_arsgl")?.voiceId).toBe(VOICE);
+    const voices = await import("./sunnyBanksVoices");
+    expect(voices.resolveSunnyBanksSpeaker("Hans", page.sk.getSkidmarksSnapshot())).toMatchObject({ voiceId: VOICE, heroImage: ARSGL.pictureUrls[0] });
+    const shazzaTile = page.tileNamed("sunny-banks", "Shazza")!;
+    expect(page.edits.characterVoice(shazzaTile, cards.find((c) => c.sourceKey === "sb:shazza")!)).toEqual({ voiceId: VOICE, saved: true });
+
+    // Clear Shazza's: one PUT without voiceId; she's back to her built-in voice.
+    expect(page.edits.setCharacterVoiceId(shazzaTile, null).ok).toBe(true);
+    await wait(100);
+    const cleared = puts();
+    expect(cleared).toHaveLength(1);
+    expect(cleared[0].body).toMatchObject({ itemId: "clora_shazza", data: { id: "clora_shazza" } });
+    expect(cleared[0].body!.data).not.toHaveProperty("voiceId");
+    expect(page.edits.characterVoice(shazzaTile, null)?.saved).toBe(false);
+    // Never Blob, never ElevenLabs.
+    expect(page.calls.every((c) => c.url.startsWith("/api/skidmarks/session") || c.url.startsWith("/api/deck/items"))).toBe(true);
+  }, 15000);
+
+  it("works the same for a Skidmarks cast member", async () => {
+    const server = {
+      session: { bands: [], removedSeedBandIds: [], session: { projectKind: "skidmarks", bandId: null, mp3: null, scriptSequenceDraft: null }, skidmarksEpisodes: { episodes: [], cast: [DAP] } },
+      rows: [] as Row[],
+    };
+    const page = await boot(server);
+    const dap = page.tileNamed("skidmarks", "Dap")!;
+    expect(page.edits.characterCanHaveVoice(dap, page.sk.getSkidmarksSnapshot())).toBe(true);
+    expect(page.edits.setCharacterVoiceId(dap, VOICE).ok).toBe(true);
+    await wait(100);
+    expect(server.rows.map((r) => r.data)).toMatchObject([{ name: "Dap", sourceKey: "sk:cast_dap", voiceId: VOICE }]);
+  }, 15000);
+});

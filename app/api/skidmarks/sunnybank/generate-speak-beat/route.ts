@@ -10,10 +10,11 @@ import {
   buildSunnyBanksHoldPrompt,
   buildSunnyBanksSpeakBeatPathname,
   buildSunnyBanksSpeakingPrompt,
-  getSunnyBanksCharacterLock,
   SUNNY_BANKS_HOLD_DURATION_SEC,
 } from "@/lib/sunnyBanks";
 import { compositeSunnyBanksCharacterOntoLocation } from "@/lib/sunnyBanksComposite";
+import { normalizeElevenLabsVoiceId } from "@/lib/characterLoras";
+import { parseSunnyBanksCharacterCard, resolveSpeakBeatCharacter } from "@/lib/sunnyBanksVoices";
 import {
   buildLtx23Ia2vWorkflow,
   downloadComfyCloudOutput,
@@ -129,6 +130,9 @@ const SPEAK_BEAT_POLL_DEADLINE_MS = 240_000;
 
 type BeatKind = "speak" | "hold";
 
+/** A voice test's line is one short sentence ("G'day, it's Hans."). */
+const VOICE_TEST_MAX_CHARS = 120;
+
 interface GenerateSpeakBeatRequestBody {
   characterName?: unknown;
   line?: unknown;
@@ -162,6 +166,35 @@ interface GenerateSpeakBeatRequestBody {
    * `<episode>-act-i-beat-03-shazza-speak` (`lib/deckMediaPaths.ts`'s
    * `sunnybankBeatTarget`). Missing → the old `sunnybanks/…-beats/` path. */
   mediaTarget?: unknown;
+  /** The character card's ElevenLabs voice id (2026-09-30,
+   * `lib/sunnyBanksVoices.ts`). Wins over a built-in's own voice; the
+   * only voice a character added on the Sunnybank bar (or Hans) has. */
+  voiceId?: unknown;
+  /** For a speaker not in `SUNNY_BANKS_CAST` (a character added with
+   * "+"): their name, look and picture (Deck's own Blob only). For a
+   * built-in with no picture of their own (Hans): just the picture. */
+  characterCard?: unknown;
+}
+
+/** `kind: "voice-test"` — the ▶ on a character's panel: speak one short
+ * line with a voice id and hand back the audio. ElevenLabs only: no
+ * picture, no Comfy, no Blob. */
+async function voiceTest(body: GenerateSpeakBeatRequestBody) {
+  const voiceId = normalizeElevenLabsVoiceId(body.voiceId);
+  const line = typeof body.line === "string" ? body.line.replace(/\s+/g, " ").trim().slice(0, VOICE_TEST_MAX_CHARS) : "";
+  if (!voiceId || !line) {
+    return NextResponse.json({ error: "A voice id and a short line are both needed.", code: "invalid_request" }, { status: 400 });
+  }
+  const speech = await synthesizeSunnyBanksLine(voiceId, line);
+  if (!speech.ok) {
+    return NextResponse.json(
+      { error: speech.message, code: speech.unconfigured ? "missing_api_key" : "upstream_error" },
+      { status: speech.unconfigured ? 501 : 502 }
+    );
+  }
+  return NextResponse.json({
+    audioDataUrl: `data:${speech.contentType};base64,${Buffer.from(speech.bytes).toString("base64")}`,
+  });
 }
 
 function parseBeatKind(value: unknown): BeatKind {
@@ -175,6 +208,8 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body.", code: "invalid_request" }, { status: 400 });
   }
+
+  if (body.kind === "voice-test") return voiceTest(body);
 
   const kind = parseBeatKind(body.kind);
   const characterName = typeof body.characterName === "string" ? body.characterName.trim() : "";
@@ -198,7 +233,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const character = characterName ? getSunnyBanksCharacterLock(characterName) : undefined;
+  const cardVoiceId = normalizeElevenLabsVoiceId(body.voiceId);
+  const character = resolveSpeakBeatCharacter(characterName, parseSunnyBanksCharacterCard(body.characterCard), cardVoiceId);
   const isLocationCutaway = kind === "hold" && !character;
   const cutawayLabel = characterName || "Crowd";
   if (kind === "speak" && !character) {
@@ -207,7 +243,8 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  const voiceId = character?.voiceId;
+  // The card's voice wins over the built-in one (Hans has only a card voice).
+  const voiceId = cardVoiceId ?? character?.voiceId;
   if (kind === "speak" && !voiceId) {
     return NextResponse.json(
       { error: `${character!.name} doesn't have a locked ElevenLabs voice yet.`, code: "missing_voice" },

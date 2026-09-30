@@ -125,6 +125,42 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("voice test (the ▶ on a character's panel): ElevenLabs only, audio back, no Comfy or Blob", async () => {
+    vi.stubEnv("COMFY_CLOUD_API_KEY", "");
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Blob([new Uint8Array([9, 8, 7])]), { status: 200, headers: { "Content-Type": "audio/mpeg" } })
+    );
+    const res = await POST(postRequest({ kind: "voice-test", voiceId: "21m00Tcm4TlvDq8ikWAM", line: "G'day, it's Hans." }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.audioDataUrl).toBe(`data:audio/mpeg;base64,${Buffer.from([9, 8, 7]).toString("base64")}`);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [ttsUrl, ttsInit] = fetchMock.mock.calls[0];
+    expect(String(ttsUrl)).toContain("elevenlabs.io");
+    expect(String(ttsUrl)).toContain("21m00Tcm4TlvDq8ikWAM");
+    expect(JSON.parse(ttsInit.body).text).toBe("G'day, it's Hans.");
+    expect(putMock).not.toHaveBeenCalled();
+
+    const bad = await POST(postRequest({ kind: "voice-test", voiceId: "nope", line: "hi" }));
+    expect(bad.status).toBe(400);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a card's voice id wins over the built-in voice on a speak beat", async () => {
+    mockElevenLabs(encodeTestMp3(2.5));
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/card-voice.mp4" });
+
+    const res = await POST(speakBeatRequest({ voiceId: "AZnzlk1XvdvUeBnXmlld" }));
+    expect(res.status).toBe(200);
+    const [ttsUrl] = fetchMock.mock.calls[0];
+    expect(String(ttsUrl)).toContain("/AZnzlk1XvdvUeBnXmlld");
+  });
+
   it("reports a real ElevenLabs upstream failure honestly", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ detail: { message: "Invalid API key" } }), {
