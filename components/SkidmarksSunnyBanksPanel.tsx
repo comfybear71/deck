@@ -24,6 +24,7 @@ import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
   buildSunnyBanksHoldPrompt,
   buildSunnyBanksSpeakingPrompt,
+  missingCastPictureMessage,
   resolveSunnyBanksStartImage,
   SUNNY_BANKS_CAST,
   SUNNY_BANKS_DEFAULT_LOCATION_ID,
@@ -76,22 +77,22 @@ import {
  * chaining, no `lib/scriptSequenceRunner`). Cast strip + a Script card
  * that stays local React state.
  *
- * **A character only shows as Speak-selectable once it has both a real
- * voice id and a real reference plate** — Hans (no voice yet, no plate)
- * and any future guest without a plate show in the cast strip so Stuart
- * can see who's missing what, but never as something this screen would
- * try to render with a stand-in. A Hold only needs the plate (no TTS).
+ * **A character only renders once it has a Cast card picture** (and a
+ * Speak line also needs a voice id). A row whose character has no Cast
+ * card picture shows a red note and Render waits; it is never rendered
+ * with a stand-in or on the bare location. A Hold only needs the
+ * picture (no TTS).
  *
- * **Start still is the hero cell, not the turnaround sheet
- * (2026-09-17)** — live QA: Silent Hold on Shazza animated every pose
- * on `shazza-reference.jpg`. Cast thumbnails still resolve
- * `resolveSunnyBanksStartImage`. No pose picker, no in-memory canvas
- * cropper.
+ * **Cast card pictures only (2026-10-01, Stuart)** — the picture laid
+ * onto the location is the character's Cast card main picture
+ * (`resolveSunnyBanksSpeaker` → `castPicture`), never a built-in or repo
+ * file: those old `*-hero.jpg` / `*-reference.jpg` stills are deleted
+ * (EP02 Act I row 16 rendered the old Dazza hero's rocket launcher).
  *
  * **Location canvas as compositor Image 1 (2026-09-17)** — Speak/Hold
  * POST that still as `startImageDataUrl` (empty location, Image 1)
  * plus `locationId` / `locationImage` alongside `characterName`. The
- * speak-beat **route** overlays the hero as Image 2, then LTX sees
+ * speak-beat **route** overlays the Cast card picture as Image 2, then the engine sees
  * only the composed still. This panel does **not** call generate-still
  * itself. Gold Hold/Speak prompt strings are never built here — the
  * route loads the full `SUNNY_BANKS_CAST` record by name and passes
@@ -335,8 +336,7 @@ export interface SunnyBanksRenderedClip {
   videoBackend?: RowVideoBackend;
 }
 
-const PLATE_CAST = CAST_LIST.filter((c) => c.referenceImage);
-const FALLBACK_CHARACTER_NAME = PLATE_CAST[0]?.name ?? "";
+const FALLBACK_CHARACTER_NAME = CAST_LIST[0]?.name ?? "";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1904,8 +1904,10 @@ export function SkidmarksSunnyBanksPanel() {
       if (row.locationProblem || !row.location.image) return false;
       if (isSunnyBanksLocationCutaway(row.chunk)) return true;
       if (!row.character) return false;
+      // No Cast card picture: never rendered (red note on the row).
+      if (!resolveSunnyBanksStartImage(row.character)) return false;
       if (row.kind === "speak") return !!row.character.voiceId && row.line.length > 0;
-      return !!resolveSunnyBanksStartImage(row.character);
+      return true;
     });
 
   const resolveLocationDataUrl = async (image: string): Promise<string> => {
@@ -2069,6 +2071,10 @@ export function SkidmarksSunnyBanksPanel() {
               status: "failed",
               error: row.locationProblem ?? "Character or location is missing.",
             });
+            return false;
+          }
+          if (lock && !cutaway && !resolveSunnyBanksStartImage(lock)) {
+            writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: missingCastPictureMessage(lock.name) });
             return false;
           }
           setRunningKind(row.kind);
@@ -2414,11 +2420,7 @@ export function SkidmarksSunnyBanksPanel() {
           faces live in the Characters section now, with "not ready" shown
           there (see `sunnyBanksNotReadyReason` in lib/characterRoster.ts). */}
       <div className="flex touch-pan-y flex-col gap-2.5 overscroll-y-contain rounded-2xl border border-amber-300/25 bg-amber-300/[0.03] p-3">
-        {PLATE_CAST.length === 0 ? (
-          <p className="text-[12px] leading-relaxed text-white/40">
-            No character has a reference plate yet.
-          </p>
-        ) : (
+        {/* Every character always shows; one with no Cast card picture gets a red note on its rows (2026-10-01). */}
           <>
             {/* Acts scroll sideways; the script tools sit on their own
               * row below. Two separate rows is the fix (2026-09-18):
@@ -2652,7 +2654,7 @@ export function SkidmarksSunnyBanksPanel() {
                                       <option key={c.name} value={c.name} className="bg-zinc-900">
                                         {c.name}
                                         {!resolveSunnyBanksStartImage(c)
-                                          ? " (no plate)"
+                                          ? " (no Cast card picture)"
                                           : !c.voiceId
                                             ? " (no voice — hold only)"
                                             : ""}
@@ -2717,6 +2719,11 @@ export function SkidmarksSunnyBanksPanel() {
                                   +
                                 </button>
                               </div>
+                              {!isStatic && !cutaway && row.character && !resolveSunnyBanksStartImage(row.character) && (
+                                <p role="alert" className="pt-0.5 text-[10px] leading-snug text-red-300">
+                                  {missingCastPictureMessage(row.character.name)}
+                                </p>
+                              )}
                               {!isStatic && row.locationProblem && (
                                 <p role="alert" className="pt-0.5 text-[10px] leading-snug text-red-300">
                                   {row.locationProblem}
@@ -2802,7 +2809,7 @@ export function SkidmarksSunnyBanksPanel() {
               <p className="text-[10px] leading-snug text-white/40">
                 {pendingRows.some((row) => row.locationProblem)
                   ? "A line's location isn't on the Locations row (see the red note on it). Add that location, or fix the [Location: …] tag."
-                  : "Every line needs a plated character. Speak needs a locked voice. Change the dropdown or the script — Hans has no plate yet."}
+                  : "Every line needs a character with a Cast card picture (see any red note). Speak also needs a voice. Change the dropdown or the script."}
               </p>
             )}
 
@@ -2887,7 +2894,6 @@ export function SkidmarksSunnyBanksPanel() {
                   }${speakCount > 0 ? `, speak video ~$0.13/s after TTS` : ""}. Stops if a line fails so later lines are not billed. Route still loads the full character lock by name for the gold prompts.`}
             </p>
           </>
-        )}
         {progressText && (
           <p role="status" className="text-[11px] leading-snug text-amber-200/80">
             {progressText}

@@ -8,12 +8,16 @@
  * - A built-in cast member (`SUNNY_BANKS_CAST`) whose card has a voice
  *   speaks with the card's voice instead of the hard-coded one. Hans has
  *   no built-in voice, so his card's voice is what makes `Hans:` speak.
- *   Hans also has no built-in picture; if his card's character has one
- *   (the face added on the Sunnybank bar), that is his picture too.
  * - A character added with "+" on the Sunnybank bar becomes a speaker
  *   once their card has a voice: their name is matched on `Name:` lines,
- *   they're in the row dropdown, and their first picture is the one
- *   laid onto the location.
+ *   and they're in the row dropdown.
+ *
+ * Pictures (2026-10-01, Stuart: "only our new character images plus 15
+ * LoRA trained images, nothing else"): every Sunnybank character, built-in
+ * or added, uses only their own Cast card's pictures
+ * (`sunnyBanksCastPictures`). Their main picture is the one laid onto
+ * the location. There is no built-in or repo picture any more, and no
+ * card picture means no picture: the row says so and doesn't render.
  *
  * Pure: reads a `SkidmarksState`, never writes.
  */
@@ -29,8 +33,6 @@ interface CardVoice {
   /** Set for a character added with "+" (not a built-in). */
   added: boolean;
   look: string;
-  /** Their first Blob picture, if they have one. */
-  pictureUrl: string | null;
 }
 
 /** One lookup per state: the store hands out a new object on every change. */
@@ -48,26 +50,83 @@ function cardVoices(state: SkidmarksState): Map<string, CardVoice> {
     if (!voiceId || !card.name.trim()) continue;
     let added = false;
     let look = "";
-    let pictureUrl: string | null = null;
     if (sourceKey.startsWith("sbx:")) {
       const extra = extras.find((x) => x.id === sourceKey.slice(4));
       if (!extra) continue;
       added = true;
       look = extra.look;
-      pictureUrl = extra.pictureUrls[0] ?? card.referenceUrl ?? null;
     } else if (!sourceKey.startsWith("sb:")) {
       continue;
-    } else {
-      pictureUrl = card.referenceUrl && /^https:/.test(card.referenceUrl) ? card.referenceUrl : null;
     }
     const name = card.name.trim();
     const lower = name.toLowerCase();
     // A built-in's own card (sb:) wins over an added face with the same name.
     if (out.has(lower) && out.get(lower)!.added === false) continue;
-    out.set(lower, { name, voiceId, added, look, pictureUrl: pictureUrl && /^https:/.test(pictureUrl) ? pictureUrl : null });
+    out.set(lower, { name, voiceId, added, look });
   }
   cache.set(state, out);
   return out;
+}
+
+/** A Sunnybank character's Cast card pictures (2026-10-01). */
+export interface SunnyBanksCastPictures {
+  /** The Cast card's main picture: its approved reference picture, else
+   * (an added character) the first picture on the card, else its first
+   * training picture. `null` = no Cast card picture at all. */
+  main: string | null;
+  /** The card's training pictures (the 15 the LoRA was trained on). */
+  training: string[];
+  /** The trained LoRA file, when there is one. */
+  loraFile: string | null;
+}
+
+const NO_CAST_PICTURES: SunnyBanksCastPictures = { main: null, training: [], loraFile: null };
+
+/** Deck's own Blob pictures only (never a repo path or a data URL). */
+function blobPicture(url: string | null | undefined): string | null {
+  const u = typeof url === "string" ? url.trim() : "";
+  return u && /^https:\/\//i.test(u) && isAllowedTrainingImageUrl(u) ? u : null;
+}
+
+const pictureCache = new WeakMap<SkidmarksState, Map<string, SunnyBanksCastPictures>>();
+
+/** Every Sunnybank Cast card's pictures, keyed by lower-case name. */
+function castPictureMap(state: SkidmarksState): Map<string, SunnyBanksCastPictures> {
+  const cached = pictureCache.get(state);
+  if (cached) return cached;
+  const out = new Map<string, SunnyBanksCastPictures>();
+  const fromBuiltInCard = new Set<string>();
+  const extras = normalizeRosterExtrasState(state.rosterExtras)?.["sunny-banks"] ?? [];
+  for (const card of state.characterLoras?.characters ?? []) {
+    const sourceKey = card.sourceKey ?? "";
+    const name = card.name.trim();
+    if (!name) continue;
+    const lower = name.toLowerCase();
+    let firstCardPicture: string | null = null;
+    if (sourceKey.startsWith("sbx:")) {
+      const extra = extras.find((x) => x.id === sourceKey.slice(4));
+      if (!extra) continue;
+      firstCardPicture = blobPicture(extra.pictureUrls[0]);
+    } else if (!sourceKey.startsWith("sb:")) {
+      continue;
+    }
+    // A built-in's own card (sb:) wins over an added face with the same name.
+    if (fromBuiltInCard.has(lower)) continue;
+    const training = card.trainingImageUrls.map(blobPicture).filter((u): u is string => Boolean(u));
+    out.set(lower, {
+      main: blobPicture(card.referenceUrl) ?? firstCardPicture ?? training[0] ?? null,
+      training,
+      loraFile: card.loraFile?.trim() || null,
+    });
+    if (sourceKey.startsWith("sb:")) fromBuiltInCard.add(lower);
+  }
+  pictureCache.set(state, out);
+  return out;
+}
+
+/** A Sunnybank character's Cast card pictures, by name. Nothing else is ever a picture for them. */
+export function sunnyBanksCastPictures(name: string, state: SkidmarksState): SunnyBanksCastPictures {
+  return castPictureMap(state).get(name.trim().toLowerCase()) ?? NO_CAST_PICTURES;
 }
 
 function builtInFor(name: string): SunnyBanksCharacterLock | undefined {
@@ -78,25 +137,27 @@ function builtInFor(name: string): SunnyBanksCharacterLock | undefined {
 }
 
 /**
- * The character a `Name:` line means, with the voice it speaks in: a
- * built-in (their card's voice wins), or an added character with a
- * voice. `undefined` = not a speaker (a `Crowd:`-style cutaway).
+ * The character a `Name:` line means, with the voice it speaks in and
+ * their Cast card main picture: a built-in (their card's voice wins), or
+ * an added character with a voice. `undefined` = not a speaker (a
+ * `Crowd:`-style cutaway). `castPicture` is unset when their Cast card
+ * has no picture.
  */
 export function resolveSunnyBanksSpeaker(name: string, state: SkidmarksState): SunnyBanksCharacterLock | undefined {
   if (!name.trim()) return undefined;
   const builtIn = builtInFor(name);
   const card = cardVoices(state).get(name.trim().toLowerCase());
+  const picture = sunnyBanksCastPictures(name, state).main;
+  const withPicture = picture ? { castPicture: picture } : {};
   if (builtIn) {
-    if (!card) return builtIn;
-    const needsPicture = !resolveSunnyBanksStartImage(builtIn) && card.pictureUrl;
-    return { ...builtIn, voiceId: card.voiceId, ...(needsPicture ? { heroImage: card.pictureUrl as string } : {}) };
+    return { ...builtIn, ...(card ? { voiceId: card.voiceId } : {}), ...withPicture };
   }
   if (!card || !card.added) return undefined;
   return {
     name: card.name,
     look: card.look.trim() || "as in their picture",
     voiceId: card.voiceId,
-    ...(card.pictureUrl ? { heroImage: card.pictureUrl } : {}),
+    ...withPicture,
   };
 }
 
@@ -124,62 +185,66 @@ export function sunnyBanksSpeakerList(state: SkidmarksState): SunnyBanksCharacte
 }
 
 /**
- * What the speak-beat route needs besides the name when the character
- * isn't fully described by the built-in table: the card's voice, and
- * for an added character (or Hans's picture) their look and picture.
+ * What the speak-beat route needs besides the name: the card's voice,
+ * the Cast card main picture (every character, 2026-10-01), and for an
+ * added character their look.
  */
 export function sunnyBanksSpeakerRequestExtras(
   lock: SunnyBanksCharacterLock | undefined,
-): { voiceId?: string; characterCard?: { name: string; look: string; heroImageUrl?: string } } {
+): { voiceId?: string; characterCard?: SunnyBanksCharacterCard } {
   if (!lock) return {};
   const builtIn = builtInFor(lock.name);
-  const out: { voiceId?: string; characterCard?: { name: string; look: string; heroImageUrl?: string } } = {};
+  const out: { voiceId?: string; characterCard?: SunnyBanksCharacterCard } = {};
   if (lock.voiceId && lock.voiceId !== builtIn?.voiceId) out.voiceId = lock.voiceId;
-  const hero = resolveSunnyBanksStartImage(lock);
-  const heroIsCard = Boolean(hero && /^https:/.test(hero) && hero !== (builtIn ? resolveSunnyBanksStartImage(builtIn) : undefined));
-  if (!builtIn || heroIsCard) {
-    out.characterCard = { name: lock.name, look: lock.look, ...(heroIsCard ? { heroImageUrl: hero as string } : {}) };
+  const picture = resolveSunnyBanksStartImage(lock);
+  if (!builtIn || picture) {
+    out.characterCard = { name: lock.name, look: lock.look, ...(picture ? { pictureUrl: picture } : {}) };
   }
   return out;
 }
 
 /* ---- Server side: the speak-beat route's reading of those fields ---- */
 
+/** What the panel sends about the character: name, look, Cast card main picture. */
+export interface SunnyBanksCharacterCard {
+  name: string;
+  look: string;
+  /** The Cast card main picture (Deck's Blob only). */
+  pictureUrl?: string;
+}
+
 /** The card fields, cleaned: `null` when absent or unusable. */
-export function parseSunnyBanksCharacterCard(value: unknown): { name: string; look: string; heroImageUrl?: string } | null {
+export function parseSunnyBanksCharacterCard(value: unknown): SunnyBanksCharacterCard | null {
   if (!value || typeof value !== "object") return null;
-  const v = value as { name?: unknown; look?: unknown; heroImageUrl?: unknown };
+  const v = value as { name?: unknown; look?: unknown; pictureUrl?: unknown };
   const name = typeof v.name === "string" ? v.name.replace(/\s+/g, " ").trim() : "";
   if (!name || name.length > 60) return null;
   const look = typeof v.look === "string" ? v.look.replace(/\s+/g, " ").trim().slice(0, 600) : "";
-  const hero = typeof v.heroImageUrl === "string" && isAllowedTrainingImageUrl(v.heroImageUrl) && !v.heroImageUrl.startsWith("data:")
-    ? v.heroImageUrl
-    : undefined;
-  return { name, look, ...(hero ? { heroImageUrl: hero } : {}) };
+  const picture = typeof v.pictureUrl === "string" ? blobPicture(v.pictureUrl) : null;
+  return { name, look, ...(picture ? { pictureUrl: picture } : {}) };
 }
 
 /**
- * Who is speaking: the built-in lock (with the card's picture only if
- * they have none of their own), or a card-described character added on
- * the Sunnybank bar, who needs a voice to count as a speaker.
+ * Who is speaking: the built-in lock with their Cast card picture, or a
+ * card-described character added on the Sunnybank bar, who needs a voice
+ * to count as a speaker. The picture is only ever the one the card sent;
+ * with none, `castPicture` is unset and the route refuses to render.
  */
 export function resolveSpeakBeatCharacter(
   characterName: string,
-  card: ReturnType<typeof parseSunnyBanksCharacterCard>,
+  card: SunnyBanksCharacterCard | null,
   voiceId: string | null
 ): SunnyBanksCharacterLock | undefined {
   if (!characterName) return undefined;
   const builtIn = getSunnyBanksCharacterLock(characterName);
   const sameCard = card && card.name.toLowerCase() === characterName.toLowerCase() ? card : null;
-  if (builtIn) {
-    if (sameCard?.heroImageUrl && !resolveSunnyBanksStartImage(builtIn)) return { ...builtIn, heroImage: sameCard.heroImageUrl };
-    return builtIn;
-  }
+  const withPicture = sameCard?.pictureUrl ? { castPicture: sameCard.pictureUrl } : {};
+  if (builtIn) return { ...builtIn, ...withPicture };
   if (!sameCard || !voiceId) return undefined;
   return {
     name: sameCard.name,
     look: sameCard.look || "as in their picture",
     voiceId,
-    ...(sameCard.heroImageUrl ? { heroImage: sameCard.heroImageUrl } : {}),
+    ...withPicture,
   };
 }

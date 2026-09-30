@@ -345,7 +345,10 @@ describe("voice id, saved per item", () => {
     expect(cards.find((c) => c.sourceKey === "sb:shazza")?.voiceId).toBe(VOICE);
     expect(cards.find((c) => c.sourceKey === "sbx:chr_arsgl")?.voiceId).toBe(VOICE);
     const voices = await import("./sunnyBanksVoices");
-    expect(voices.resolveSunnyBanksSpeaker("Hans", page.sk.getSkidmarksSnapshot())).toMatchObject({ voiceId: VOICE, heroImage: ARSGL.pictureUrls[0] });
+    const hans = voices.resolveSunnyBanksSpeaker("Hans", page.sk.getSkidmarksSnapshot());
+    expect(hans).toMatchObject({ voiceId: VOICE });
+    // His picture here is on a test host, not Deck's Blob, so it's never used (2026-10-01).
+    expect(hans?.castPicture).toBeUndefined();
     const shazzaTile = page.tileNamed("sunny-banks", "Shazza")!;
     expect(page.edits.characterVoice(shazzaTile, cards.find((c) => c.sourceKey === "sb:shazza")!)).toEqual({ voiceId: VOICE, saved: true });
 

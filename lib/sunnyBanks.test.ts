@@ -34,26 +34,16 @@ describe("SUNNY_BANKS_CAST", () => {
     expect(getSunnyBanksCharacterLock("Some Guest")).toBeUndefined();
   });
 
-  it("real reported ask (2026-09-15): six cast members have Stuart's real reference plates", () => {
-    expect(SUNNY_BANKS_CAST.Shazza.referenceImage).toBe("/skidmarks/sunnybanks/shazza-reference.jpg");
-    expect(SUNNY_BANKS_CAST.Dazza.referenceImage).toBe("/skidmarks/sunnybanks/dazza-reference.jpg");
-    expect(SUNNY_BANKS_CAST.Nan.referenceImage).toBe("/skidmarks/sunnybanks/nan-reference.jpg");
-    expect(SUNNY_BANKS_CAST.Nuggets.referenceImage).toBe("/skidmarks/sunnybanks/nuggets-reference.jpg");
-    expect(SUNNY_BANKS_CAST["Ranger Bazza"].referenceImage).toBe("/skidmarks/sunnybanks/ranger-bazza-reference.jpg");
-    expect(SUNNY_BANKS_CAST["Unit 4S"].referenceImage).toBe("/skidmarks/sunnybanks/unit-4s-reference.jpg");
-    // Not sent yet — an undefined reference must stay undefined, never a
-    // guessed/invented path a caller could 404 on.
-    expect(SUNNY_BANKS_CAST.Hans.referenceImage).toBeUndefined();
-  });
-
-  it("live-QA (2026-09-17): sheet characters have a single-subject hero still; Unit 4S is already one figure", () => {
-    expect(SUNNY_BANKS_CAST.Shazza.heroImage).toBe("/skidmarks/sunnybanks/shazza-hero.jpg");
-    expect(SUNNY_BANKS_CAST.Dazza.heroImage).toBe("/skidmarks/sunnybanks/dazza-hero.jpg");
-    expect(SUNNY_BANKS_CAST.Nan.heroImage).toBe("/skidmarks/sunnybanks/nan-hero.jpg");
-    expect(SUNNY_BANKS_CAST.Nuggets.heroImage).toBe("/skidmarks/sunnybanks/nuggets-hero.jpg");
-    expect(SUNNY_BANKS_CAST["Ranger Bazza"].heroImage).toBe("/skidmarks/sunnybanks/ranger-bazza-hero.jpg");
-    expect(SUNNY_BANKS_CAST["Unit 4S"].heroImage).toBeUndefined();
-    expect(SUNNY_BANKS_CAST.Hans.heroImage).toBeUndefined();
+  it("Cast card pictures only (2026-10-01): the built-in table carries no pictures, and the old repo stills are gone", () => {
+    for (const character of Object.values(SUNNY_BANKS_CAST)) {
+      for (const key of Object.keys(character)) expect(["name", "look", "voiceId", "guest"]).toContain(key);
+      expect(character.castPicture).toBeUndefined();
+      expect(resolveSunnyBanksStartImage(character)).toBeUndefined();
+    }
+    for (const slug of ["shazza", "dazza", "nan", "nuggets", "ranger-bazza", "unit-4s", "hans"]) {
+      expect(existsSync(resolve(process.cwd(), `public/skidmarks/sunnybanks/${slug}-hero.jpg`))).toBe(false);
+      expect(existsSync(resolve(process.cwd(), `public/skidmarks/sunnybanks/${slug}-reference.jpg`))).toBe(false);
+    }
   });
 
   it("real reported ask (2026-09-15): only Hans is a guest — the six series regulars aren't", () => {
@@ -127,28 +117,11 @@ describe("buildSunnyBanksSpeakingPrompt", () => {
 });
 
 describe("resolveSunnyBanksStartImage", () => {
-  it("prefers the hero still so LTX never receives the turnaround sheet as the first frame", () => {
-    expect(resolveSunnyBanksStartImage(SUNNY_BANKS_CAST.Shazza)).toBe(
-      "/skidmarks/sunnybanks/shazza-hero.jpg"
-    );
-    expect(resolveSunnyBanksStartImage(SUNNY_BANKS_CAST.Shazza)).not.toBe(
-      SUNNY_BANKS_CAST.Shazza.referenceImage
-    );
-  });
-
-  it("falls back to the reference plate when there is no hero file (Unit 4S is already a single figure)", () => {
-    expect(resolveSunnyBanksStartImage(SUNNY_BANKS_CAST["Unit 4S"])).toBe(
-      "/skidmarks/sunnybanks/unit-4s-reference.jpg"
-    );
-  });
-});
-
-describe("Sunny Banks hero still files", () => {
-  it("every heroImage path is a real file under public/", () => {
-    for (const character of Object.values(SUNNY_BANKS_CAST)) {
-      if (!character.heroImage) continue;
-      expect(existsSync(resolve(process.cwd(), `public${character.heroImage}`))).toBe(true);
-    }
+  it("is the Cast card picture and nothing else", () => {
+    const pic = "https://abc.public.blob.vercel-storage.com/deck/sunnybank/characters/dazza/dazza-reference.jpg";
+    expect(resolveSunnyBanksStartImage({ ...SUNNY_BANKS_CAST.Dazza, castPicture: pic })).toBe(pic);
+    expect(resolveSunnyBanksStartImage({ ...SUNNY_BANKS_CAST.Dazza, castPicture: "  " })).toBeUndefined();
+    expect(resolveSunnyBanksStartImage(SUNNY_BANKS_CAST.Dazza)).toBeUndefined();
   });
 });
 
@@ -186,7 +159,7 @@ describe("SUNNY_BANKS_LOCATIONS", () => {
 });
 
 describe("buildSunnyBanksCompositePlatePrompt", () => {
-  it("follows Studio plateCast order: location is Image 1, hero is Image 2", () => {
+  it("follows Studio plateCast order: location is Image 1, the Cast card picture is Image 2", () => {
     const prompt = buildSunnyBanksCompositePlatePrompt(
       SUNNY_BANKS_CAST.Shazza,
       SUNNY_BANKS_LOCATIONS.office_storefront
@@ -202,7 +175,7 @@ describe("buildSunnyBanksCompositePlatePrompt", () => {
     expect(prompt).not.toBe(buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Shazza));
   });
 
-  it("never names the turnaround sheet — compositor uses the hero card, not the bible", () => {
+  it("never names a picture file or a turnaround sheet", () => {
     const prompt = buildSunnyBanksCompositePlatePrompt(
       SUNNY_BANKS_CAST.Shazza,
       SUNNY_BANKS_LOCATIONS.office_storefront
@@ -236,11 +209,44 @@ describe("buildSunnyBanksCompositePlatePrompt", () => {
     expect(prompt).not.toContain("Do not change their clothes.");
     expect(prompt).toContain("Change only what the shot-specific override below explicitly names.");
     expect(prompt).not.toContain("Only the held object named in the look lock.");
+    expect(prompt).toContain("Held objects: only what this shot's text below names.");
     // Still keeps every other lock: same person, no second person, same place.
     expect(prompt).toContain("<IMAGE_0> is the LOCKED background");
     expect(prompt).toContain("do not invent a second person");
     expect(prompt).toContain(SUNNY_BANKS_STYLE_LOCK);
     expect(prompt).toContain("Dazza");
+  });
+
+  it("EP02 Act I row 16 (2026-10-01): never keeps a prop just because it's in the picture", () => {
+    for (const character of Object.values(SUNNY_BANKS_CAST)) {
+      const prompt = buildSunnyBanksCompositePlatePrompt(character, SUNNY_BANKS_LOCATIONS.office_booth);
+      expect(prompt).not.toContain("Keep any held prop already visible");
+      expect(prompt).toContain("Do not copy");
+    }
+    // Dazza's look names nothing held, so his hands are empty unless the shot says otherwise.
+    expect(buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Dazza, SUNNY_BANKS_LOCATIONS.office_booth)).toContain(
+      "Empty hands. Do not copy any object from image 2."
+    );
+    // A look that names what's held still says only that.
+    expect(buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Nuggets, SUNNY_BANKS_LOCATIONS.office_booth)).toContain(
+      "Only the held object named in the look lock. Do not copy any other object from image 2."
+    );
+  });
+
+  it("EP02 Act I row 16 (2026-10-01): a silent hold's [Action:] text reaches the start still and decides what's held", () => {
+    const action =
+      "Dazza ambles across the red dirt towards the site office booth, beer can in hand, thongs flapping. Full figure, side on";
+    const prompt = buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Dazza, SUNNY_BANKS_LOCATIONS.office_booth, undefined, action);
+    expect(prompt).toContain(`This shot: ${action}.`);
+    expect(prompt).toContain("Held objects: only what this shot's text below names.");
+    expect(prompt).toContain("Pose and anything held follow this shot's text below.");
+    expect(prompt).not.toContain("Keep the EXACT body pose");
+    expect(prompt).not.toContain("Empty hands.");
+    expect(prompt).toContain("Site Office Booth");
+    // Blank action text changes nothing.
+    expect(buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Dazza, SUNNY_BANKS_LOCATIONS.office_booth, undefined, "  ")).toBe(
+      buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Dazza, SUNNY_BANKS_LOCATIONS.office_booth)
+    );
   });
 });
 
