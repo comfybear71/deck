@@ -10,7 +10,6 @@ import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
   buildSunnyBanksHoldPrompt,
   buildSunnyBanksSpeakingPrompt,
-  getSunnyBanksCharacterLock,
   getSunnyBanksLocation,
   resolveSunnyBanksStartImage,
   SUNNY_BANKS_CAST,
@@ -20,6 +19,12 @@ import {
   type SunnyBanksLocationId,
 } from "@/lib/sunnyBanks";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
+import {
+  resolveSunnyBanksSpeaker,
+  sunnyBanksSpeakerList,
+  sunnyBanksSpeakerNames,
+  sunnyBanksSpeakerRequestExtras,
+} from "@/lib/sunnyBanksVoices";
 import { sunnybankBeatTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
 import { setSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
 import {
@@ -175,9 +180,18 @@ import {
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
 
+/** The character a `Name:` line means, with the voice from their card
+ * when one is saved (`lib/sunnyBanksVoices.ts`, 2026-09-30). */
+function speakerLock(name: string) {
+  return resolveSunnyBanksSpeaker(name, getSkidmarksSnapshot());
+}
+
 /** Longest name first so "Ranger Bazza" / "Unit 4S" win over a
  * shorter prefix. Keys of `SUNNY_BANKS_CAST`, not a parallel array. */
-const SPEAKER_NAMES = Object.keys(SUNNY_BANKS_CAST).sort((a, b) => b.length - a.length);
+function speakerNames(): string[] {
+  // Built-in cast plus characters added with "+" once they have a voice.
+  return sunnyBanksSpeakerNames(getSkidmarksSnapshot());
+}
 
 type BeatKind = "speak" | "hold";
 export type SunnyBanksChunkKind = BeatKind | "scene";
@@ -305,7 +319,7 @@ function escapeRegExp(value: string): string {
 }
 
 function matchSpeakerPrefix(raw: string): { name: string; rest: string } | null {
-  for (const name of SPEAKER_NAMES) {
+  for (const name of speakerNames()) {
     const re = new RegExp(`^${escapeRegExp(name)}\\s*(?:says\\s*)?:\\s*(.*)$`, "i");
     const match = raw.match(re);
     if (match) {
@@ -387,7 +401,7 @@ function parseCharacterLookTag(inner: string): string {
   if (!trimmed) return "";
   const colon = trimmed.match(/^([^:]+):\s*(.*)$/);
   if (colon) return (colon[2] ?? "").replace(/\s+/g, " ").trim();
-  for (const name of SPEAKER_NAMES) {
+  for (const name of speakerNames()) {
     const re = new RegExp(`^${escapeRegExp(name)}\\s+(.*)$`, "i");
     const match = trimmed.match(re);
     if (match) return (match[1] ?? "").replace(/\s+/g, " ").trim();
@@ -402,7 +416,7 @@ export function parseSunnyBanksGhostTargetName(rest: string): string | null {
   if (!match) return null;
   const name = match[1].replace(/\s+/g, " ").trim();
   if (!name) return "Crowd";
-  if (SPEAKER_NAMES.some((speaker) => speaker.toLowerCase() === name.toLowerCase())) return null;
+  if (speakerNames().some((speaker) => speaker.toLowerCase() === name.toLowerCase())) return null;
   return name;
 }
 
@@ -415,7 +429,7 @@ export function isSunnyBanksGhostTargetLine(rest: string): boolean {
 export function isSunnyBanksLocationCutaway(
   chunk: Pick<SunnyBanksScriptChunk, "kind" | "characterName">
 ): boolean {
-  return chunk.kind === "hold" && !getSunnyBanksCharacterLock(chunk.characterName);
+  return chunk.kind === "hold" && !speakerLock(chunk.characterName);
 }
 
 /** Motion text for a Crowd/location Hold. Not gold — `lib/sunnyBanks.ts`
@@ -523,8 +537,8 @@ export function buildSunnyBanksHighlightSegments(raw: string): SunnyBanksHighlig
 export function buildSunnyBanksOverlaySegments(raw: string): SunnyBanksHighlightSegment[] {
   const out: SunnyBanksHighlightSegment[] = [];
   const speakerRe =
-    SPEAKER_NAMES.length > 0
-      ? new RegExp(`^([ \\t]*)((?:${SPEAKER_NAMES.map(escapeRegExp).join("|")})\\s*(?:says\\s*)?:)`, "i")
+    speakerNames().length > 0
+      ? new RegExp(`^([ \\t]*)((?:${speakerNames().map(escapeRegExp).join("|")})\\s*(?:says\\s*)?:)`, "i")
       : null;
   let atLineStart = true;
   for (const segment of buildSunnyBanksHighlightSegments(raw)) {
@@ -632,8 +646,8 @@ export function formatSunnyBanksGodScript(text: string): string {
   });
 
   // Same for a recognized speaker prefix (`Name:` / `Name says:`).
-  if (SPEAKER_NAMES.length > 0) {
-    const speakerAlternation = SPEAKER_NAMES.map(escapeRegExp).join("|");
+  if (speakerNames().length > 0) {
+    const speakerAlternation = speakerNames().map(escapeRegExp).join("|");
     const speakerRe = new RegExp(`[ \\t]*\\b(?:${speakerAlternation})\\s*(?:says\\s*)?:`, "gi");
     working = working.replace(speakerRe, (match, offset: number, full: string) => {
       const before = full.slice(0, offset);
@@ -1167,7 +1181,7 @@ export function collectSunnyBanksEpisodePrompts(source: {
     const locations = source.locationOverrides[act] ?? {};
     chunks.forEach((chunk, index) => {
       const characterName = overrides[index] ?? chunk.characterName;
-      const lock = getSunnyBanksCharacterLock(characterName);
+      const lock = speakerLock(characterName);
       const locationId = locations[index] ?? chunk.locationId ?? source.defaultLocationId;
       const kind = chunk.kind;
       const extra = [chunk.action, chunk.appearanceModifier].filter(Boolean).join(" ");
@@ -1559,7 +1573,7 @@ export function SkidmarksSunnyBanksPanel() {
   const queue = sunnyBanksQueueChunks(parsed).map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
     const locationId = locationOverrides[index] ?? chunk.locationId ?? defaultLocationId;
-    const character = getSunnyBanksCharacterLock(characterName);
+    const character = speakerLock(characterName);
     const location = getSunnyBanksLocation(locationId) ?? SUNNY_BANKS_LOCATIONS[SUNNY_BANKS_DEFAULT_LOCATION_ID];
     const line = chunk.line;
     return { chunk, index, characterName, character, location, line, kind: chunk.kind };
@@ -1631,6 +1645,8 @@ export function SkidmarksSunnyBanksPanel() {
     appearanceModifier?: string;
     /** Where the finished clip goes in the Blob tree; `null` = old path. */
     mediaTarget?: DeckMediaTarget | null;
+    /** The card's voice (and, for an added character, look and picture). */
+    speaker?: ReturnType<typeof sunnyBanksSpeakerRequestExtras>;
   }): Promise<
     | { ok: true; videoUrl: string; durationSec: number; audioMuxed?: boolean }
     | { ok: false; message: string }
@@ -1638,6 +1654,7 @@ export function SkidmarksSunnyBanksPanel() {
     const action = args.action?.trim() ?? "";
     const appearanceModifier = args.appearanceModifier?.trim() ?? "";
     const mediaTarget = args.mediaTarget ? { mediaTarget: args.mediaTarget } : {};
+    const speaker = args.speaker ?? {};
     // `action` and `appearanceModifier` travel as two separate fields —
     // the route itself merges them into the motion prompt (2026-09-18).
     // Previously this client pre-merged them into one `action` string,
@@ -1658,6 +1675,7 @@ export function SkidmarksSunnyBanksPanel() {
               startImageDataUrl: args.startImageDataUrl,
               ...(action ? { action } : {}),
               ...mediaTarget,
+              ...speaker,
             }
           : {
               characterName: args.characterName,
@@ -1668,6 +1686,7 @@ export function SkidmarksSunnyBanksPanel() {
               startImageDataUrl: args.startImageDataUrl,
               ...(action ? { action } : {}),
               ...mediaTarget,
+              ...speaker,
             }
       ),
     });
@@ -1710,7 +1729,7 @@ export function SkidmarksSunnyBanksPanel() {
       for (let i = 0; i < queue.length; i += 1) {
         const row = queue[i];
         if (runtimeFor(row.index, row.chunk.raw).status === "done") continue;
-        const lock = getSunnyBanksCharacterLock(row.characterName);
+        const lock = speakerLock(row.characterName);
         const cutaway = isSunnyBanksLocationCutaway(row.chunk);
         if ((!lock && !cutaway) || !row.location.image) {
           writeRuntime(i, {
@@ -1741,6 +1760,7 @@ export function SkidmarksSunnyBanksPanel() {
             startImageDataUrl,
             action: row.chunk.action,
             appearanceModifier: row.chunk.appearanceModifier,
+            speaker: sunnyBanksSpeakerRequestExtras(lock),
             // Filed under this episode's pinned folder (set once from
             // its name, so a rename never moves it) when it has one.
             mediaTarget: sunnybankBeatTarget({
@@ -2262,10 +2282,10 @@ export function SkidmarksSunnyBanksPanel() {
                                     aria-label={`Character for line ${row.index + 1}`}
                                     className="h-10 min-h-[40px] w-[4.75rem] max-w-[4.75rem] shrink-0 truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
                                   >
-                                    {CAST_LIST.map((c) => (
+                                    {sunnyBanksSpeakerList(studioState).map((c) => (
                                       <option key={c.name} value={c.name} className="bg-zinc-900">
                                         {c.name}
-                                        {!c.referenceImage
+                                        {!resolveSunnyBanksStartImage(c)
                                           ? " (no plate)"
                                           : !c.voiceId
                                             ? " (no voice — hold only)"

@@ -27,7 +27,12 @@
  * folder), so a trained character's folder stays under the old name.
  */
 
-import { buildCharacterLoraEntry, slugifyCharacterName, type CharacterLoraEntry } from "./characterLoras";
+import {
+  buildCharacterLoraEntry,
+  normalizeElevenLabsVoiceId,
+  slugifyCharacterName,
+  type CharacterLoraEntry,
+} from "./characterLoras";
 import { buildCharacterRoster, minorBlockReason, type RosterCharacter } from "./characterRoster";
 import { normalizeAdultShortsState } from "./adultShorts";
 import type { RosterExtraGroup } from "./rosterExtras";
@@ -307,6 +312,77 @@ export function deleteRosterCharacter(char: RosterCharacter): CharacterEditResul
   }
   const card = getCharacterLorasState().characters.find((c) => c.sourceKey === char.sourceKey) ?? null;
   if (card) removeCharacterLora(card.id);
+  flushSkidmarksSessionNow();
+  return { ok: true, sourceKey: char.sourceKey };
+}
+
+/**
+ * The voice the panel shows for a character: their card's saved id, or
+ * (built-in Sunny Banks regulars only) the voice Deck's cast list gives
+ * them. `saved` is true only for a card's own id — the one ✕ removes.
+ */
+export function characterVoice(
+  char: Pick<RosterCharacter, "sourceKey" | "name">,
+  entry: Pick<CharacterLoraEntry, "voiceId"> | null,
+): { voiceId: string; saved: boolean } | null {
+  const saved = entry?.voiceId ? normalizeElevenLabsVoiceId(entry.voiceId) : null;
+  if (saved) return { voiceId: saved, saved: true };
+  if (char.sourceKey.startsWith("sb:")) {
+    const lower = char.name.trim().toLowerCase();
+    const builtIn = Object.values(SUNNY_BANKS_CAST).find((c) => c.name.toLowerCase() === lower);
+    if (builtIn?.voiceId) return { voiceId: builtIn.voiceId, saved: false };
+  }
+  return null;
+}
+
+/** True when the open panel can save a voice for this character — every
+ * genre, built-in Sunny Banks regulars included. */
+export function characterCanHaveVoice(char: Pick<RosterCharacter, "sourceKey" | "name">, state: SkidmarksState): boolean {
+  if (char.sourceKey.startsWith("sb:")) return true;
+  if (getCharacterLorasState(state).characters.some((c) => c.sourceKey === char.sourceKey)) return true;
+  return characterSource(char, state).kind !== "fixed";
+}
+
+/**
+ * Saves (or, with `null`, removes) this character's ElevenLabs voice id
+ * on their own card — the same `deck_items` row a rename uses. A
+ * character with no card gets one. Nothing else about them changes.
+ */
+export function setCharacterVoiceId(char: RosterCharacter, raw: string | null): CharacterEditResult {
+  const state = getSkidmarksSnapshot();
+  if (!characterCanHaveVoice(char, state)) {
+    return { ok: false, error: `Couldn't find where ${char.name} is saved, so nothing was changed.` };
+  }
+  let voiceId: string | null = null;
+  if (raw !== null && raw.trim()) {
+    voiceId = normalizeElevenLabsVoiceId(raw);
+    if (!voiceId) return { ok: false, error: "That doesn't look like an ElevenLabs voice ID (letters and numbers, like 21m00Tcm4TlvDq8ikWAM)." };
+  }
+  const cards = getCharacterLorasState().characters;
+  const card = cards.find((c) => c.sourceKey === char.sourceKey) ?? null;
+  if (card) {
+    if ((card.voiceId ?? null) === voiceId) return { ok: true, sourceKey: char.sourceKey };
+    patchCharacterLoras((s) => ({
+      characters: s.characters.map((c) => {
+        if (c.id !== card.id) return c;
+        const next: CharacterLoraEntry = { ...c };
+        if (voiceId) next.voiceId = voiceId;
+        else delete next.voiceId;
+        return next;
+      }),
+    }));
+  } else {
+    if (!voiceId) return { ok: true, sourceKey: char.sourceKey };
+    const created: CharacterLoraEntry = {
+      ...buildCharacterLoraEntry(char.name, cards.map((c) => c.slug), new Date(), {
+        sourceKey: char.sourceKey,
+        trainingStyle: char.style,
+        subjectWord: char.subjectWord,
+      }),
+      voiceId,
+    };
+    patchCharacterLoras((s) => ({ characters: [...s.characters, created] }));
+  }
   flushSkidmarksSessionNow();
   return { ok: true, sourceKey: char.sourceKey };
 }

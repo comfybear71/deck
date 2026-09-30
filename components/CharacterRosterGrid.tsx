@@ -63,11 +63,14 @@ import { SKIDMARKS_CAST_MAX_PICTURES, buildSkidmarksCastMember, castNameFromFile
 import {
   CHARACTER_NAME_MAX,
   characterCanBeEdited,
+  characterCanHaveVoice,
   characterDeleteBlocker,
+  characterVoice,
   deleteRosterCharacter,
   renameRosterCharacter,
+  setCharacterVoiceId,
 } from "@/lib/characterEdits";
-import { TILE_CORNER_BUTTON_SHAPE_CLASS, TrashGlyph } from "./TileCornerGlyphs";
+import { EditGlyph, TILE_CORNER_BUTTON_SHAPE_CLASS, TrashGlyph } from "./TileCornerGlyphs";
 
 /**
  * The thumbnail grid at the top of the Characters screen (2026-09-29):
@@ -304,6 +307,15 @@ export function CharacterRosterGrid({
   const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
   /** A line under the open character's name: why a rename or delete didn't happen, or what to check. */
   const [editNotice, setEditNotice] = useState<{ key: string; text: string; tone: "warn" | "error" } | null>(null);
+  /** The ElevenLabs voice id being pasted in next to the open character's name. */
+  const [voiceDraft, setVoiceDraft] = useState<{ key: string; value: string } | null>(null);
+  /** Escape was pressed in the voice box: the blur that follows must not save. */
+  const cancelVoice = useRef(false);
+  /** The voice ✕ was tapped once on this character; a second tap removes it. */
+  const [confirmVoiceKey, setConfirmVoiceKey] = useState<string | null>(null);
+  /** The character whose ▶ test line is being made. */
+  const [voiceTestKey, setVoiceTestKey] = useState<string | null>(null);
+  const voiceAudio = useRef<HTMLAudioElement | null>(null);
 
   const adultConfirmed = Boolean(normalizeAdultShortsState(snapshot.adultShorts)?.ageConfirmed);
   const allChars = useMemo(() => ROSTER_GROUPS.flatMap((g) => roster[g.id]), [roster]);
@@ -685,6 +697,141 @@ export function CharacterRosterGrid({
     setNameDraft(null);
     setConfirmDeleteKey(null);
     setEditNotice(null);
+    setVoiceDraft(null);
+    setConfirmVoiceKey(null);
+  };
+
+  /** Enter or leaving the voice box saves the id; Escape leaves it as it was. */
+  const commitVoice = (char: RosterCharacter) => {
+    const draft = voiceDraft && voiceDraft.key === char.sourceKey && !cancelVoice.current ? voiceDraft.value : null;
+    cancelVoice.current = false;
+    setVoiceDraft(null);
+    if (draft === null || !draft.trim()) return;
+    const result = setCharacterVoiceId(char, draft);
+    setEditNotice(result.ok ? null : { key: char.sourceKey, text: result.error, tone: "error" });
+  };
+
+  /** Two taps: the first turns the ✕ red, the second takes the voice off. */
+  const tapRemoveVoice = (char: RosterCharacter) => {
+    if (confirmVoiceKey !== char.sourceKey) {
+      setConfirmVoiceKey(char.sourceKey);
+      return;
+    }
+    setConfirmVoiceKey(null);
+    const result = setCharacterVoiceId(char, null);
+    setEditNotice(result.ok ? null : { key: char.sourceKey, text: result.error, tone: "error" });
+  };
+
+  /** ▶ — says a short hello in this voice (ElevenLabs only; nothing is saved). */
+  const playVoiceTest = async (char: RosterCharacter, voiceId: string) => {
+    if (voiceTestKey) return;
+    setVoiceTestKey(char.sourceKey);
+    setConfirmVoiceKey(null);
+    try {
+      const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "voice-test", voiceId, line: `G'day, it's ${char.name.trim()}.` }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { audioDataUrl?: string; error?: string; message?: string };
+      if (!res.ok || !data.audioDataUrl) {
+        throw new Error(data.error || data.message || `The voice test didn't work (${res.status}).`);
+      }
+      voiceAudio.current?.pause();
+      const audio = new Audio(data.audioDataUrl);
+      voiceAudio.current = audio;
+      await audio.play();
+    } catch (err) {
+      setEditNotice({ key: char.sourceKey, text: err instanceof Error ? err.message : "The voice test didn't work.", tone: "error" });
+    } finally {
+      setVoiceTestKey(null);
+    }
+  };
+
+  /** Tiny voice controls right after the name: "+ voice", or ▶ ✎ ✕. */
+  const renderVoiceControls = (char: RosterCharacter, entry: CharacterLoraEntry | null) => {
+    if (!characterCanHaveVoice(char, snapshot)) return null;
+    if (voiceDraft?.key === char.sourceKey) {
+      return (
+        <input
+          autoFocus
+          value={voiceDraft.value}
+          onChange={(e) => setVoiceDraft({ key: char.sourceKey, value: e.target.value })}
+          onFocus={(e) => e.currentTarget.select()}
+          onBlur={() => commitVoice(char)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            else if (e.key === "Escape") {
+              cancelVoice.current = true;
+              e.currentTarget.blur();
+            }
+          }}
+          placeholder="voice ID"
+          autoCapitalize="off"
+          autoCorrect="off"
+          autoComplete="off"
+          spellCheck={false}
+          enterKeyHint="done"
+          maxLength={80}
+          aria-label={`ElevenLabs voice ID for ${char.name}`}
+          className="h-6 w-32 min-w-0 rounded border border-white/15 bg-black/40 px-1.5 text-[16px] leading-none text-white"
+        />
+      );
+    }
+    const voice = characterVoice(char, entry);
+    const tiny = "flex h-5 w-5 shrink-0 touch-manipulation items-center justify-center rounded-full text-[10px] leading-none";
+    if (!voice) {
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            setEditNotice(null);
+            setVoiceDraft({ key: char.sourceKey, value: "" });
+          }}
+          className="shrink-0 text-[11px] text-sky-300/80 hover:text-sky-200"
+          aria-label={`Add an ElevenLabs voice for ${char.name}`}
+        >
+          + voice
+        </button>
+      );
+    }
+    const testing = voiceTestKey === char.sourceKey;
+    const confirmingVoice = confirmVoiceKey === char.sourceKey;
+    return (
+      <span className="flex shrink-0 items-center gap-0.5" title={`Voice ${voice.voiceId}`}>
+        <button
+          type="button"
+          onClick={() => void playVoiceTest(char, voice.voiceId)}
+          disabled={Boolean(voiceTestKey)}
+          className={`${tiny} text-sky-300/90 hover:text-sky-200 disabled:opacity-50`}
+          aria-label={testing ? `Playing ${char.name}'s voice` : `Play ${char.name}'s voice`}
+        >
+          {testing ? "…" : "▶"}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setConfirmVoiceKey(null);
+            setEditNotice(null);
+            setVoiceDraft({ key: char.sourceKey, value: voice.voiceId });
+          }}
+          className={`${tiny} text-white/50 hover:text-white`}
+          aria-label={`Change ${char.name}'s voice ID`}
+        >
+          <EditGlyph />
+        </button>
+        {voice.saved && (
+          <button
+            type="button"
+            onClick={() => tapRemoveVoice(char)}
+            className={`${tiny} ${confirmingVoice ? "bg-red-500/80 text-white" : "text-white/40 hover:text-red-300"}`}
+            aria-label={confirmingVoice ? `Tap again to remove ${char.name}'s voice` : `Remove ${char.name}'s voice`}
+          >
+            ✕
+          </button>
+        )}
+      </span>
+    );
   };
 
   /** Enter or leaving the box saves the name; Escape puts the old one back. */
@@ -744,41 +891,44 @@ export function CharacterRosterGrid({
     return (
       <>
         <div className="flex items-center justify-between gap-2">
-          {editing ? (
-            <input
-              autoFocus
-              value={nameDraft?.value ?? ""}
-              onChange={(e) => setNameDraft({ key: char.sourceKey, value: e.target.value })}
-              onFocus={(e) => e.currentTarget.select()}
-              onBlur={() => commitName(char)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.currentTarget.blur();
-                else if (e.key === "Escape") {
-                  cancelRename.current = true;
-                  e.currentTarget.blur();
-                }
-              }}
-              maxLength={CHARACTER_NAME_MAX}
-              aria-label={`Rename ${char.name}`}
-              className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/40 px-2 py-1 text-xs text-white"
-            />
-          ) : editable ? (
-            <button
-              type="button"
-              onClick={() => {
-                setConfirmDeleteKey(null);
-                setEditNotice(null);
-                setNameDraft({ key: char.sourceKey, value: char.name });
-              }}
-              className="min-w-0 truncate text-left text-sm font-semibold text-white"
-              title="Tap to rename"
-              aria-label={`${char.name}. Tap to rename`}
-            >
-              {char.name}
-            </button>
-          ) : (
-            <p className="truncate text-sm font-semibold text-white">{char.name}</p>
-          )}
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {editing ? (
+              <input
+                autoFocus
+                value={nameDraft?.value ?? ""}
+                onChange={(e) => setNameDraft({ key: char.sourceKey, value: e.target.value })}
+                onFocus={(e) => e.currentTarget.select()}
+                onBlur={() => commitName(char)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                  else if (e.key === "Escape") {
+                    cancelRename.current = true;
+                    e.currentTarget.blur();
+                  }
+                }}
+                maxLength={CHARACTER_NAME_MAX}
+                aria-label={`Rename ${char.name}`}
+                className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/40 px-2 py-1 text-xs text-white"
+              />
+            ) : editable ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmDeleteKey(null);
+                  setEditNotice(null);
+                  setNameDraft({ key: char.sourceKey, value: char.name });
+                }}
+                className="min-w-0 truncate text-left text-sm font-semibold text-white"
+                title="Tap to rename"
+                aria-label={`${char.name}. Tap to rename`}
+              >
+                {char.name}
+              </button>
+            ) : (
+              <p className="truncate text-sm font-semibold text-white">{char.name}</p>
+            )}
+            {!editing && renderVoiceControls(char, entry)}
+          </div>
           <div className="flex shrink-0 items-center gap-2">
             {extra}
             {editable && (

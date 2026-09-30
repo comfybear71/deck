@@ -100,6 +100,24 @@ export interface CharacterLoraEntry {
   autoTrain?: boolean;
   /** How many times Redo has run. 0 uses the fixed poses; each Redo picks new poses and places. */
   pictureRound?: number;
+  /**
+   * This character's ElevenLabs voice id (2026-09-30), typed or pasted
+   * on their open panel. Sunny Banks' line reader speaks with it (it
+   * overrides a built-in regular's own voice). Absent = no voice set.
+   */
+  voiceId?: string;
+}
+
+/**
+ * An ElevenLabs voice id as typed or pasted, cleaned, or `null` if it
+ * doesn't look like one. Real ids are 20 letters and digits
+ * (`Vuun8WKmo2MZSUXgLPGw`); anything with spaces, slashes or symbols is
+ * refused so it can't be anything but a path segment.
+ */
+export function normalizeElevenLabsVoiceId(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim();
+  return /^[A-Za-z0-9]{8,64}$/.test(v) ? v : null;
 }
 
 export interface CharacterLorasState {
@@ -321,6 +339,8 @@ function normalizeEntry(raw: unknown): CharacterLoraEntry | null {
     cleanReferenceApproved: r.cleanReferenceApproved === true,
     autoTrain: r.autoTrain === true,
     pictureRound: typeof r.pictureRound === "number" && r.pictureRound > 0 ? Math.floor(r.pictureRound) : 0,
+    // Only present when set, so a card without a voice cleans to exactly what it did before.
+    ...(normalizeElevenLabsVoiceId(r.voiceId) ? { voiceId: normalizeElevenLabsVoiceId(r.voiceId) as string } : {}),
   };
 }
 
