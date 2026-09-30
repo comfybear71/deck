@@ -11,8 +11,10 @@
  * uploads, and nothing here changes any existing link.
  */
 
+import { adultShortEpisodeNumbers, nextAdultShortEpisodeNumber } from "./adultShorts";
 import type { CharacterLoraEntry } from "./characterLoras";
 import {
+  adultShortEpisodeSlug,
   adultShortTarget,
   bandCoverTarget,
   characterMediaOwner,
@@ -146,13 +148,25 @@ export function songPlateTargetFor(segmentId: string, plateId: string): DeckMedi
 // ---- Adult shorts -----------------------------------------------------------
 
 /** The open short's folder name: pinned (and saved) the first time it
- * makes a file, from its Library title or else its character's name,
- * with `-2`, `-3`… if another saved short already uses it. */
+ * makes a file. Since 2026-09-30 it is the episode's number and title,
+ * `ep01-blonde-girl-1` (`deck/shorts/episodes/ep01-blonde-girl-1/`): the
+ * open card's number, or the next one for an episode with no card yet,
+ * then its title or else its character's name, with `-2`, `-3`… if
+ * another saved short already uses it. A short pinned before keeps its
+ * old folder name. */
 function pinAdultShortMediaSlug(): string {
   const state = getAdultShortsState();
   if (isSafeDeckMediaSlug(state.mediaSlug)) return state.mediaSlug;
-  const title = state.saved.find((x) => x.id === state.currentSavedId)?.title ?? "";
-  const base = deckMediaSlug(title || state.character.name, "short");
+  const card = state.saved.find((x) => x.id === state.currentSavedId);
+  if (card && isSafeDeckMediaSlug(card.mediaSlug)) {
+    const pinned = card.mediaSlug;
+    patchAdultShorts((s) => (isSafeDeckMediaSlug(s.mediaSlug) ? s : { ...s, mediaSlug: pinned }));
+    return getAdultShortsState().mediaSlug ?? pinned;
+  }
+  const episodeNumber = card
+    ? (adultShortEpisodeNumbers(state.saved).get(card.id) ?? nextAdultShortEpisodeNumber(state.saved))
+    : nextAdultShortEpisodeNumber(state.saved);
+  const base = adultShortEpisodeSlug(episodeNumber, card?.title || state.character.name);
   const taken = state.saved
     .filter((x) => x.id !== state.currentSavedId)
     .map((x) => x.mediaSlug)

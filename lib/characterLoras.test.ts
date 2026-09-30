@@ -127,3 +127,25 @@ describe("state", () => {
     expect(n?.characters[0].fictionalAdultConfirmed).toBe(false);
   });
 });
+
+describe("character profile (Shorts, 2026-09-30)", () => {
+  it("checks the age: blank is fine, under 21 or not a whole number is refused", async () => {
+    const { characterProfileAgeProblem } = await import("./characterLoras");
+    expect(characterProfileAgeProblem("")).toBeNull();
+    expect(characterProfileAgeProblem("21")).toBeNull();
+    expect(characterProfileAgeProblem("20")).toBe("Age must be 21 or over.");
+    expect(characterProfileAgeProblem("2x")).toBe("Age is a whole number, like 24.");
+    expect(characterProfileAgeProblem("150")).toMatch(/under 100/);
+  });
+
+  it("cleans a profile: drops an under-21 age, trims text, AI-generated on unless it says off", async () => {
+    const { normalizeCharacterProfile, normalizeCharacterLoraEntry } = await import("./characterLoras");
+    expect(normalizeCharacterProfile({ age: 18, bio: "  hi  " })).toEqual({ bio: "hi", aiGenerated: true });
+    expect(normalizeCharacterProfile({ age: 30, aiGenerated: false })).toEqual({ age: 30, aiGenerated: false });
+    expect(normalizeCharacterProfile("x")).toBeNull();
+    const card = normalizeCharacterLoraEntry({ id: "c1", name: "Skye", slug: "skye", profile: { age: 24, chatPersonality: "playful" } });
+    expect(card?.profile).toEqual({ age: 24, chatPersonality: "playful", aiGenerated: true });
+    // A card without a profile cleans exactly as before (no key).
+    expect("profile" in (normalizeCharacterLoraEntry({ id: "c2", name: "Bo", slug: "bo" }) ?? {})).toBe(false);
+  });
+});

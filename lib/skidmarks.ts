@@ -205,7 +205,10 @@ import {
 } from "./skidmarksEpisodes";
 import {
   adultShortsHaveUserContent,
+  autoSaveAdultShortEditor,
   deleteSavedAdultShort,
+  openSavedAdultShort,
+  startNewAdultShort,
   emptyAdultShortsState,
   normalizeAdultShortsState,
   type AdultShortsSaved,
@@ -3321,12 +3324,18 @@ export function getAdultShortsState(state: SkidmarksState = getSkidmarksSnapshot
 export function patchAdultShorts(updater: (state: AdultShortsState) => AdultShortsState): void {
   const current = getSkidmarksSnapshot();
   const base = getAdultShortsState(current);
-  const next = updater({
-    ...base,
-    character: { ...base.character, referenceUrls: base.character.referenceUrls.slice() },
-    shots: base.shots.map((s) => ({ ...s })),
-    saved: base.saved.slice(),
-  });
+  // Every change is saved onto the open episode card as it happens
+  // (2026-09-30, the same as Sunnybank's EPISODES row). A no-op patch or
+  // a blank editor leaves `saved` exactly as it was, so nothing is sent.
+  const next = autoSaveAdultShortEditor(
+    updater({
+      ...base,
+      character: { ...base.character, referenceUrls: base.character.referenceUrls.slice() },
+      shots: base.shots.map((s) => ({ ...s })),
+      saved: base.saved.slice(),
+    }),
+    new Date(),
+  );
   persist({ ...current, adultShorts: next });
   // Per-item saving: only the saved shorts that really changed are sent,
   // one debounced PUT each. A short missing from `next.saved` is never a
@@ -3341,8 +3350,28 @@ export function patchAdultShorts(updater: (state: AdultShortsState) => AdultShor
  */
 export function removeSavedAdultShort(id: string): void {
   const before = getAdultShortsState().saved.find((x) => x.id === id) ?? null;
-  patchAdultShorts((s) => deleteSavedAdultShort(s, id));
+  // Deleting the open episode also clears the editor, or auto-save would
+  // put it straight back as a new card (same as Sunnybank).
+  patchAdultShorts((s) => {
+    const wasOpen = s.currentSavedId === id;
+    const after = deleteSavedAdultShort(s, id);
+    return wasOpen ? startNewAdultShort(after, false) : after;
+  });
   getAdultShortItemSync()?.deleteItem(id, before);
+}
+
+/** Shorts EPISODES row: open a card in the editor. The editor's own work
+ * is already on its card (auto-save), so nothing on screen is lost. */
+export function openAdultShortEpisode(id: string): void {
+  patchAdultShorts((s) => openSavedAdultShort(s, id));
+}
+
+/** Shorts EPISODES row "+ New": a fresh shot list; the open card stays
+ * as it is. The same character carries over (continuity: change her in
+ * the Character box). The new card appears once a shot has something in
+ * it, the same as a new Sunnybank episode. */
+export function startNewAdultShortEpisode(): void {
+  patchAdultShorts((s) => startNewAdultShort(s, true));
 }
 
 /** Character LoRAs — the Skye seed until the first edit. */

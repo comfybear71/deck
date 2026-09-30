@@ -4,26 +4,21 @@
  * above the panel, outside it, so it can't see the panel's own state.
  * Each side reports here under its own reason and the row reads the
  * total, so an episode can't be swapped out from under a render, and one
- * side finishing never clears the other side's busy flag.
+ * side finishing never clears the other side's busy flag. Built with the
+ * shared `createBusyFlag` (Shorts has its own, `lib/shortsBusy.ts`).
  */
-const reasons = new Set<string>();
-const listeners = new Set<() => void>();
+import { createBusyFlag } from "./busyFlag";
+
+const flag = createBusyFlag();
 
 export function setSunnyBanksBusy(next: boolean, reason: string = "panel"): void {
-  const before = reasons.size > 0;
-  if (next) reasons.add(reason);
-  else reasons.delete(reason);
-  if (before === reasons.size > 0) return;
-  for (const listener of listeners) listener();
+  flag.set(next, reason);
 }
 
 export function getSunnyBanksBusy(): boolean {
-  return reasons.size > 0;
+  return flag.get();
 }
 
 export function subscribeSunnyBanksBusy(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return flag.subscribe(listener);
 }

@@ -1148,8 +1148,9 @@ kind is a small kind file (kind + cleaner, like
   own `deck/music-video/bands/<band>/` folder. A character with no
   genre prefix (Skye, anyone added by hand) is a Shorts character. No
   random tags anywhere, Shorts included (`deck/shorts/characters/skye/
-  plates/skye-plate-03.jpg`, `deck/shorts/shorts/blonde-girl-1/
-  blonde-girl-1-plate-02.jpg`). A taken name becomes `-v2`, `-v3`… and
+  plates/skye-plate-03.jpg`; Shorts episodes since 2026-09-30
+  `deck/shorts/episodes/ep01-blonde-girl-1/ep01-blonde-girl-1-plate-02.jpg`,
+  older pinned shorts keep `deck/shorts/shorts/blonde-girl-1/`). A taken name becomes `-v2`, `-v3`… and
   `deck/` uploads are always `allowOverwrite: false`. Folder names are
   pinned the first time (a card's own `slug`, a band's or member's
   `mediaSlug`, a short's `mediaSlug`) and never follow a rename. Anything

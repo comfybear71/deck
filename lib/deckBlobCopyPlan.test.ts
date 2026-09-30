@@ -73,7 +73,9 @@ describe("layout rules", () => {
     expect(deckTreeLayoutProblem("deck/sunnybank/characters/shazza/plates/nan-plate-03.jpg")).toMatch(/character file/);
     expect(deckTreeLayoutProblem("deck/sunnybank/characters/shazza/plates/shazza-plate-3.jpg")).toMatch(/character file/);
     expect(deckTreeLayoutProblem("deck/sunnybank/songs/x/x-clip-01a.jpg")).toMatch(/not characters/);
-    expect(deckTreeLayoutProblem("deck/shorts/episodes/x/x-plate-01.jpg")).toMatch(/not characters/);
+    expect(deckTreeLayoutProblem("deck/shorts/songs/x/x-plate-01.jpg")).toMatch(/not characters/);
+    // Shorts episodes (2026-09-30) sit next to the older shorts folders.
+    expect(deckTreeLayoutProblem("deck/shorts/episodes/ep01-blonde-girl-1/ep01-blonde-girl-1-plate-01.jpg")).toBeNull();
     expect(deckTreeLayoutProblem("deck/sunnybank/bands/x/x-cover.jpg")).toMatch(/only Music video/);
     expect(deckTreeLayoutProblem("deck/characters/skye/skye-reference.jpg")).toMatch(/genre|not a safe/);
     expect(deckTreeLayoutProblem("deck/shorts/shorts/blonde/other-plate-01.jpg")).toMatch(/must start with/);

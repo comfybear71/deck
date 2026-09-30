@@ -29,7 +29,10 @@
 
 import {
   buildCharacterLoraEntry,
+  characterProfileAgeProblem,
+  normalizeCharacterProfile,
   normalizeElevenLabsVoiceId,
+  type CharacterProfile,
   slugifyCharacterName,
   type CharacterLoraEntry,
 } from "./characterLoras";
@@ -186,7 +189,7 @@ export function characterDeleteBlocker(char: RosterCharacter, state: SkidmarksSt
     const slug = slugifyCharacterName(name);
     const saved = (adult?.saved ?? []).filter((s) => slugifyCharacterName(s.character.name) === slug);
     if (saved.length > 0) {
-      return `${name} is the character in ${plural(saved.length, "saved short")} (${listTitles(saved.map((s) => s.title))}). Delete those shorts in the Library first.`;
+      return `${name} is the character in ${plural(saved.length, "Shorts episode")} (${listTitles(saved.map((s) => s.title))}). Delete those episodes first.`;
     }
     if (adult && adult.character.name.trim() && slugifyCharacterName(adult.character.name) === slug) {
       return `${name} is the character open in the Shorts editor. Change the editor's character first.`;
@@ -380,6 +383,66 @@ export function setCharacterVoiceId(char: RosterCharacter, raw: string | null): 
         subjectWord: char.subjectWord,
       }),
       voiceId,
+    };
+    patchCharacterLoras((s) => ({ characters: [...s.characters, created] }));
+  }
+  flushSkidmarksSessionNow();
+  return { ok: true, sourceKey: char.sourceKey };
+}
+
+/** The profile fields (age, bio, chat personality, AI-generated) show on
+ * Shorts characters' open panel (2026-09-30). */
+export function characterCanHaveProfile(char: Pick<RosterCharacter, "group" | "sourceKey" | "name">, state: SkidmarksState): boolean {
+  return char.group === "adult-shorts" && characterCanHaveVoice(char, state);
+}
+
+/** What the open panel shows: the card's saved profile, or the defaults (AI-generated on). */
+export function characterProfile(entry: Pick<CharacterLoraEntry, "profile"> | null): CharacterProfile {
+  return entry?.profile ?? { aiGenerated: true };
+}
+
+/** The profile as typed in the open panel. The age is still text so the problem can be shown. */
+export interface CharacterProfileDraft {
+  age: string;
+  bio: string;
+  chatPersonality: string;
+  aiGenerated: boolean;
+}
+
+/**
+ * Saves this character's profile on their own card (the same `deck_items`
+ * row as a rename or a voice). A character with no card gets one. An age
+ * under 21 is refused with the reason and nothing is saved. The
+ * "AI-generated" label is always written.
+ */
+export function setCharacterProfile(char: RosterCharacter, draft: CharacterProfileDraft): CharacterEditResult {
+  const state = getSkidmarksSnapshot();
+  if (!characterCanHaveProfile(char, state)) {
+    return { ok: false, error: `Couldn't find where ${char.name} is saved, so nothing was changed.` };
+  }
+  const ageProblem = characterProfileAgeProblem(draft.age);
+  if (ageProblem) return { ok: false, error: ageProblem };
+  const minor = minorBlockReason(`${draft.bio} ${draft.chatPersonality}`);
+  if (minor) return { ok: false, error: "The bio or personality reads as under 18. Describe a grown adult." };
+  const profile = normalizeCharacterProfile({
+    age: draft.age.trim() ? Number(draft.age.trim()) : undefined,
+    bio: draft.bio,
+    chatPersonality: draft.chatPersonality,
+    aiGenerated: draft.aiGenerated,
+  }) as CharacterProfile;
+  const cards = getCharacterLorasState().characters;
+  const card = cards.find((c) => c.sourceKey === char.sourceKey) ?? null;
+  if (card) {
+    if (JSON.stringify(card.profile ?? null) === JSON.stringify(profile)) return { ok: true, sourceKey: char.sourceKey };
+    patchCharacterLoras((s) => ({ characters: s.characters.map((c) => (c.id === card.id ? { ...c, profile } : c)) }));
+  } else {
+    const created: CharacterLoraEntry = {
+      ...buildCharacterLoraEntry(char.name, cards.map((c) => c.slug), new Date(), {
+        sourceKey: char.sourceKey,
+        trainingStyle: char.style,
+        subjectWord: char.subjectWord,
+      }),
+      profile,
     };
     patchCharacterLoras((s) => ({ characters: [...s.characters, created] }));
   }

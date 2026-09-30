@@ -54,6 +54,7 @@ import {
   type SkidmarksState,
 } from "@/lib/skidmarks";
 import { normalizeAdultShortsState } from "@/lib/adultShorts";
+import { CharacterProfileFields } from "./CharacterProfileFields";
 import {
   addPicturesToRosterExtra,
   buildRosterExtraCharacter,
@@ -66,6 +67,7 @@ import {
   CHARACTER_NAME_MAX,
   characterCanBeEdited,
   characterCanHaveVoice,
+  characterCanHaveProfile,
   characterDeleteBlocker,
   characterVoice,
   deleteRosterCharacter,
@@ -980,6 +982,8 @@ export function CharacterRosterGrid({
             {notice.text}
           </p>
         )}
+        {/* Shorts characters' optional profile (2026-09-30), folded to one line. */}
+        {characterCanHaveProfile(char, snapshot) && <CharacterProfileFields key={char.sourceKey} char={char} entry={entry} />}
       </>
     );
   };
@@ -1621,9 +1625,9 @@ export function CharacterRosterGrid({
         const done = list.filter((c) => entryForRosterCharacter(characters, c.sourceKey)?.status === "ready").length;
         const plan = groupPlan(list);
         // Sunny Banks faces scroll sideways in one row with the dotted +
-        // tile on the far right (Stuart, 2026-09-30). Other screens keep
-        // the grid.
-        const asRow = simple && g.id === "sunny-banks";
+        // tile on the far right (Stuart, 2026-09-30), and so do Shorts'
+        // (the same layout as Sunnybank). Other screens keep the grid.
+        const asRow = simple && (g.id === "sunny-banks" || g.id === "adult-shorts");
         return (
           <div key={g.id}>
             <div className={simple ? "hidden" : "mb-2 flex items-center justify-between gap-2"}>

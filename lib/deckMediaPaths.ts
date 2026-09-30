@@ -5,7 +5,7 @@
  *   deck/sunnybank/characters/shazza/plates/shazza-plate-07.jpg
  *   deck/music-video/characters/big-sexy/big-sexy-avatar.jpg
  *   deck/music-video/songs/crack-haul/plates/crack-haul-clip-03a.jpg
- *   deck/shorts/shorts/blonde-girl-1/blonde-girl-1-plate-02.jpg
+ *   deck/shorts/episodes/ep01-blonde-girl-1/ep01-blonde-girl-1-plate-02.jpg
  *   deck/shorts/characters/skye/plates/skye-plate-03.jpg
  *
  * Pure: no network, no store. Shared by the browser upload helpers
@@ -338,12 +338,28 @@ export function songPlateTarget(songSlug: string, clipNumber: number, plateLette
 
 // ---- Adult shorts ----------------------------------------------------------
 
-/** `deck/shorts/shorts/blonde-girl-1` — the short's own pinned folder name. */
+/** A Shorts episode's folder name: `ep01-blonde-girl-1` (2026-09-30). */
+export const ADULT_SHORT_EPISODE_SLUG_RE = /^ep\d{2,3}-[a-z0-9]/;
+
+/** `ep01-blonde-girl-1` from episode 1 and its title (or character name). */
+export function adultShortEpisodeSlug(episodeNumber: number, title: string): string {
+  const n = String(Math.max(1, Math.min(999, Math.floor(episodeNumber)))).padStart(2, "0");
+  return `ep${n}-${deckMediaSlug(title, "short")}`;
+}
+
+/**
+ * The short's own folder. An episode folder name (`ep01-blonde-girl-1`,
+ * 2026-09-30) goes under `deck/shorts/episodes/`, like every other
+ * genre's episodes. A short pinned before that (`blonde-girl-1`) keeps
+ * `deck/shorts/shorts/`, so one short never ends up split across two
+ * folders.
+ */
 export function adultShortFolder(shortSlug: string): string {
+  if (ADULT_SHORT_EPISODE_SLUG_RE.test(shortSlug)) return `${DECK_MEDIA_ROOT}/shorts/episodes/${shortSlug}`;
   return deckProjectFolder("shorts", shortSlug);
 }
 
-/** `blonde-girl-1-plate-02`, `blonde-girl-1-clip-02`, `blonde-girl-1-ref-01`. */
+/** `ep01-blonde-girl-1-plate-02`, `…-clip-02`, `…-ref-01`. */
 export function adultShortTarget(shortSlug: string, role: "ref" | "plate" | "clip", n: number): DeckMediaTarget {
   return { folder: adultShortFolder(shortSlug), name: `${shortSlug}-${role}-${twoDigits(n)}` };
 }

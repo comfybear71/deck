@@ -169,7 +169,9 @@ export function deckTreeLayoutProblem(pathname: string): string | null {
     const band = parts[3];
     return parts.length === 5 && new RegExp(`^${band}-cover${VERSION}$`).test(file) ? null : `band file must be bands/${band}/${band}-cover`;
   }
-  if (area === DECK_GENRE_PROJECTS_FOLDER[genre]) {
+  // Shorts episodes (2026-09-30) live in `deck/shorts/episodes/`, next to
+  // the older `deck/shorts/shorts/` folders.
+  if (area === DECK_GENRE_PROJECTS_FOLDER[genre] || (genre === "shorts" && area === "episodes")) {
     const project = parts[3];
     if (!project || parts.length < 5) return "no project folder";
     return file.startsWith(`${project}-`) ? null : `project file must start with "${project}-"`;

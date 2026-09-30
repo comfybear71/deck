@@ -26,6 +26,7 @@ import { SkidmarksScriptSequencePanel } from "./SkidmarksScriptSequencePanel";
 import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
 import { SunnyBanksEpisodeRow } from "./SunnyBanksEpisodeRow";
+import { ShortsEpisodeRow } from "./ShortsEpisodeRow";
 import { SkidmarksEpisodesPanel } from "./SkidmarksEpisodesPanel";
 import { AdultShortsPanel } from "./AdultShortsPanel";
 import { CharacterLorasPanel } from "./CharacterLorasPanel";
@@ -611,6 +612,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {session.projectKind === "sunnybank" && <SunnyBanksEpisodeRow />}
       {session.projectKind === "sunnybank" && <LocationsRow genre="sunnybank" />}
       {session.projectKind === "sunnybank" && <CharacterLorasPanel group="sunny-banks" />}
+      {/* Shorts matches Sunnybank (2026-09-30): EPISODES, then LOCATIONS, then the cast row. */}
+      {session.projectKind === "adult-shorts" && <ShortsEpisodeRow />}
       {session.projectKind === "adult-shorts" && <LocationsRow genre="adult-shorts" />}
       {session.projectKind === "adult-shorts" && <CharacterLorasPanel group="adult-shorts" />}
 
