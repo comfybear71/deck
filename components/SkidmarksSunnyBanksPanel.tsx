@@ -12,14 +12,17 @@ import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
   buildSunnyBanksHoldPrompt,
   buildSunnyBanksSpeakingPrompt,
-  getSunnyBanksLocation,
   resolveSunnyBanksStartImage,
   SUNNY_BANKS_CAST,
   SUNNY_BANKS_DEFAULT_LOCATION_ID,
   SUNNY_BANKS_HOLD_DURATION_SEC,
-  SUNNY_BANKS_LOCATIONS,
   type SunnyBanksLocationId,
+  type SunnyBanksLocationLock,
 } from "@/lib/sunnyBanks";
+import { deckLocationKeyFromName } from "@/lib/deckLocations";
+import { findSunnyBanksLocation, sunnyBanksLocationList, sunnyBanksLocationProblem } from "@/lib/sunnyBanksLocations";
+import { runSunnyBanksRenderQueue, sunnyBanksStoppedText } from "@/lib/sunnyBanksRenderQueue";
+import { downloadSunnyBanksActZip } from "@/lib/sunnyBanksClipsZip";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
 import {
   resolveSunnyBanksSpeaker,
@@ -32,6 +35,7 @@ import { setSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
 import {
   buildSunnyBanksGodScriptPrompt,
   listSunnyBanksLocationIds,
+  listSunnyBanksNonSpeakingCast,
   listSunnyBanksSpeakingCast,
   SUNNY_BANKS_GOD_SCRIPT_EXAMPLE,
   SUNNY_BANKS_GOD_SCRIPT_RULES,
@@ -312,7 +316,6 @@ export interface SunnyBanksRenderedClip {
 }
 
 const HOLD_COST_USD = estimateLtxClipRenderCostUsd(SUNNY_BANKS_HOLD_DURATION_SEC);
-const LOCATION_LIST = Object.values(SUNNY_BANKS_LOCATIONS);
 const PLATE_CAST = CAST_LIST.filter((c) => c.referenceImage);
 const FALLBACK_CHARACTER_NAME = PLATE_CAST[0]?.name ?? "";
 
@@ -340,11 +343,23 @@ export function parseSunnyBanksEpisodeHeader(raw: string): { title: string } | n
 
 /** A bare `=== ACT I ===` / `=== ACT 2` names that act buffer.
  *  A titled beat (`=== ACT III — CROWD CUTAWAY ===`) is a scene, not
- *  a new act — see `parseSunnyBanksTitledActHeader`. */
+ *  a new act — see `parseSunnyBanksTitledActHeader`.
+ *  `# Act I` / `# ACT II: The Con` (a markdown heading, 2026-09-30) is
+ *  an act header too: EP01's `# Act I` was read as a spoken line and
+ *  billed as a Shazza clip. */
 export function parseSunnyBanksActHeader(raw: string): SunnyBanksActId | null {
-  const match = raw.trim().match(/^===\s*ACT\s+([IVXLCDM]+|\d+)\s*(?:===)?\s*$/i);
+  const trimmed = raw.trim();
+  const match =
+    trimmed.match(/^===\s*ACT\s+([IVXLCDM]+|\d+)\s*(?:===)?\s*$/i) ??
+    trimmed.match(/^#+\s*ACT\s+([IVXLCDM]+|\d+)\b(?:\s*[:.\-\u2013\u2014].*|\s+.*)?$/i);
   if (!match) return null;
   return actTokenToId(match[1]);
+}
+
+/** Any other `# heading` (not `# EPISODE:`, not `# Act …`): a note for
+ *  the reader, never a spoken or billed row. */
+export function isSunnyBanksMarkdownHeading(raw: string): boolean {
+  return /^#+\s/.test(raw.trim()) && !parseSunnyBanksEpisodeHeader(raw.trim());
 }
 
 function actTokenToId(token: string): SunnyBanksActId | null {
@@ -382,20 +397,30 @@ export function parseSunnyBanksSceneHeader(raw: string): string | null {
   return label.length > 0 ? label : null;
 }
 
-/** Map `[Location: id]` onto one of the six locked park plates. */
+/** The saved characters for the God-script guide: the built-in cast with
+ *  any voice saved on their card (Hans), plus characters added with "+". */
+function guideCast() {
+  return sunnyBanksSpeakerList(getSkidmarksSnapshot());
+}
+
+/** Sunnybank's locations: the Locations row's saved list, or the
+ *  built-ins until it has one (`lib/sunnyBanksLocations.ts`). */
+function locationList(): SunnyBanksLocationLock[] {
+  return sunnyBanksLocationList(getSkidmarksSnapshot().locations);
+}
+
+/** Map `[Location: id]` onto a location on the Locations row (its key,
+ *  its key spelled loosely, or its name). */
 export function resolveSunnyBanksScriptLocationId(token: string): SunnyBanksLocationId | undefined {
-  const trimmed = token.trim();
-  if (!trimmed) return undefined;
-  const direct = getSunnyBanksLocation(trimmed);
-  if (direct) return direct.id;
-  const slug = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-  const slugged = getSunnyBanksLocation(slug);
-  if (slugged) return slugged.id;
-  const lower = trimmed.toLowerCase();
-  for (const location of LOCATION_LIST) {
-    if (location.label.toLowerCase() === lower) return location.id;
-  }
-  return undefined;
+  return findSunnyBanksLocation(locationList(), token)?.id;
+}
+
+/** What an unknown `[Location: …]` is kept as: its key form, so the row
+ *  shows a warning (and resolves by itself once that location is added)
+ *  instead of quietly rendering on the storefront. */
+function unknownLocationKey(token: string): SunnyBanksLocationId | undefined {
+  const t = token.replace(/\s+/g, " ").trim();
+  return t ? deckLocationKeyFromName(t) : undefined;
 }
 
 function parseCharacterLookTag(inner: string): string {
@@ -452,7 +477,7 @@ function extractGodScriptTags(raw: string): {
   const appearanceModifiers: string[] = [];
   const rest = raw
     .replace(/\[Location:\s*([^\]]*)\]/gi, (_, token: string) => {
-      const resolved = resolveSunnyBanksScriptLocationId(token);
+      const resolved = resolveSunnyBanksScriptLocationId(token) ?? unknownLocationKey(token);
       if (resolved) locationId = resolved;
       return " ";
     })
@@ -874,7 +899,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     const rawLine = rawLines[sourceLineIndex];
     const raw = rawLine.trim();
     if (!raw) continue;
-    if (parseSunnyBanksEpisodeHeader(raw) || parseSunnyBanksActHeader(raw)) continue;
+    if (parseSunnyBanksEpisodeHeader(raw) || parseSunnyBanksActHeader(raw) || isSunnyBanksMarkdownHeading(raw)) continue;
     const sceneLabel = parseSunnyBanksSceneHeader(raw);
     if (sceneLabel) {
       chunks.push({
@@ -1572,7 +1597,7 @@ function SunnyBanksGodScriptCheatSheet() {
 
   const handleCopyPrompt = async () => {
     try {
-      await navigator.clipboard.writeText(buildSunnyBanksGodScriptPrompt());
+      await navigator.clipboard.writeText(buildSunnyBanksGodScriptPrompt(locationList(), guideCast()));
       setCopyState("copied");
     } catch {
       setCopyState("failed");
@@ -1618,20 +1643,33 @@ function SunnyBanksGodScriptCheatSheet() {
           <div className="flex flex-col gap-1">
             <p className="text-[11px] font-semibold text-white/75">Who can speak</p>
             <p className="text-[11px] leading-snug text-white/50">
-              {listSunnyBanksSpeakingCast().join(", ")} — exact spelling and capitals. Any other
+              {listSunnyBanksSpeakingCast(guideCast()).join(", ")} — exact spelling and capitals. Any other
               name with an empty line is a location shot with nobody in it.
             </p>
+            {listSunnyBanksNonSpeakingCast(guideCast()).length > 0 && (
+              <p className="text-[11px] leading-snug text-white/40">
+                Not speaking yet:{" "}
+                {listSunnyBanksNonSpeakingCast(guideCast())
+                  .map((c) => `${c.name} (${c.note})`)
+                  .join(", ")}
+                .
+              </p>
+            )}
           </div>
 
           <div className="flex flex-col gap-1">
             <p className="text-[11px] font-semibold text-white/75">Location ids</p>
             <div className="flex flex-col gap-0.5">
-              {listSunnyBanksLocationIds().map(({ id, label }) => (
+              {listSunnyBanksLocationIds(locationList()).map(({ id, label }) => (
                 <p key={id} className="text-[11px] leading-snug text-white/50">
                   <span className="text-yellow-300/90">{id}</span> — {label}
                 </p>
               ))}
             </div>
+            <p className="text-[11px] leading-snug text-white/40">
+              From the Locations row. An id that isn&apos;t on it gets a red warning on its row and
+              won&apos;t render.
+            </p>
           </div>
 
           <div className="flex flex-col gap-1">
@@ -1680,6 +1718,17 @@ function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+/** A tiny zip-file icon (the act zip in CLIPS). */
+function ZipIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-4 w-4 shrink-0">
+      <path d="M5.5 2.75h6l3 3v11.5h-9V2.75Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M9 3v1.5M10.5 4.5V6M9 6v1.5M10.5 7.5V9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="8.5" y="10" width="2.5" height="3" rx="0.6" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
 export function SkidmarksSunnyBanksPanel() {
   const studioState = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const live = studioState.sunnyBanks?.live ?? getSunnyBanksLiveOrDefault(studioState);
@@ -1706,6 +1755,10 @@ export function SkidmarksSunnyBanksPanel() {
   const scriptHighlightRef = useRef<HTMLDivElement>(null);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
+  /** Stop (2026-09-30): the queue ends before the next line starts; the
+   * line that's rendering finishes and saves. */
+  const stopRequestedRef = useRef(false);
+  const [stopRequested, setStopRequested] = useState(false);
 
   const scriptText = actScripts[activeAct] ?? "";
   const characterOverrides = characterOverridesByAct[activeAct] ?? {};
@@ -1724,13 +1777,22 @@ export function SkidmarksSunnyBanksPanel() {
     return remappedRuntime[index] ?? { lineKey: raw, status: "idle" };
   };
 
+  // The Locations row's list (or the built-ins until it has one).
+  const locations = sunnyBanksLocationList(studioState.locations);
   const queue = sunnyBanksQueueChunks(parsed).map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
     const locationId = locationOverrides[index] ?? chunk.locationId ?? defaultLocationId;
     const character = speakerLock(characterName);
-    const location = getSunnyBanksLocation(locationId) ?? SUNNY_BANKS_LOCATIONS[SUNNY_BANKS_DEFAULT_LOCATION_ID];
+    // An unknown location is never quietly swapped for the storefront
+    // (EP01's Park Site 4 scene was): the row says so and Render waits.
+    const locationProblem = sunnyBanksLocationProblem(locations, locationId);
+    const location: SunnyBanksLocationLock = locations.find((l) => l.id === locationId) ?? {
+      id: locationId,
+      label: locationId,
+      image: "",
+    };
     const line = chunk.line;
-    return { chunk, index, characterName, character, location, line, kind: chunk.kind };
+    return { chunk, index, characterName, character, location, locationProblem, line, kind: chunk.kind };
   });
 
   const renderedClips = collectRenderedClips({
@@ -1742,6 +1804,14 @@ export function SkidmarksSunnyBanksPanel() {
   const clipsByAct = groupSunnyBanksClipsByAct(actIds, renderedClips);
   /** Act rows Stuart tapped open or shut, per episode. Component state only. */
   const [clipRowToggles, setClipRowToggles] = useState<Record<string, boolean>>({});
+  /** The episode's pinned folder name (`ep01-the-first-fleet`) when it
+   * has one, else its name. Read only: the zip never pins a folder. */
+  const zipEpisodeName =
+    live.mediaSlug ??
+    studioState.sunnyBanks?.workspaces.find((w) => w.id === live.episodeId)?.mediaSlug ??
+    (live.workspaceTitle.trim() || "episode");
+  /** Why an act's zip didn't start (rare: the page checks first). */
+  const [zipNotice, setZipNotice] = useState<{ act: SunnyBanksActId; text: string } | null>(null);
   const clipRowKey = (act: SunnyBanksActId) => `${live.episodeId ?? ""}|${act}`;
 
   /** Finished shots collapse out of the way (2026-09-18, Stuart's ask).
@@ -1771,7 +1841,7 @@ export function SkidmarksSunnyBanksPanel() {
     pendingRows.length > 0 &&
     !running &&
     pendingRows.every((row) => {
-      if (!row.location.image) return false;
+      if (row.locationProblem || !row.location.image) return false;
       if (isSunnyBanksLocationCutaway(row.chunk)) return true;
       if (!row.character) return false;
       if (row.kind === "speak") return !!row.character.voiceId && row.line.length > 0;
@@ -1791,6 +1861,8 @@ export function SkidmarksSunnyBanksPanel() {
     characterName: string;
     line: string;
     locationId: string;
+    /** The location's name, for the compositing prompt. */
+    locationLabel?: string;
     locationImage: string;
     startImageDataUrl: string;
     action?: string;
@@ -1823,6 +1895,7 @@ export function SkidmarksSunnyBanksPanel() {
               characterName: args.characterName,
               ...(appearanceModifier ? { appearanceModifier } : {}),
               locationId: args.locationId,
+              ...(args.locationLabel ? { locationLabel: args.locationLabel } : {}),
               locationImage: args.locationImage,
               startImageDataUrl: args.startImageDataUrl,
               ...(action ? { action } : {}),
@@ -1834,6 +1907,7 @@ export function SkidmarksSunnyBanksPanel() {
               ...(appearanceModifier ? { appearanceModifier } : {}),
               line: args.line,
               locationId: args.locationId,
+              ...(args.locationLabel ? { locationLabel: args.locationLabel } : {}),
               locationImage: args.locationImage,
               startImageDataUrl: args.startImageDataUrl,
               ...(action ? { action } : {}),
@@ -1874,6 +1948,8 @@ export function SkidmarksSunnyBanksPanel() {
     if (!canRenderAll || runningRef.current) return;
     const act = activeAct;
     runningRef.current = true;
+    stopRequestedRef.current = false;
+    setStopRequested(false);
     const writeRuntime = (index: number, next: RowRuntime) => {
       const row = queue[index];
       const stamped: RowRuntime = {
@@ -1890,79 +1966,87 @@ export function SkidmarksSunnyBanksPanel() {
       }));
     };
     try {
-      for (let i = 0; i < queue.length; i += 1) {
-        const row = queue[i];
-        if (runtimeFor(row.index, row.chunk.raw).status === "done") continue;
-        const lock = speakerLock(row.characterName);
-        const cutaway = isSunnyBanksLocationCutaway(row.chunk);
-        if ((!lock && !cutaway) || !row.location.image) {
-          writeRuntime(i, {
-            lineKey: row.chunk.raw,
-            status: "failed",
-            error: "Character or location is missing.",
-          });
-          break;
-        }
-        setRunningKind(row.kind);
-        setRunningIndex(i);
-        writeRuntime(i, { lineKey: row.chunk.raw, status: "rendering" });
-        setProgressText(
-          cutaway
-            ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
-            : row.kind === "hold"
-              ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
-              : `Line ${i + 1} of ${queue.length} — rendering ${lock!.name}'s line…`
-        );
-        try {
-          const startImageDataUrl = await resolveLocationDataUrl(row.location.image);
-          const result = await postBeat({
-            kind: row.kind,
-            characterName: lock?.name ?? row.characterName,
-            line: row.line,
-            locationId: row.location.id,
-            locationImage: row.location.image,
-            startImageDataUrl,
-            action: row.chunk.action,
-            appearanceModifier: row.chunk.appearanceModifier,
-            speaker: sunnyBanksSpeakerRequestExtras(lock),
-            // Filed under this episode's pinned folder (set once from
-            // its name, so a rename never moves it) when it has one.
-            mediaTarget: sunnybankBeatTarget({
-              episodeSlug: ensureSunnyBanksEpisodeMediaSlug(),
-              actId: act,
-              beatNumber: row.index + 1,
-              characterName: lock?.name ?? row.characterName,
-              kind: row.kind,
-            }),
-          });
-          if (!result.ok) {
-            writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: result.message });
-            setProgressText(`Stopped at line ${i + 1} — later lines were not billed.`);
-            break;
+      const run = await runSunnyBanksRenderQueue(queue, {
+        skip: (row) => runtimeFor(row.index, row.chunk.raw).status === "done",
+        // Stop (2026-09-30): read before each new line starts, so the
+        // line that's rendering finishes and saves.
+        shouldStop: () => stopRequestedRef.current,
+        render: async (row, i) => {
+          const lock = speakerLock(row.characterName);
+          const cutaway = isSunnyBanksLocationCutaway(row.chunk);
+          if ((!lock && !cutaway) || !row.location.image || row.locationProblem) {
+            writeRuntime(i, {
+              lineKey: row.chunk.raw,
+              status: "failed",
+              error: row.locationProblem ?? "Character or location is missing.",
+            });
+            return false;
           }
-          writeRuntime(i, {
-            lineKey: row.chunk.raw,
-            status: "done",
-            videoUrl: result.videoUrl,
-            durationSec: result.durationSec,
-            audioMuxed: result.audioMuxed,
-            error:
-              result.audioMuxed === false
-                ? "Clip finished, but the driving audio did not land in the file. Lips may move with no sound."
-                : undefined,
-          });
-        } catch (err) {
-          writeRuntime(i, {
-            lineKey: row.chunk.raw,
-            status: "failed",
-            error: err instanceof Error ? err.message : "Could not render this line.",
-          });
-          setProgressText(`Stopped at line ${i + 1} — later lines were not billed.`);
-          break;
-        }
-      }
+          setRunningKind(row.kind);
+          setRunningIndex(i);
+          writeRuntime(i, { lineKey: row.chunk.raw, status: "rendering" });
+          setProgressText(
+            cutaway
+              ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+              : row.kind === "hold"
+                ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+                : `Line ${i + 1} of ${queue.length} — rendering ${lock!.name}'s line…`
+          );
+          try {
+            const startImageDataUrl = await resolveLocationDataUrl(row.location.image);
+            const result = await postBeat({
+              kind: row.kind,
+              characterName: lock?.name ?? row.characterName,
+              line: row.line,
+              locationId: row.location.id,
+              locationLabel: row.location.label,
+              locationImage: row.location.image,
+              startImageDataUrl,
+              action: row.chunk.action,
+              appearanceModifier: row.chunk.appearanceModifier,
+              speaker: sunnyBanksSpeakerRequestExtras(lock),
+              // Filed under this episode's pinned folder (set once from
+              // its name, so a rename never moves it) when it has one.
+              mediaTarget: sunnybankBeatTarget({
+                episodeSlug: ensureSunnyBanksEpisodeMediaSlug(),
+                actId: act,
+                beatNumber: row.index + 1,
+                characterName: lock?.name ?? row.characterName,
+                kind: row.kind,
+              }),
+            });
+            if (!result.ok) {
+              writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: result.message });
+              return false;
+            }
+            writeRuntime(i, {
+              lineKey: row.chunk.raw,
+              status: "done",
+              videoUrl: result.videoUrl,
+              durationSec: result.durationSec,
+              audioMuxed: result.audioMuxed,
+              error:
+                result.audioMuxed === false
+                  ? "Clip finished, but the driving audio did not land in the file. Lips may move with no sound."
+                  : undefined,
+            });
+            return true;
+          } catch (err) {
+            writeRuntime(i, {
+              lineKey: row.chunk.raw,
+              status: "failed",
+              error: err instanceof Error ? err.message : "Could not render this line.",
+            });
+            return false;
+          }
+        },
+      });
+      if (run.outcome === "stopped") setProgressText(sunnyBanksStoppedText(run.index));
+      else if (run.outcome === "halted") setProgressText(`Stopped at line ${run.index + 1} — later lines were not billed.`);
     } finally {
       runningRef.current = false;
+      stopRequestedRef.current = false;
+      setStopRequested(false);
       setRunningKind(null);
       setRunningIndex(null);
       setProgressText((current) => (current?.startsWith("Stopped") ? current : null));
@@ -2494,7 +2578,12 @@ export function SkidmarksSunnyBanksPanel() {
                                     aria-label={`Location for line ${row.index + 1}`}
                                     className="h-10 min-h-[40px] min-w-0 max-w-[120px] shrink truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
                                   >
-                                    {LOCATION_LIST.map((location) => (
+                                    {row.locationProblem && !locations.some((l) => l.id === row.location.id) && (
+                                      <option value={row.location.id} className="bg-zinc-900">
+                                        {row.location.id} (unknown)
+                                      </option>
+                                    )}
+                                    {locations.map((location) => (
                                       <option key={location.id} value={location.id} className="bg-zinc-900">
                                         {compactQueueLocationLabel(location.label)}
                                       </option>
@@ -2519,6 +2608,11 @@ export function SkidmarksSunnyBanksPanel() {
                                   +
                                 </button>
                               </div>
+                              {!isStatic && row.locationProblem && (
+                                <p role="alert" className="pt-0.5 text-[10px] leading-snug text-red-300">
+                                  {row.locationProblem}
+                                </p>
+                              )}
                               {isStatic ? (
                                 <details className="group min-w-0 pt-0.5">
                                   <summary
@@ -2592,25 +2686,45 @@ export function SkidmarksSunnyBanksPanel() {
 
             {pendingRows.length > 0 && !canRenderAll && !running && (
               <p className="text-[10px] leading-snug text-white/40">
-                Every line needs a plated character. Speak needs a locked voice. Change the
-                dropdown or the script — Hans has no plate yet.
+                {pendingRows.some((row) => row.locationProblem)
+                  ? "A line's location isn't on the Locations row (see the red note on it). Add that location, or fix the [Location: …] tag."
+                  : "Every line needs a plated character. Speak needs a locked voice. Change the dropdown or the script — Hans has no plate yet."}
               </p>
             )}
 
-            <button
-              type="button"
-              onClick={() => void handleRenderAll()}
-              disabled={!canRenderAll}
-              className="min-h-[44px] w-full rounded-md bg-amber-300 px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {running
-                ? `Rendering line ${(runningIndex ?? 0) + 1} of ${queue.length}…`
-                : queue.length === 0
-                  ? "Render lines"
-                  : pendingRows.length === 0
-                    ? "Clips already loaded"
-                    : `Render ${pendingRows.length} line${pendingRows.length === 1 ? "" : "s"}`}
-            </button>
+            <div className="flex items-stretch gap-2">
+              <button
+                type="button"
+                onClick={() => void handleRenderAll()}
+                disabled={!canRenderAll}
+                className="min-h-[44px] min-w-0 flex-1 rounded-md bg-amber-300 px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {running
+                  ? `Rendering line ${(runningIndex ?? 0) + 1} of ${queue.length}…`
+                  : queue.length === 0
+                    ? "Render lines"
+                    : pendingRows.length === 0
+                      ? "Clips already loaded"
+                      : `Render ${pendingRows.length} line${pendingRows.length === 1 ? "" : "s"}`}
+              </button>
+              {/* Stop: only while rendering. The line on screen finishes
+                  and saves; nothing after it starts. */}
+              {running && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopRequestedRef.current = true;
+                    setStopRequested(true);
+                  }}
+                  disabled={stopRequested}
+                  aria-label={stopRequested ? "Stopping after this line" : "Stop after this line"}
+                  title="Stop after this line"
+                  className="shrink-0 rounded-md bg-rose-400 px-3 text-xs font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:opacity-60"
+                >
+                  {stopRequested ? "Stopping…" : "Stop"}
+                </button>
+              )}
+            </div>
             <p className="text-[10px] leading-snug text-white/40">
               {pendingRows.length === 0
                 ? "Existing Crash Lab clips are already in the strip below. Tap + on a row to insert a shot between them, or − on an Idle row to drop it — one clip at a time, never a batch of these 46."
@@ -2661,23 +2775,54 @@ export function SkidmarksSunnyBanksPanel() {
                 });
                 return (
                   <div key={group.act} className="flex min-w-0 flex-col gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setClipRowToggles((prev) => ({ ...prev, [clipRowKey(group.act)]: !rowOpen }))
-                      }
-                      aria-expanded={rowOpen}
-                      aria-label={`Act ${group.act} clips, ${group.clips.length}. ${rowOpen ? "Hide" : "Show"}`}
-                      className="flex min-h-[32px] items-center gap-1.5 self-start text-left text-[10px] font-semibold uppercase tracking-wide text-white/40 [-webkit-tap-highlight-color:transparent]"
-                    >
-                      <span>
-                        Act {group.act}
-                        <span aria-hidden className="ml-1 text-white/25">
-                          {"\u00b7"} {group.clips.length}
+                    <div className="flex items-center gap-1 self-start">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setClipRowToggles((prev) => ({ ...prev, [clipRowKey(group.act)]: !rowOpen }))
+                        }
+                        aria-expanded={rowOpen}
+                        aria-label={`Act ${group.act} clips, ${group.clips.length}. ${rowOpen ? "Hide" : "Show"}`}
+                        className="flex min-h-[32px] items-center gap-1.5 self-start text-left text-[10px] font-semibold uppercase tracking-wide text-white/40 [-webkit-tap-highlight-color:transparent]"
+                      >
+                        <span>
+                          Act {group.act}
+                          <span aria-hidden className="ml-1 text-white/25">
+                            {"\u00b7"} {group.clips.length}
+                          </span>
                         </span>
-                      </span>
-                      <ChevronIcon open={rowOpen} />
-                    </button>
+                        <ChevronIcon open={rowOpen} />
+                      </button>
+                      {/* One zip of this act's Done clips, built on the server
+                          (2026-09-30): ep01-act-ii-01-shazza.mp4, … */}
+                      {group.clips.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const result = downloadSunnyBanksActZip({
+                              episode: zipEpisodeName,
+                              act: group.act,
+                              clips: group.clips.map((clip) => ({
+                                url: clip.videoUrl,
+                                line: clip.index + 1,
+                                character: clip.characterName,
+                              })),
+                            });
+                            setZipNotice(result.ok ? null : { act: group.act, text: result.error });
+                          }}
+                          aria-label={`Download Act ${group.act}'s ${group.clips.length} clips as one zip`}
+                          title="Download this act as a zip"
+                          className="flex h-8 w-8 items-center justify-center rounded-md text-white/40 transition-colors hover:text-white/70 [-webkit-tap-highlight-color:transparent]"
+                        >
+                          <ZipIcon />
+                        </button>
+                      )}
+                    </div>
+                    {zipNotice?.act === group.act && (
+                      <p role="alert" className="text-[10px] leading-snug text-red-300">
+                        {zipNotice.text}
+                      </p>
+                    )}
                     {rowOpen &&
                       (group.clips.length === 0 ? (
                         <p className="text-[10px] leading-snug text-white/30">Nothing rendered in this act yet.</p>

@@ -228,6 +228,14 @@ import { CHARACTER_ITEMS } from "./characterItems";
 import { SUNNYBANK_EPISODE_ITEMS } from "./sunnybankEpisodeItems";
 import { SKIDMARKS_EPISODE_ITEMS } from "./skidmarksEpisodeItems";
 import { ADULT_SHORT_ITEMS } from "./adultShortItems";
+import { LOCATION_ITEMS } from "./locationItems";
+import {
+  deckLocationsHaveUserContent,
+  emptyDeckLocationsState,
+  normalizeDeckLocationsState,
+  type DeckLocation,
+  type DeckLocationsState,
+} from "./deckLocations";
 import type { MusicVideoSongItem } from "./musicVideoItemData";
 import { MUSIC_VIDEO_SONG_ITEMS, deskSongItems, musicVideoBandItems, withServerBands, withServerDeskSong } from "./musicVideoItems";
 
@@ -1426,6 +1434,12 @@ export interface SkidmarksState {
    * `lib/rosterExtras.ts`. URLs only, never bytes.
    */
   rosterExtras?: RosterExtrasState | null;
+  /**
+   * Locations (2026-09-30): the places on every genre's Locations row,
+   * one list tagged by genre, see `lib/deckLocations.ts`. URLs only.
+   * `null` = none saved yet (Sunnybank then shows its built-ins).
+   */
+  locations?: DeckLocationsState | null;
 }
 
 function isBrowser(): boolean {
@@ -1493,6 +1507,7 @@ function emptyState(): SkidmarksState {
     adultShorts: null,
     characterLoras: null,
     rosterExtras: null,
+    locations: null,
   };
 }
 
@@ -1901,6 +1916,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
     adultShorts: normalizeAdultShortsState(p.adultShorts),
     characterLoras: normalizeCharacterLorasState(p.characterLoras),
     rosterExtras: normalizeRosterExtrasState(p.rosterExtras),
+    locations: normalizeDeckLocationsState(p.locations),
   };
 }
 
@@ -2122,6 +2138,7 @@ export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
   const hasAdultShorts = adultShortsHaveUserContent(state.adultShorts);
   const hasCharacterLoras = characterLorasHaveUserContent(state.characterLoras);
   const hasRosterExtras = rosterExtrasHaveUserContent(state.rosterExtras);
+  const hasLocations = deckLocationsHaveUserContent(state.locations);
   return (
     hasRealBand ||
     hasMp3 ||
@@ -2130,7 +2147,8 @@ export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
     hasEpisodes ||
     hasAdultShorts ||
     hasCharacterLoras ||
-    hasRosterExtras
+    hasRosterExtras ||
+    hasLocations
   );
 }
 
@@ -2712,6 +2730,7 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     void getSunnybankEpisodeItemSync()?.refreshFromServer();
     void getSkidmarksEpisodeItemSync()?.refreshFromServer();
     void getAdultShortItemSync()?.refreshFromServer();
+    void getLocationItemSync()?.refreshFromServer();
     // Same for Music video bands and songs (`lib/musicVideoItems.ts`).
     refreshMusicVideoItems();
   }
@@ -2983,6 +3002,7 @@ export function flushSkidmarksSessionNow(keepalive = false): void {
   sunnybankEpisodeItemSync?.flush(keepalive);
   skidmarksEpisodeItemSync?.flush(keepalive);
   adultShortItemSync?.flush(keepalive);
+  locationItemSync?.flush(keepalive);
   // And any Music video band or song.
   bandItemSync?.flush(keepalive);
   songItemSync?.flush(keepalive);
@@ -3041,6 +3061,7 @@ export async function loadSkidmarksSessionFromServerNow(): Promise<boolean> {
     void getSunnybankEpisodeItemSync()?.refreshFromServer();
     void getSkidmarksEpisodeItemSync()?.refreshFromServer();
     void getAdultShortItemSync()?.refreshFromServer();
+    void getLocationItemSync()?.refreshFromServer();
     refreshMusicVideoItems();
     return true;
   } catch (err) {
@@ -3093,6 +3114,7 @@ function ensureSessionPersistenceWired(): void {
       sunnybankEpisodeItemSync?.hasUnsavedWork() ||
       skidmarksEpisodeItemSync?.hasUnsavedWork() ||
       adultShortItemSync?.hasUnsavedWork() ||
+      locationItemSync?.hasUnsavedWork() ||
       bandItemSync?.hasUnsavedWork() ||
       songItemSync?.hasUnsavedWork()
     ) {
@@ -3266,6 +3288,30 @@ export function removeSkidmarksEpisode(id: string): void {
   getSkidmarksEpisodeItemSync()?.deleteItem(id, before);
 }
 
+/** Locations on every genre's Locations row — empty until the first edit
+ * (Sunnybank shows its built-ins until then, `lib/deckLocations.ts`). */
+export function getDeckLocationsState(state: SkidmarksState = getSkidmarksSnapshot()): DeckLocationsState {
+  return state.locations ?? emptyDeckLocationsState();
+}
+
+export function patchDeckLocations(updater: (state: DeckLocationsState) => DeckLocationsState): void {
+  const current = getSkidmarksSnapshot();
+  const base = getDeckLocationsState(current);
+  const next = updater({ locations: base.locations.slice() });
+  persist({ ...current, locations: next });
+  // Per-item saving: only the locations that really changed are sent,
+  // one debounced PUT each. A missing location is never a delete; only
+  // `removeDeckLocation` (the two-tap bin) deletes.
+  getLocationItemSync()?.noteLocalChange(base.locations, next.locations);
+}
+
+/** The one real delete for a location, called only from its two-tap bin. */
+export function removeDeckLocation(id: string): void {
+  const before = getDeckLocationsState().locations.find((l) => l.id === id) ?? null;
+  patchDeckLocations((s) => ({ locations: s.locations.filter((l) => l.id !== id) }));
+  getLocationItemSync()?.deleteItem(id, before);
+}
+
 /** Adult shorts — empty until the first edit. */
 export function getAdultShortsState(state: SkidmarksState = getSkidmarksSnapshot()): AdultShortsState {
   return state.adultShorts ?? emptyAdultShortsState();
@@ -3384,6 +3430,13 @@ function getAdultShortItemSync(): DeckItemSync<AdultShortsSaved> | null {
   return adultShortItemSync;
 }
 
+let locationItemSync: DeckItemSync<DeckLocation> | null = null;
+function getLocationItemSync(): DeckItemSync<DeckLocation> | null {
+  if (!isBrowser()) return null;
+  locationItemSync ??= createStoreItemSync(LOCATION_ITEMS, () => getDeckLocationsState().locations, applyServerLocations);
+  return locationItemSync;
+}
+
 /*
  * Putting server items on screen. Each is a load, not an edit: never
  * `persist()` and never the kind's patch function, so it never counts
@@ -3433,6 +3486,14 @@ function applyServerAdultShorts(saved: AdultShortsSaved[]): void {
   notify();
 }
 
+/** Every genre's locations (one list tagged by genre). */
+function applyServerLocations(locations: DeckLocation[]): void {
+  const current = getSkidmarksSnapshot();
+  cachedState = { ...current, locations: { locations } };
+  noteContentObserved(cachedState);
+  notify();
+}
+
 /** After the Blob image migration: keep the per-item lists that are on
  * screen now rather than the pre-upload snapshot's copy of them (the
  * migration never touches them, and an overlay or 409 adopt may have
@@ -3444,6 +3505,7 @@ function keepPerItemListsOnScreen(migrated: SkidmarksState): SkidmarksState {
     characterLoras: onScreen?.characterLoras ?? migrated.characterLoras,
     skidmarksEpisodes: onScreen?.skidmarksEpisodes ?? migrated.skidmarksEpisodes,
     adultShorts: onScreen?.adultShorts ?? migrated.adultShorts,
+    locations: onScreen?.locations ?? migrated.locations,
   };
   if (onScreen?.sunnyBanks) {
     next.sunnyBanks = migrated.sunnyBanks

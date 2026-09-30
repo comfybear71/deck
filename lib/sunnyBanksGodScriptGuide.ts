@@ -12,10 +12,13 @@
  * unbroken line. Every one of those would have billed a clip of the
  * character reading the tag text out loud.
  *
- * **Cast and location lists are derived from `SUNNY_BANKS_CAST` and
- * `SUNNY_BANKS_LOCATIONS`, never retyped** — a new location or a
- * renamed regular updates this guide automatically instead of quietly
- * going stale. The rules themselves are prose and do have to be kept in
+ * **Cast and location lists are derived, never retyped** — from the
+ * saved characters (`sunnyBanksSpeakerList`: the built-in cast with any
+ * voice saved on their card, plus characters added with "+") and the
+ * Locations row (`sunnyBanksLocationList`: saved locations, or the
+ * built-ins until there are some), 2026-09-30. Hans used to be left out
+ * because his voice is on his card, not in `SUNNY_BANKS_CAST`. Left out,
+ * both fall back to the built-in tables. The rules themselves are prose and do have to be kept in
  * step with the parser by hand; `lib/sunnyBanksGodScriptGuide.test.ts`
  * runs this guide's own worked example through the real parser so a
  * parser change that breaks the documented shape fails a test rather
@@ -36,23 +39,41 @@
  * for yet.
  */
 
-import { SUNNY_BANKS_CAST, SUNNY_BANKS_LOCATIONS } from "./sunnyBanks";
+import { resolveSunnyBanksStartImage, SUNNY_BANKS_CAST, SUNNY_BANKS_LOCATIONS, type SunnyBanksCharacterLock } from "./sunnyBanks";
 
-/** The six series regulars, in cast-strip order. Hans is in
- * `SUNNY_BANKS_CAST` as a one-episode guest with no locked voice, so he
- * cannot speak a beat and is deliberately not listed here — same rule
- * the always-on cast strip already follows. */
-export function listSunnyBanksSpeakingCast(): string[] {
-  return Object.values(SUNNY_BANKS_CAST)
-    .filter((character) => !!character.voiceId)
-    .map((character) => character.name);
+/** A character as the guide needs it: name, voice, and a picture to plate. */
+type GuideCharacter = Pick<SunnyBanksCharacterLock, "name" | "voiceId"> & Partial<SunnyBanksCharacterLock>;
+
+/** Who can speak a line: every saved character with a voice, in cast-strip
+ * order (`sunnyBanksSpeakerList(state)` from the panel). Left out, the
+ * built-in cast with a locked voice. */
+export function listSunnyBanksSpeakingCast(characters?: readonly GuideCharacter[]): string[] {
+  const list = characters ?? Object.values(SUNNY_BANKS_CAST);
+  return list.filter((character) => !!character.voiceId).map((character) => character.name);
+}
+
+/** Saved characters with no voice yet, and what they can do: a silent
+ * hold if they have a picture, nothing until they have one. */
+export function listSunnyBanksNonSpeakingCast(characters?: readonly GuideCharacter[]): { name: string; note: string }[] {
+  const list = characters ?? Object.values(SUNNY_BANKS_CAST);
+  return list
+    .filter((character) => !character.voiceId)
+    .map((character) => ({
+      name: character.name,
+      note: resolveSunnyBanksStartImage(character as SunnyBanksCharacterLock)
+        ? "no voice yet, silent holds only"
+        : "no voice or picture yet, can't be used",
+    }));
 }
 
 /** `[Location: id]` takes the id, not the human label — the panel's own
  * dropdown stores the same id. Both are listed so a draft can be read
  * back by a person. */
-export function listSunnyBanksLocationIds(): { id: string; label: string }[] {
-  return Object.values(SUNNY_BANKS_LOCATIONS).map((location) => ({
+export function listSunnyBanksLocationIds(
+  /** The Locations row's list (`sunnyBanksLocationList`); the built-ins when left out. */
+  locations: readonly { id: string; label: string }[] = Object.values(SUNNY_BANKS_LOCATIONS),
+): { id: string; label: string }[] {
+  return locations.map((location) => ({
     id: location.id,
     label: location.label,
   }));
@@ -99,6 +120,15 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
     example: "Shazza: Are you kidding me?   ← speaks\nShazza:                        ← silent hold",
   },
   {
+    title: "[Character …] on a talking line is a still pose",
+    body: [
+      "On a line with dialogue, describe a still pose only: standing or sitting, where they are, what they're holding. Movement goes in a silent hold (Name: with nothing after it) with an [Action: …].",
+      "For the same character in the same scene, repeat the tag word for word on every line, so their look and props don't shift between clips.",
+    ],
+    example:
+      "[Character Shazza: standing behind the counter, holding a clipboard]\nShazza: Right, who's next?\n[Character Shazza: standing behind the counter, holding a clipboard]\nShazza: Don't all rush at once.\n[Action: slams the clipboard down and storms out]\nShazza:",
+  },
+  {
     title: "A tag is used up by the next row",
     body: [
       "[Character ...] and [Action: ...] attach to the next row and are then cleared. If the look carries on, repeat the tag.",
@@ -115,6 +145,7 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
     title: "Location sticks until you change it",
     body: [
       "[Location: id] stays in effect for every following row until the next [Location: id]. No need to repeat it.",
+      "Use an id from the Locations list below (the Locations row). An id that isn't on it gets a red warning on its row and won't render until you add that location or fix the tag.",
     ],
   },
   {
@@ -135,6 +166,7 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
     title: "Headers are free",
     body: [
       "Headers never render a clip, so use as many as you like.",
+      "The only line that starts with # is # EPISODE:. Don't write # Act II or any other # heading — start an act with === ACT II ===.",
     ],
     example: "# EPISODE: The Payoff\n=== ACT I ===\n=== ACT IV — THE PAYOFF ===\n=== ANY OTHER LABEL ===",
   },
@@ -167,9 +199,19 @@ export const SUNNY_BANKS_GOD_SCRIPT_EXAMPLE = [
  * because it reads naturally is not making a formatting mistake, it is
  * spending money on a clip of someone reading the word "Outfit" aloud.
  */
-export function buildSunnyBanksGodScriptPrompt(): string {
-  const cast = listSunnyBanksSpeakingCast().join(", ");
-  const locations = listSunnyBanksLocationIds()
+export function buildSunnyBanksGodScriptPrompt(
+  /** The Locations row's list; the built-ins when left out. */
+  locationList?: readonly { id: string; label: string }[],
+  /** The saved characters (`sunnyBanksSpeakerList(state)`); the built-in cast when left out. */
+  characters?: readonly GuideCharacter[],
+): string {
+  const cast = listSunnyBanksSpeakingCast(characters).join(", ");
+  const nonSpeaking = listSunnyBanksNonSpeakingCast(characters);
+  const nonSpeakingText =
+    nonSpeaking.length === 0
+      ? ""
+      : `\n\n   Not speaking yet: ${nonSpeaking.map((c) => `${c.name} (${c.note})`).join(", ")}.`;
+  const locations = listSunnyBanksLocationIds(locationList)
     .map(({ id, label }) => `   ${id.padEnd(20)} — ${label}`)
     .join("\n");
 
@@ -221,9 +263,13 @@ Follow these rules exactly. Do not improvise new syntax.
    dialogue. Do not leave stray prose lines around — they become spoken
    words.
 
+6. NO "#" LINES except "# EPISODE: Title". Never write "# Act II",
+   "# Scene" or any other markdown heading. Start an act with
+   === ACT II ===.
+
 === THE CAST (use these names exactly, including capitals) ===
 
-   ${cast}
+   ${cast}${nonSpeakingText}
 
    Any other name (e.g. "Crowd:") with an empty line after it renders a
    location shot with no character in it. Any other name WITH dialogue
@@ -235,6 +281,9 @@ ${locations}
 
    A [Location: id] stays in effect until the next [Location: id]. Do
    not repeat it for consecutive lines in the same place.
+
+   Use only the ids above. An id that isn't in this list gets a red
+   warning in the tool and WILL NOT RENDER until that location is added.
 
 === HEADERS ===
 
@@ -256,6 +305,13 @@ ${locations}
    Good:  [Character Shazza: sitting cross-legged on the floor behind an
           empty table, a huge pile of $50 notes spread in front of her]
    Bad:   [Character Shazza: feeling triumphant about the money]
+
+   On a TALKING line, [Character ...] is a STILL POSE only: standing or
+   sitting, where they are, what they are holding. No movement. For the
+   same character in the same scene, repeat the exact same words every
+   time, so their look and props don't shift from clip to clip. Put
+   movement in a silent hold (Name: with nothing after it) with an
+   [Action: ...] instead.
 
 === WHAT [Action: ...] IS FOR ===
 

@@ -159,3 +159,108 @@ export function buildStoreZip(entries: ZipEntryInput[]): Uint8Array {
 
   return result;
 }
+
+/**
+ * The same "store" ZIP as `buildStoreZip`, written as a stream (2026-09-30,
+ * the CLIPS act zip): one entry at a time, so a server route holds at most
+ * one clip in memory and the phone never holds any. Each entry's bytes are
+ * read (`load`) only when the reader wants more, then dropped. An entry
+ * whose `load` gives `null` is left out; its name is passed to `onMissing`.
+ * `extra` entries (e.g. a note listing what was missing) go last.
+ */
+export function storeZipStream(
+  names: readonly string[],
+  load: (index: number) => Promise<Uint8Array | null>,
+  extra?: (missing: string[]) => ZipEntryInput[],
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const { time, date } = dosDateTime(new Date());
+  const central: Uint8Array[] = [];
+  const missing: string[] = [];
+  let offset = 0;
+  let count = 0;
+  let i = 0;
+  let tailDone = false;
+
+  const entryParts = (name: string, data: Uint8Array): Uint8Array[] => {
+    const nameBytes = encoder.encode(name);
+    const crc = crc32(data);
+    const size = data.length;
+    const local = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(local.buffer);
+    writeUint32LE(lv, 0, 0x04034b50);
+    writeUint16LE(lv, 4, 20);
+    writeUint16LE(lv, 6, 0);
+    writeUint16LE(lv, 8, 0);
+    writeUint16LE(lv, 10, time);
+    writeUint16LE(lv, 12, date);
+    writeUint32LE(lv, 14, crc);
+    writeUint32LE(lv, 18, size);
+    writeUint32LE(lv, 22, size);
+    writeUint16LE(lv, 26, nameBytes.length);
+    writeUint16LE(lv, 28, 0);
+    local.set(nameBytes, 30);
+    const c = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(c.buffer);
+    writeUint32LE(cv, 0, 0x02014b50);
+    writeUint16LE(cv, 4, 20);
+    writeUint16LE(cv, 6, 20);
+    writeUint16LE(cv, 8, 0);
+    writeUint16LE(cv, 10, 0);
+    writeUint16LE(cv, 12, time);
+    writeUint16LE(cv, 14, date);
+    writeUint32LE(cv, 16, crc);
+    writeUint32LE(cv, 20, size);
+    writeUint32LE(cv, 24, size);
+    writeUint16LE(cv, 28, nameBytes.length);
+    writeUint16LE(cv, 30, 0);
+    writeUint16LE(cv, 32, 0);
+    writeUint16LE(cv, 34, 0);
+    writeUint16LE(cv, 36, 0);
+    writeUint32LE(cv, 38, 0);
+    writeUint32LE(cv, 42, offset);
+    c.set(nameBytes, 46);
+    central.push(c);
+    offset += local.length + size;
+    count += 1;
+    return [local, data];
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      while (i < names.length) {
+        const index = i++;
+        let data: Uint8Array | null = null;
+        try {
+          data = await load(index);
+        } catch {
+          data = null;
+        }
+        if (!data) {
+          missing.push(names[index]);
+          continue;
+        }
+        for (const part of entryParts(names[index], data)) controller.enqueue(part);
+        return;
+      }
+      if (!tailDone) {
+        tailDone = true;
+        for (const e of extra?.(missing) ?? []) for (const part of entryParts(e.name, e.data)) controller.enqueue(part);
+        const centralSize = central.reduce((s, p) => s + p.length, 0);
+        for (const part of central) controller.enqueue(part);
+        const eocd = new Uint8Array(22);
+        const ev = new DataView(eocd.buffer);
+        writeUint32LE(ev, 0, 0x06054b50);
+        writeUint16LE(ev, 4, 0);
+        writeUint16LE(ev, 6, 0);
+        writeUint16LE(ev, 8, count);
+        writeUint16LE(ev, 10, count);
+        writeUint32LE(ev, 12, centralSize);
+        writeUint32LE(ev, 16, offset);
+        writeUint16LE(ev, 20, 0);
+        controller.enqueue(eocd);
+      }
+      controller.close();
+    },
+  });
+}

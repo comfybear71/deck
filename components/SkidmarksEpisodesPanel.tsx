@@ -433,7 +433,7 @@ function EpisodeEditor({ episode, onBack }: { episode: SkidmarksEpisode; onBack:
   const hasAntihero = Boolean(episode.antiheroId);
   const total = episodeTotalSec(episode);
   const inTarget = total >= SKIDMARKS_EPISODE_TARGET_MIN_SEC && total <= SKIDMARKS_EPISODE_TARGET_MAX_SEC;
-  const tags = tagBarEntries(episode, state.cast);
+  const tags = tagBarEntries(episode, state.cast, snapshot.locations);
 
   const insertTag = (text: string) => {
     if (!openBeat) return;

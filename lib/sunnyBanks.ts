@@ -313,23 +313,42 @@ export function buildSunnyBanksCompositePlatePrompt(
  * These files are already 1280×720, so `letterboxImageForLtxIa2v` is a
  * no-op on them (source aspect already 16:9).
  */
-export type SunnyBanksLocationId =
+export type SunnyBanksBuiltInLocationId =
   | "water_tank_dam"
   | "main_entrance_sign"
   | "site_laundry"
   | "office_storefront"
   | "tin_shed_mower"
-  | "caravan_interior";
+  | "caravan_interior"
+  | "park_site_4"
+  | "office_booth"
+  | "rock_art_outcrop";
+
+/**
+ * A location's key: one of the built-ins above, or one Stuart saved on
+ * the Locations row (2026-09-30, `lib/deckLocations.ts`). Any key is
+ * kept as it is (never quietly turned into the default); a key that
+ * isn't in the saved list shows a warning on its row instead.
+ */
+export type SunnyBanksLocationId = string;
 
 export interface SunnyBanksLocationLock {
   id: SunnyBanksLocationId;
   label: string;
+  /** A repo file (`/skidmarks/sunnybanks/...`) or a Deck Blob URL. */
   image: string;
 }
 
 export const SUNNY_BANKS_DEFAULT_LOCATION_ID: SunnyBanksLocationId = "office_storefront";
 
-export const SUNNY_BANKS_LOCATIONS: Record<SunnyBanksLocationId, SunnyBanksLocationLock> = {
+/**
+ * The built-in list. The Locations row and the renderer use it until
+ * Stuart's saved locations are in (`deck_items` kind `location`), so
+ * nothing changes before the seed. The last three (2026-09-30) are
+ * Stuart's own pictures: EP01's Park Site 4 scene rendered on the
+ * storefront because `park_site_4` wasn't a known key.
+ */
+export const SUNNY_BANKS_LOCATIONS: Record<SunnyBanksBuiltInLocationId, SunnyBanksLocationLock> = {
   water_tank_dam: {
     id: "water_tank_dam",
     label: "Water Tank Dam",
@@ -360,10 +379,28 @@ export const SUNNY_BANKS_LOCATIONS: Record<SunnyBanksLocationId, SunnyBanksLocat
     label: "Fibro Caravan Interior",
     image: "/skidmarks/sunnybanks/caravan-interior.jpg",
   },
+  park_site_4: {
+    id: "park_site_4",
+    label: "Park Site 4",
+    image: "/skidmarks/sunnybanks/park-site-4.jpg",
+  },
+  office_booth: {
+    id: "office_booth",
+    label: "Site Office Booth",
+    image: "/skidmarks/sunnybanks/office-booth.jpg",
+  },
+  rock_art_outcrop: {
+    id: "rock_art_outcrop",
+    label: "Rock Art Outcrop",
+    image: "/skidmarks/sunnybanks/rock-art-outcrop.jpg",
+  },
 };
 
+/** A built-in location by its key. For the saved list, use `lib/sunnyBanksLocations.ts`. */
 export function getSunnyBanksLocation(id: string): SunnyBanksLocationLock | undefined {
-  return SUNNY_BANKS_LOCATIONS[id as SunnyBanksLocationId];
+  return Object.prototype.hasOwnProperty.call(SUNNY_BANKS_LOCATIONS, id)
+    ? SUNNY_BANKS_LOCATIONS[id as SunnyBanksBuiltInLocationId]
+    : undefined;
 }
 
 /**

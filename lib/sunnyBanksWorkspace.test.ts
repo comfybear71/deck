@@ -217,3 +217,24 @@ describe("stable episode ids and pinned media folders (2026-09-30)", () => {
     expect(pickSunnyBanksEpisodeMediaSlug("", [])).toBe("episode");
   });
 });
+
+describe("saved location keys are kept (2026-09-30)", () => {
+  it("keeps a saved or not-yet-added location instead of turning it into the storefront", async () => {
+    const { normalizeSunnyBanksLive } = await import("./sunnyBanksWorkspace");
+    const live = buildDefaultSunnyBanksLive();
+    const next = normalizeSunnyBanksLive({
+      ...live,
+      defaultLocationId: "park_site_4",
+      locationOverrides: { ...live.locationOverrides, I: { 0: "boat_ramp", 1: "office_booth", 2: "Bad Key!", 3: 7 } },
+    })!;
+    expect(next.defaultLocationId).toBe("park_site_4");
+    expect(next.locationOverrides.I[0]).toBe("boat_ramp");
+    expect(next.locationOverrides.I[1]).toBe("office_booth");
+    // Only a malformed value falls back to the episode's default.
+    expect(next.locationOverrides.I[2]).toBe("park_site_4");
+    expect(next.locationOverrides.I[3]).toBeUndefined();
+    expect(normalizeSunnyBanksLive({ ...live, defaultLocationId: "../../etc" })!.defaultLocationId).toBe(
+      buildDefaultSunnyBanksLive().defaultLocationId,
+    );
+  });
+});

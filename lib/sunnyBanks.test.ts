@@ -161,7 +161,7 @@ describe("SUNNY_BANKS_LOCATIONS", () => {
     expect(getSunnyBanksLocation("not-a-place")).toBeUndefined();
   });
 
-  it("six locked park plates, each a real file under public/", () => {
+  it("nine locked park plates (Stuart's three added 2026-09-30), each a real 1280x720 file under public/", () => {
     const ids = [
       "water_tank_dam",
       "main_entrance_sign",
@@ -169,11 +169,19 @@ describe("SUNNY_BANKS_LOCATIONS", () => {
       "office_storefront",
       "tin_shed_mower",
       "caravan_interior",
+      "park_site_4",
+      "office_booth",
+      "rock_art_outcrop",
     ] as const;
     expect(Object.keys(SUNNY_BANKS_LOCATIONS)).toEqual(ids);
     for (const id of ids) {
       expect(existsSync(resolve(process.cwd(), `public${SUNNY_BANKS_LOCATIONS[id].image}`))).toBe(true);
     }
+    expect(SUNNY_BANKS_LOCATIONS.park_site_4).toEqual({ id: "park_site_4", label: "Park Site 4", image: "/skidmarks/sunnybanks/park-site-4.jpg" });
+    expect(SUNNY_BANKS_LOCATIONS.office_booth.label).toBe("Site Office Booth");
+    expect(SUNNY_BANKS_LOCATIONS.rock_art_outcrop.image).toBe("/skidmarks/sunnybanks/rock-art-outcrop.jpg");
+    // Only a real built-in, never something off the object's prototype.
+    expect(getSunnyBanksLocation("toString")).toBeUndefined();
   });
 });
 

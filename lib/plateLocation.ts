@@ -51,8 +51,14 @@
  * something to bolt on here.
  */
 
-import { generatePlateStill, type PlateGenerationRequest } from "./plateGeneration";
-import { downscaleDataUrlImage, registerSkidmarksIdentityWipeListener } from "./skidmarks";
+import { effectiveDeckLocations, findDeckLocation, type DeckLocation } from "./deckLocations";
+import { generatePlateStill, resolvePlateReferenceDataUrl, type PlateGenerationRequest } from "./plateGeneration";
+import {
+  downscaleDataUrlImage,
+  getDeckLocationsState,
+  getSkidmarksSnapshot,
+  registerSkidmarksIdentityWipeListener,
+} from "./skidmarks";
 
 /** Normalised cache key — the same scene text typed with different
  * spacing or casing is the same place, and re-generating one plate of a
@@ -171,9 +177,28 @@ export interface LocationStillOutcome {
  * silently downgraded and nothing is charged for an image Stuart would
  * have rejected anyway.
  */
-export async function resolveLocationStill(params: BuildLocationStillRequestParams): Promise<LocationStillOutcome> {
+export async function resolveLocationStill(
+  params: BuildLocationStillRequestParams & {
+    /** Music video's Locations row; read from the session when left out. */
+    locations?: readonly DeckLocation[];
+  },
+): Promise<LocationStillOutcome> {
   const cached = getCachedLocationStill(params.sceneText);
   if (cached) return { ok: true, dataUrl: cached };
+
+  // A saved location (2026-09-30): a shot prompt with `[Location: Name]`
+  // naming a place on Music video's Locations row uses that picture as
+  // the place, instead of generating one. Free, and the same place every time.
+  const saved = savedLocationFor(params.sceneText, params.locations);
+  if (saved?.pictureUrl) {
+    try {
+      const dataUrl = await resolvePlateReferenceDataUrl(saved.pictureUrl);
+      cacheLocationStill(params.sceneText, dataUrl);
+      return { ok: true, dataUrl };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : `Could not load ${saved.name}'s picture.` };
+    }
+  }
 
   const outcome = await generatePlateStill(buildLocationStillRequest(params));
   if (!outcome.ok) {
@@ -193,4 +218,19 @@ export async function resolveLocationStill(params: BuildLocationStillRequestPara
   }
   cacheLocationStill(params.sceneText, dataUrl);
   return { ok: true, dataUrl };
+}
+
+/** `[Location: Name]` in a shot prompt, if there is one. */
+export function locationTagIn(sceneText: string): string | null {
+  const m = sceneText.match(/\[Location:\s*([^\]]*)\]/i);
+  const token = m?.[1]?.replace(/\s+/g, " ").trim();
+  return token ? token : null;
+}
+
+/** The Music video location a shot prompt's `[Location: …]` names, if it's on the row. */
+export function savedLocationFor(sceneText: string, locations?: readonly DeckLocation[]): DeckLocation | undefined {
+  const token = locationTagIn(sceneText);
+  if (!token) return undefined;
+  const list = locations ?? effectiveDeckLocations(getDeckLocationsState(getSkidmarksSnapshot()), "music-video");
+  return findDeckLocation(list, token);
 }

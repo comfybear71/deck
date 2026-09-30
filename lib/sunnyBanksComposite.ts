@@ -18,8 +18,6 @@ import {
   buildSunnyBanksCompositePlatePrompt,
   getSunnyBanksLocation,
   resolveSunnyBanksStartImage,
-  SUNNY_BANKS_DEFAULT_LOCATION_ID,
-  SUNNY_BANKS_LOCATIONS,
   type SunnyBanksCharacterLock,
   type SunnyBanksLocationLock,
 } from "@/lib/sunnyBanks";
@@ -112,8 +110,19 @@ export async function readSunnyBanksHeroImageDataUrl(src: string): Promise<strin
   }
 }
 
-function resolveLocationLock(locationId: string): SunnyBanksLocationLock {
-  return getSunnyBanksLocation(locationId) ?? SUNNY_BANKS_LOCATIONS[SUNNY_BANKS_DEFAULT_LOCATION_ID];
+/**
+ * The place named in the compositing prompt. Only the name is used here
+ * (the picture is `locationDataUrl`). A built-in by its key, or the name
+ * the panel sent for a saved location (2026-09-30). Never quietly the
+ * storefront: EP01's Park Site 4 beats were told they were at the
+ * Office Storefront because `park_site_4` wasn't a built-in.
+ */
+export function resolveLocationLock(locationId: string, locationLabel?: string): SunnyBanksLocationLock {
+  const label = locationLabel?.replace(/\s+/g, " ").trim().slice(0, 80) ?? "";
+  const builtIn = getSunnyBanksLocation(locationId);
+  if (builtIn) return label ? { ...builtIn, label } : builtIn;
+  const fromId = locationId.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  return { id: locationId, label: label || fromId || "the location in image 1", image: "" };
 }
 
 /**
@@ -129,6 +138,8 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   locationDataUrl: string;
   character: SunnyBanksCharacterLock;
   locationId?: string;
+  /** The saved location's name (2026-09-30), for a location that isn't a built-in. */
+  locationLabel?: string;
   /** Per-beat prop/outfit text from `[Character Name: description]` —
    * fed into the xAI compositing prompt itself (not just LTX's later
    * motion prompt) so the STARTING FRAME already shows it. Fixes the
@@ -165,7 +176,7 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
     };
   }
 
-  const location = resolveLocationLock(opts.locationId ?? "");
+  const location = resolveLocationLock(opts.locationId ?? "", opts.locationLabel);
   const prompt = buildSunnyBanksCompositePlatePrompt(opts.character, location, opts.appearanceOverride);
 
   // Same two-image edits payload Studio's generateFaceImage sends
@@ -234,4 +245,16 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
     code: "no_image",
     error: "xAI Grok Imagine succeeded but returned no image data.",
   };
+}
+
+/**
+ * The location canvas (Image 1): the `startImageDataUrl` the panel sends,
+ * or (2026-09-30) the location's own picture when that's missing — a
+ * built-in's repo file or a picture in Deck's own Blob store, read the
+ * same guarded way as a character's picture. Anything else is "".
+ */
+export async function resolveBeatStartImage(startImageDataUrl: unknown, locationImage: unknown): Promise<string> {
+  if (typeof startImageDataUrl === "string" && startImageDataUrl) return startImageDataUrl;
+  if (typeof locationImage !== "string" || !locationImage.trim()) return "";
+  return (await readSunnyBanksHeroImageDataUrl(locationImage.trim())) ?? "";
 }

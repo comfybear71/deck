@@ -41,6 +41,7 @@ import {
   type DeckItemRecord,
   type DeckItemTombstone,
 } from "./deckItems";
+import { normalizeDeckLocation } from "./deckLocations";
 import { normalizeSkidmarksEpisode } from "./skidmarksEpisodes";
 import { MUSIC_VIDEO_ITEM_FOLDER, cleanBandRowData, cleanSongItem } from "./musicVideoItemData";
 import { SKIDMARKS_STUDIO_OWNER_ID } from "./skidmarksSession-server";
@@ -175,6 +176,14 @@ export function prepareDeckItemData(
       if (song.id !== itemId) return { ok: false, error: "The song's id doesn't match the item id." };
       if (JSON.stringify(song).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That song is too big to save." };
       return { ok: true, data: song as unknown as Record<string, unknown>, folder: MUSIC_VIDEO_ITEM_FOLDER };
+    }
+    case "location": {
+      const loc = normalizeDeckLocation(data);
+      if (!loc) return { ok: false, error: "That isn't a location." };
+      if (loc.id !== itemId) return { ok: false, error: "The location's id doesn't match the item id." };
+      if (JSON.stringify(loc).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That location is too big to save." };
+      // One folder per genre, the same names as the other kinds.
+      return { ok: true, data: loc as unknown as Record<string, unknown>, folder: loc.genre };
     }
   }
 }

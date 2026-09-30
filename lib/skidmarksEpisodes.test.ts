@@ -81,6 +81,17 @@ describe("skidmarks episodes", () => {
     expect(entries.map((e) => e.label)).toContain("[Location:]");
   });
 
+  it("tag bar offers each Skidmarks location on the Locations row as a ready tag (2026-09-30)", () => {
+    const ep = { ...buildStarterEpisode("x"), antiheroId: "c1", castIds: [] };
+    const dam = { id: "loc_skidmarks_the_dam", genre: "skidmarks", key: "the_dam", name: "The Dam", pictureUrl: null, createdAt: 1 } as const;
+    const motel = { ...dam, id: "loc_music_video_motel", genre: "music-video", key: "motel", name: "Motel" } as const;
+    const entries = tagBarEntries(ep, [cast("c1", "Darryl", "antihero")], { locations: [dam, motel] });
+    expect(entries[1]).toEqual({ label: "[The Dam]", insert: "[Location: The Dam] " });
+    expect(entries.map((e) => e.label)).not.toContain("[Motel]");
+    expect(entries.map((e) => e.label)).toContain("[Location:]");
+    expect(tagBarEntries(ep, [])).toHaveLength(5);
+  });
+
   it("inserts tags at the cursor, on a new line mid-text, caret inside empty tags", () => {
     expect(insertAtSelection("", 0, 0, "[Location: ]")).toEqual({ value: "[Location: ]", caret: 11 });
     const r = insertAtSelection("He parks", 8, 8, "[SFX: ]");

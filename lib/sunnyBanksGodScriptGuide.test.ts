@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { parseSunnyBanksScriptBlock } from "@/components/SkidmarksSunnyBanksPanel";
 import { SUNNY_BANKS_CAST, SUNNY_BANKS_LOCATIONS } from "./sunnyBanks";
+import { sunnyBanksSpeakerList } from "./sunnyBanksVoices";
+import type { SkidmarksState } from "./skidmarks";
 import {
   buildSunnyBanksGodScriptPrompt,
   listSunnyBanksLocationIds,
+  listSunnyBanksNonSpeakingCast,
   listSunnyBanksSpeakingCast,
   SUNNY_BANKS_GOD_SCRIPT_EXAMPLE,
   SUNNY_BANKS_GOD_SCRIPT_RULES,
@@ -16,9 +19,61 @@ describe("listSunnyBanksSpeakingCast", () => {
     );
   });
 
-  it("leaves Hans out — he has no locked voice, so he cannot speak a beat", () => {
+  it("with no saved characters, Hans has no voice, so he is listed as not speaking yet", () => {
     expect(SUNNY_BANKS_CAST.Hans.voiceId).toBeUndefined();
     expect(listSunnyBanksSpeakingCast()).not.toContain("Hans");
+    expect(listSunnyBanksNonSpeakingCast().map((c) => c.name)).toContain("Hans");
+  });
+
+  it("real ask (2026-09-30): comes from the saved characters, so Hans with a voice on his card can speak", () => {
+    const hansCard = {
+      id: "clora_hans",
+      name: "Hans",
+      slug: "hans",
+      sourceKey: "sb:hans",
+      status: "draft",
+      trainingImageUrls: [],
+      referenceUrl: "https://abc.public.blob.vercel-storage.com/deck/sunnybank/characters/hans/hans.jpg",
+      voiceId: "abcdefghij0123456789",
+      version: 1,
+      createdAt: "2026-09-30T00:00:00.000Z",
+    };
+    const state = { characterLoras: { characters: [hansCard] } } as unknown as SkidmarksState;
+    const saved = sunnyBanksSpeakerList(state);
+    expect(listSunnyBanksSpeakingCast(saved)).toContain("Hans");
+    expect(buildSunnyBanksGodScriptPrompt(undefined, saved)).toMatch(/THE CAST[^]*Hans/);
+  });
+});
+
+describe("the 2026-09-30 rules", () => {
+  it("lists the new built-ins and says an unknown id won't render", () => {
+    const ids = listSunnyBanksLocationIds().map((l) => l.id);
+    expect(ids).toEqual(expect.arrayContaining(["park_site_4", "office_booth", "rock_art_outcrop"]));
+    const prompt = buildSunnyBanksGodScriptPrompt();
+    expect(prompt).toContain("park_site_4");
+    expect(prompt).toMatch(/red\s+warning[^]*WILL NOT RENDER/);
+    const sheet = JSON.stringify(SUNNY_BANKS_GOD_SCRIPT_RULES);
+    expect(sheet).toMatch(/red warning on its row and won't render/);
+  });
+
+  it("no # lines except # EPISODE:, acts are === ACT II ===", () => {
+    expect(buildSunnyBanksGodScriptPrompt()).toMatch(/NO "#" LINES except "# EPISODE: Title"[^]*=== ACT II ===/);
+    expect(JSON.stringify(SUNNY_BANKS_GOD_SCRIPT_RULES)).toContain("Don't write # Act II");
+  });
+
+  it("[Character …] on a talking line is a still pose, repeated word for word; movement goes in silent holds", () => {
+    const prompt = buildSunnyBanksGodScriptPrompt();
+    expect(prompt).toMatch(/STILL POSE only/);
+    expect(prompt).toMatch(/repeat the exact same words/);
+    expect(prompt).toMatch(/movement in a silent hold/);
+    const rule = SUNNY_BANKS_GOD_SCRIPT_RULES.find((r) => r.title.includes("still pose"))!;
+    // The rule's own example parses as it says: two talking lines with the
+    // same pose, then a silent hold carrying the movement.
+    const rows = parseSunnyBanksScriptBlock(rule.example!);
+    expect(rows.map((r) => r.kind)).toEqual(["speak", "speak", "hold"]);
+    expect(rows[0].appearanceModifier).toBe(rows[1].appearanceModifier);
+    expect(rows[2].action).toMatch(/storms out/);
+    expect(rows[2].appearanceModifier).toBeUndefined();
   });
 });
 
@@ -93,7 +148,10 @@ describe("buildSunnyBanksGodScriptPrompt", () => {
       expect(prompt).toContain(id);
       expect(prompt).toContain(label);
     }
-    expect(prompt).not.toContain("Hans");
+    // Hans has no voice in the built-in table, so he's only in the "not speaking yet" line.
+    const castLine = prompt.split("=== THE CAST")[1].split("\n").find((l) => l.includes("Shazza"))!;
+    expect(castLine).not.toContain("Hans");
+    expect(prompt).toContain("Not speaking yet: Hans (");
   });
 
   it("carries the three real tags and explicitly forbids the invented ones", () => {
