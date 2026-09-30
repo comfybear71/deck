@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   appendSunnyBanksActionToPrompt,
   collectRenderedClips,
+  groupSunnyBanksClipsByAct,
+  isSunnyBanksClipRowOpen,
   fingerprintWorkspace,
   mergeSunnyBanksActIds,
   mintWorkspaceId,
@@ -25,6 +27,9 @@ import {
   unshiftKeyedIndexRecord,
   preserveRenderedRuntimes,
   resetSunnyBanksClipRuntime,
+  shiftSunnyBanksRuntimesForInsert,
+  shiftSunnyBanksRuntimesForRemove,
+  writeSunnyBanksRowRuntime,
   decodeSunnyBanksPastedScript,
   resolveSunnyBanksScriptLocationId,
   sunnyBanksQueueChunks,
@@ -1017,5 +1022,156 @@ describe("resetSunnyBanksClipRuntime (Remove on a clip)", () => {
   it("leaves the runtimes alone for a row that isn't there", () => {
     const before = { 0: done("Hans:", 13) };
     expect(resetSunnyBanksClipRuntime(script, before, 9)).toBe(before);
+  });
+});
+
+describe("CLIPS strip: one row per act", () => {
+  const clip = (act: string, index: number) => ({
+    act,
+    index,
+    characterName: "Shazza",
+    lineLabel: "You right?",
+    videoUrl: `https://blob.example/${act}-${index}.mp4`,
+  });
+
+  it("stacks every act in act order, each with its own clips and count", () => {
+    const rows = groupSunnyBanksClipsByAct(["I", "II", "III", "IV"], [clip("II", 0), clip("I", 1), clip("I", 0)]);
+    expect(rows.map((r) => r.act)).toEqual(["I", "II", "III", "IV"]);
+    expect(rows.map((r) => r.clips.length)).toEqual([2, 1, 0, 0]);
+    expect(rows[0].clips.map((c) => c.index)).toEqual([1, 0]);
+  });
+
+  it("opens the act being edited, and any act with clips, unless its label was tapped", () => {
+    expect(isSunnyBanksClipRowOpen({ act: "I", clipCount: 0, activeAct: "I" })).toBe(true);
+    expect(isSunnyBanksClipRowOpen({ act: "II", clipCount: 3, activeAct: "I" })).toBe(true);
+    expect(isSunnyBanksClipRowOpen({ act: "III", clipCount: 0, activeAct: "I" })).toBe(false);
+    expect(isSunnyBanksClipRowOpen({ act: "I", clipCount: 19, activeAct: "I", toggled: false })).toBe(false);
+    expect(isSunnyBanksClipRowOpen({ act: "III", clipCount: 0, activeAct: "I", toggled: true })).toBe(true);
+  });
+});
+
+describe("inserting or removing a row keeps every other Done clip (2026-09-30)", () => {
+  // The end of EP01 Act I as it was when Stuart hit "+" between rows 15 and 16.
+  const before = [
+    "Hans: Guten tag, true blue Australian locals!",
+    "Shazza:",
+    "Shazza: It bloody well is if you've got a credit card, mate.",
+    "Dazza:",
+    "Dazza: These are pants, Shaz.",
+    "Shazza:",
+  ].join("\n");
+  const doneAll = (script: string) => {
+    const out: Record<number, { lineKey: string; status: "done"; videoUrl: string; characterName: string; line: string }> = {};
+    sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(script)).forEach((chunk, i) => {
+      out[i] = {
+        lineKey: chunk.raw,
+        status: "done",
+        videoUrl: `https://blob.example/beat-${i + 1}.mp4`,
+        characterName: chunk.characterName,
+        line: chunk.line,
+      };
+    });
+    return out;
+  };
+  const shownUrls = (script: string, runtimes: Parameters<typeof preserveRenderedRuntimes>[1]) => {
+    const parsed = parseSunnyBanksScriptBlock(script);
+    const shown = preserveRenderedRuntimes(parsed, runtimes);
+    return sunnyBanksQueueChunks(parsed).map((_, i) => (shown[i]?.status === "done" ? shown[i].videoUrl : shown[i]?.status ?? "idle"));
+  };
+
+  it("+ after a hold: the new row is Idle and every row below keeps its own clip", () => {
+    const runtimes = doneAll(before);
+    // "+" on row 2 (the Shazza hold) inserts another "Shazza:" under it.
+    const after = insertSunnyBanksLineAfter(before, 1, buildSunnyBanksHoldScriptLine("Shazza"));
+    const shifted = shiftSunnyBanksRuntimesForInsert(before, after, runtimes, 2);
+    expect(shownUrls(after, shifted)).toEqual([
+      "https://blob.example/beat-1.mp4",
+      "https://blob.example/beat-2.mp4",
+      "idle",
+      "https://blob.example/beat-3.mp4",
+      "https://blob.example/beat-4.mp4",
+      "https://blob.example/beat-5.mp4",
+      "https://blob.example/beat-6.mp4",
+    ]);
+  });
+
+  it("the old one-pass match let an inserted hold take a later look-alike row's clip", () => {
+    // Unshifted store (the pre-fix "+"): the display must still not move the last Shazza hold's clip.
+    const after = insertSunnyBanksLineAfter(before, 1, buildSunnyBanksHoldScriptLine("Shazza"));
+    const urls = shownUrls(after, doneAll(before));
+    expect(urls[6]).toBe("https://blob.example/beat-6.mp4");
+    expect(urls[3]).toBe("https://blob.example/beat-3.mp4");
+  });
+
+  it("rendering the inserted row never wipes the Done row below it", () => {
+    const after = insertSunnyBanksLineAfter(before, 1, buildSunnyBanksHoldScriptLine("Shazza"));
+    let runtimes = shiftSunnyBanksRuntimesForInsert(before, after, doneAll(before), 2);
+    runtimes = writeSunnyBanksRowRuntime(after, runtimes, 2, { lineKey: "Shazza:", status: "rendering" });
+    runtimes = writeSunnyBanksRowRuntime(after, runtimes, 2, {
+      lineKey: "Shazza:",
+      status: "done",
+      videoUrl: "https://blob.example/new.mp4",
+    });
+    expect(shownUrls(after, runtimes)).toEqual([
+      "https://blob.example/beat-1.mp4",
+      "https://blob.example/beat-2.mp4",
+      "https://blob.example/new.mp4",
+      "https://blob.example/beat-3.mp4",
+      "https://blob.example/beat-4.mp4",
+      "https://blob.example/beat-5.mp4",
+      "https://blob.example/beat-6.mp4",
+    ]);
+  });
+
+  it("a render written into a store that was never shifted (hand-edited script) still lands on the right row", () => {
+    // A new spoken line typed into the script by hand above "It bloody well…".
+    const edited = before.replace("Shazza:\nShazza: It bloody", "Shazza:\nShazza: the first fleet, of bloody tourists\nShazza: It bloody");
+    let runtimes = doneAll(before) as Record<number, import("@/lib/sunnyBanksWorkspace").SunnyBanksRowRuntime>;
+    runtimes = writeSunnyBanksRowRuntime(edited, runtimes, 2, {
+      lineKey: "Shazza: the first fleet, of bloody tourists",
+      status: "done",
+      videoUrl: "https://blob.example/new.mp4",
+    });
+    const urls = shownUrls(edited, runtimes);
+    expect(urls[2]).toBe("https://blob.example/new.mp4");
+    expect(urls.slice(3)).toEqual([
+      "https://blob.example/beat-3.mp4",
+      "https://blob.example/beat-4.mp4",
+      "https://blob.example/beat-5.mp4",
+      "https://blob.example/beat-6.mp4",
+    ]);
+  });
+
+  it("+ before the first row moves every Done row down one", () => {
+    const runtimes = doneAll(before);
+    const after = insertSunnyBanksLineBefore(before, 0, buildSunnyBanksHoldScriptLine("Hans"));
+    const shifted = shiftSunnyBanksRuntimesForInsert(before, after, runtimes, 0);
+    const urls = shownUrls(after, shifted);
+    expect(urls[0]).toBe("idle");
+    expect(urls.slice(1)).toEqual([1, 2, 3, 4, 5, 6].map((n) => `https://blob.example/beat-${n}.mp4`));
+  });
+
+  it("− on an Idle row mid-act moves every Done row below up with its clip", () => {
+    const after = insertSunnyBanksLineAfter(before, 1, buildSunnyBanksHoldScriptLine("Shazza"));
+    const withIdle = shiftSunnyBanksRuntimesForInsert(before, after, doneAll(before), 2);
+    const parsed = parseSunnyBanksScriptBlock(after);
+    const removedLine = sunnyBanksQueueChunks(parsed)[2].sourceLineIndex;
+    const back = removeSunnyBanksSourceLine(after, removedLine);
+    const removed = shiftSunnyBanksRuntimesForRemove(after, withIdle, 2);
+    expect(shownUrls(back, removed)).toEqual([1, 2, 3, 4, 5, 6].map((n) => `https://blob.example/beat-${n}.mp4`));
+    expect(Object.keys(removed).map(Number).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it("− on a Done row mid-act drops only that clip; every Done row below moves up with its own", () => {
+    const parsed = parseSunnyBanksScriptBlock(before);
+    const removedLine = sunnyBanksQueueChunks(parsed)[2].sourceLineIndex;
+    const back = removeSunnyBanksSourceLine(before, removedLine);
+    const removed = shiftSunnyBanksRuntimesForRemove(before, doneAll(before), 2);
+    expect(shownUrls(back, removed)).toEqual([1, 2, 4, 5, 6].map((n) => `https://blob.example/beat-${n}.mp4`));
+  });
+
+  it("a line deleted by hand above (store never shifted) leaves every Done row below with its own clip", () => {
+    const edited = before.replace("Shazza: It bloody well is if you've got a credit card, mate.\n", "");
+    expect(shownUrls(edited, doneAll(before))).toEqual([1, 2, 4, 5, 6].map((n) => `https://blob.example/beat-${n}.mp4`));
   });
 });
