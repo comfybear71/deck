@@ -74,8 +74,9 @@ describe("buildSunnyBanksSpeakingPrompt", () => {
       "We haven't got any shade, Dazza. So it's forty-seven degrees of structural integrity. Stop complaining and finish your breakfast"
     );
     expect(prompt).toBe(
-      "Use the provided start image as the first frame. Shazza, big blonde hair, leopard-print top, cigarette, " +
-        "arms folded is prominent, mouth and head move naturally while speaking, subtle gesture. Props and " +
+      "Use the provided start image as the first frame. Shazza, middle-aged woman, huge curly blonde hair, gold " +
+        "hoop earrings, cigarette in her mouth, arms folded, leopard-print singlet top, frayed denim shorts is " +
+        "prominent, mouth and head move naturally while speaking, subtle gesture. Props and " +
         "background stay exactly as the start image, nothing new enters frame. Shazza says: \"We haven't got " +
         "any shade, Dazza. So it's forty-seven degrees of structural integrity. Stop complaining and finish " +
         "your breakfast\". Camera holds. Same person and objects as the start image. " +
@@ -101,6 +102,22 @@ describe("buildSunnyBanksSpeakingPrompt", () => {
     expect(prompt).toContain(SUNNY_BANKS_HELD_OBJECT_LOCK);
     expect(prompt).toContain("without morphing or disappearing");
     expect(prompt.startsWith("Use the provided start image as the first frame. Dazza,")).toBe(true);
+    // EP01 (2026-09-30): naming "coins" drew Dazza as a coin. No prop is named any more.
+    expect(prompt).not.toMatch(/coin|hair dryer|beer|stubbies/i);
+    expect(buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Dazza)).not.toMatch(/coin|hair dryer|beer|stubbies/i);
+  });
+
+  it("every look is one clear description: no alternate outfits and no bare props (2026-09-30)", () => {
+    for (const character of Object.values(SUNNY_BANKS_CAST)) {
+      expect(character.look, character.name).not.toMatch(/as on that plate|\beither\b|\bor\b|depending|\bearly:|\blater:/i);
+      expect(character.look, character.name).not.toMatch(/coins?|hair dryer|mountain bike|high-vis|akubra|thongs/i);
+      // A prop that stays is held or worn, never a bare noun at the end of a clause.
+      for (const clause of character.look.split(/,\s*/)) {
+        if (/\b(cigarette|pie|teacup|cricket bat|flip-flop|whistle|camera)\b/i.test(clause)) {
+          expect(clause, `${character.name}: "${clause}"`).toMatch(/\b(in her|in his|in each|in both|held|on her|on a|around his)\b/i);
+        }
+      }
+    }
   });
 
   it("does not append the Dazza held-object lock onto Shazza's gold string", () => {

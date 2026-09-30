@@ -479,7 +479,7 @@ const MAX_LOOK_CHARS = 1100;
 // character and turns up in every later render, so training pictures
 // are always empty-handed. Props go in per-shot prompts instead.
 const HELD_PROP_RE =
-  /\b(holding|holds|carrying|carries|clutching|gripping|wielding|cigarettes?|smok(e|es|ing)|vape|pipe|pies?|tea ?cups?|cups?|mugs?|glass(es)? of|cricket bat|bats?|thongs|beers?|beer cans?|stubb(y|ies)|tinnies|cans?|bottles?|coins|hair ?dryer|cameras?|whistles?|phones?|microphones?|mic|guitars?|instruments?|drinks?|guns?|rifles?|knife|knives|tools?|umbrella|bags?|tins?)\b/i;
+  /\b(holding|holds|carrying|carries|clutching|gripping|wielding|cigarettes?|smok(e|es|ing)|vape|pipe|pies?|tea ?cups?|cups?|mugs?|glass(es)? of|cricket bat|bats?|thongs|flip-?flops?|beers?|beer cans?|stubb(y|ies)|tinnies|cans?|bottles?|coins|hair ?dryer|cameras?|whistles?|phones?|microphones?|mic|guitars?|instruments?|drinks?|guns?|rifles?|knife|knives|tools?|umbrella|bags?|tins?)\b/i;
 
 // Arm poses in a look ("arms folded") fight each shot's own pose and
 // Siray draws both sets of arms, so the shot description owns the pose.

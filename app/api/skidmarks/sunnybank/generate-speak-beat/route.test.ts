@@ -355,7 +355,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(prompt).toContain("leans on the bunk");
     expect(prompt).not.toMatch(/shoe|boot|sneaker/i);
     expect(String(prompt).startsWith("Use the provided start image")).toBe(true);
-    expect(prompt).toContain("Unit 4S, short purple alien");
+    expect(prompt).toContain("Unit 4S, skinny purple alien");
   });
 
   it("real reported bug fix (2026-09-18): appearanceModifier reaches the xAI compositing prompt, not just the motion prompt", async () => {
