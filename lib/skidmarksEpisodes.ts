@@ -12,6 +12,7 @@
  * Cast rule: every character must be made up and clearly adult — no real
  * person's likeness or name. Adding a character requires ticking that.
  */
+import { effectiveDeckLocations, type DeckLocationsState } from "./deckLocations";
 
 export type SkidmarksBeatId =
   | "intro"
@@ -234,7 +235,13 @@ export function availableAntiheroes(
 }
 
 /** Tag-bar entries: the generic tags, then one per cast member in the episode. */
-export function tagBarEntries(ep: SkidmarksEpisode, cast: readonly SkidmarksCastMember[]): { label: string; insert: string }[] {
+export function tagBarEntries(
+  ep: SkidmarksEpisode,
+  cast: readonly SkidmarksCastMember[],
+  /** The session's locations (2026-09-30): each Skidmarks one on the
+   * Locations row gets its own ready-made `[Location: Name]` tag. */
+  locations?: DeckLocationsState | null,
+): { label: string; insert: string }[] {
   const base = [
     { label: "[Character: look]", insert: "[Character: look] " },
     { label: "[Location:]", insert: "[Location: ]" },
@@ -253,7 +260,11 @@ export function tagBarEntries(ep: SkidmarksEpisode, cast: readonly SkidmarksCast
     const look = member.look.trim();
     people.push({ label: `[${member.name}]`, insert: `[${member.name}: ${look || "look"}] ` });
   }
-  return [...people, ...base];
+  const places = effectiveDeckLocations(locations, "skidmarks").map((l) => ({
+    label: `[${l.name}]`,
+    insert: `[Location: ${l.name}] `,
+  }));
+  return [...people, ...places, ...base];
 }
 
 /** Inserts `text` into `value` at the selection, returning the new value and caret. */

@@ -1,5 +1,5 @@
 import fixture from "./sunnyBanksDropBears.fixture.json";
-import { SUNNY_BANKS_CAST, type SunnyBanksLocationId } from "./sunnyBanks";
+import { getSunnyBanksLocation, SUNNY_BANKS_CAST, type SunnyBanksLocationId } from "./sunnyBanks";
 
 /**
  * Crash Lab EP02 (Drop Bears Dilemma) as in-memory Sunny Banks seed —
@@ -47,14 +47,7 @@ function isActId(value: string): value is ActId {
 }
 
 function isLocationId(value: string): value is SunnyBanksLocationId {
-  return (
-    value === "water_tank_dam" ||
-    value === "main_entrance_sign" ||
-    value === "site_laundry" ||
-    value === "office_storefront" ||
-    value === "tin_shed_mower" ||
-    value === "caravan_interior"
-  );
+  return getSunnyBanksLocation(value) !== undefined;
 }
 
 /** Script line + clip URL per act, ready for `SkidmarksSunnyBanksPanel`

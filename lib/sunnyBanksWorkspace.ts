@@ -19,6 +19,7 @@
  * Neither field is part of the fingerprint, so older cards still read as
  * "saved" exactly as before.
  */
+import { isValidDeckLocationKey } from "./deckLocations";
 import {
   getSunnyBanksLocation,
   SUNNY_BANKS_DEFAULT_LOCATION_ID,
@@ -286,9 +287,22 @@ export function pickSunnyBanksEpisodeMediaSlug(text: string, taken: Iterable<str
   return uniqueDeckMediaSlug(deckMediaSlug(text, "episode"), used);
 }
 
+/**
+ * A saved location key as it is (2026-09-30): a built-in, one saved on
+ * the Locations row, or one that isn't on the row yet. It used to become
+ * the default (the storefront) whenever it wasn't one of the six
+ * built-ins, which is how EP01's Park Site 4 rows ended up rendered at
+ * the shop. Only a malformed value falls back.
+ */
 function normalizeLocationId(value: unknown, fallback: SunnyBanksLocationId): SunnyBanksLocationId {
-  if (typeof value !== "string") return fallback;
-  return getSunnyBanksLocation(value)?.id ?? fallback;
+  return safeLocationKey(value) ?? fallback;
+}
+
+function safeLocationKey(value: unknown): SunnyBanksLocationId | null {
+  if (typeof value !== "string") return null;
+  const builtIn = getSunnyBanksLocation(value);
+  if (builtIn) return builtIn.id;
+  return isValidDeckLocationKey(value) ? value : null;
 }
 
 function normalizeRowRuntime(value: unknown): SunnyBanksRowRuntime | null {
@@ -341,8 +355,8 @@ function normalizeLocationMap(value: unknown, fallback: SunnyBanksLocationId): R
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
     const index = Number(key);
     if (!Number.isInteger(index) || index < 0) continue;
-    const located = typeof raw === "string" ? getSunnyBanksLocation(raw) : undefined;
-    if (located) next[index] = located.id;
+    const located = safeLocationKey(raw);
+    if (located) next[index] = located;
     else if (typeof raw === "string") next[index] = fallback;
   }
   return next;

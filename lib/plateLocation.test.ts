@@ -6,6 +6,8 @@ import {
   getCachedLocationStill,
   locationStillCacheKey,
   resolveLocationStill,
+  locationTagIn,
+  savedLocationFor,
 } from "./plateLocation";
 import { attachSkidmarksMp3, createMp3Attachment, selectSkidmarksBand } from "./skidmarks";
 
@@ -173,5 +175,48 @@ describe("identity wipe integration (lib/skidmarks.ts band/song switches)", () =
     attachSkidmarksMp3(createMp3Attachment("a-new-song.mp3", 120));
 
     expect(getCachedLocationStill(SCENE)).toBeUndefined();
+  });
+});
+
+describe("a saved Music video location as the place (2026-09-30)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    clearCachedLocationStills();
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearCachedLocationStills();
+  });
+
+  const MOTEL = {
+    id: "loc_music_video_roadside_motel",
+    genre: "music-video" as const,
+    key: "roadside_motel",
+    name: "Roadside Motel",
+    pictureUrl: "data:image/jpeg;base64,motelBytes",
+    createdAt: 1,
+  };
+
+  it("[Location: Roadside Motel] uses that picture, with no paid generate", async () => {
+    expect(locationTagIn("Wide shot [Location: Roadside Motel] at dusk")).toBe("Roadside Motel");
+    expect(savedLocationFor("[Location: roadside_motel] night", [MOTEL])?.id).toBe(MOTEL.id);
+    const outcome = await resolveLocationStill({ sceneText: "[Location: Roadside Motel] night", bandName: "Solar Rebel", locations: [MOTEL] });
+    expect(outcome).toEqual({ ok: true, dataUrl: "data:image/jpeg;base64,motelBytes" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("an unknown or picture-less location still generates the place, as before", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ dataUrl: "data:image/jpeg;base64,generated" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    const outcome = await resolveLocationStill({
+      sceneText: "[Location: Moon Base] night",
+      bandName: "Solar Rebel",
+      locations: [{ ...MOTEL, name: "Moon Base", key: "moon_base", id: "loc_music_video_moon_base", pictureUrl: null }],
+    });
+    expect(outcome.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

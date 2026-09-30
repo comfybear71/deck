@@ -12,7 +12,7 @@ import {
   buildSunnyBanksSpeakingPrompt,
   SUNNY_BANKS_HOLD_DURATION_SEC,
 } from "@/lib/sunnyBanks";
-import { compositeSunnyBanksCharacterOntoLocation } from "@/lib/sunnyBanksComposite";
+import { compositeSunnyBanksCharacterOntoLocation, resolveBeatStartImage } from "@/lib/sunnyBanksComposite";
 import { normalizeElevenLabsVoiceId } from "@/lib/characterLoras";
 import { parseSunnyBanksCharacterCard, resolveSpeakBeatCharacter } from "@/lib/sunnyBanksVoices";
 import {
@@ -146,6 +146,12 @@ interface GenerateSpeakBeatRequestBody {
    * is `startImageDataUrl` (Image 1). The character hero from
    * `characterName` is Image 2. LTX still has one LoadImage. */
   locationId?: unknown;
+  /** The location's name (2026-09-30), for a location saved on the
+   * Locations row rather than a built-in. Prompt text only. */
+  locationLabel?: unknown;
+  /** The location's picture: a built-in's repo file or a Deck Blob URL.
+   * Only read when `startImageDataUrl` is missing (the panel always
+   * sends that); never any other host. */
   locationImage?: unknown;
   /** Extra LTX prompt context from `[Action: text]`. Appended after
    * gold Hold/Speak strings. Never sent to ElevenLabs. */
@@ -216,8 +222,9 @@ export async function POST(request: Request) {
   const kind = parseBeatKind(body.kind);
   const characterName = typeof body.characterName === "string" ? body.characterName.trim() : "";
   const line = typeof body.line === "string" ? body.line.trim() : "";
-  const startImageDataUrl = typeof body.startImageDataUrl === "string" ? body.startImageDataUrl : "";
   const locationId = typeof body.locationId === "string" ? body.locationId.trim() : "";
+  const locationLabel = typeof body.locationLabel === "string" ? body.locationLabel.replace(/\s+/g, " ").trim().slice(0, 80) : "";
+  const startImageDataUrl = await resolveBeatStartImage(body.startImageDataUrl, body.locationImage);
   const action = typeof body.action === "string" ? body.action.replace(/\s+/g, " ").trim() : "";
   const appearanceModifier =
     typeof body.appearanceModifier === "string" ? body.appearanceModifier.replace(/\s+/g, " ").trim() : "";
@@ -370,6 +377,7 @@ export async function POST(request: Request) {
       locationDataUrl: startImageDataUrl,
       character: character!,
       locationId,
+      locationLabel: locationLabel || undefined,
       appearanceOverride: appearanceModifier || undefined,
     });
     if (!plated.ok) {

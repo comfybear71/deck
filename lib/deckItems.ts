@@ -25,7 +25,9 @@
  * `skidmarks-episode`: one Skidmarks episode (`SkidmarksState.skidmarksEpisodes.episodes[]`).
  * `adult-short`: one saved short from the Shorts Library (`SkidmarksState.adultShorts.saved[]`).
  * `music-video-band` / `music-video-song`: one Music video band, and the
- * song on the desk (see `lib/musicVideoItemData.ts`). */
+ * song on the desk (see `lib/musicVideoItemData.ts`).
+ * `location`: one place on a genre's Locations row (`lib/deckLocations.ts`),
+ * foldered by its genre. */
 export const DECK_ITEM_KINDS = [
   "character",
   "sunnybank-episode",
@@ -33,6 +35,7 @@ export const DECK_ITEM_KINDS = [
   "adult-short",
   "music-video-band",
   "music-video-song",
+  "location",
 ] as const;
 export type DeckItemKind = (typeof DECK_ITEM_KINDS)[number];
 

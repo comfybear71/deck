@@ -29,6 +29,7 @@ import { SunnyBanksEpisodeRow } from "./SunnyBanksEpisodeRow";
 import { SkidmarksEpisodesPanel } from "./SkidmarksEpisodesPanel";
 import { AdultShortsPanel } from "./AdultShortsPanel";
 import { CharacterLorasPanel } from "./CharacterLorasPanel";
+import LocationsRow from "./LocationsRow";
 import { useIsPcShell } from "@/hooks/useIsPcShell";
 import { DeckPcRail } from "./DeckPcRail";
 import { DeckMobileDrawer } from "./DeckMobileDrawer";
@@ -495,6 +496,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       )}
 
       {/* The chosen band's own Characters bar: just the people in this band. */}
+      {/* Locations sit directly above the Characters row in every genre. */}
+      {activeBand && <LocationsRow genre="music-video" />}
       {activeBand && (
         <CharacterLorasPanel
           group="music-video"
@@ -600,11 +603,15 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
       {/* Each project's own Characters bar (folded by default): that
           group's cast, tap a face to train their LoRA. */}
+      {/* LOCATIONS, directly above each project's Characters row (2026-09-30). */}
+      {session.projectKind === "skidmarks" && <LocationsRow genre="skidmarks" />}
       {session.projectKind === "skidmarks" && <CharacterLorasPanel group="skidmarks" />}
       {/* Sunny Banks episodes as a sideways row, straight under the
           project tiles (Stuart, 2026-09-30). */}
       {session.projectKind === "sunnybank" && <SunnyBanksEpisodeRow />}
+      {session.projectKind === "sunnybank" && <LocationsRow genre="sunnybank" />}
       {session.projectKind === "sunnybank" && <CharacterLorasPanel group="sunny-banks" />}
+      {session.projectKind === "adult-shorts" && <LocationsRow genre="adult-shorts" />}
       {session.projectKind === "adult-shorts" && <CharacterLorasPanel group="adult-shorts" />}
 
       {session.projectKind === "sunnybank" && <SkidmarksSunnyBanksPanel />}

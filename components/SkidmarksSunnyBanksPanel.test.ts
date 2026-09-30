@@ -40,7 +40,7 @@ import {
   buildSunnyBanksOverlaySegments,
   formatSunnyBanksGodScript,
 } from "./SkidmarksSunnyBanksPanel";
-import { SUNNY_BANKS_CAST, SUNNY_BANKS_LOCATIONS, buildSunnyBanksSpeakingPrompt } from "@/lib/sunnyBanks";
+import { SUNNY_BANKS_CAST, getSunnyBanksLocation, buildSunnyBanksSpeakingPrompt } from "@/lib/sunnyBanks";
 
 describe("decodeSunnyBanksPastedScript", () => {
   it("turns a URL-encoded paste into real spaces and newlines", () => {
@@ -133,19 +133,47 @@ describe("parseSunnyBanksScriptBlock", () => {
     expect(chunks[0].locationId).toBe("main_entrance_sign");
     expect(chunks[1].locationId).toBe("main_entrance_sign");
     expect(chunks[2].locationId).toBe("caravan_interior");
-    expect(SUNNY_BANKS_LOCATIONS[chunks[0].locationId!].image).toBe(
+    expect(getSunnyBanksLocation(chunks[0].locationId!)?.image).toBe(
       "/skidmarks/sunnybanks/main-entrance-sign.jpg"
     );
-    expect(SUNNY_BANKS_LOCATIONS[chunks[2].locationId!].image).toBe(
+    expect(getSunnyBanksLocation(chunks[2].locationId!)?.image).toBe(
       "/skidmarks/sunnybanks/caravan-interior.jpg"
     );
   });
 
-  it("ignores an unknown location id instead of inventing a plate", () => {
+  it("keeps an unknown location as it is (the row warns) instead of quietly using the storefront (2026-09-30)", () => {
     const chunks = parseSunnyBanksScriptBlock(
-      "[Location: moon_base]\nShazza: You right?"
+      "[Location: moon_base]\nShazza: You right?\n[Location: Moon Base 2]\nDazza: Yeah nah."
     );
-    expect(chunks[0].locationId).toBe("office_storefront");
+    expect(chunks[0].locationId).toBe("moon_base");
+    expect(chunks[1].locationId).toBe("moon_base_2");
+  });
+
+  it("real EP01 (2026-09-30): [Location: park_site_4] is a built-in now, not the storefront", () => {
+    const chunks = parseSunnyBanksScriptBlock("[Location: park_site_4]\nShazza: You right?\n[Location: Rock Art Outcrop]\nDazza: Yeah nah.");
+    expect(chunks[0].locationId).toBe("park_site_4");
+    expect(chunks[1].locationId).toBe("rock_art_outcrop");
+  });
+
+  it("an empty [Location: ] is still ignored", () => {
+    const chunks = parseSunnyBanksScriptBlock("[Location: site_laundry]\nShazza: You right?\n[Location: ]\nDazza: Yeah nah.");
+    expect(chunks[1].locationId).toBe("site_laundry");
+  });
+
+  it("real EP01 (2026-09-30): # Act I / # Act II are act headers, never a spoken or billed row", () => {
+    expect(parseSunnyBanksActHeader("# Act I")).toBe("I");
+    expect(parseSunnyBanksActHeader("## ACT II: The Con")).toBe("II");
+    expect(parseSunnyBanksActHeader("# Act 3")).toBe("III");
+    expect(parseSunnyBanksActHeader("# Actually no")).toBeNull();
+    const chunks = parseSunnyBanksScriptBlock("# EPISODE: Drop Bears\n# Act I\nShazza: You right?\n# Scene notes\nDazza: Yeah nah.");
+    expect(chunks.map((c) => c.characterName)).toEqual(["Shazza", "Dazza"]);
+    expect(chunks.map((c) => c.line)).toEqual(["You right?", "Yeah nah."]);
+    const doc = parseSunnyBanksGodDocument("# EPISODE: Drop Bears\n# Act I\nShazza: One.\n# Act II\nDazza: Two.");
+    expect(doc.episodeTitle).toBe("Drop Bears");
+    expect(doc.actIds).toEqual(["I", "II"]);
+    expect(doc.actScripts.I).toBe("Shazza: One.");
+    expect(doc.actScripts.II).toContain("Dazza: Two.");
+    expect(doc.actScripts.II).not.toContain("# Act");
   });
 
   it("stamps the locked default plate on every row until a [Location:] tag, then carries that id", () => {
@@ -374,7 +402,9 @@ describe("parseSunnyBanksScriptBlock", () => {
     expect(cutaway.action).toMatch(/Fast dynamic drone shot/i);
     expect(cutaway.action).toMatch(/crowd of park residents/i);
     expect(resolveSunnyBanksScriptLocationId("caravan_park_grounds")).toBeUndefined();
-    expect(cutaway.locationId).toBe("office_storefront");
+    // Kept as written (2026-09-30), so the row warns until a location
+    // with that name is on the Locations row, instead of the storefront.
+    expect(cutaway.locationId).toBe("caravan_park_grounds");
     expect(isSunnyBanksLocationCutaway(cutaway)).toBe(true);
     expect(buildSunnyBanksLocationCutawayPrompt(cutaway.action)).toContain("Fast dynamic drone shot");
     expect(buildSunnyBanksLocationCutawayPrompt(cutaway.action)).not.toContain("Shazza,");
