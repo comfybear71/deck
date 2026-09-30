@@ -99,6 +99,17 @@ const STYLE_LABELS: Record<CharacterTrainingStyle, string> = {
   render3d: "3D cartoon",
 };
 
+/**
+ * The Cast thumbnails on every genre screen (Sunnybank, Music video,
+ * Skidmarks, Shorts), one size for all (Stuart, 2026-09-30: twice the old
+ * size). Each face is 176px square (the old sideways-row face was 88px).
+ * On a phone it's two across, shrinking to fit (about 162px on a 390px
+ * iPhone, 155px on a 375px one); on a wider screen as many 176px faces
+ * as fit, wrapping onto the next line.
+ */
+export const CAST_GRID_CLASS = "grid grid-cols-2 gap-2 sm:grid-cols-[repeat(auto-fill,184px)]";
+export const CAST_TILE_CLASS = "mx-auto w-full min-w-0 max-w-[184px]";
+
 const EMPTY_GROUP_TEXT: Record<RosterGroup, string> = {
   "music-video": "No characters yet. Add a band member, or tap + Add a character.",
   "sunny-banks": "No characters yet. Tap + Add a character.",
@@ -1624,10 +1635,12 @@ export function CharacterRosterGrid({
         const list = g.id === "music-video" ? onlyBandCharacters(roster[g.id], bandMemberIds) : roster[g.id];
         const done = list.filter((c) => entryForRosterCharacter(characters, c.sourceKey)?.status === "ready").length;
         const plan = groupPlan(list);
-        // Sunny Banks faces scroll sideways in one row with the dotted +
-        // tile on the far right (Stuart, 2026-09-30), and so do Shorts'
-        // (the same layout as Sunnybank). Other screens keep the grid.
-        const asRow = simple && (g.id === "sunny-banks" || g.id === "adult-shorts");
+        // Sunny Banks and Shorts faces used to scroll sideways in one row
+        // (2026-09-30). The same day Stuart asked for every genre's Cast
+        // thumbnails at twice the size and identical, wrapping cleanly on an
+        // iPhone, so every genre now uses the same two-across grid
+        // (`CAST_TILE_CLASS`). The sideways-row code stays for a switch back.
+        const asRow = false;
         return (
           <div key={g.id}>
             <div className={simple ? "hidden" : "mb-2 flex items-center justify-between gap-2"}>
@@ -1680,7 +1693,7 @@ export function CharacterRosterGrid({
                   asRow
                     ? "flex touch-pan-x touch-pan-y items-start gap-3 overflow-x-auto pb-1 [scrollbar-width:thin]"
                     : simple
-                      ? "grid grid-cols-3 gap-3 sm:grid-cols-4"
+                      ? CAST_GRID_CLASS
                       : "grid grid-cols-4 gap-2 sm:grid-cols-6"
                 }
               >
@@ -1695,7 +1708,7 @@ export function CharacterRosterGrid({
                     return (
                       <div
                         key={c.sourceKey}
-                        className={`flex flex-col items-center gap-1 rounded-lg p-1 ${asRow ? "w-24 shrink-0" : "min-w-0"} ${isSel ? "bg-emerald-500/10" : ""}`}
+                        className={`flex flex-col items-center gap-1 rounded-lg p-1 ${asRow ? "w-24 shrink-0" : CAST_TILE_CLASS} ${isSel ? "bg-emerald-500/10" : ""}`}
                       >
                         <span
                           className={`relative block aspect-square w-full overflow-hidden rounded-lg bg-white/5 ${
@@ -1753,7 +1766,7 @@ export function CharacterRosterGrid({
                 {/* Simple mode: a dotted "+" tile after the faces adds another person
                     (Stuart, 2026-09-29: just the faces and a + tile, nothing else). */}
                 {simple && (g.id !== "adult-shorts" || adultConfirmed) && (
-                  <div className={`flex flex-col items-center gap-1 p-1 ${asRow ? "w-24 shrink-0" : "min-w-0"}`}>
+                  <div className={`flex flex-col items-center gap-1 p-1 ${asRow ? "w-24 shrink-0" : CAST_TILE_CLASS}`}>
                     <button
                       type="button"
                       onClick={() => (newCast.openGroup === g.id ? closeAddCast() : openAddCast(g.id))}

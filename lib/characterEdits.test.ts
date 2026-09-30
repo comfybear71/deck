@@ -295,7 +295,7 @@ describe("rename and delete, saved per item", () => {
     // The editor's own character: its key follows its name, and it can't
     // be deleted while it's the one open in the editor.
     const mia = shorts.tileNamed("adult-shorts", "Mia")!;
-    expect(shorts.edits.deleteRosterCharacter(mia)).toMatchObject({ ok: false, error: expect.stringMatching(/open in the Shorts editor/) });
+    expect(shorts.edits.deleteRosterCharacter(mia)).toMatchObject({ ok: false, error: expect.stringMatching(/starring in the open Shorts episode/) });
     expect(shorts.edits.renameRosterCharacter(mia, "Mia Rose")).toEqual({ ok: true, sourceKey: "as:mia_rose" });
     expect(shorts.sk.getAdultShortsState().character.name).toBe("Mia Rose");
     expect(shorts.tileNamed("adult-shorts", "Mia Rose")?.sourceKey).toBe("as:mia_rose");

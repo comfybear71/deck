@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { videoBackendTagLabel } from "@/lib/videoBackendRouting";
 import {
-  ADULT_SHORTS_MAX_REFERENCES,
   ADULT_SHORTS_MAX_SHOT_SEC,
   ADULT_SHORTS_MAX_SHOTS,
   ADULT_SHORTS_MIN_SHOT_SEC,
@@ -25,7 +24,7 @@ import {
 } from "@/lib/adultShorts";
 import { buildForceDownloadUrl } from "@/lib/clipRenders";
 import type { DeckMediaTarget } from "@/lib/deckMediaPaths";
-import { adultShortCharacterPictureTargetFor, adultShortTargetFor } from "@/lib/deckMediaTargets";
+import { adultShortTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksMemberPhoto } from "@/lib/memberPhotoBlob";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
@@ -33,17 +32,18 @@ import {
   getAdultShortsState,
   getSkidmarksSnapshot,
   patchAdultShorts,
-  readImageFileAsDataUrl,
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
+import { slugifyCharacterName } from "@/lib/characterLoras";
+import { resolveShortsRenderCharacter, shortsCastList, shortsCharacterFromCast } from "@/lib/shortsCast";
 import { setShortsBusy } from "@/lib/shortsBusy";
 import { runSunnyBanksRenderQueue } from "@/lib/sunnyBanksRenderQueue";
 import { SHORTS_EDITOR_ID } from "./ShortsEpisodeRow";
 
 /**
  * Adult shorts (2026-09-28) — the screen behind the fourth landing tile.
- * An 18+ confirm, one locked character (name, look, up to three
- * reference images), then a short shot list: each shot makes a Siray
+ * An 18+ confirm, one character from the Shorts Cast row ("Starring",
+ * her name, look and up to three pictures), then a short shot list: each shot makes a Siray
  * spicy plate from one reference, then renders a Siray Wan spicy clip
  * from that plate (or from the previous clip's last frame when chained).
  * Every paid action is a deliberate tap with its price on the button;
@@ -54,9 +54,13 @@ import { SHORTS_EDITOR_ID } from "./ShortsEpisodeRow";
  * happens. "Render N clips" runs the unfinished shots one after another,
  * with the same Stop as Sunnybank (the shot already rendering finishes,
  * later shots are never billed).
+ *
+ * The old "Character" box (name, look, three pictures, 2026-09-28) was
+ * removed on 2026-09-30: the Cast row above does that job. The episode's
+ * own copy of her stays saved as it was; plates and clips read her
+ * through her Cast card (`lib/shortsCast.ts`).
  */
 
-const REFERENCE_MAX_DIMENSION = 1600;
 /** ~40s per server poll, so this is roughly 12 minutes of waiting. */
 const MAX_PENDING_POLLS = 18;
 /** A dropped connection (Safari/Chrome "Failed to fetch") is retried this many times in a row. */
@@ -83,13 +87,16 @@ async function persistImageUrl(dataOrHttps: string, target?: DeckMediaTarget | n
 export function AdultShortsPanel() {
   const snapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const state = getAdultShortsState(snapshot);
-  const { character, shots } = state;
+  const { shots } = state;
+  // Who's in this episode, read through her Cast card (the episode's own
+  // pictures first, so each shot's "From N" still means the same picture).
+  const character = resolveShortsRenderCharacter(snapshot);
+  const cast = shortsCastList(snapshot);
+  const starringSlug = slugifyCharacterName(state.character.name);
+  const starring = state.character.name.trim() ? cast.find((c) => slugifyCharacterName(c.name) === starringSlug) ?? null : null;
   const [busy, setBusy] = useState<Busy>(null);
   const [armedRenderId, setArmedRenderId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [refError, setRefError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
   const [savingTitle, setSavingTitle] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [confirmNew, setConfirmNew] = useState(false);
@@ -158,50 +165,19 @@ export function AdultShortsPanel() {
     );
   }
 
-  const addReferences = async (files: FileList | null) => {
-    if (!files?.length) return;
-    setRefError(null);
-    setUploading(true);
-    try {
-      const room = ADULT_SHORTS_MAX_REFERENCES - character.referenceUrls.length;
-      const picked = Array.from(files).slice(0, Math.max(0, room));
-      const urls: string[] = [];
-      for (const file of picked) {
-        const dataUrl = await readImageFileAsDataUrl(file, REFERENCE_MAX_DIMENSION);
-        const refNumber = character.referenceUrls.length + urls.length + 1;
-        urls.push(await persistImageUrl(dataUrl, adultShortCharacterPictureTargetFor(refNumber)));
-      }
-      patchAdultShorts((s) => ({
-        ...s,
-        character: {
-          ...s.character,
-          referenceUrls: [...s.character.referenceUrls, ...urls].slice(0, ADULT_SHORTS_MAX_REFERENCES),
-        },
-      }));
-      flushSkidmarksSessionNow();
-    } catch (err) {
-      setRefError(err instanceof Error ? err.message : "Could not add that image.");
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
+  /** "Starring": the episode's girl comes from the Cast row. */
+  const pickStarring = (key: string) => {
+    const c = cast.find((x) => x.sourceKey === key);
+    if (!c || c.blockedReason) return;
+    patchAdultShorts((st) => ({ ...st, character: shortsCharacterFromCast(c) }));
+    flushSkidmarksSessionNow();
   };
-
-  const removeReference = (index: number) =>
-    patchAdultShorts((s) => ({
-      ...s,
-      character: { ...s.character, referenceUrls: s.character.referenceUrls.filter((_, i) => i !== index) },
-      shots: s.shots.map((x) => ({
-        ...x,
-        referenceIndex: x.referenceIndex === index ? 0 : x.referenceIndex > index ? x.referenceIndex - 1 : x.referenceIndex,
-      })),
-    }));
 
   const makePlate = async (shot: AdultShortsShot) => {
     if (busy) return;
     const ref = character.referenceUrls[shot.referenceIndex] ?? character.referenceUrls[0];
     if (!ref) {
-      setShotError(shot.id, "Add a reference image of her first.");
+      setShotError(shot.id, "Add her pictures on her card in the Cast row first.");
       return;
     }
     if (!shot.prompt.trim()) {
@@ -244,7 +220,7 @@ export function AdultShortsPanel() {
     const index = now.shots.findIndex((x) => x.id === shotId);
     const shot = now.shots[index];
     if (!shot) return false;
-    const character = now.character;
+    const character = resolveShortsRenderCharacter(getSkidmarksSnapshot());
     const startImageUrl = resolveAdultShortsStartImage(now.shots, index);
     if (!startImageUrl && !shot.sirayTaskId) {
       setShotError(
@@ -355,68 +331,6 @@ export function AdultShortsPanel() {
 
   return (
     <div id={SHORTS_EDITOR_ID} className="flex scroll-mt-4 flex-col gap-6">
-      <section className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-        <div className="flex items-center justify-between">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">Character</p>
-          <span className="rounded bg-red-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-red-200">18+</span>
-        </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <input
-            value={character.name}
-            onChange={(e) => patchAdultShorts((s) => ({ ...s, character: { ...s.character, name: e.target.value } }))}
-            placeholder="Name (made up)"
-            aria-label="Character name"
-            className="rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30"
-          />
-          <input
-            value={character.look}
-            onChange={(e) => patchAdultShorts((s) => ({ ...s, character: { ...s.character, look: e.target.value } }))}
-            placeholder="Look, e.g. wavy blonde hair, gold necklaces"
-            aria-label="Character look"
-            className="rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30"
-          />
-        </div>
-        <div className="mt-3 flex gap-2">
-          {character.referenceUrls.map((url, i) => (
-            <div key={url.slice(-40) + i} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-md border border-white/10">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={url} alt={`Reference ${i + 1}`} className="h-full w-full object-cover" />
-              <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-[10px] text-white/80">{i + 1}</span>
-              <button
-                type="button"
-                onClick={() => removeReference(i)}
-                aria-label={`Remove reference ${i + 1}`}
-                className="absolute right-1 top-1 rounded bg-black/70 px-1 text-[11px] text-white/80 hover:text-white"
-              >
-                ×
-              </button>
-            </div>
-          ))}
-          {character.referenceUrls.length < ADULT_SHORTS_MAX_REFERENCES && (
-            <button
-              type="button"
-              disabled={uploading}
-              onClick={() => fileRef.current?.click()}
-              className="flex h-20 w-20 shrink-0 items-center justify-center rounded-md border border-dashed border-white/20 text-xs text-white/50 hover:border-white/40 hover:text-white/80"
-            >
-              {uploading ? "Adding…" : "+ Image"}
-            </button>
-          )}
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={(e) => void addReferences(e.target.files)}
-          />
-        </div>
-        <p className="mt-2 text-xs text-white/40">
-          Up to three pictures of her. Crop out play buttons or watermarks first, or Siray may copy them.
-        </p>
-        {refError && <p className="mt-2 text-xs text-red-300">{refError}</p>}
-      </section>
-
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">
@@ -426,6 +340,35 @@ export function AdultShortsPanel() {
             {finishedCount}/{shots.length} clips done · plate {formatUsd(ADULT_SHORTS_STILL_COST_USD)} each
           </p>
         </div>
+        <div className="flex min-w-0 items-center gap-2 text-xs text-white/60">
+          {character.referenceUrls[0] && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={character.referenceUrls[0]} alt="" className="h-7 w-7 shrink-0 rounded-full object-cover object-top" />
+          )}
+          <label htmlFor="shorts-starring" className="shrink-0">
+            Starring
+          </label>
+          <select
+            id="shorts-starring"
+            value={starring?.sourceKey ?? ""}
+            onChange={(e) => pickStarring(e.target.value)}
+            disabled={Boolean(busy) || queueRunning}
+            className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2 py-1 text-base text-white sm:flex-none sm:text-xs"
+          >
+            {!starring && <option value="">{state.character.name.trim() || "Pick someone from the Cast row"}</option>}
+            {cast.map((c) => (
+              <option key={c.sourceKey} value={c.sourceKey} disabled={Boolean(c.blockedReason)}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        {!character.referenceUrls.length && (
+          <p className="text-xs text-white/40">
+            {character.name.trim() ? `${character.name.trim()} has no pictures yet.` : "Pick who's in this episode."} Add her
+            pictures on her card in the Cast row above.
+          </p>
+        )}
 
         {shots.map((shot, index) => {
           const isBusy = busy?.shotId === shot.id;
