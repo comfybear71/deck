@@ -117,9 +117,20 @@ describe("POST /api/skidmarks/generate-still-siray", () => {
     expect(submittedBody.images).toBeUndefined();
   });
 
-  it("rejects more than one reference image", async () => {
-    const res = await POST(postRequest({ prompt: "front wide", referenceImageDataUrls: [REFERENCE, REFERENCE] }));
+  it("rejects more than four reference images (one per person in a Shorts shot)", async () => {
+    const res = await POST(
+      postRequest({ prompt: "front wide", referenceImageDataUrls: [REFERENCE, REFERENCE, REFERENCE, REFERENCE, REFERENCE] }),
+    );
     expect(res.status).toBe(400);
+  });
+
+  it("sends every reference to Siray for a two-person shot, in order", async () => {
+    const second = REFERENCE.replace("base64,", "base64,AA");
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: "stop here" }));
+    await POST(postRequest({ prompt: "two people", referenceImageDataUrls: [REFERENCE, second] }));
+    const submittedBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(submittedBody.model).toBe("bytedance/seedream-4.5-ref2i-spicy");
+    expect(submittedBody.images).toEqual([REFERENCE, second]);
   });
 
   it("rejects a reference that isn't a real data: image URL", async () => {

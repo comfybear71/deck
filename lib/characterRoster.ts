@@ -22,7 +22,7 @@ import {
   type CharacterLoraEntry,
   type CharacterTrainingStyle,
 } from "./characterLoras";
-import { normalizeAdultShortsState } from "./adultShorts";
+import { adultShortStarring, normalizeAdultShortsState } from "./adultShorts";
 import { ROSTER_EXTRA_GROUPS, normalizeRosterExtrasState, rosterExtraSourceKey, type RosterExtraGroup } from "./rosterExtras";
 import { resolveMemberStillSleeve } from "./memberStillSleeve";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
@@ -151,7 +151,10 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
   // training pictures stay fully clothed (see the prompt builders).
   // Every character from the saved shorts too (newest first), one tile per name.
   const adult = normalizeAdultShortsState(state.adultShorts);
-  const adultChars = adult?.ageConfirmed ? [adult.character, ...adult.saved.map((sv) => sv.character)] : [];
+  // Everyone starring, in the open episode and every saved one (2026-09-30: more than one can star).
+  const adultChars = adult?.ageConfirmed
+    ? [adult.character, ...adultShortStarring(adult), ...adult.saved.flatMap((sv) => [sv.character, ...adultShortStarring(sv)])]
+    : [];
   const seenAdult = new Set<string>();
   for (const ac of adultChars) {
     if (!ac?.name.trim()) continue;

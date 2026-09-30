@@ -208,6 +208,7 @@ import {
   autoSaveAdultShortEditor,
   deleteSavedAdultShort,
   openSavedAdultShort,
+  startBlankAdultShort,
   startNewAdultShort,
   emptyAdultShortsState,
   normalizeAdultShortsState,
@@ -3366,12 +3367,12 @@ export function openAdultShortEpisode(id: string): void {
   patchAdultShorts((s) => openSavedAdultShort(s, id));
 }
 
-/** Shorts EPISODES row "+ New": a fresh shot list; the open card stays
- * as it is. The same character carries over (continuity: change her in
- * the Character box). The new card appears once a shot has something in
- * it, the same as a new Sunnybank episode. */
-export function startNewAdultShortEpisode(): void {
-  patchAdultShorts((s) => startNewAdultShort(s, true));
+/** Shorts EPISODES row "+ New" (2026-09-30): a blank workspace with just
+ * the name typed for it (no one starring, one empty shot, 18+ off). The
+ * open card stays as it is. The new card appears once a shot has
+ * something in it, the same as a new Sunnybank episode. */
+export function startNewAdultShortEpisode(title = ""): void {
+  patchAdultShorts((s) => startBlankAdultShort(s, title));
 }
 
 /** Character LoRAs — the Skye seed until the first edit. */

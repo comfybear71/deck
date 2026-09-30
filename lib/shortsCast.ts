@@ -17,9 +17,18 @@
  * Skye). Nothing here writes anything.
  */
 
-import { ADULT_SHORTS_MAX_REFERENCES, normalizeAdultShortsState, type AdultShortsCharacter } from "./adultShorts";
-import { slugifyCharacterName } from "./characterLoras";
-import { buildCharacterRoster, type RosterCharacter } from "./characterRoster";
+import {
+  ADULT_SHORTS_MAX_PEOPLE_PER_SHOT,
+  ADULT_SHORTS_MAX_REFERENCES,
+  adultShortShotPeople,
+  adultShortStarring,
+  normalizeAdultShortsState,
+  type AdultShortsCharacter,
+  type AdultShortsPerson,
+  type AdultShortsShot,
+} from "./adultShorts";
+import { emptyCharacterLorasState, slugifyCharacterName } from "./characterLoras";
+import { buildCharacterRoster, entryForRosterCharacter, type RosterCharacter } from "./characterRoster";
 import type { SkidmarksState } from "./skidmarks";
 
 const EMPTY: AdultShortsCharacter = { name: "", look: "", referenceUrls: [] };
@@ -59,12 +68,49 @@ export function shortsCharacterFromCast(c: Pick<RosterCharacter, "name" | "look"
  */
 export function resolveShortsRenderCharacter(state: SkidmarksState): AdultShortsCharacter {
   const adult = normalizeAdultShortsState(state.adultShorts);
-  const own = adult?.character ?? EMPTY;
-  const cast = adult?.ageConfirmed ? findShortsCastCharacter(state, own.name) : null;
+  const lead = resolvePerson(state, adult?.character ?? EMPTY, Boolean(adult?.ageConfirmed));
+  return { name: lead.name, look: lead.look, referenceUrls: lead.referenceUrls };
+}
+
+/** One starring person read through their Cast card (see `resolveShortsRenderCharacter`). */
+function resolvePerson(state: SkidmarksState, own: AdultShortsCharacter, confirmed: boolean): AdultShortsPerson {
+  const cast = confirmed ? findShortsCastCharacter(state, own.name) : null;
   if (!cast) return { ...own, referenceUrls: own.referenceUrls.slice() };
   const pictures = [...new Set([...own.referenceUrls, ...shortsCastPictures(cast)].filter(usablePicture))].slice(
     0,
     ADULT_SHORTS_MAX_REFERENCES,
   );
-  return { name: own.name.trim() || cast.name, look: own.look.trim() || cast.look.trim(), referenceUrls: pictures };
+  // Their own card's word (woman, man, person) goes in the prompt's adult line.
+  const card = entryForRosterCharacter((state.characterLoras ?? emptyCharacterLorasState()).characters, cast.sourceKey);
+  const subjectWord = (card?.subjectWord || cast.subjectWord || "person").trim();
+  return { name: own.name.trim() || cast.name, look: own.look.trim() || cast.look.trim(), referenceUrls: pictures, subjectWord };
+}
+
+/**
+ * Everyone starring in the open episode (2026-09-30: more than one
+ * person can star), each read through their own Cast card, in order.
+ */
+export function resolveShortsStarring(state: SkidmarksState): AdultShortsPerson[] {
+  const adult = normalizeAdultShortsState(state.adultShorts);
+  if (!adult) return [];
+  return adultShortStarring(adult).map((p) => resolvePerson(state, p, adult.ageConfirmed));
+}
+
+/** The people in one shot (its own picks, else everyone starring), at most the four one plate can use. */
+export function shortsShotPeople(starring: readonly AdultShortsPerson[], shot: Pick<AdultShortsShot, "castNames">): AdultShortsPerson[] {
+  return adultShortShotPeople(starring, shot).slice(0, ADULT_SHORTS_MAX_PEOPLE_PER_SHOT);
+}
+
+/**
+ * The pictures a shot's plate is made from: one per person in the shot,
+ * in the same order as the prompt names them. "From N" picks each
+ * person's Nth picture (their first when they have fewer).
+ */
+export function shortsPlateReferences(people: readonly AdultShortsCharacter[], referenceIndex: number): string[] {
+  const out: string[] = [];
+  for (const p of people) {
+    const url = p.referenceUrls[referenceIndex] ?? p.referenceUrls[0];
+    if (url && !out.includes(url)) out.push(url);
+  }
+  return out.slice(0, ADULT_SHORTS_MAX_PEOPLE_PER_SHOT);
 }

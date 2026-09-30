@@ -23,8 +23,9 @@ const character = { name: "Skye", look: "wavy blonde hair, gold necklaces", refe
 
 describe("adult shorts prompts", () => {
   it("always carries the adult and content locks", () => {
-    const still = buildAdultShortsStillPrompt(character, { prompt: "lounging on a couch in a band room" });
-    const motion = buildAdultShortsMotionPrompt(character, { prompt: "slow push-in, she laughs" });
+    const skye = [{ ...character, subjectWord: "woman" }];
+    const still = buildAdultShortsStillPrompt(skye, { prompt: "lounging on a couch in a band room" });
+    const motion = buildAdultShortsMotionPrompt(skye, { prompt: "slow push-in, she laughs" });
     for (const p of [still, motion]) {
       expect(p).toContain(ADULT_SHORTS_ADULT_LOCK);
       expect(p).toContain(ADULT_SHORTS_CONTENT_LOCK);
@@ -34,7 +35,7 @@ describe("adult shorts prompts", () => {
   });
 
   it("keeps the locks even when the shot prompt is huge", () => {
-    const p = buildAdultShortsStillPrompt(character, { prompt: "x".repeat(5000) });
+    const p = buildAdultShortsStillPrompt([{ ...character, subjectWord: "woman" }], { prompt: "x".repeat(5000) });
     expect(p.length).toBeLessThanOrEqual(2000);
     expect(p).toContain(ADULT_SHORTS_ADULT_LOCK);
     expect(p).toContain(ADULT_SHORTS_CONTENT_LOCK);

@@ -166,7 +166,7 @@ function pinAdultShortMediaSlug(): string {
   const episodeNumber = card
     ? (adultShortEpisodeNumbers(state.saved).get(card.id) ?? nextAdultShortEpisodeNumber(state.saved))
     : nextAdultShortEpisodeNumber(state.saved);
-  const base = adultShortEpisodeSlug(episodeNumber, card?.title || state.character.name);
+  const base = adultShortEpisodeSlug(episodeNumber, card?.title || state.title || state.character.name);
   const taken = state.saved
     .filter((x) => x.id !== state.currentSavedId)
     .map((x) => x.mediaSlug)

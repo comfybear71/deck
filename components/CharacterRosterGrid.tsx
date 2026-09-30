@@ -122,7 +122,7 @@ const LOOK_PLACEHOLDER: Record<RosterGroup, string> = {
   "music-video": "Their look, e.g. early-30s guitarist, shaved head, sleeve tattoos, black denim jacket",
   "sunny-banks": "Their look, e.g. 60s neighbour, curlers, floral dressing gown, thongs",
   skidmarks: "Their look, e.g. late-40s bloke, sunburnt, wild grey mullet, faded hi-vis shirt, stubby shorts",
-  "adult-shorts": "Their look, e.g. early-30s woman, long auburn hair, green eyes, freckles",
+  "adult-shorts": "Their look, e.g. early-30s, long auburn hair or short dark hair and a beard",
 };
 
 interface CastUpload {

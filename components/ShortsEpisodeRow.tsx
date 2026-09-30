@@ -2,11 +2,13 @@
 
 import { useState, useSyncExternalStore } from "react";
 import {
+  ADULT_SHORTS_TITLE_MAX,
   adultShortEpisodeCode,
   adultShortEpisodeNumbers,
   adultShortEpisodeView,
   describeAdultShortEpisode,
   firstAdultShortClipUrl,
+  nextAdultShortEpisodeNumber,
   type AdultShortsSaved,
 } from "@/lib/adultShorts";
 import {
@@ -32,7 +34,8 @@ export const SHORTS_EDITOR_ID = "shorts-editor";
  * shots on Siray. Tap to open, pencil to jump to the editor, bin twice to
  * delete (clip files in storage are not touched), download for a zip of
  * its finished clips (built on the server, works on iPhone Safari), and
- * "+ New" for a fresh shot list with the same character.
+ * "+ New" for a blank workspace with a name you type (2026-09-30: no one
+ * starring, one empty shot, 18+ off; its folder is `ep02-<name>`).
  *
  * Every change in the editor is saved onto the open card as it happens
  * (`autoSaveAdultShortEditor`), so opening another card never loses work.
@@ -45,6 +48,8 @@ export function ShortsEpisodeRow() {
   const busy = useSyncExternalStore(subscribeShortsBusy, getShortsBusy, () => false);
   const [notice, setNotice] = useState<EpisodeRowNotice>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  /** "+ New" asks for the short's name first; `null` = not asking. */
+  const [naming, setNaming] = useState<string | null>(null);
   const state = getAdultShortsState(snapshot);
   if (!state.ageConfirmed) return null;
 
@@ -115,11 +120,24 @@ export function ShortsEpisodeRow() {
   const startNew = () => {
     setConfirmDeleteId(null);
     if (busy) return;
-    startNewAdultShortEpisode();
-    say("Started a new episode with the same character. It gets its card once a shot has something in it.");
+    setNotice(null);
+    setNaming((n) => (n === null ? "" : null));
+  };
+
+  const createNamed = () => {
+    const name = (naming ?? "").replace(/\s+/g, " ").trim();
+    if (!name || busy) return;
+    const code = adultShortEpisodeCode(nextAdultShortEpisodeNumber(state.saved));
+    startNewAdultShortEpisode(name);
+    setNaming(null);
+    say(`Started ${code} · ${name}. Pick who's starring, then write the first shot. It gets its card once a shot has something in it.`);
+    window.setTimeout(() => {
+      document.getElementById(SHORTS_EDITOR_ID)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
   };
 
   return (
+    <>
     <EpisodeCardsRow
       cards={episodes.map((entry) => {
         const view = adultShortEpisodeView(state, entry);
@@ -141,5 +159,35 @@ export function ShortsEpisodeRow() {
       onDownload={download}
       onNew={startNew}
     />
+    {naming !== null && (
+      <form
+        className="-mt-2 flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          createNamed();
+        }}
+      >
+        <input
+          autoFocus
+          value={naming}
+          onChange={(e) => setNaming(e.target.value)}
+          maxLength={ADULT_SHORTS_TITLE_MAX}
+          placeholder="Name this short, e.g. Brother vs Rambo"
+          aria-label="New short's name"
+          className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-1.5 text-base text-white placeholder:text-white/30 sm:text-sm"
+        />
+        <button
+          type="submit"
+          disabled={!naming.trim() || busy}
+          className="rounded-md bg-sky-500/80 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-40"
+        >
+          Start
+        </button>
+        <button type="button" onClick={() => setNaming(null)} className="rounded-md px-2 py-1.5 text-xs text-white/50 hover:text-white">
+          Cancel
+        </button>
+      </form>
+    )}
+    </>
   );
 }
