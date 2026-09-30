@@ -7,6 +7,7 @@ vi.mock("@vercel/blob", () => ({
 }));
 
 import { estimateMp3DurationSec } from "@/lib/mp3Slice";
+import { SUNNY_BANKS_CAST } from "@/lib/sunnyBanks";
 import { POST } from "./route";
 
 /** Same real-encoder fixture helper as `lib/mp3Slice.test.ts` and
@@ -53,13 +54,30 @@ function postRequest(body: unknown): Request {
   });
 }
 
+/** A character's Cast card main picture on Deck's Blob (2026-10-01: the
+ * only picture a Sunnybank character ever has). */
+function castPictureUrl(name: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return `https://abc123.public.blob.vercel-storage.com/deck/sunnybank/characters/${slug}/${slug}-reference.jpg`;
+}
+
+/** What the panel sends: every built-in row carries its Cast card picture. */
+function withCastCard(body: Record<string, unknown>): Record<string, unknown> {
+  if ("characterCard" in body) return body;
+  const name = String(body.characterName ?? "");
+  const lock = SUNNY_BANKS_CAST[name];
+  return lock ? { ...body, characterCard: { name, look: lock.look, pictureUrl: castPictureUrl(name) } } : body;
+}
+
 function speakBeatRequest(overrides: Record<string, unknown> = {}): Request {
-  return postRequest({
-    characterName: "Shazza",
-    line: "We haven't got any shade, Dazza.",
-    startImageDataUrl: TINY_DATA_URL,
-    ...overrides,
-  });
+  return postRequest(
+    withCastCard({
+      characterName: "Shazza",
+      line: "We haven't got any shade, Dazza.",
+      startImageDataUrl: TINY_DATA_URL,
+      ...overrides,
+    })
+  );
 }
 
 describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
@@ -225,8 +243,12 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(fetchMock.mock.calls.length).toBe(1);
   });
 
+  /** The Cast card picture fetch from Blob, then the xAI edit. */
   function mockXaiComposite(dataUrl = TINY_DATA_URL) {
     const b64 = dataUrl.split(",")[1] ?? "";
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]), { status: 200, headers: { "Content-Type": "image/jpeg" } })
+    );
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ data: [{ b64_json: b64, mime_type: "image/png" }] }), {
         status: 200,
@@ -533,12 +555,14 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
   });
 
   function holdBeatRequest(overrides: Record<string, unknown> = {}): Request {
-    return postRequest({
-      kind: "hold",
-      characterName: "Shazza",
-      startImageDataUrl: TINY_DATA_URL,
-      ...overrides,
-    });
+    return postRequest(
+      withCastCard({
+        kind: "hold",
+        characterName: "Shazza",
+        startImageDataUrl: TINY_DATA_URL,
+        ...overrides,
+      })
+    );
   }
 
   it("hold: skips ElevenLabs, uses the gold hold prompt, and still runs the LTX pipeline", async () => {
@@ -583,6 +607,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
   });
 
   it("hold: does not require a locked voice (Hans has none) and does not require a line", async () => {
+    mockXaiComposite();
     mockUploads();
     mockSubmit();
     mockJobPoll();
@@ -628,7 +653,7 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(String(fetchMock.mock.calls[0][0])).not.toContain("elevenlabs.io");
   });
 
-  it("hold: xAI edits map startImageDataUrl to Image 1 (location) and Shazza hero to Image 2, then LTX gets the composed still", async () => {
+  it("hold: xAI edits map startImageDataUrl to Image 1 (location) and Shazza's Cast card picture to Image 2, then LTX gets the composed still", async () => {
     mockXaiComposite();
     mockUploads();
     mockSubmit();
@@ -660,6 +685,68 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(xaiBody.prompt).toContain("Office Storefront");
     expect(xaiBody.prompt).toContain("Shazza");
     expect(xaiBody.prompt).not.toContain("shazza-reference");
+    // Image 2 came from her Cast card picture on Blob, fetched first.
+    expect(String(fetchMock.mock.calls[0][0])).toBe(castPictureUrl("Shazza"));
+  });
+
+  it("EP02 Act I row 16 (2026-10-01): a Dazza silent hold on Grok sends his Cast card picture and the [Action:] text to the start still", async () => {
+    vi.stubEnv("COMFY_CLOUD_API_KEY", "");
+    mockXaiComposite();
+    const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "Content-Type": "application/json" } });
+    fetchMock
+      .mockResolvedValueOnce(json({ request_id: "grok-16" }))
+      .mockResolvedValueOnce(json({ status: "done", video: { url: "https://vidgen.x.ai/v.mp4", duration: 5, respect_moderation: true } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([7]), { status: 200 }));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/row16.mp4" });
+    const action =
+      "Dazza ambles across the red dirt towards the site office booth, beer can in hand, thongs flapping. Full figure, side on";
+
+    const res = await POST(
+      holdBeatRequest({
+        characterName: "Dazza",
+        videoBackend: "grok",
+        locationId: "office_booth",
+        locationLabel: "Site Office Booth",
+        action,
+      })
+    );
+    expect(res.status).toBe(200);
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls[0]).toBe(castPictureUrl("Dazza"));
+    expect(urls.some((url) => url.includes("dazza-hero"))).toBe(false);
+    const xaiCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/v1/images/edits"));
+    const xaiBody = JSON.parse(xaiCall![1].body as string) as { prompt: string; images: { url: string }[] };
+    expect(xaiBody.images[1].url).toMatch(/^data:image\/jpeg;base64,/);
+    expect(xaiBody.prompt).toContain(`This shot: ${action}.`);
+    expect(xaiBody.prompt).toContain("Held objects: only what this shot's text below names.");
+    expect(xaiBody.prompt).not.toContain("Keep any held prop already visible");
+    const start = fetchMock.mock.calls.find(([url]) => String(url) === "https://api.x.ai/v1/videos/generations");
+    const startBody = JSON.parse(start![1].body as string);
+    expect(startBody.prompt).toContain(action);
+    expect(startBody.prompt).toContain("nobody talks");
+  });
+
+  it("no Cast card picture (2026-10-01): refused with missing_cast_picture before anything is billed, never the bare location", async () => {
+    for (const kind of ["hold", "speak"] as const) {
+      fetchMock.mockClear();
+      const res = await POST(
+        kind === "hold"
+          ? holdBeatRequest({ characterName: "Dazza", characterCard: undefined })
+          : speakBeatRequest({ characterName: "Dazza", characterCard: undefined })
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("missing_cast_picture");
+      expect(body.error).toContain("Dazza has no Cast card picture");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(putMock).not.toHaveBeenCalled();
+    }
+    // A picture that isn't on Deck's Blob (a repo path, another host) counts as none.
+    for (const pictureUrl of ["/skidmarks/sunnybanks/dazza-hero.jpg", "https://evil.example/dazza.jpg"]) {
+      const res = await POST(holdBeatRequest({ characterName: "Dazza", characterCard: { name: "Dazza", look: "", pictureUrl } }));
+      expect((await res.json()).code).toBe("missing_cast_picture");
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("hold: Crowd cutaway skips overlay and gold Hold, uses [Action:] on the location still", async () => {

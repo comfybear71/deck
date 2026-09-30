@@ -17,6 +17,7 @@ import path from "node:path";
 import {
   buildSunnyBanksCompositePlatePrompt,
   getSunnyBanksLocation,
+  missingCastPictureMessage,
   resolveSunnyBanksStartImage,
   type SunnyBanksCharacterLock,
   type SunnyBanksLocationLock,
@@ -69,9 +70,10 @@ function classifyXaiFailure(upstreamStatus: number): { httpStatus: number; code:
   return { httpStatus: 502, code: "upstream_error" };
 }
 
-/** Read a locked Sunny Banks public still as a data URL. Rejects any
+/** Read a built-in location's repo picture as a data URL. Rejects any
  * path outside `public/skidmarks/sunnybanks/` so a body field cannot
- * point this at an arbitrary file. */
+ * point this at an arbitrary file. Locations only: a character's picture
+ * never comes from the repo (2026-10-01). */
 export async function readSunnyBanksPublicImageDataUrl(publicPath: string): Promise<string | null> {
   if (!publicPath.startsWith(SUNNYBANKS_PUBLIC_PREFIX)) return null;
   if (publicPath.includes("..")) return null;
@@ -84,30 +86,33 @@ export async function readSunnyBanksPublicImageDataUrl(publicPath: string): Prom
   }
 }
 
-/** Biggest character picture fetched from Blob for the overlay. */
-const MAX_BLOB_HERO_BYTES = 8 * 1024 * 1024;
+/** Biggest picture fetched from Blob for the overlay. */
+const MAX_BLOB_PICTURE_BYTES = 8 * 1024 * 1024;
 
 /**
- * A character's picture as a data URL for the overlay: a locked public
- * still (above), or (2026-09-30) a picture from Deck's own Vercel Blob
- * store, for a character added on the Sunnybank bar or Hans's added
- * face. Only Deck's Blob host is ever fetched (https, no credentials, no
- * port, `isAllowedTrainingImageUrl`); anything else is `null`.
+ * A picture in Deck's own Vercel Blob store, as a data URL. Only Deck's
+ * Blob host is ever fetched (https, no credentials, no port,
+ * `isAllowedTrainingImageUrl`); anything else is `null`.
  */
-export async function readSunnyBanksHeroImageDataUrl(src: string): Promise<string | null> {
-  if (src.startsWith("/")) return readSunnyBanksPublicImageDataUrl(src);
-  if (src.startsWith("data:") || !isAllowedTrainingImageUrl(src)) return null;
+export async function readSunnyBanksBlobPictureDataUrl(src: string): Promise<string | null> {
+  if (!/^https:\/\//i.test(src) || !isAllowedTrainingImageUrl(src)) return null;
   try {
     const res = await fetch(src, { signal: AbortSignal.timeout(20_000) });
     if (!res.ok) return null;
     const type = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
     if (!/^image\/(jpeg|jpg|png|webp)$/.test(type)) return null;
     const bytes = Buffer.from(await res.arrayBuffer());
-    if (bytes.length === 0 || bytes.length > MAX_BLOB_HERO_BYTES) return null;
+    if (bytes.length === 0 || bytes.length > MAX_BLOB_PICTURE_BYTES) return null;
     return `data:${type};base64,${bytes.toString("base64")}`;
   } catch {
     return null;
   }
+}
+
+/** A location's picture: a built-in's repo file or a Deck Blob picture. */
+async function readSunnyBanksLocationImageDataUrl(src: string): Promise<string | null> {
+  if (src.startsWith("/")) return readSunnyBanksPublicImageDataUrl(src);
+  return readSunnyBanksBlobPictureDataUrl(src);
 }
 
 /**
@@ -126,13 +131,14 @@ export function resolveLocationLock(locationId: string, locationLabel?: string):
 }
 
 /**
- * Overlay the locked character hero onto the location canvas.
- * `locationDataUrl` is Image 1 (`startImageDataUrl` from the panel).
- * Image 2 is `resolveSunnyBanksStartImage` (hero card, never the sheet).
- * Returns the composed still that LTX node `269` should animate.
+ * Overlay the character's Cast card main picture onto the location
+ * canvas. `locationDataUrl` is Image 1 (`startImageDataUrl` from the
+ * panel). Image 2 is `resolveSunnyBanksStartImage`: the Cast card
+ * picture, fetched from Deck's Blob, never a repo file. Returns the
+ * composed still the video engine animates.
  *
- * A character with no plate (Hans today) is a skip, not a guess —
- * callers keep the location canvas as-is.
+ * No Cast card picture is an error (`missing_cast_picture`), never a
+ * quiet skip onto the bare location (2026-10-01).
  */
 export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   locationDataUrl: string;
@@ -149,10 +155,18 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
    * the clip, which is what morphed/duplicated. `undefined`/empty
    * leaves the prompt byte-identical to before this field existed. */
   appearanceOverride?: string;
-}): Promise<SunnyBanksCompositeOutcome | { ok: true; dataUrl: string; skipped: true }> {
-  const heroPath = resolveSunnyBanksStartImage(opts.character);
-  if (!heroPath) {
-    return { ok: true, dataUrl: opts.locationDataUrl, skipped: true };
+  /** The shot's `[Action: …]` text (2026-10-01, silent holds), so the
+   * start still shows the pose and what's held that the shot describes. */
+  shotAction?: string;
+}): Promise<SunnyBanksCompositeOutcome> {
+  const picture = resolveSunnyBanksStartImage(opts.character);
+  if (!picture) {
+    return {
+      ok: false,
+      status: 400,
+      code: "missing_cast_picture",
+      error: missingCastPictureMessage(opts.character.name),
+    };
   }
 
   const resolvedKey = resolveXaiApiKey();
@@ -166,18 +180,18 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   }
   const apiKey = resolvedKey.key;
 
-  const heroDataUrl = await readSunnyBanksHeroImageDataUrl(heroPath);
-  if (!heroDataUrl) {
+  const pictureDataUrl = await readSunnyBanksBlobPictureDataUrl(picture);
+  if (!pictureDataUrl) {
     return {
       ok: false,
       status: 400,
       code: "invalid_request",
-      error: `Could not load ${opts.character.name}'s hero still (${heroPath}).`,
+      error: `Could not load ${opts.character.name}'s Cast card picture (${picture}).`,
     };
   }
 
   const location = resolveLocationLock(opts.locationId ?? "", opts.locationLabel);
-  const prompt = buildSunnyBanksCompositePlatePrompt(opts.character, location, opts.appearanceOverride);
+  const prompt = buildSunnyBanksCompositePlatePrompt(opts.character, location, opts.appearanceOverride, opts.shotAction);
 
   // Same two-image edits payload Studio's generateFaceImage sends
   // (`images: [{ url, type: "image_url" }, …]` — location then person).
@@ -187,7 +201,7 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
     response_format: "b64_json",
     images: [
       { url: opts.locationDataUrl, type: "image_url" },
-      { url: heroDataUrl, type: "image_url" },
+      { url: pictureDataUrl, type: "image_url" },
     ],
   };
 
@@ -256,5 +270,5 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
 export async function resolveBeatStartImage(startImageDataUrl: unknown, locationImage: unknown): Promise<string> {
   if (typeof startImageDataUrl === "string" && startImageDataUrl) return startImageDataUrl;
   if (typeof locationImage !== "string" || !locationImage.trim()) return "";
-  return (await readSunnyBanksHeroImageDataUrl(locationImage.trim())) ?? "";
+  return (await readSunnyBanksLocationImageDataUrl(locationImage.trim())) ?? "";
 }

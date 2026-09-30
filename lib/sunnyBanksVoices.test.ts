@@ -8,6 +8,7 @@ import {
   resolveSunnyBanksSpeaker,
   sunnyBanksSpeakerList,
   sunnyBanksSpeakerNames,
+  sunnyBanksCastPictures,
   sunnyBanksSpeakerRequestExtras,
 } from "./sunnyBanksVoices";
 
@@ -21,9 +22,24 @@ const HANS_PIC = "https://abc123.public.blob.vercel-storage.com/deck/sunnybank/c
 const VOICE_A = "21m00Tcm4TlvDq8ikWAM";
 const VOICE_B = "AZnzlk1XvdvUeBnXmlld";
 
-function card(name: string, sourceKey: string, voiceId?: string) {
-  return { id: `clora_${name.toLowerCase()}`, name, slug: name.toLowerCase(), sourceKey, status: "idle", trainingImageUrls: [], version: 1, createdAt: "2026-09-30T00:00:00.000Z", ...(voiceId ? { voiceId } : {}) };
+function card(name: string, sourceKey: string, voiceId?: string, pictures: { referenceUrl?: string | null; trainingImageUrls?: string[]; loraFile?: string } = {}) {
+  return {
+    id: `clora_${name.toLowerCase()}`,
+    name,
+    slug: name.toLowerCase(),
+    sourceKey,
+    status: "idle",
+    trainingImageUrls: [],
+    version: 1,
+    createdAt: "2026-09-30T00:00:00.000Z",
+    ...(voiceId ? { voiceId } : {}),
+    ...pictures,
+  };
 }
+
+const BLOB = "https://abc123.public.blob.vercel-storage.com/deck/sunnybank/characters";
+const DAZZA_REF = `${BLOB}/dazza/dazza-reference.jpg`;
+const DAZZA_PLATES = Array.from({ length: 15 }, (_, i) => `${BLOB}/dazza/plates/dazza-plate-${String(i + 1).padStart(2, "0")}.jpg`);
 
 function state(cards: unknown[], extras: unknown[] = []): SkidmarksState {
   return {
@@ -56,23 +72,55 @@ describe("normalizeElevenLabsVoiceId", () => {
 });
 
 describe("Sunny Banks speakers from cards", () => {
-  it("Hans speaks with his card's voice and uses the added face's picture", () => {
+  it("Hans speaks with his card's voice and uses his Cast card picture", () => {
     expect(resolveSunnyBanksSpeaker("Hans", state([]))?.voiceId).toBeFalsy();
     const s = state([card("Hans", "sbx:chr_hans", VOICE_A)], [hansExtra]);
     const hans = resolveSunnyBanksSpeaker("hans", s)!;
-    expect(hans).toMatchObject({ name: SUNNY_BANKS_CAST.Hans?.name ?? "Hans", voiceId: VOICE_A, heroImage: HANS_PIC });
-    expect(sunnyBanksSpeakerRequestExtras(hans)).toEqual({ voiceId: VOICE_A, characterCard: { name: hans.name, look: hans.look, heroImageUrl: HANS_PIC } });
+    expect(hans).toMatchObject({ name: SUNNY_BANKS_CAST.Hans?.name ?? "Hans", voiceId: VOICE_A, castPicture: HANS_PIC });
+    expect(sunnyBanksSpeakerRequestExtras(hans)).toEqual({ voiceId: VOICE_A, characterCard: { name: hans.name, look: hans.look, pictureUrl: HANS_PIC } });
   });
 
-  it("a built-in's card voice wins over the hard-coded one; no card, no change", () => {
+  it("a built-in's card voice wins over the hard-coded one; no card, no voice change and no picture", () => {
     const shazza = SUNNY_BANKS_CAST.Shazza;
-    expect(resolveSunnyBanksSpeaker("Shazza", state([]))).toBe(shazza);
+    expect(resolveSunnyBanksSpeaker("Shazza", state([]))).toEqual(shazza);
     const s = state([card("Shazza", "sb:shazza", VOICE_B)]);
     const lock = resolveSunnyBanksSpeaker("Shazza", s)!;
     expect(lock.voiceId).toBe(VOICE_B);
-    expect(lock.heroImage).toBe(shazza.heroImage);
+    expect(lock.castPicture).toBeUndefined();
     expect(sunnyBanksSpeakerRequestExtras(lock)).toEqual({ voiceId: VOICE_B });
     expect(sunnyBanksSpeakerRequestExtras(shazza)).toEqual({});
+  });
+
+  it("EP02 Act I row 16 (2026-10-01): Dazza's picture is his Cast card's, even with no voice on the card", () => {
+    const s = state([card("Dazza", "sb:dazza", undefined, { referenceUrl: DAZZA_REF, trainingImageUrls: DAZZA_PLATES, loraFile: "dazza_v1.safetensors" })]);
+    expect(sunnyBanksCastPictures("Dazza", s)).toEqual({ main: DAZZA_REF, training: DAZZA_PLATES, loraFile: "dazza_v1.safetensors" });
+    const dazza = resolveSunnyBanksSpeaker("Dazza", s)!;
+    expect(dazza.castPicture).toBe(DAZZA_REF);
+    expect(dazza.voiceId).toBe(SUNNY_BANKS_CAST.Dazza.voiceId);
+    // The built-in's voice isn't resent; the picture always is.
+    expect(sunnyBanksSpeakerRequestExtras(dazza)).toEqual({ characterCard: { name: "Dazza", look: SUNNY_BANKS_CAST.Dazza.look, pictureUrl: DAZZA_REF } });
+  });
+
+  it("Cast card pictures only: the main picture, else the first training picture; never a repo path or another host", () => {
+    const onlyPlates = state([card("Nan", "sb:nan", undefined, { referenceUrl: null, trainingImageUrls: DAZZA_PLATES })]);
+    expect(sunnyBanksCastPictures("Nan", onlyPlates).main).toBe(DAZZA_PLATES[0]);
+    const repoPath = state([card("Nan", "sb:nan", undefined, { referenceUrl: "/skidmarks/sunnybanks/nan-hero.jpg" })]);
+    expect(sunnyBanksCastPictures("Nan", repoPath).main).toBeNull();
+    expect(resolveSunnyBanksSpeaker("Nan", repoPath)?.castPicture).toBeUndefined();
+    const otherHost = state([card("Nan", "sb:nan", undefined, { referenceUrl: "https://evil.example/nan.jpg" })]);
+    expect(sunnyBanksCastPictures("Nan", otherHost).main).toBeNull();
+    // No card at all: no picture (the row shows a red note).
+    expect(sunnyBanksCastPictures("Nuggets", state([]))).toEqual({ main: null, training: [], loraFile: null });
+    // A Shorts card with the same name is not a Sunny Banks picture.
+    expect(sunnyBanksCastPictures("Nan", state([card("Nan", "asx:nan", undefined, { referenceUrl: DAZZA_REF })])).main).toBeNull();
+  });
+
+  it("a built-in's own card (sb:) wins over an added face with the same name", () => {
+    const s = state(
+      [card("Hans", "sb:hans", undefined, { referenceUrl: DAZZA_REF }), card("Hans", "sbx:chr_hans", VOICE_A)],
+      [hansExtra]
+    );
+    expect(sunnyBanksCastPictures("Hans", s).main).toBe(DAZZA_REF);
   });
 
   it("an added character becomes a speaker once voiced, and not before", () => {
@@ -82,7 +130,7 @@ describe("Sunny Banks speakers from cards", () => {
 
     const voiced = state([card("Kev", "sbx:chr_kev", VOICE_A)], [kevExtra]);
     const kev = resolveSunnyBanksSpeaker("kev", voiced)!;
-    expect(kev).toMatchObject({ name: "Kev", voiceId: VOICE_A, look: "as in their picture", heroImage: kevExtra.pictureUrls[0] });
+    expect(kev).toMatchObject({ name: "Kev", voiceId: VOICE_A, look: "as in their picture", castPicture: kevExtra.pictureUrls[0] });
     expect(sunnyBanksSpeakerNames(voiced)).toContain("Kev");
     expect(sunnyBanksSpeakerList(voiced).map((c) => c.name)).toContain("Kev");
     // Longest first, so "Ranger Bazza" beats "Bazza"-style prefixes.
@@ -95,17 +143,20 @@ describe("Sunny Banks speakers from cards", () => {
 
 describe("speak-beat route helpers", () => {
   it("only takes Deck Blob pictures from the request", () => {
-    expect(parseSunnyBanksCharacterCard({ name: " Kev ", look: "x", heroImageUrl: HANS_PIC })).toEqual({ name: "Kev", look: "x", heroImageUrl: HANS_PIC });
-    expect(parseSunnyBanksCharacterCard({ name: "Kev", heroImageUrl: "https://evil.example/a.jpg" })).toEqual({ name: "Kev", look: "" });
-    expect(parseSunnyBanksCharacterCard({ name: "Kev", heroImageUrl: "data:image/png;base64,AAAA" })).toEqual({ name: "Kev", look: "" });
+    expect(parseSunnyBanksCharacterCard({ name: " Kev ", look: "x", pictureUrl: HANS_PIC })).toEqual({ name: "Kev", look: "x", pictureUrl: HANS_PIC });
+    expect(parseSunnyBanksCharacterCard({ name: "Kev", pictureUrl: "https://evil.example/a.jpg" })).toEqual({ name: "Kev", look: "" });
+    expect(parseSunnyBanksCharacterCard({ name: "Kev", pictureUrl: "data:image/png;base64,AAAA" })).toEqual({ name: "Kev", look: "" });
+    expect(parseSunnyBanksCharacterCard({ name: "Kev", pictureUrl: "/skidmarks/sunnybanks/dazza-hero.jpg" })).toEqual({ name: "Kev", look: "" });
     expect(parseSunnyBanksCharacterCard({ name: "" })).toBeNull();
     expect(parseSunnyBanksCharacterCard("Kev")).toBeNull();
   });
 
-  it("resolves the built-in, Hans with his card picture, and an added character only with a voice", () => {
-    expect(resolveSpeakBeatCharacter("Shazza", null, null)).toBe(SUNNY_BANKS_CAST.Shazza);
-    const hans = resolveSpeakBeatCharacter("Hans", { name: "Hans", look: "", heroImageUrl: HANS_PIC }, VOICE_A);
-    expect(hans?.heroImage).toBe(HANS_PIC);
+  it("resolves the built-in with only the card's picture, and an added character only with a voice", () => {
+    expect(resolveSpeakBeatCharacter("Shazza", null, null)).toEqual(SUNNY_BANKS_CAST.Shazza);
+    expect(resolveSpeakBeatCharacter("Shazza", null, null)?.castPicture).toBeUndefined();
+    expect(resolveSpeakBeatCharacter("Dazza", { name: "Dazza", look: "", pictureUrl: DAZZA_REF }, null)).toEqual({ ...SUNNY_BANKS_CAST.Dazza, castPicture: DAZZA_REF });
+    const hans = resolveSpeakBeatCharacter("Hans", { name: "Hans", look: "", pictureUrl: HANS_PIC }, VOICE_A);
+    expect(hans?.castPicture).toBe(HANS_PIC);
     expect(resolveSpeakBeatCharacter("Kev", { name: "Kev", look: "" }, null)).toBeUndefined();
     expect(resolveSpeakBeatCharacter("Kev", { name: "Kev", look: "" }, VOICE_A)).toMatchObject({ name: "Kev", voiceId: VOICE_A, look: "as in their picture" });
     expect(resolveSpeakBeatCharacter("Kev", { name: "Other", look: "" }, VOICE_A)).toBeUndefined();

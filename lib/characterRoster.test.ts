@@ -46,10 +46,12 @@ describe("buildCharacterRoster", () => {
     expect(r.skidmarks).toEqual([]);
   });
 
-  it("uses the single-figure hero crop for Sunny Banks, not the group sheet", () => {
-    const shazza = buildCharacterRoster(stateWith())["sunny-banks"].find((c) => c.name === "Shazza")!;
-    expect(shazza.thumbUrl).toBe("/skidmarks/sunnybanks/shazza-hero.jpg");
-    expect(shazza.style).toBe("cartoon");
+  it("Sunny Banks regulars have no built-in picture any more: only their Cast card's (2026-10-01)", () => {
+    for (const c of buildCharacterRoster(stateWith())["sunny-banks"]) {
+      expect(c.thumbUrl).toBeNull();
+      expect(c.extraPictureUrls).toEqual([]);
+      expect(c.style).toBe("cartoon");
+    }
   });
 
   it("leaves the whole Sunnybank cast open, Nuggets included (a grown adult)", () => {
@@ -170,9 +172,9 @@ describe("cartoon reference picture: their own upload, and Redo starts from it",
     expect(uploadedCartoonReference(hansTile, hansTile.style)).toBe(upload);
   });
 
-  it("keeps the clean redraw for a regular's hand-cut hero still and for other styles", () => {
+  it("no upload means no reference to copy, for a regular and for other styles", () => {
     const shazza = buildCharacterRoster(stateWith())["sunny-banks"].find((c) => c.name === "Shazza")!;
-    expect(shazza.thumbUrl).toMatch(/^\/skidmarks\/sunnybanks\//);
+    expect(shazza.thumbUrl).toBeNull();
     expect(uploadedCartoonReference(shazza, shazza.style)).toBeNull();
     expect(uploadedCartoonReference({ thumbUrl: upload, extraPictureUrls: [] }, "photo")).toBeNull();
     expect(uploadedCartoonReference({ thumbUrl: upload, extraPictureUrls: [] }, "render3d")).toBeNull();
@@ -501,11 +503,20 @@ describe("Redo rounds (one-button faces, 2026-09-29)", () => {
 });
 
 describe("Sunny Banks not ready", () => {
-  it("regulars with a voice and a start picture are ready", () => {
-    expect(sunnyBanksNotReadyReason(SUNNY_BANKS_CAST.Shazza)).toBeNull();
+  const pic = "https://abc.public.blob.vercel-storage.com/deck/sunnybank/characters/shazza/shazza-reference.jpg";
+  it("regulars with a voice and a Cast card picture are ready", () => {
+    expect(sunnyBanksNotReadyReason({ ...SUNNY_BANKS_CAST.Shazza, castPicture: pic })).toBeNull();
+  });
+  it("a regular with no Cast card picture says so (2026-10-01: no built-in picture to fall back on)", () => {
+    expect(sunnyBanksNotReadyReason(SUNNY_BANKS_CAST.Shazza)).toBe("Needs a Cast card picture before an episode can use them.");
+    const card = { ...buildCharacterLoraEntry("Shazza", [], new Date(), { sourceKey: "sb:shazza", trainingStyle: "cartoon" }), referenceUrl: pic };
+    const tile = buildCharacterRoster(stateWith({ characterLoras: { characters: [card] } }))["sunny-banks"].find((c) => c.name === "Shazza")!;
+    expect(tile.notReadyReason).toBeNull();
   });
   it("a character with no voice says so", () => {
-    expect(sunnyBanksNotReadyReason({ ...SUNNY_BANKS_CAST.Shazza, voiceId: undefined })).toMatch(/a voice/);
+    expect(sunnyBanksNotReadyReason({ ...SUNNY_BANKS_CAST.Shazza, voiceId: undefined, castPicture: pic })).toBe(
+      "Needs a voice before an episode can use them."
+    );
   });
 });
 

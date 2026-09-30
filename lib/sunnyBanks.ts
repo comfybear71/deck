@@ -13,11 +13,18 @@
  * … beers, coins, or pink hair dryer depending on the plate"), and EP01
  * rendered Dazza as a coin with his face on it — the prompt drew the
  * prop as the subject. Each look is now one clear description of the
- * character's hero picture (`public/skidmarks/sunnybanks/*-hero.jpg`,
- * Unit 4S's single-figure plate, Hans's Blob picture), with a prop kept
- * only when it's in that picture, phrased as held or worn. The Speak
- * and Hold template shapes, style lock and global lock below are still
- * the verbatim gold.
+ * character, with a prop kept only when it's part of them, phrased as
+ * held or worn. The Speak and Hold template shapes, style lock and
+ * global lock below are still the verbatim gold.
+ *
+ * **Pictures come only from the Cast card (2026-10-01, Stuart):** this
+ * table has no pictures at all any more. The old repo stills
+ * (`public/skidmarks/sunnybanks/*-hero.jpg` / `*-reference.jpg`) are
+ * deleted: EP02 Act I row 16 put the old Dazza hero, holding a rocket
+ * launcher, into a Grok silent hold even though his Cast card pictures
+ * all show empty hands. Every render now uses the character's Cast card
+ * main picture (`castPicture`, filled in by `lib/sunnyBanksVoices.ts`),
+ * and a character without one shows a red hint and doesn't render.
  *
  * **This module is prompt/voice *gold*, not a reimplementation of the
  * old Skidmarks Studio's Sunny Banks pipeline** (`comfybear71/skidmarks`,
@@ -69,10 +76,10 @@ export interface SunnyBanksCharacterLock {
    * plate. */
   name: string;
   /** Look lock — inserted directly after the character's name in the
-   * speaking/hold plate templates below. One clear description of their
-   * hero picture (2026-09-30): no "either / or / depending on the plate"
-   * wording and no loose props — a prop appears only when it's in the
-   * hero picture, phrased as held or worn ("cigarette in her mouth"),
+   * speaking/hold plate templates below. One clear description of the
+   * character (2026-09-30): no "either / or / depending on the plate"
+   * wording and no loose props — a prop appears only when it's part of
+   * the character, phrased as held or worn ("cigarette in her mouth"),
    * never as a bare noun a prompt could draw as the subject (EP01's
    * coin-faced Dazza). A per-shot change goes in `[Character Name: …]`,
    * never here. */
@@ -86,33 +93,12 @@ export interface SunnyBanksCharacterLock {
    * have one; a caller must treat that as a real, named gap rather than
    * silently picking a stand-in voice for him. */
   voiceId?: string;
-  /** This character's real reference plate — a static asset shipped
-   * with the app (`public/skidmarks/sunnybanks/...`), same convention
-   * as Skidmarks' own `jack-ash-reference.jpg`: a real photo/plate
-   * Stuart provided, not picked at runtime, so a fresh session already
-   * has an identity reference without him having to upload one first.
-   * Still resolves through the normal reference-resolution path
-   * (`lib/plateGeneration.ts`'s `resolvePlateReferenceDataUrl`) before
-   * ever reaching xAI/Comfy — same as any other reference image in this
-   * app. `undefined` means no plate yet; a caller (the eventual cast-
-   * strip UI) must offer Stuart an upload for that character rather
-   * than rendering with no identity reference at all.
-   *
-   * For five of the six regulars this is a **turnaround sheet** (several
-   * poses on one canvas — live-QA, 2026-09-17: sending that sheet to
-   * LTX as the Hold/Speak first frame animated a grid of Shazzas). Keep
-   * it as the character bible; the start still LTX actually animates is
-   * `heroImage` when set. Unit 4S's plate is already a single figure, so
-   * it has no separate hero file. */
-  referenceImage?: string;
-  /** Single-subject start still — one cropped cell from `referenceImage`,
-   * minted once into `public/skidmarks/sunnybanks/*-hero.jpg`, never a
-   * runtime canvas crop (iPhone Safari first; magic bounding boxes in
-   * the panel are how this would silently drift the next time a sheet is
-   * replaced). Hold and Speak, and the cast thumbnails, use this so what
-   * Stuart sees is what LTX holds. `undefined` falls back to
-   * `referenceImage` via `resolveSunnyBanksStartImage`. */
-  heroImage?: string;
+  /** The character's Cast card main picture (Deck's Blob), filled in at
+   * run time from their card by `lib/sunnyBanksVoices.ts` — never set in
+   * `SUNNY_BANKS_CAST` (2026-10-01: no built-in or repo pictures).
+   * `undefined` = no Cast card picture yet: the row shows a red hint and
+   * doesn't render, never a quiet fallback. */
+  castPicture?: string;
   /** `true` for a one-episode special guest (Hans, 2026-09-15's real
    * correction) rather than one of the six locked series regulars.
    * Never shown in an always-on "the cast" strip — a guest only ever
@@ -151,22 +137,15 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
       "middle-aged woman, huge curly blonde hair, gold hoop earrings, cigarette in her mouth, arms folded, " +
       "leopard-print singlet top, frayed denim shorts",
     voiceId: "Vuun8WKmo2MZSUXgLPGw",
-    referenceImage: "/skidmarks/sunnybanks/shazza-reference.jpg",
-    // Top row, 2nd body from left on the 1248×832 sheet (arms folded,
-    // cigarette — the gold look). Extract { left: 358, top: 74, width: 258, height: 400 }.
-    heroImage: "/skidmarks/sunnybanks/shazza-hero.jpg",
   },
   Dazza: {
     name: "Dazza",
-    // One look, matching dazza-hero.jpg (2026-09-30). The old lock listed
+    // One look (2026-09-30). The old lock listed
     // "beers, coins, or pink hair dryer" and EP01 drew him as a coin.
     look:
       "skinny adult bloke, wild spiky blonde hair, bulging eyes, gap-toothed grin, tattooed forearm, " +
       "stained faded blue singlet, torn brown shorts, bare feet",
     voiceId: "Kn29eGLhsovCLwKvKi2q",
-    referenceImage: "/skidmarks/sunnybanks/dazza-reference.jpg",
-    // Front-left full figure on the 1168×784 sheet. Extract { left: 20, top: 8, width: 290, height: 470 }.
-    heroImage: "/skidmarks/sunnybanks/dazza-hero.jpg",
   },
   Nan: {
     name: "Nan",
@@ -174,13 +153,10 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
       "tiny elderly woman, grey hair in a bun, round glasses, cricket bat resting on her shoulder, " +
       "teacup and saucer in her other hand, purple floral housecoat, pink bunny slippers",
     voiceId: "u57uR2xbwGdASNetz0GB",
-    referenceImage: "/skidmarks/sunnybanks/nan-reference.jpg",
-    // Front-left full figure (bat + teacup + bunny slippers). Extract { left: 40, top: 20, width: 260, height: 420 }.
-    heroImage: "/skidmarks/sunnybanks/nan-hero.jpg",
   },
   Hans: {
     name: "Hans",
-    // Matches his picture on the Sunnybank bar (the face added as ArSGL).
+    // Matches his Cast card picture.
     look:
       "slim German backpacker, cork hat with dangling corks, khaki safari shirt, big canvas backpack, " +
       "camera on a strap around his neck",
@@ -195,34 +171,25 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
       "skinny adult bloke in his late twenties, bald head, freckles, worried wide eyes, meat pie held in both " +
       "hands, blue and yellow polo shirt, blue shorts, white socks, brown work boots",
     voiceId: "URQwIuGxmxWfCgwXuDxA",
-    referenceImage: "/skidmarks/sunnybanks/nuggets-reference.jpg",
-    // Front-left full figure with pie. Extract { left: 30, top: 8, width: 280, height: 500 }.
-    heroImage: "/skidmarks/sunnybanks/nuggets-hero.jpg",
   },
   "Ranger Bazza": {
     name: "Ranger Bazza",
-    // One look, matching ranger-bazza-hero.jpg (2026-09-30). The old lock
+    // One look (2026-09-30). The old lock
     // offered a second outfit (Akubra, high-vis vest, mountain bike);
     // a scene that wants it says so with `[Character Ranger Bazza: …]`.
     look:
       "portly middle-aged park ranger, short brown hair, dark sunglasses, bushy moustache, whistle on a " +
       "lanyard around his neck, short-sleeved khaki ranger shirt, khaki trousers, brown belt",
     voiceId: "lT1zujgSfYwPzAlTNE9z",
-    referenceImage: "/skidmarks/sunnybanks/ranger-bazza-reference.jpg",
-    // Top row, 2nd body from left (¾, whistle) on the 1248×832 sheet.
-    // Extract { left: 390, top: 90, width: 250, height: 430 }.
-    heroImage: "/skidmarks/sunnybanks/ranger-bazza-hero.jpg",
   },
   "Unit 4S": {
     name: "Unit 4S",
-    // Real reference plate (2026-09-15): bucket hat + antennae + bulging
-    // eyes, a thong in each hand. "Flip-flop" (2026-09-30), not "thongs":
+    // Bucket hat + antennae + bulging eyes, a thong in each hand. "Flip-flop" (2026-09-30), not "thongs":
     // to an image model outside Australia a thong is underwear.
     look:
       "skinny purple alien, two antennae, big round bulging eyes, wide toothy grin, teal bucket hat, " +
       "a teal flip-flop held in each hand, bare feet",
     voiceId: "9AMMyX2GM74yY0KQwYkF",
-    referenceImage: "/skidmarks/sunnybanks/unit-4s-reference.jpg",
   },
 };
 
@@ -231,19 +198,22 @@ export function getSunnyBanksCharacterLock(name: string): SunnyBanksCharacterLoc
 }
 
 /**
- * The still the cast strip shows, and compositor **Image 2** (the
- * single cast card). Prefers the single-subject `heroImage` so a
- * turnaround sheet never reaches the compositor or LTX (live QA:
- * Shazza Hold animated every cell on `shazza-reference.jpg`; original
- * Skidmarks AGENTS.md: do not hand the sheet to `plateCastIntoGen`).
- * Falls back to `referenceImage` when there is no hero file (Unit 4S,
- * Hans). Keyed by the character's own lock, never a synthetic
- * `characterId`. When a location is selected, LTX's first frame is the
- * composed plate (`buildSunnyBanksCompositePlatePrompt`), not this
- * hero still alone.
+ * Compositor **Image 2**: the character's Cast card main picture, and
+ * nothing else (2026-10-01, Stuart: "only our new character images plus
+ * 15 LoRA trained images, nothing else"). There is no built-in or repo
+ * fallback: `undefined` means the character has no Cast card picture
+ * yet, and callers must say so and not render. When a location is
+ * selected, the first frame is the composed plate
+ * (`buildSunnyBanksCompositePlatePrompt`), not this picture alone.
  */
 export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock): string | undefined {
-  return character.heroImage ?? character.referenceImage;
+  const picture = character.castPicture?.trim();
+  return picture ? picture : undefined;
+}
+
+/** The red note on a row (and the route's refusal) when a character has no Cast card picture. */
+export function missingCastPictureMessage(name: string): string {
+  return `${name} has no Cast card picture yet. Add one on their Cast card; this shot won't render until then.`;
 }
 
 /**
@@ -254,33 +224,41 @@ export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock):
  * single LoadImage of the **already composed** plate. Overlay is xAI
  * `/v1/images/edits` with two references:
  *   Image 1 / `<IMAGE_0>` = locked empty location (the canvas)
- *   Image 2 / `<IMAGE_1>` = single hero/cast card (never the sheet)
+ *   Image 2 / `<IMAGE_1>` = the character's Cast card main picture
  * `generate-speak-beat` is the caller (Studio's gen-plate + LTX in one
- * route). Gold Hold/Speak strings stay untouched — they already assume
+ * route). Image 2 is always the Cast card main picture. Gold Hold/Speak strings stay untouched — they already assume
  * the start image has both the person and the place.
  */
 export function buildSunnyBanksCompositePlatePrompt(
   character: SunnyBanksCharacterLock,
   location: SunnyBanksLocationLock,
-  appearanceOverride?: string
+  appearanceOverride?: string,
+  /** The shot's own `[Action: …]` text (2026-10-01): silent holds send it
+   * so the start still already shows what the shot describes (pose,
+   * what's in their hands), not only the later motion prompt. */
+  shotAction?: string
 ): string {
   const trimmedOverride = appearanceOverride?.trim() || "";
+  const trimmedAction = shotAction?.replace(/\s+/g, " ").trim() || "";
+  const shotText = Boolean(trimmedOverride || trimmedAction);
   const heldProp = /\b(cigarette|pie|teacup|cricket bat|thongs|flip-flops?|beer|camera|whistle)\b/i.test(
     character.look
   );
-  // An override changes what's held/worn on purpose, so the base
-  // "don't change their clothes" line (below) would directly contradict
-  // it — swap in a narrower instruction that still forbids anything
-  // *not* named by the override (no free-for-all just because one prop
-  // changed).
-  const propLine = trimmedOverride
-    ? "Only the object(s)/outfit named in the shot-specific override below — do not invent anything beyond what it names."
+  // What's held comes from the words (the shot's own text, then the look
+  // lock), never from image 2 (2026-10-01): "keep any held prop already
+  // visible" is how a stray prop in a picture got locked into a shot.
+  const propLine = shotText
+    ? "Held objects: only what this shot's text below names. Do not copy any object from image 2 that the text doesn't name. Do not invent anything beyond what it names."
     : heldProp
-      ? "Only the held object named in the look lock. Do not invent extra objects."
-      : "Keep any held prop already visible in <IMAGE_1>. Do not invent a phone or extra objects.";
-  const bodyLine = trimmedOverride
-    ? "Keep the same body pose, body, and face identity from image 2 — same person, do not turn them into a different person, do not invent a second person, no passer-by. Change only what the shot-specific override below explicitly names."
-    : "Keep the EXACT body pose, clothes, and body from image 2. Same face from image 2. Do not stand them up. Do not change their clothes. Do not invent a second person. No passer-by. No extra body in the distance.";
+      ? "Only the held object named in the look lock. Do not copy any other object from image 2. Do not invent extra objects."
+      : "Empty hands. Do not copy any object from image 2. Do not invent a phone or extra objects.";
+  // An action says how they stand and move, so the pose comes from it,
+  // not image 2. An override alone keeps the pose (as before).
+  const bodyLine = trimmedAction
+    ? "Keep the same body, clothes, and face identity from image 2 — same person, do not turn them into a different person, do not invent a second person, no passer-by. Pose and anything held follow this shot's text below."
+    : trimmedOverride
+      ? "Keep the same body pose, body, and face identity from image 2 — same person, do not turn them into a different person, do not invent a second person, no passer-by. Change only what the shot-specific override below explicitly names."
+      : "Keep the EXACT body pose, clothes, and body from image 2. Same face from image 2. Do not stand them up. Do not change their clothes. Do not invent a second person. No passer-by. No extra body in the distance.";
 
   const lines = [
     SUNNY_BANKS_STYLE_LOCK,
@@ -294,6 +272,9 @@ export function buildSunnyBanksCompositePlatePrompt(
     propLine,
     "No captions, no watermarks, no name tags. Keep any signage that is already part of the locked place in image 1.",
   ];
+  if (trimmedAction) {
+    lines.push(`This shot: ${trimmedAction}.`);
+  }
   if (trimmedOverride) {
     lines.push(`Shot-specific override for this render only: ${trimmedOverride}.`);
   }
@@ -304,7 +285,7 @@ export function buildSunnyBanksCompositePlatePrompt(
  * Locked park plates — Stuart's own full-frame location stills
  * (2026-09-17), not generated here. Empty of cast on purpose: they are
  * compositor **Image 1** (the location canvas). `generate-speak-beat`
- * overlays the character hero as Image 2, then sends the composed
+ * overlays the character's Cast card picture as Image 2, then sends the composed
  * still to LTX node `269`. Keyed by a stable id the Locations
  * `<select>` stores (`selectedLocationId`), never a synthetic
  * `characterId`. Not a pose picker and not a sequencer — one native

@@ -10,6 +10,8 @@ import {
   buildSunnyBanksHoldPrompt,
   buildSunnyBanksSpeakBeatPathname,
   buildSunnyBanksSpeakingPrompt,
+  missingCastPictureMessage,
+  resolveSunnyBanksStartImage,
   SUNNY_BANKS_HOLD_DURATION_SEC,
 } from "@/lib/sunnyBanks";
 import { compositeSunnyBanksCharacterOntoLocation, resolveBeatStartImage } from "@/lib/sunnyBanksComposite";
@@ -55,11 +57,21 @@ import {
  *
  * **Plate overlay (2026-09-17)** — copied from original Studio, not a
  * new Comfy node. Studio `plateCastIntoGen` draws the character onto
- * the location with xAI edits (Image 1 = empty place, Image 2 = hero
- * card). `src/lib/ltxCloudIa2v.ts` then patches that composed
+ * the location with xAI edits (Image 1 = empty place, Image 2 = the
+ * character). `src/lib/ltxCloudIa2v.ts` then patches that composed
  * `plateFile` onto node `269` only. This route now does both steps:
- * `startImageDataUrl` is the location canvas, `characterName` loads
- * the hero overlay, the composed still is what Comfy LoadImage gets.
+ * `startImageDataUrl` is the location canvas, `characterCard.pictureUrl`
+ * (the Cast card main picture, 2026-10-01) is the overlay, the composed
+ * still is what Comfy LoadImage gets.
+ *
+ * **Cast card pictures only (2026-10-01, Stuart)** — the overlay is
+ * only ever the character's Cast card main picture, sent by the panel
+ * and fetched from Deck's Blob. No built-in or repo picture exists any
+ * more (EP02 Act I row 16: the old repo Dazza hero, holding a rocket
+ * launcher, went into a Grok hold). A character row with no Cast card
+ * picture is refused with `missing_cast_picture` before anything is
+ * billed, never rendered on the bare location. A silent hold's
+ * `[Action:]` text now also reaches the start still's prompt.
  * Gold Hold/Speak strings unchanged. The LTX JSON is not edited.
  *
  * **Location cutaway Hold (2026-09-17)** — empty `Crowd:` (any non-CAST
@@ -167,8 +179,8 @@ interface GenerateSpeakBeatRequestBody {
   kind?: unknown;
   /** Optional park-plate id from `SUNNY_BANKS_LOCATIONS` — used only
    * to name the place in the compositor prompt. The location *canvas*
-   * is `startImageDataUrl` (Image 1). The character hero from
-   * `characterName` is Image 2. LTX still has one LoadImage. */
+   * is `startImageDataUrl` (Image 1). The Cast card picture in
+   * `characterCard` is Image 2. LTX still has one LoadImage. */
   locationId?: unknown;
   /** The location's name (2026-09-30), for a location saved on the
    * Locations row rather than a built-in. Prompt text only. */
@@ -178,7 +190,8 @@ interface GenerateSpeakBeatRequestBody {
    * sends that); never any other host. */
   locationImage?: unknown;
   /** Extra LTX prompt context from `[Action: text]`. Appended after
-   * gold Hold/Speak strings. Never sent to ElevenLabs. */
+   * gold Hold/Speak strings. On a character hold it also goes into the
+   * start still's prompt (2026-10-01). Never sent to ElevenLabs. */
   action?: unknown;
   /** Prop/outfit text from `[Character Name: description]` — the
    * client already sends this as its own field (folded into `action`
@@ -200,9 +213,10 @@ interface GenerateSpeakBeatRequestBody {
    * `lib/sunnyBanksVoices.ts`). Wins over a built-in's own voice; the
    * only voice a character added on the Sunnybank bar (or Hans) has. */
   voiceId?: unknown;
-  /** For a speaker not in `SUNNY_BANKS_CAST` (a character added with
-   * "+"): their name, look and picture (Deck's own Blob only). For a
-   * built-in with no picture of their own (Hans): just the picture. */
+  /** `{ name, look, pictureUrl }`: the character's Cast card main
+   * picture (Deck's own Blob only), for every character (2026-10-01).
+   * Name and look matter only for a character added with "+"; a
+   * built-in keeps its locked look. */
   characterCard?: unknown;
   /** `"ltx"` | `"grok"` | `"h3"` (2026-09-30). Holds only; a Speak beat
    * always renders on LTX. Missing or unknown → LTX. */
@@ -287,6 +301,14 @@ export async function POST(request: Request) {
   if (kind === "speak" && !voiceId) {
     return NextResponse.json(
       { error: `${character!.name} doesn't have a locked ElevenLabs voice yet.`, code: "missing_voice" },
+      { status: 400 }
+    );
+  }
+  // Every character shot needs its Cast card picture: refuse before
+  // anything is billed, never fall back to the bare location.
+  if (character && !resolveSunnyBanksStartImage(character)) {
+    return NextResponse.json(
+      { error: missingCastPictureMessage(character.name), code: "missing_cast_picture" },
       { status: 400 }
     );
   }
@@ -415,6 +437,8 @@ export async function POST(request: Request) {
       locationId,
       locationLabel: locationLabel || undefined,
       appearanceOverride: appearanceModifier || undefined,
+      // A silent hold's [Action:] shapes its start still too (2026-10-01).
+      shotAction: kind === "hold" ? action || undefined : undefined,
     });
     if (!plated.ok) {
       return NextResponse.json({ error: plated.error, code: plated.code }, { status: plated.status });

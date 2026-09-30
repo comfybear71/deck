@@ -28,7 +28,8 @@ import { resolveMemberStillSleeve } from "./memberStillSleeve";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
 import type { SkidmarksState } from "./skidmarks";
 import { normalizeSkidmarksEpisodesState } from "./skidmarksEpisodes";
-import { SUNNY_BANKS_CAST, resolveSunnyBanksStartImage } from "./sunnyBanks";
+import { SUNNY_BANKS_CAST, resolveSunnyBanksStartImage, type SunnyBanksCharacterLock } from "./sunnyBanks";
+import { resolveSunnyBanksSpeaker } from "./sunnyBanksVoices";
 
 export type RosterGroup = "music-video" | "sunny-banks" | "skidmarks" | "adult-shorts";
 
@@ -73,11 +74,6 @@ export function minorBlockReason(text: string): string | null {
     : null;
 }
 
-function firstNonEmpty(...values: (string | null | undefined)[]): string | null {
-  for (const v of values) if (typeof v === "string" && v.trim()) return v.trim();
-  return null;
-}
-
 /** Characters Stuart has taken off the LoRA cast grid. They stay everywhere else in the app. */
 export const ROSTER_HIDDEN_NAMES: ReadonlySet<string> = new Set(["hans"]);
 
@@ -114,17 +110,16 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
       sourceKey: `sb:${slugifyCharacterName(c.name)}`,
       group: "sunny-banks",
       name: c.name,
-      // The hero image is one figure cropped from the sheet; the full
-      // reference sheet has several people on it, which would confuse
-      // Siray about who to copy.
-      thumbUrl: firstNonEmpty(c.heroImage, c.referenceImage),
+      // No built-in picture (2026-10-01): their Cast card's own pictures
+      // are the only pictures they have (the tile shows its approved face).
+      thumbUrl: null,
       extraPictureUrls: [],
       look: c.look,
       neverShow: "",
       style: "cartoon",
       subjectWord: "character",
       blockedReason: minorBlockReason(`${c.name} ${c.look}`),
-      notReadyReason: sunnyBanksNotReadyReason(c),
+      notReadyReason: sunnyBanksNotReadyReason(resolveSunnyBanksSpeaker(c.name, state) ?? c),
     });
   }
 
@@ -267,9 +262,10 @@ export function onlyBandCharacters(list: RosterCharacter[], memberIds: readonly 
   return list.filter((c) => !c.sourceKey.startsWith("mv:") || keep.has(c.sourceKey));
 }
 
-/** Why a Sunny Banks regular can't be put in an episode yet (no voice, no start picture), or `null`. */
-export function sunnyBanksNotReadyReason(c: (typeof SUNNY_BANKS_CAST)[string]): string | null {
-  const missing = [!c.voiceId ? "a voice" : null, !resolveSunnyBanksStartImage(c) ? "a start picture" : null].filter(Boolean);
+/** Why a Sunny Banks regular can't be put in an episode yet (no voice, no Cast card picture), or `null`.
+ * Pass the lock from `resolveSunnyBanksSpeaker`, which carries their Cast card picture. */
+export function sunnyBanksNotReadyReason(c: SunnyBanksCharacterLock): string | null {
+  const missing = [!c.voiceId ? "a voice" : null, !resolveSunnyBanksStartImage(c) ? "a Cast card picture" : null].filter(Boolean);
   return missing.length ? `Needs ${missing.join(" and ")} before an episode can use them.` : null;
 }
 
@@ -300,8 +296,7 @@ export function startingPictures(char: RosterCharacter, entry: CharacterLoraEntr
  * first picture is one: Siray then copies that picture straight into all
  * the training pictures, with no clean redraw first (2026-09-30: the
  * redraw is where Stuart's flat 2D Hans first turned soft 3D). A built-in
- * regular's first picture is the hand-cut hero still (a `/skidmarks/…`
- * path, often holding a prop), which still gets the clean redraw.
+ * regular has no picture outside their Cast card (2026-10-01).
  * `null` for any other style.
  */
 export function uploadedCartoonReference(
