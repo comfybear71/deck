@@ -1086,21 +1086,42 @@ export function preserveRenderedRuntimes(
       line: chunk.line,
     };
   };
+  // Pass 1 (2026-09-30): every row that still sits on its own stored key
+  // claims it first. Before, one pass ran top to bottom, so an inserted
+  // `Shazza:` hold took a later `Shazza:` row's clip by content before
+  // that row got to claim its own, and the later row went Idle.
   queue.forEach((chunk, index) => {
     if (previous[index] && !claimed.has(index) && sunnyBanksRuntimeMatchesChunk(previous[index], chunk)) {
       attach(index, chunk, index);
-      return;
     }
-    const oldIndex = Object.keys(previous)
+  });
+  // Pass 2: rows that moved (the script was edited by hand) find their
+  // Done clip by speaker + line among the ones nobody claimed. A line
+  // added above pushes rows down, so first a row looks only at clips
+  // stored at or above its own number (nearest first); only then, for
+  // lines removed above, at clips stored below it (nearest first). That
+  // way a new look-alike line (`Shazza:`) can't take a clip belonging to
+  // a later row that moved down.
+  const candidates = (chunk: SunnyBanksScriptChunk) =>
+    Object.keys(previous)
       .map((key) => Number(key))
-      .find(
+      .filter(
         (i) =>
+          Number.isInteger(i) &&
           !claimed.has(i) &&
           previous[i]?.status === "done" &&
-          previous[i]?.videoUrl &&
+          Boolean(previous[i]?.videoUrl) &&
           sunnyBanksRuntimeMatchesChunk(previous[i], chunk)
       );
-    if (oldIndex !== undefined) attach(oldIndex, chunk, index);
+  queue.forEach((chunk, index) => {
+    if (index in next) return;
+    const above = candidates(chunk).filter((i) => i <= index);
+    if (above.length > 0) attach(Math.max(...above), chunk, index);
+  });
+  queue.forEach((chunk, index) => {
+    if (index in next) return;
+    const below = candidates(chunk).filter((i) => i > index);
+    if (below.length > 0) attach(Math.min(...below), chunk, index);
   });
   return next;
 }
@@ -1158,6 +1179,33 @@ export function collectRenderedClips(args: {
 }
 
 /**
+ * The CLIPS strip as one sideways row per act (2026-09-30): every act in
+ * act order, each with its clips (possibly none). Pure grouping of
+ * `collectRenderedClips`' output; nothing saved changes.
+ */
+export function groupSunnyBanksClipsByAct(
+  actIds: readonly SunnyBanksActId[],
+  clips: readonly SunnyBanksRenderedClip[]
+): { act: SunnyBanksActId; clips: SunnyBanksRenderedClip[] }[] {
+  return actIds.map((act) => ({ act, clips: clips.filter((clip) => clip.act === act) }));
+}
+
+/**
+ * Whether an act's clip row is open. A tap on its label wins (kept in
+ * component state only, never saved); otherwise the act being edited or
+ * rendered is open, and any other act is open when it has clips.
+ */
+export function isSunnyBanksClipRowOpen(args: {
+  act: SunnyBanksActId;
+  clipCount: number;
+  activeAct: SunnyBanksActId;
+  toggled?: boolean;
+}): boolean {
+  if (typeof args.toggled === "boolean") return args.toggled;
+  return args.act === args.activeAct || args.clipCount > 0;
+}
+
+/**
  * Remove on a clip in the CLIPS strip (2026-09-30): the row that clip
  * belongs to goes back to Idle, so "Render 1 line" makes it again. Same
  * Remove as Music video's rendered-clips shelf, but no file is deleted —
@@ -1178,8 +1226,36 @@ export function resetSunnyBanksClipRuntime(
   const parsed = parseSunnyBanksScriptBlock(script);
   const chunk = sunnyBanksQueueChunks(parsed)[index];
   if (!chunk) return runtimes;
-  const shown = preserveRenderedRuntimes(parsed, runtimes);
-  const removedUrl = shown[index]?.videoUrl;
+  const removedUrl = preserveRenderedRuntimes(parsed, runtimes)[index]?.videoUrl;
+  const next = normalizeSunnyBanksActRuntimes(script, runtimes, removedUrl);
+  next[index] = idleRuntimeFor(chunk);
+  return next;
+}
+
+function idleRuntimeFor(chunk: SunnyBanksScriptChunk): RowRuntime {
+  return { lineKey: chunk.raw, status: "idle", characterName: chunk.characterName, line: chunk.line };
+}
+
+/**
+ * An act's saved runtimes re-keyed to the rows as the screen shows them
+ * (2026-09-30). Rows are stored by row number, and the screen already
+ * follows a clip whose row moved (`preserveRenderedRuntimes`), but the
+ * store kept the old numbers. Writing a new render at its new number
+ * then landed on another row's old key and wiped that row's Done clip
+ * (Stuart: after a "+" between rows 15 and 16, the "It bloody well is…"
+ * row went Idle and wanted billing again). Every write goes through this
+ * first, so the stored number always matches the row on screen.
+ *
+ * Entries the screen doesn't use stay where they were (nothing is thrown
+ * away), except ones whose clip is already shown on another row or is
+ * `dropUrl`.
+ */
+export function normalizeSunnyBanksActRuntimes(
+  script: string,
+  runtimes: Record<number, RowRuntime>,
+  dropUrl?: string
+): Record<number, RowRuntime> {
+  const shown = preserveRenderedRuntimes(parseSunnyBanksScriptBlock(script), runtimes);
   const shownUrls = new Set(
     Object.values(shown)
       .map((r) => r.videoUrl)
@@ -1188,13 +1264,47 @@ export function resetSunnyBanksClipRuntime(
   const next: Record<number, RowRuntime> = {};
   for (const [key, stored] of Object.entries(runtimes)) {
     const k = Number(key);
-    if (k in shown) continue;
-    if (stored.videoUrl && (stored.videoUrl === removedUrl || shownUrls.has(stored.videoUrl))) continue;
+    if (!Number.isInteger(k) || k in shown) continue;
+    if (stored.videoUrl && (stored.videoUrl === dropUrl || shownUrls.has(stored.videoUrl))) continue;
     next[k] = stored;
   }
-  Object.assign(next, shown);
-  next[index] = { lineKey: chunk.raw, status: "idle", characterName: chunk.characterName, line: chunk.line };
+  return Object.assign(next, shown);
+}
+
+/** One row's runtime written at its row number, after re-keying the rest (see above). */
+export function writeSunnyBanksRowRuntime(
+  script: string,
+  runtimes: Record<number, RowRuntime>,
+  index: number,
+  row: RowRuntime
+): Record<number, RowRuntime> {
+  return { ...normalizeSunnyBanksActRuntimes(script, runtimes), [index]: row };
+}
+
+/**
+ * Runtimes after a "+" puts a new row at `insertAt` (`scriptAfter` is the
+ * script with it in). Every row at or below moves down one with its clip,
+ * and the new row starts Idle, so it can't borrow a look-alike row's clip.
+ */
+export function shiftSunnyBanksRuntimesForInsert(
+  scriptBefore: string,
+  scriptAfter: string,
+  runtimes: Record<number, RowRuntime>,
+  insertAt: number
+): Record<number, RowRuntime> {
+  const next = shiftKeyedIndexRecord(normalizeSunnyBanksActRuntimes(scriptBefore, runtimes), insertAt);
+  const inserted = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(scriptAfter))[insertAt];
+  if (inserted) next[insertAt] = idleRuntimeFor(inserted);
   return next;
+}
+
+/** Runtimes after − drops the row at `removeAt`: every row below moves up one with its clip. */
+export function shiftSunnyBanksRuntimesForRemove(
+  scriptBefore: string,
+  runtimes: Record<number, RowRuntime>,
+  removeAt: number
+): Record<number, RowRuntime> {
+  return unshiftKeyedIndexRecord(normalizeSunnyBanksActRuntimes(scriptBefore, runtimes), removeAt);
 }
 
 /** Prompts for any episode source — the live working copy, or a saved
@@ -1629,12 +1739,10 @@ export function SkidmarksSunnyBanksPanel() {
     runtimeMap: runtimeMapByAct,
     characterOverrides: characterOverridesByAct,
   });
-  const clipsByAct = actIds
-    .map((act) => ({
-      act,
-      clips: renderedClips.filter((clip) => clip.act === act),
-    }))
-    .filter((group) => group.clips.length > 0);
+  const clipsByAct = groupSunnyBanksClipsByAct(actIds, renderedClips);
+  /** Act rows Stuart tapped open or shut, per episode. Component state only. */
+  const [clipRowToggles, setClipRowToggles] = useState<Record<string, boolean>>({});
+  const clipRowKey = (act: SunnyBanksActId) => `${live.episodeId ?? ""}|${act}`;
 
   /** Finished shots collapse out of the way (2026-09-18, Stuart's ask).
    * Default closed: a real act is mostly Done rows once it has been
@@ -1777,7 +1885,7 @@ export function SkidmarksSunnyBanksPanel() {
         ...prev,
         runtimeMap: {
           ...prev.runtimeMap,
-          [act]: { ...(prev.runtimeMap[act] ?? {}), [index]: stamped },
+          [act]: writeSunnyBanksRowRuntime(prev.actScripts[act] ?? "", prev.runtimeMap[act] ?? {}, index, stamped),
         },
       }));
     };
@@ -2003,11 +2111,17 @@ export function SkidmarksSunnyBanksPanel() {
       const script = prev.actScripts[act] ?? "";
       const shiftedLocations = shiftKeyedIndexRecord(prev.locationOverrides[act] ?? {}, insertAt);
       shiftedLocations[insertAt] = row.location.id;
+      const nextScript = insertSunnyBanksLineAfter(script, row.chunk.sourceLineIndex, holdLine);
       return {
         ...prev,
         actScripts: {
           ...prev.actScripts,
-          [act]: insertSunnyBanksLineAfter(script, row.chunk.sourceLineIndex, holdLine),
+          [act]: nextScript,
+        },
+        // Every Done row below moves down with its clip (2026-09-30).
+        runtimeMap: {
+          ...prev.runtimeMap,
+          [act]: shiftSunnyBanksRuntimesForInsert(script, nextScript, prev.runtimeMap[act] ?? {}, insertAt),
         },
         characterOverrides: {
           ...prev.characterOverrides,
@@ -2038,6 +2152,10 @@ export function SkidmarksSunnyBanksPanel() {
       return {
         ...prev,
         actScripts: { ...prev.actScripts, [act]: nextScript },
+        runtimeMap: {
+          ...prev.runtimeMap,
+          [act]: shiftSunnyBanksRuntimesForInsert(script, nextScript, prev.runtimeMap[act] ?? {}, 0),
+        },
         characterOverrides: {
           ...prev.characterOverrides,
           [act]: shiftKeyedIndexRecord(prev.characterOverrides[act] ?? {}, 0),
@@ -2071,6 +2189,11 @@ export function SkidmarksSunnyBanksPanel() {
         locationOverrides: {
           ...prev.locationOverrides,
           [act]: unshiftKeyedIndexRecord(prev.locationOverrides[act] ?? {}, rowIndex),
+        },
+        // Every Done row below moves up with its clip (2026-09-30).
+        runtimeMap: {
+          ...prev.runtimeMap,
+          [act]: shiftSunnyBanksRuntimesForRemove(script, prev.runtimeMap[act] ?? {}, rowIndex),
         },
       };
     });
@@ -2525,57 +2648,82 @@ export function SkidmarksSunnyBanksPanel() {
           (renderedClips.length === 0 ? (
             <p className="text-[11px] leading-relaxed text-white/35">Nothing rendered yet.</p>
           ) : (
-            <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
-              {clipsByAct.map((group, groupIndex) => (
-                <div key={group.act} className="flex shrink-0 items-stretch gap-2.5">
-                  {groupIndex > 0 ? (
-                    <div aria-hidden className="w-px shrink-0 self-stretch bg-white/10" />
-                  ) : null}
-                  <div className="flex shrink-0 flex-col gap-1.5">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
-                      Act {group.act}
-                    </span>
-                    <div className="flex gap-2.5">
-                      {group.clips.map((clip) => (
-                        <div
-                          key={`${clip.act}:${clip.index}:${clip.videoUrl}`}
-                          className="flex w-44 shrink-0 touch-pan-x touch-pan-y flex-col gap-1.5"
-                        >
-                          <video
-                            src={clip.videoUrl}
-                            controls
-                            playsInline
-                            preload="metadata"
-                            className="h-28 w-44 rounded-xl bg-black object-cover"
-                          />
-                          <p className="truncate text-[11px] font-medium leading-tight text-white/70">
-                            {clip.characterName}
-                            {typeof clip.durationSec === "number"
-                              ? ` \u00b7 ${clip.durationSec.toFixed(1)}s`
-                              : ""}
-                          </p>
-                          <p className="truncate text-[10px] leading-tight text-white/40">
-                            Line {clip.index + 1} · {clip.lineLabel}
-                          </p>
-                          <div className="flex items-center justify-end">
-                            <button
-                              type="button"
-                              onClick={() => setPendingClipRemove(clip)}
-                              disabled={running}
-                              aria-label={`Remove the clip for line ${clip.index + 1} so it can be rendered again`}
-                              title="Remove this clip"
-                              className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-white/45 transition-colors hover:border-rose-400/30 hover:text-rose-300/90 disabled:cursor-not-allowed disabled:text-white/25"
+            // One sideways row per act, stacked in act order (2026-09-30).
+            // Each row scrolls on its own; `touch-pan-x touch-pan-y` on the
+            // cards keeps an up/down swipe scrolling the page (PR 223).
+            <div className="flex flex-col gap-3">
+              {clipsByAct.map((group) => {
+                const rowOpen = isSunnyBanksClipRowOpen({
+                  act: group.act,
+                  clipCount: group.clips.length,
+                  activeAct,
+                  toggled: clipRowToggles[clipRowKey(group.act)],
+                });
+                return (
+                  <div key={group.act} className="flex min-w-0 flex-col gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setClipRowToggles((prev) => ({ ...prev, [clipRowKey(group.act)]: !rowOpen }))
+                      }
+                      aria-expanded={rowOpen}
+                      aria-label={`Act ${group.act} clips, ${group.clips.length}. ${rowOpen ? "Hide" : "Show"}`}
+                      className="flex min-h-[32px] items-center gap-1.5 self-start text-left text-[10px] font-semibold uppercase tracking-wide text-white/40 [-webkit-tap-highlight-color:transparent]"
+                    >
+                      <span>
+                        Act {group.act}
+                        <span aria-hidden className="ml-1 text-white/25">
+                          {"\u00b7"} {group.clips.length}
+                        </span>
+                      </span>
+                      <ChevronIcon open={rowOpen} />
+                    </button>
+                    {rowOpen &&
+                      (group.clips.length === 0 ? (
+                        <p className="text-[10px] leading-snug text-white/30">Nothing rendered in this act yet.</p>
+                      ) : (
+                        <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+                          {group.clips.map((clip) => (
+                            <div
+                              key={`${clip.act}:${clip.index}:${clip.videoUrl}`}
+                              className="flex w-44 shrink-0 touch-pan-x touch-pan-y flex-col gap-1.5"
                             >
-                              <TrashIcon />
-                              Remove
-                            </button>
-                          </div>
+                              <video
+                                src={clip.videoUrl}
+                                controls
+                                playsInline
+                                preload="metadata"
+                                className="h-28 w-44 rounded-xl bg-black object-cover"
+                              />
+                              <p className="truncate text-[11px] font-medium leading-tight text-white/70">
+                                {clip.characterName}
+                                {typeof clip.durationSec === "number"
+                                  ? ` \u00b7 ${clip.durationSec.toFixed(1)}s`
+                                  : ""}
+                              </p>
+                              <p className="truncate text-[10px] leading-tight text-white/40">
+                                Line {clip.index + 1} · {clip.lineLabel}
+                              </p>
+                              <div className="flex items-center justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => setPendingClipRemove(clip)}
+                                  disabled={running}
+                                  aria-label={`Remove the clip for line ${clip.index + 1} so it can be rendered again`}
+                                  title="Remove this clip"
+                                  className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-white/45 transition-colors hover:border-rose-400/30 hover:text-rose-300/90 disabled:cursor-not-allowed disabled:text-white/25"
+                                >
+                                  <TrashIcon />
+                                  Remove
+                                </button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       ))}
-                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ))}
         <SkidmarksConfirmDialog
