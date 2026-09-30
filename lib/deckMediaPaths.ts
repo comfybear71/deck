@@ -359,8 +359,8 @@ export function adultShortFolder(shortSlug: string): string {
   return deckProjectFolder("shorts", shortSlug);
 }
 
-/** `ep01-blonde-girl-1-plate-02`, `…-clip-02`, `…-ref-01`. */
-export function adultShortTarget(shortSlug: string, role: "ref" | "plate" | "clip", n: number): DeckMediaTarget {
+/** `ep01-blonde-girl-1-plate-02`, `…-clip-02`, `…-ref-01`, `…-voice-02` (a talking shot's spoken line). */
+export function adultShortTarget(shortSlug: string, role: "ref" | "plate" | "clip" | "voice", n: number): DeckMediaTarget {
   return { folder: adultShortFolder(shortSlug), name: `${shortSlug}-${role}-${twoDigits(n)}` };
 }
 

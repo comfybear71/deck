@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { SHOT_GRID_CLASS, ShotGrid } from "./ShotGrid";
+import { SHOT_GRID_CLASS, SHOT_GRID_SPLIT_CLASS, SHOT_GRID_SPLIT_PANEL_CLASS, SHOT_GRID_SPLIT_WRAP_CLASS, ShotGrid } from "./ShotGrid";
 
 const noop = () => {};
 
@@ -52,5 +52,36 @@ describe("ShotGrid (shared by Shorts and Sunnybank)", () => {
     );
     expect(html).toContain('src="https://x.test/line4.mp4#t=0.1"');
     expect(html).toContain('aria-label="Line 4: Rendered. Open"');
+  });
+
+  it("the default (Sunnybank) layout is unchanged: no columns, no sticky panel, no inline play button", () => {
+    const html = renderToStaticMarkup(
+      createElement(ShotGrid, { tiles, openId: "a", onToggle: noop, renderPanel: () => "PANEL", labelPrefix: "Line" }),
+    );
+    expect(html).toContain(SHOT_GRID_CLASS);
+    expect(html).not.toContain(SHOT_GRID_SPLIT_WRAP_CLASS);
+    expect(html).not.toContain("md:sticky");
+    expect(html).not.toContain('aria-label="Play line 1"');
+  });
+
+  it("split (Shorts): grid left, sticky panel right from tablet width, and ▶ plays a clip in its tile", () => {
+    const html = renderToStaticMarkup(
+      createElement(ShotGrid, { tiles, openId: "a", onToggle: noop, renderPanel: () => "PANEL", layout: "split" }),
+    );
+    expect(SHOT_GRID_SPLIT_WRAP_CLASS).toContain("md:grid-cols-2");
+    expect(html).toContain(SHOT_GRID_SPLIT_WRAP_CLASS);
+    expect(html).toContain(SHOT_GRID_SPLIT_CLASS);
+    expect(html).toContain(SHOT_GRID_SPLIT_PANEL_CLASS);
+    expect(html).toContain('aria-label="Play shot 1"');
+    // Only a rendered tile gets one.
+    expect(html).not.toContain('aria-label="Play shot 2"');
+    expect(html).toContain("PANEL");
+  });
+
+  it("split with nothing open shows the hint in the right column", () => {
+    const html = renderToStaticMarkup(
+      createElement(ShotGrid, { tiles, openId: null, onToggle: noop, renderPanel: () => null, layout: "split", emptyPanelHint: "Tap a shot to edit it here." }),
+    );
+    expect(html).toContain("Tap a shot to edit it here.");
   });
 });

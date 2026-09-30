@@ -254,11 +254,14 @@ export function renameRosterCharacter(char: RosterCharacter, nextName: string): 
           : {}),
       });
       const oldName = char.name;
-      const renameShots = <T extends { shots: { castNames?: string[] }[] }>(x: T): T => ({
+      const renameShots = <T extends { shots: { castNames?: string[]; speakerName?: string }[] }>(x: T): T => ({
         ...x,
-        shots: x.shots.map((sh) =>
-          sh.castNames ? { ...sh, castNames: sh.castNames.map((n) => (sameAdultShortPerson(n, oldName) ? name : n)) } : sh,
-        ),
+        shots: x.shots.map((sh) => ({
+          ...sh,
+          ...(sh.castNames ? { castNames: sh.castNames.map((n) => (sameAdultShortPerson(n, oldName) ? name : n)) } : {}),
+          // A talking shot's picked speaker follows the rename too.
+          ...(sh.speakerName && sameAdultShortPerson(sh.speakerName, oldName) ? { speakerName: name } : {}),
+        })),
       });
       patchAdultShorts((st) => ({
         ...renameShots(renameIn(st)),

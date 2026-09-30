@@ -49,6 +49,15 @@ export const ADULT_SHORTS_MAX_STARRING = 6;
 export const ADULT_SHORTS_MAX_PEOPLE_PER_SHOT = 4;
 /** Longest episode name typed on "+ New". */
 export const ADULT_SHORTS_TITLE_MAX = 80;
+/** Longest spoken Line on a talking shot (2026-09-30). One or two sentences. */
+export const ADULT_SHORTS_LINE_MAX = 500;
+/**
+ * A talking shot (a shot with a Line, 2026-09-30) renders on Comfy Cloud
+ * LTX, the same lip-sync pipeline as Sunnybank's talking lines, at Deck's
+ * same stand-in rate (`estimateLtxClipRenderCostUsd`, `lib/clipGeneration.ts`).
+ * It's as long as the spoken line, so it's quoted per second, like Sunnybank.
+ */
+export const ADULT_SHORTS_TALKING_COST_USD_PER_SEC = 0.13;
 
 /** Siray still route caps prompts at 2000 chars. */
 const MAX_PROMPT_CHARS = 1900;
@@ -81,6 +90,15 @@ export interface AdultShortsShot {
    * one-person episodes need nothing.
    */
   castNames?: string[];
+  /**
+   * What's said in this shot (2026-09-30), ElevenLabs tags like
+   * `[whispers]` kept. Present and not blank = a talking shot: voiced
+   * with the speaker's Cast card voice and rendered on LTX. Absent or
+   * blank = the silent Siray clip, exactly as before.
+   */
+  line?: string;
+  /** Who says the Line when more than one person is in the shot. Absent = the first of them. */
+  speakerName?: string;
 }
 
 /**
@@ -276,6 +294,8 @@ function normalizeShots(value: unknown): AdultShortsShot[] {
       ...(Array.isArray(s.castNames)
         ? { castNames: s.castNames.filter((n): n is string => typeof n === "string" && n.trim().length > 0).map((n) => n.trim()).slice(0, ADULT_SHORTS_MAX_STARRING) }
         : {}),
+      ...(typeof s.line === "string" && s.line.trim() ? { line: s.line.slice(0, ADULT_SHORTS_LINE_MAX) } : {}),
+      ...(typeof s.speakerName === "string" && s.speakerName.trim() ? { speakerName: s.speakerName.trim() } : {}),
     });
   }
   return shots;
@@ -343,7 +363,7 @@ export function adultShortsHaveUserContent(state: AdultShortsState | null | unde
 export function editorHasContent(state: Pick<AdultShortsState, "character" | "shots" | "starring">): boolean {
   if (state.character.name.trim() || state.character.look.trim() || state.character.referenceUrls.length) return true;
   if (state.starring?.length) return true;
-  return state.shots.some((s) => s.prompt.trim() || s.plateUrl || s.clipUrl);
+  return state.shots.some((s) => s.prompt.trim() || s.line?.trim() || s.plateUrl || s.clipUrl);
 }
 
 /** Default Library title: "<name> · <first shot words>", or the date. */
@@ -594,6 +614,8 @@ export function editorHasUnsavedChanges(state: AdultShortsState): boolean {
 /** One person in a shot, as the prompts see them. `subjectWord` is their Cast card's (woman, man, person…). */
 export interface AdultShortsPerson extends AdultShortsCharacter {
   subjectWord?: string;
+  /** Their Cast card's ElevenLabs voice id (2026-09-30), for a talking shot. Read from the card, never saved on the episode. */
+  voiceId?: string;
 }
 
 export interface AdultShortsPromptOptions {
@@ -678,6 +700,44 @@ export function buildAdultShortsMotionPrompt(
   const people = peopleOf(who);
   const locks = [characterLine(people), adultShortsAdultLock(people), identityLine(people), contentLock(opts)].filter(Boolean).join(" ");
   return withLocks(shot, locks);
+}
+
+/** A talking shot: it has a Line (2026-09-30). Renders on LTX; anything else stays on Siray. */
+export function isAdultShortTalkingShot(shot: Pick<AdultShortsShot, "line">): boolean {
+  return Boolean(shot.line?.trim());
+}
+
+/** Who says a shot's Line: its picked speaker if they're in the shot, else the first person in it. */
+export function adultShortSpeaker<T extends { name: string }>(people: readonly T[], shot: Pick<AdultShortsShot, "speakerName">): T | null {
+  const picked = shot.speakerName?.trim();
+  return (picked ? people.find((p) => sameAdultShortPerson(p.name, picked)) : undefined) ?? people[0] ?? null;
+}
+
+/**
+ * Talking-shot motion prompt for LTX (2026-09-30): the same locks as the
+ * Siray motion prompt (the adult line, "keep the same person" and the
+ * episode's content rule), plus who's speaking. The route adds the
+ * spoken words themselves, without the ElevenLabs tags.
+ */
+export function buildAdultShortsTalkingPrompt(
+  who: readonly AdultShortsPerson[],
+  shot: Pick<AdultShortsShot, "prompt">,
+  speakerName: string,
+  opts?: AdultShortsPromptOptions,
+): string {
+  const people = peopleOf(who);
+  const speaking = speakerName.trim()
+    ? `${speakerName.trim()} speaks to camera, lips in sync with the audio.${people.length > 1 ? " Everyone else listens." : ""}`
+    : "";
+  const locks = [characterLine(people), speaking, adultShortsAdultLock(people), identityLine(people), contentLock(opts)]
+    .filter(Boolean)
+    .join(" ");
+  return withLocks(shot, locks);
+}
+
+/** "~$0.13/s", the talking-shot price as Sunnybank shows it (as long as the line). */
+export function formatAdultShortsTalkingCost(): string {
+  return `~$${ADULT_SHORTS_TALKING_COST_USD_PER_SEC.toFixed(2)}/s`;
 }
 
 /**
