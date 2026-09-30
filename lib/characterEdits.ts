@@ -192,7 +192,7 @@ export function characterDeleteBlocker(char: RosterCharacter, state: SkidmarksSt
       return `${name} is the character in ${plural(saved.length, "Shorts episode")} (${listTitles(saved.map((s) => s.title))}). Delete those episodes first.`;
     }
     if (adult && adult.character.name.trim() && slugifyCharacterName(adult.character.name) === slug) {
-      return `${name} is the character open in the Shorts editor. Change the editor's character first.`;
+      return `${name} is starring in the open Shorts episode. Pick someone else under Starring first.`;
     }
   }
   return null;

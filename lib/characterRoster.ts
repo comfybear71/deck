@@ -156,7 +156,19 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
   for (const ac of adultChars) {
     if (!ac?.name.trim()) continue;
     const slug = slugifyCharacterName(ac.name);
-    if (seenAdult.has(slug)) continue;
+    if (seenAdult.has(slug)) {
+      // The same girl in another episode: her pictures and look join
+      // her one Cast card (2026-09-30, the old Character box is gone, so
+      // the Cast card is where they're read from). Earlier ones stay first.
+      const tile = out["adult-shorts"].find((c) => c.sourceKey === `as:${slug}`);
+      if (tile) {
+        const pics = [...new Set([tile.thumbUrl, ...tile.extraPictureUrls, ...ac.referenceUrls].filter((u): u is string => Boolean(u)))];
+        tile.thumbUrl = pics[0] ?? null;
+        tile.extraPictureUrls = pics.slice(1, CHARACTER_LORA_MAX_IMAGES);
+        if (!tile.look.trim() && ac.look.trim()) tile.look = ac.look;
+      }
+      continue;
+    }
     seenAdult.add(slug);
     out["adult-shorts"].push({
       sourceKey: `as:${slug}`,
