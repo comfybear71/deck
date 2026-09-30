@@ -47,3 +47,20 @@ describe("adult shorts render-clip", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 });
+
+describe("adult shorts render-clip: anyone can star (2026-09-30)", () => {
+  beforeEach(() => submit.mockReset());
+  it("accepts the lock for a man, anyone, or a group, and still refuses a prompt with none", async () => {
+    submit.mockResolvedValue({ ok: true, taskId: "t2" });
+    for (const lock of [
+      "Adult man, clearly over 25, fictional AI-created character.",
+      "Adult person, clearly over 25, fictional AI-created character.",
+      "Everyone shown is an adult, clearly over 25, a fictional AI-created character.",
+    ]) {
+      const res = await POST(req({ prompt: `arm wrestling. ${lock}`, startImageUrl: "data:image/png;base64,AAAA", durationSec: 5 }));
+      expect(res.status).toBe(202);
+    }
+    const res = await POST(req({ prompt: "arm wrestling, clearly over 25", startImageUrl: "data:image/png;base64,AAAA", durationSec: 5 }));
+    expect(res.status).toBe(400);
+  });
+});

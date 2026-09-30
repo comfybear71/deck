@@ -39,6 +39,7 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const POLL_DEADLINE_MS = 40_000;
+const ADULT_SHORTS_LOCK_RE = /\badult\b[a-z ]{0,12}, clearly over 25/i;
 const MAX_PROMPT_LENGTH = 2000;
 const FETCH_TIMEOUT_MS = 30_000;
 
@@ -120,7 +121,10 @@ export async function POST(request: Request) {
   if (prompt.length > MAX_PROMPT_LENGTH) {
     return NextResponse.json({ error: "Prompt is too long.", code: "invalid_request" }, { status: 400 });
   }
-  if (!/adult woman, clearly over 25/i.test(prompt)) {
+  // "Adult woman, clearly over 25" / "Adult man, …" / "Everyone shown is
+  // an adult, clearly over 25" (2026-09-30: anyone can star, and more
+  // than one person) all carry it.
+  if (!ADULT_SHORTS_LOCK_RE.test(prompt)) {
     return NextResponse.json(
       { error: "Shorts prompts must carry the adult character lock.", code: "invalid_request" },
       { status: 400 }

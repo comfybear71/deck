@@ -22,8 +22,9 @@ import {
  * Seedream 4.5 ref2i-spicy (same Auto-plate path as before). With zero
  * references it calls Seedream 4.5 t2i-spicy — text-to-image, no
  * reference — so a per-clip "Siray" still can run from the shot prompt
- * alone. More than one reference is still rejected (this app only ever
- * sends a single optional continuity/master still).
+ * alone. Since 2026-09-30 up to four references are accepted: a Shorts
+ * shot with more than one person in it sends one picture of each (in
+ * the order its prompt names them). Every other caller still sends one.
  *
  * Submit → poll → download → re-encode as a `data:` URL, same
  * submit/poll/download shape as `lib/comfyCloud.ts`'s LTX path, just
@@ -36,6 +37,8 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const MAX_PROMPT_LENGTH = 2000;
+/** One picture per person in a Shorts shot (`ADULT_SHORTS_MAX_PEOPLE_PER_SHOT`). */
+const MAX_REFERENCES = 4;
 // Seedream 4.5 at 2048² sometimes takes over a minute (live 2026-09-24: clip 10 still in_progress at 45s).
 const POLL_DEADLINE_MS = 240_000;
 
@@ -89,18 +92,19 @@ export async function POST(request: Request) {
     );
   }
 
-  // Missing / non-array → treat as no references (t2i). Cap at one.
+  // Missing / non-array → treat as no references (t2i). Up to four: one
+  // per person in a Shorts shot (2026-09-30); every other caller sends one.
   const rawReferences = Array.isArray(body.referenceImageDataUrls) ? body.referenceImageDataUrls : [];
-  if (rawReferences.length > 1) {
+  if (rawReferences.length > MAX_REFERENCES) {
     return NextResponse.json(
       {
-        error: "This route accepts at most one reference image (optional continuity / master still).",
+        error: `This route accepts at most ${MAX_REFERENCES} reference images (one per person in the shot).`,
         code: "invalid_request",
       },
       { status: 400 }
     );
   }
-  if (rawReferences.length === 1 && !isReferenceDataUrl(rawReferences[0])) {
+  if (!rawReferences.every(isReferenceDataUrl)) {
     return NextResponse.json(
       { error: "The reference image must be a `data:image/...;base64,...` URL.", code: "invalid_request" },
       { status: 400 }

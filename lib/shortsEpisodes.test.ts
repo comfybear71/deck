@@ -5,7 +5,7 @@ import type { RosterCharacter } from "./characterRoster";
  * Shorts episodes and Shorts cast profiles (2026-09-30) through the real
  * store with a fake server: the short Stuart already has becomes EP01
  * with the editor's five shots (nothing written on load, no shot lost on
- * the first save), "+ New" starts EP02 with the same character, deleting
+ * the first save), "+ New" starts a blank, named EP02, deleting
  * the open episode clears the editor without it coming back, and a cast
  * profile is saved on the character's own row. Never Blob.
  */
@@ -176,31 +176,45 @@ describe("Shorts episodes, saved per item", () => {
     expect(page.calls.every((c) => c.url.startsWith("/api/skidmarks/session") || c.url.startsWith("/api/deck/items"))).toBe(true);
   }, 15000);
 
-  it("+ New keeps the character, and EP02 only appears once a shot has something in it", async () => {
+  it("+ New is a blank workspace with its typed name; EP02 only appears once a shot has something in it", async () => {
     const page = await boot(liveLikeServer());
-    page.sk.startNewAdultShortEpisode();
+    page.sk.startNewAdultShortEpisode("Brother vs Rambo");
     await wait(1200);
     expect(page.writes()).toEqual([]);
     let state = page.sk.getAdultShortsState();
-    expect(state.character.name).toBe("SKYLAR");
+    // Blank: no one starring, one empty shot, 18+ off, just the name.
+    expect(state.character.name).toBe("");
+    expect(state.starring).toEqual([]);
+    expect(state.shots).toHaveLength(1);
+    expect(state.shots[0].prompt).toBe("");
+    expect(state.adult).toBe(false);
+    expect(state.title).toBe("Brother vs Rambo");
     expect(state.currentSavedId).toBeNull();
     expect(state.saved).toHaveLength(1);
 
-    page.sk.patchAdultShorts((s) => ({ ...s, shots: s.shots.map((x) => ({ ...x, prompt: "Walking along the beach at sunset" })) }));
+    page.sk.patchAdultShorts((s) => ({ ...s, shots: s.shots.map((x) => ({ ...x, prompt: "Two brothers arm-wrestle in a garage" })) }));
     await wait(1200);
     state = page.sk.getAdultShortsState();
     expect(state.saved).toHaveLength(2);
     const ep2 = state.saved.find((x) => x.id === state.currentSavedId)!;
+    expect(ep2.title).toBe("Brother vs Rambo");
+    expect(ep2.adult).toBe(false);
     expect(page.shorts.adultShortEpisodeNumbers(state.saved).get(ep2.id)).toBe(2);
     const puts = page.writes().filter((c) => c.method === "PUT");
     expect(puts).toHaveLength(1);
-    expect(puts[0].body).toMatchObject({ kind: "adult-short", itemId: ep2.id, expectedRevision: 0, data: { episodeNumber: 2, character: { name: "SKYLAR" } } });
+    expect(puts[0].body).toMatchObject({ kind: "adult-short", itemId: ep2.id, expectedRevision: 0, data: { episodeNumber: 2, title: "Brother vs Rambo", adult: false } });
+    // Its files go in a readable folder named after it.
+    const targets = await import("./deckMediaTargets");
+    expect(targets.adultShortTargetFor("plate", 1).folder).toBe("deck/shorts/episodes/ep02-brother-vs-rambo");
 
-    // Open EP01 again: it's the editor's again, unchanged.
+    // Open EP01 again: it's the editor's again, unchanged, and still 18+.
     page.sk.openAdultShortEpisode(SAVED_SHORT.id);
     state = page.sk.getAdultShortsState();
     expect(state.currentSavedId).toBe(SAVED_SHORT.id);
     expect(state.shots.map((s) => s.id)).toEqual(SKYLAR_SHOTS.map((s) => s.id));
+    expect(page.shorts.adultShortIsAdult(state)).toBe(true);
+    // Let the debounced saves finish here, not in the next test.
+    await wait(1500);
   }, 15000);
 
   it("deleting the open episode is one tombstone and clears the editor so it isn't saved straight back", async () => {

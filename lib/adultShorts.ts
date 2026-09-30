@@ -38,6 +38,17 @@ export const ADULT_SHORTS_VIDEO_COST_USD_PER_SEC = 0.18;
 export const ADULT_SHORTS_ADULT_LOCK =
   "Adult woman, clearly over 25, fictional AI-created character, photorealistic, same face, hair and body as the reference.";
 export const ADULT_SHORTS_CONTENT_LOCK = "No sexual acts shown.";
+/** An episode with its 18+ switch off (2026-09-30): nothing spicy at all. */
+export const ADULT_SHORTS_GENERAL_CONTENT_LOCK = "Everyone fully clothed. No nudity and nothing sexual.";
+/** Two or more people in one shot: every one of them is a made-up adult. */
+export const ADULT_SHORTS_GROUP_ADULT_LOCK =
+  "Everyone shown is an adult, clearly over 25, a fictional AI-created character, photorealistic, each with the same face, hair and body as their reference.";
+/** How many people can star in one episode. */
+export const ADULT_SHORTS_MAX_STARRING = 6;
+/** How many people's pictures one plate can be made from (Siray still route cap). */
+export const ADULT_SHORTS_MAX_PEOPLE_PER_SHOT = 4;
+/** Longest episode name typed on "+ New". */
+export const ADULT_SHORTS_TITLE_MAX = 80;
 
 /** Siray still route caps prompts at 2000 chars. */
 const MAX_PROMPT_CHARS = 1900;
@@ -64,6 +75,12 @@ export interface AdultShortsShot {
   sirayTaskId: string | null;
   /** Start this clip from the previous clip's last frame instead of its own plate. */
   chainFromPrevious: boolean;
+  /**
+   * Who's in this shot, by name (2026-09-30, more than one person can
+   * star). Absent = everyone starring in the episode, so older shots and
+   * one-person episodes need nothing.
+   */
+  castNames?: string[];
 }
 
 /**
@@ -91,6 +108,12 @@ export interface AdultShortsSaved {
    * first (`adultShortEpisodeNumbers`), so nothing needs rewriting.
    */
   episodeNumber?: number;
+  /** Everyone starring, in order (2026-09-30). Absent on older shorts:
+   * `character` is then the one person starring (`adultShortStarring`). */
+  starring?: AdultShortsCharacter[];
+  /** This episode's own 18+ switch (2026-09-30). Absent on older shorts,
+   * which were all 18+ (Skylar's EP01), so absent reads as on. */
+  adult?: boolean;
 }
 
 export interface AdultShortsState {
@@ -106,6 +129,65 @@ export interface AdultShortsState {
   /** The open short's Blob folder name (see `AdultShortsSaved.mediaSlug`).
    * Set the first time it makes a file; carried into its Library copy. */
   mediaSlug?: string;
+  /** The open episode's cast (see `AdultShortsSaved.starring`). `character` is always the first of them. */
+  starring?: AdultShortsCharacter[];
+  /** The open episode's 18+ switch (see `AdultShortsSaved.adult`). */
+  adult?: boolean;
+  /** The name typed on "+ New" for an episode that has no card yet; its card takes it. */
+  title?: string;
+}
+
+const EMPTY_CHARACTER: AdultShortsCharacter = { name: "", look: "", referenceUrls: [] };
+
+/**
+ * Everyone starring in an episode (or the open editor), in order. Older
+ * shorts only have `character`, the one person starring (none when it has
+ * no name). Always a fresh copy.
+ */
+export function adultShortStarring(x: { character: AdultShortsCharacter; starring?: AdultShortsCharacter[] }): AdultShortsCharacter[] {
+  if (Array.isArray(x.starring)) return x.starring.map(cloneCharacter);
+  return x.character.name.trim() ? [cloneCharacter(x.character)] : [];
+}
+
+/** Is this episode 18+? Older shorts (no switch saved) were all 18+. */
+export function adultShortIsAdult(x: { adult?: boolean }): boolean {
+  return x.adult !== false;
+}
+
+/**
+ * Set who's starring in the open episode. `character` follows the first
+ * of them, so everything that reads one person (the Library, the Cast
+ * row, zip names) keeps working.
+ */
+export function setAdultShortStarring(state: AdultShortsState, starring: readonly AdultShortsCharacter[]): AdultShortsState {
+  const list = dedupeStarring(starring).slice(0, ADULT_SHORTS_MAX_STARRING);
+  return { ...state, starring: list, character: list[0] ? cloneCharacter(list[0]) : { ...EMPTY_CHARACTER, referenceUrls: [] } };
+}
+
+function nameKey(name: string): string {
+  return name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/** Same person, the way the Cast row matches names ("Skylar" = "SKYLAR"). */
+export function sameAdultShortPerson(a: string, b: string): boolean {
+  const ka = nameKey(a);
+  return ka.length > 0 && ka === nameKey(b);
+}
+
+function dedupeStarring(list: readonly AdultShortsCharacter[]): AdultShortsCharacter[] {
+  const out: AdultShortsCharacter[] = [];
+  for (const c of list) {
+    if (!c?.name?.trim() || out.some((x) => sameAdultShortPerson(x.name, c.name))) continue;
+    out.push(cloneCharacter(c));
+  }
+  return out;
+}
+
+/** The people in one shot: its own picks, or everyone starring when it has none (or none of them still star). */
+export function adultShortShotPeople<T extends { name: string }>(starring: readonly T[], shot: Pick<AdultShortsShot, "castNames">): T[] {
+  if (!shot.castNames) return starring.slice();
+  const picked = starring.filter((p) => shot.castNames!.some((n) => sameAdultShortPerson(n, p.name)));
+  return picked.length ? picked : starring.slice();
 }
 
 export function mintAdultShortsId(prefix = "shot"): string {
@@ -161,6 +243,15 @@ function normalizeCharacter(value: unknown): AdultShortsCharacter {
   return { name: str(c.name), look: str(c.look), referenceUrls: refs };
 }
 
+function normalizeStarring(value: unknown): { starring?: AdultShortsCharacter[] } {
+  if (!Array.isArray(value)) return {};
+  return { starring: dedupeStarring(value.map(normalizeCharacter)).slice(0, ADULT_SHORTS_MAX_STARRING) };
+}
+
+function normalizeAdultFlag(value: unknown): { adult?: boolean } {
+  return typeof value === "boolean" ? { adult: value } : {};
+}
+
 function normalizeShots(value: unknown): AdultShortsShot[] {
   const shotsRaw = Array.isArray(value) ? value : [];
   const shots: AdultShortsShot[] = [];
@@ -182,6 +273,9 @@ function normalizeShots(value: unknown): AdultShortsShot[] {
       lastFrameUrl: urlOrNull(s.lastFrameUrl),
       sirayTaskId: str(s.sirayTaskId) || null,
       chainFromPrevious: s.chainFromPrevious === true,
+      ...(Array.isArray(s.castNames)
+        ? { castNames: s.castNames.filter((n): n is string => typeof n === "string" && n.trim().length > 0).map((n) => n.trim()).slice(0, ADULT_SHORTS_MAX_STARRING) }
+        : {}),
     });
   }
   return shots;
@@ -208,6 +302,8 @@ function normalizeSaved(value: unknown): AdultShortsSaved[] {
       shots,
       ...(isSafeDeckMediaSlug(r.mediaSlug) ? { mediaSlug: r.mediaSlug } : {}),
       ...(isEpisodeNumber(r.episodeNumber) ? { episodeNumber: r.episodeNumber } : {}),
+      ...normalizeStarring(r.starring),
+      ...normalizeAdultFlag(r.adult),
     });
   }
   return out;
@@ -230,6 +326,9 @@ export function normalizeAdultShortsState(value: unknown): AdultShortsState | nu
     saved,
     currentSavedId: saved.some((x) => x.id === currentSavedId) ? currentSavedId : null,
     ...(isSafeDeckMediaSlug(v.mediaSlug) ? { mediaSlug: v.mediaSlug } : {}),
+    ...normalizeStarring(v.starring),
+    ...normalizeAdultFlag(v.adult),
+    ...(str(v.title).trim() ? { title: str(v.title).trim().slice(0, ADULT_SHORTS_TITLE_MAX) } : {}),
   };
 }
 
@@ -241,8 +340,9 @@ export function adultShortsHaveUserContent(state: AdultShortsState | null | unde
 }
 
 /** Anything worth saving in the editor right now (ignores the Library). */
-export function editorHasContent(state: Pick<AdultShortsState, "character" | "shots">): boolean {
+export function editorHasContent(state: Pick<AdultShortsState, "character" | "shots" | "starring">): boolean {
   if (state.character.name.trim() || state.character.look.trim() || state.character.referenceUrls.length) return true;
+  if (state.starring?.length) return true;
   return state.shots.some((s) => s.prompt.trim() || s.plateUrl || s.clipUrl);
 }
 
@@ -256,8 +356,18 @@ export function suggestAdultShortTitle(state: Pick<AdultShortsState, "character"
   return `Short ${now.toISOString().slice(0, 10)}`;
 }
 
-const cloneShots = (shots: readonly AdultShortsShot[]) => shots.map((s) => ({ ...s }));
-const cloneCharacter = (c: AdultShortsCharacter): AdultShortsCharacter => ({ ...c, referenceUrls: c.referenceUrls.slice() });
+const cloneShots = (shots: readonly AdultShortsShot[]) => shots.map((s) => ({ ...s, ...(s.castNames ? { castNames: s.castNames.slice() } : {}) }));
+function cloneCharacter(c: AdultShortsCharacter): AdultShortsCharacter {
+  return { ...c, referenceUrls: c.referenceUrls.slice() };
+}
+
+/** The episode fields that ride along with the shots (only the ones set, so older cards stay byte-for-byte the same). */
+function episodeExtras(state: AdultShortsState): Pick<AdultShortsSaved, "starring" | "adult"> {
+  return {
+    ...(Array.isArray(state.starring) ? { starring: state.starring.map(cloneCharacter) } : {}),
+    ...(typeof state.adult === "boolean" ? { adult: state.adult } : {}),
+  };
+}
 
 /**
  * Save the editor to the Library. Updates the entry the editor came from
@@ -271,15 +381,18 @@ export function saveAdultShortToLibrary(state: AdultShortsState, now: Date, titl
     : nextAdultShortEpisodeNumber(state.saved);
   const entry: AdultShortsSaved = {
     id: existing?.id ?? id,
-    title: (title ?? "").trim() || existing?.title || suggestAdultShortTitle(state, now),
+    title: (title ?? "").trim() || existing?.title || state.title || suggestAdultShortTitle(state, now),
     savedAt: now.toISOString(),
     character: cloneCharacter(state.character),
     shots: cloneShots(state.shots).map((s) => ({ ...s, sirayTaskId: null })),
     ...((state.mediaSlug ?? existing?.mediaSlug) ? { mediaSlug: state.mediaSlug ?? existing?.mediaSlug } : {}),
     episodeNumber,
+    ...episodeExtras(state),
   };
   const rest = state.saved.filter((x) => x.id !== entry.id);
-  return { ...state, saved: [entry, ...rest].slice(0, ADULT_SHORTS_MAX_SAVED), currentSavedId: entry.id };
+  const next: AdultShortsState = { ...state, saved: [entry, ...rest].slice(0, ADULT_SHORTS_MAX_SAVED), currentSavedId: entry.id };
+  delete next.title;
+  return next;
 }
 
 // ---- Episodes (2026-09-30) ------------------------------------------------
@@ -346,7 +459,9 @@ function sameEditorAsCard(state: AdultShortsState, card: AdultShortsSaved): bool
   return (
     JSON.stringify(card.character) === JSON.stringify(state.character) &&
     JSON.stringify(strip(card.shots)) === JSON.stringify(strip(state.shots)) &&
-    (state.mediaSlug ?? card.mediaSlug) === card.mediaSlug
+    (state.mediaSlug ?? card.mediaSlug) === card.mediaSlug &&
+    JSON.stringify(adultShortStarring(card)) === JSON.stringify(adultShortStarring(state)) &&
+    adultShortIsAdult(card) === adultShortIsAdult(state)
   );
 }
 
@@ -371,7 +486,7 @@ export function autoSaveAdultShortEditor(state: AdultShortsState, now: Date, id:
   const mediaSlug = state.mediaSlug ?? card?.mediaSlug;
   const entry: AdultShortsSaved = {
     id: card?.id ?? id,
-    title: card?.title || suggestAdultShortTitle(state, now),
+    title: card?.title || state.title || suggestAdultShortTitle(state, now),
     savedAt: now.toISOString(),
     character: cloneCharacter(state.character),
     shots: cloneShots(state.shots).map((s) => ({ ...s, sirayTaskId: null })),
@@ -379,9 +494,13 @@ export function autoSaveAdultShortEditor(state: AdultShortsState, now: Date, id:
     episodeNumber: card
       ? (adultShortEpisodeNumbers(state.saved).get(card.id) ?? nextAdultShortEpisodeNumber(state.saved))
       : nextAdultShortEpisodeNumber(state.saved),
+    ...episodeExtras(state),
   };
   const saved = card ? state.saved.map((x) => (x.id === card.id ? entry : x)) : [entry, ...state.saved];
-  return { ...state, saved, currentSavedId: entry.id };
+  const next: AdultShortsState = { ...state, saved, currentSavedId: entry.id };
+  // The typed name now lives on the card.
+  delete next.title;
+  return next;
 }
 
 /**
@@ -392,10 +511,9 @@ export function autoSaveAdultShortEditor(state: AdultShortsState, now: Date, id:
 export function adultShortEpisodeView(
   state: AdultShortsState,
   entry: AdultShortsSaved,
-): { shots: AdultShortsShot[]; character: AdultShortsCharacter } {
-  return state.currentSavedId === entry.id
-    ? { shots: state.shots, character: state.character }
-    : { shots: entry.shots, character: entry.character };
+): { shots: AdultShortsShot[]; character: AdultShortsCharacter; starring: AdultShortsCharacter[]; adult: boolean } {
+  const src = state.currentSavedId === entry.id ? state : entry;
+  return { shots: src.shots, character: src.character, starring: adultShortStarring(src), adult: adultShortIsAdult(src) };
 }
 
 
@@ -404,12 +522,27 @@ export function adultShortEpisodeView(
 export function startNewAdultShort(state: AdultShortsState, keepCharacter: boolean): AdultShortsState {
   const rest: AdultShortsState = { ...state };
   delete rest.mediaSlug;
-  return {
+  delete rest.title;
+  const base: AdultShortsState = {
     ...rest,
-    character: keepCharacter ? cloneCharacter(state.character) : { name: "", look: "", referenceUrls: [] },
     shots: [buildAdultShortsShot(mintAdultShortsId())],
     currentSavedId: null,
+    // Every new short starts with its 18+ switch off (2026-09-30).
+    adult: false,
   };
+  return setAdultShortStarring(base, keepCharacter ? adultShortStarring(state) : []);
+}
+
+/**
+ * "+ New" on the Shorts EPISODES row (2026-09-30): a blank workspace with
+ * only the name typed for it. No one starring, one empty shot, 18+ off.
+ * Like every new episode it only gets its card (and its row) once a shot
+ * has something in it; its folder is then `ep02-<name>`.
+ */
+export function startBlankAdultShort(state: AdultShortsState, title: string): AdultShortsState {
+  const next = startNewAdultShort(state, false);
+  const name = title.replace(/\s+/g, " ").trim().slice(0, ADULT_SHORTS_TITLE_MAX);
+  return name ? { ...next, title: name } : next;
 }
 
 /** Load a saved short back into the editor. */
@@ -418,12 +551,17 @@ export function openSavedAdultShort(state: AdultShortsState, id: string): AdultS
   if (!entry) return state;
   const rest: AdultShortsState = { ...state };
   delete rest.mediaSlug;
+  delete rest.starring;
+  delete rest.adult;
+  delete rest.title;
   return {
     ...rest,
     character: cloneCharacter(entry.character),
     shots: cloneShots(entry.shots),
     currentSavedId: entry.id,
     ...(entry.mediaSlug ? { mediaSlug: entry.mediaSlug } : {}),
+    ...(entry.starring ? { starring: entry.starring.map(cloneCharacter) } : {}),
+    ...(typeof entry.adult === "boolean" ? { adult: entry.adult } : {}),
   };
 }
 
@@ -447,40 +585,99 @@ export function editorHasUnsavedChanges(state: AdultShortsState): boolean {
   const strip = (shots: readonly AdultShortsShot[]) => shots.map((s) => ({ ...s, sirayTaskId: null }));
   return (
     JSON.stringify(entry.character) !== JSON.stringify(state.character) ||
-    JSON.stringify(strip(entry.shots)) !== JSON.stringify(strip(state.shots))
+    JSON.stringify(strip(entry.shots)) !== JSON.stringify(strip(state.shots)) ||
+    JSON.stringify(adultShortStarring(entry)) !== JSON.stringify(adultShortStarring(state)) ||
+    adultShortIsAdult(entry) !== adultShortIsAdult(state)
   );
 }
 
-function characterLine(character: AdultShortsCharacter): string {
-  const bits = [character.name.trim(), character.look.trim()].filter(Boolean);
-  return bits.length ? `Character: ${bits.join(", ")}.` : "";
+/** One person in a shot, as the prompts see them. `subjectWord` is their Cast card's (woman, man, person…). */
+export interface AdultShortsPerson extends AdultShortsCharacter {
+  subjectWord?: string;
+}
+
+export interface AdultShortsPromptOptions {
+  /** The episode's 18+ switch. Default on (older shorts were all 18+). */
+  adult?: boolean;
+}
+
+function peopleOf(who: AdultShortsCharacter | readonly AdultShortsPerson[]): AdultShortsPerson[] {
+  const list = Array.isArray(who) ? (who as readonly AdultShortsPerson[]).slice() : [who as AdultShortsPerson];
+  return list.filter((p) => p.name.trim() || p.look.trim());
+}
+
+function personBits(p: AdultShortsPerson): string {
+  return [p.name.trim(), p.look.trim()].filter(Boolean).join(", ");
+}
+
+/** "Character: SKYLAR." for one person (unchanged); "Characters: A; B, look." for more. */
+function characterLine(people: readonly AdultShortsPerson[]): string {
+  if (people.length === 0) return "";
+  if (people.length === 1) return `Character: ${personBits(people[0])}.`;
+  return `Characters: ${people.map(personBits).join("; ")}.`;
+}
+
+/** Which reference picture is who, when a plate is made from more than one person's pictures. */
+function referenceLine(people: readonly AdultShortsPerson[]): string {
+  if (people.length < 2) return "";
+  return `${people.map((p, i) => `Reference ${i + 1} is ${p.name.trim() || `person ${i + 1}`}`).join(", ")}.`;
+}
+
+const SUBJECT_WORDS = new Set(["woman", "man", "person"]);
+
+/** The adult lock: word for word as before for a woman; the same sentence for a man or anyone else; one line for a group. */
+export function adultShortsAdultLock(people: readonly Pick<AdultShortsPerson, "subjectWord">[]): string {
+  if (people.length > 1) return ADULT_SHORTS_GROUP_ADULT_LOCK;
+  const raw = (people[0]?.subjectWord ?? "").trim().toLowerCase();
+  const word = SUBJECT_WORDS.has(raw) ? raw : "person";
+  return word === "woman" ? ADULT_SHORTS_ADULT_LOCK : ADULT_SHORTS_ADULT_LOCK.replace(/^Adult woman,/, `Adult ${word},`);
+}
+
+function identityLine(people: readonly Pick<AdultShortsPerson, "subjectWord">[]): string {
+  if (people.length > 1) return "Keep everyone's identity consistent with the start frame.";
+  const word = (people[0]?.subjectWord ?? "").trim().toLowerCase();
+  const pronoun = word === "woman" ? "her" : word === "man" ? "his" : "their";
+  return `Keep ${pronoun} identity consistent with the start frame.`;
+}
+
+function contentLock(opts: AdultShortsPromptOptions | undefined): string {
+  return opts?.adult === false ? ADULT_SHORTS_GENERAL_CONTENT_LOCK : ADULT_SHORTS_CONTENT_LOCK;
 }
 
 function capPrompt(text: string): string {
   return text.length > MAX_PROMPT_CHARS ? text.slice(0, MAX_PROMPT_CHARS) : text;
 }
 
-/** Plate still prompt — shot first, then the locks (locks always survive the cap). */
-export function buildAdultShortsStillPrompt(character: AdultShortsCharacter, shot: Pick<AdultShortsShot, "prompt">): string {
-  const locks = [characterLine(character), ADULT_SHORTS_ADULT_LOCK, ADULT_SHORTS_CONTENT_LOCK].filter(Boolean).join(" ");
+function withLocks(shot: Pick<AdultShortsShot, "prompt">, locks: string): string {
   const room = MAX_PROMPT_CHARS - locks.length - 1;
   const shotText = shot.prompt.trim().slice(0, Math.max(0, room));
   return capPrompt([shotText, locks].filter(Boolean).join(" "));
 }
 
+/**
+ * Plate still prompt — shot first, then the locks (locks always survive
+ * the cap). `who` is the one person (older callers) or everyone in the
+ * shot, in the same order as the reference pictures.
+ */
+export function buildAdultShortsStillPrompt(
+  who: AdultShortsCharacter | readonly AdultShortsPerson[],
+  shot: Pick<AdultShortsShot, "prompt">,
+  opts?: AdultShortsPromptOptions,
+): string {
+  const people = peopleOf(who);
+  const locks = [characterLine(people), referenceLine(people), adultShortsAdultLock(people), contentLock(opts)].filter(Boolean).join(" ");
+  return withLocks(shot, locks);
+}
+
 /** Motion prompt for Wan i2v — same locks, plus "keep the same person". */
-export function buildAdultShortsMotionPrompt(character: AdultShortsCharacter, shot: Pick<AdultShortsShot, "prompt">): string {
-  const locks = [
-    characterLine(character),
-    ADULT_SHORTS_ADULT_LOCK,
-    "Keep her identity consistent with the start frame.",
-    ADULT_SHORTS_CONTENT_LOCK,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const room = MAX_PROMPT_CHARS - locks.length - 1;
-  const shotText = shot.prompt.trim().slice(0, Math.max(0, room));
-  return capPrompt([shotText, locks].filter(Boolean).join(" "));
+export function buildAdultShortsMotionPrompt(
+  who: AdultShortsCharacter | readonly AdultShortsPerson[],
+  shot: Pick<AdultShortsShot, "prompt">,
+  opts?: AdultShortsPromptOptions,
+): string {
+  const people = peopleOf(who);
+  const locks = [characterLine(people), adultShortsAdultLock(people), identityLine(people), contentLock(opts)].filter(Boolean).join(" ");
+  return withLocks(shot, locks);
 }
 
 /**

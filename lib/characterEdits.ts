@@ -37,7 +37,7 @@ import {
   type CharacterLoraEntry,
 } from "./characterLoras";
 import { buildCharacterRoster, minorBlockReason, type RosterCharacter } from "./characterRoster";
-import { normalizeAdultShortsState } from "./adultShorts";
+import { adultShortStarring, normalizeAdultShortsState, sameAdultShortPerson } from "./adultShorts";
 import type { RosterExtraGroup } from "./rosterExtras";
 import { SUNNY_BANKS_CAST } from "./sunnyBanks";
 import {
@@ -187,11 +187,13 @@ export function characterDeleteBlocker(char: RosterCharacter, state: SkidmarksSt
   if (char.group === "adult-shorts") {
     const adult = normalizeAdultShortsState(state.adultShorts);
     const slug = slugifyCharacterName(name);
-    const saved = (adult?.saved ?? []).filter((s) => slugifyCharacterName(s.character.name) === slug);
+    const inEpisode = (x: Parameters<typeof adultShortStarring>[0]) =>
+      slugifyCharacterName(x.character.name) === slug || adultShortStarring(x).some((p) => slugifyCharacterName(p.name) === slug);
+    const saved = (adult?.saved ?? []).filter(inEpisode);
     if (saved.length > 0) {
-      return `${name} is the character in ${plural(saved.length, "Shorts episode")} (${listTitles(saved.map((s) => s.title))}). Delete those episodes first.`;
+      return `${name} stars in ${plural(saved.length, "Shorts episode")} (${listTitles(saved.map((s) => s.title))}). Delete those episodes first.`;
     }
-    if (adult && adult.character.name.trim() && slugifyCharacterName(adult.character.name) === slug) {
+    if (adult && inEpisode(adult)) {
       return `${name} is starring in the open Shorts episode. Pick someone else under Starring first.`;
     }
   }
@@ -244,10 +246,23 @@ export function renameRosterCharacter(char: RosterCharacter, nextName: string): 
       break;
     case "short": {
       nextKey = `as:${slugifyCharacterName(name)}`;
+      const renameIn = <T extends { character: { name: string }; starring?: { name: string }[] }>(x: T): T => ({
+        ...x,
+        character: slugifyCharacterName(x.character.name) === source.slug ? { ...x.character, name } : x.character,
+        ...(x.starring
+          ? { starring: x.starring.map((p) => (slugifyCharacterName(p.name) === source.slug ? { ...p, name } : p)) }
+          : {}),
+      });
+      const oldName = char.name;
+      const renameShots = <T extends { shots: { castNames?: string[] }[] }>(x: T): T => ({
+        ...x,
+        shots: x.shots.map((sh) =>
+          sh.castNames ? { ...sh, castNames: sh.castNames.map((n) => (sameAdultShortPerson(n, oldName) ? name : n)) } : sh,
+        ),
+      });
       patchAdultShorts((st) => ({
-        ...st,
-        character: slugifyCharacterName(st.character.name) === source.slug ? { ...st.character, name } : st.character,
-        saved: st.saved.map((s) => (slugifyCharacterName(s.character.name) === source.slug ? { ...s, character: { ...s.character, name } } : s)),
+        ...renameShots(renameIn(st)),
+        saved: st.saved.map((s) => renameShots(renameIn(s))),
       }));
       break;
     }

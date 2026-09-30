@@ -11,6 +11,12 @@ import {
   buildAdultShortsShot,
   adultShortEpisodeCode,
   adultShortEpisodeNumbers,
+  adultShortIsAdult,
+  adultShortShotPeople,
+  adultShortStarring,
+  sameAdultShortPerson,
+  setAdultShortStarring,
+  ADULT_SHORTS_MAX_STARRING,
   buildAdultShortsStillPrompt,
   clampAdultShortsDuration,
   estimateAdultShortsClipCostUsd,
@@ -34,8 +40,15 @@ import {
   patchAdultShorts,
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
-import { slugifyCharacterName } from "@/lib/characterLoras";
-import { resolveShortsRenderCharacter, shortsCastList, shortsCharacterFromCast } from "@/lib/shortsCast";
+import {
+  resolveShortsStarring,
+  shortsCastList,
+  shortsCastPictures,
+  shortsCharacterFromCast,
+  shortsPlateReferences,
+  shortsShotPeople,
+} from "@/lib/shortsCast";
+import { ShotGrid, type ShotTileView } from "./ShotGrid";
 import { setShortsBusy } from "@/lib/shortsBusy";
 import { runSunnyBanksRenderQueue } from "@/lib/sunnyBanksRenderQueue";
 import { SHORTS_EDITOR_ID } from "./ShortsEpisodeRow";
@@ -88,12 +101,14 @@ export function AdultShortsPanel() {
   const snapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const state = getAdultShortsState(snapshot);
   const { shots } = state;
-  // Who's in this episode, read through her Cast card (the episode's own
-  // pictures first, so each shot's "From N" still means the same picture).
-  const character = resolveShortsRenderCharacter(snapshot);
+  // Everyone starring, each read through their own Cast card (the
+  // episode's own pictures first, so each shot's "From N" still means the
+  // same picture).
+  const starringPeople = resolveShortsStarring(snapshot);
+  const starringList = adultShortStarring(state);
   const cast = shortsCastList(snapshot);
-  const starringSlug = slugifyCharacterName(state.character.name);
-  const starring = state.character.name.trim() ? cast.find((c) => slugifyCharacterName(c.name) === starringSlug) ?? null : null;
+  const isAdult = adultShortIsAdult(state);
+  const [openShotId, setOpenShotId] = useState<string | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [armedRenderId, setArmedRenderId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -165,19 +180,45 @@ export function AdultShortsPanel() {
     );
   }
 
-  /** "Starring": the episode's girl comes from the Cast row. */
-  const pickStarring = (key: string) => {
+  /** "Starring" (2026-09-30): anyone from the Cast row, more than one allowed. A tap adds or removes them. */
+  const toggleStarring = (key: string) => {
     const c = cast.find((x) => x.sourceKey === key);
     if (!c || c.blockedReason) return;
-    patchAdultShorts((st) => ({ ...st, character: shortsCharacterFromCast(c) }));
+    patchAdultShorts((st) => {
+      const now = adultShortStarring(st);
+      const on = now.some((p) => sameAdultShortPerson(p.name, c.name));
+      const next = on ? now.filter((p) => !sameAdultShortPerson(p.name, c.name)) : [...now, shortsCharacterFromCast(c)];
+      return setAdultShortStarring(st, next);
+    });
     flushSkidmarksSessionNow();
+  };
+
+  /** "In this shot": who's in one shot, from the people starring. All of them = no picks saved. */
+  const toggleShotPerson = (shot: AdultShortsShot, name: string) => {
+    const inShot = adultShortShotPeople(starringList, shot).map((p) => p.name);
+    const on = inShot.some((n) => sameAdultShortPerson(n, name));
+    const next = on ? inShot.filter((n) => !sameAdultShortPerson(n, name)) : [...inShot, name];
+    if (next.length === 0) return; // Someone has to be in the shot; untick everyone else instead.
+    const all = starringList.every((p) => next.some((n) => sameAdultShortPerson(n, p.name)));
+    patchAdultShorts((st) => ({
+      ...st,
+      shots: st.shots.map((x) => {
+        if (x.id !== shot.id) return x;
+        const rest = { ...x };
+        delete rest.castNames;
+        return all ? rest : { ...rest, castNames: next };
+      }),
+    }));
   };
 
   const makePlate = async (shot: AdultShortsShot) => {
     if (busy) return;
-    const ref = character.referenceUrls[shot.referenceIndex] ?? character.referenceUrls[0];
-    if (!ref) {
-      setShotError(shot.id, "Add her pictures on her card in the Cast row first.");
+    const people = shortsShotPeople(starringPeople, shot);
+    // One picture of each person in the shot, in the order the prompt names them.
+    const refs = shortsPlateReferences(people, shot.referenceIndex);
+    const missing = people.filter((p) => p.referenceUrls.length === 0).map((p) => p.name);
+    if (missing.length) {
+      setShotError(shot.id, `Add pictures of ${missing.join(" and ")} on their Cast card first.`);
       return;
     }
     if (!shot.prompt.trim()) {
@@ -187,14 +228,14 @@ export function AdultShortsPanel() {
     setShotError(shot.id, null);
     setBusy({ shotId: shot.id, kind: "plate" });
     try {
-      const refData = await resolvePlateReferenceDataUrl(ref);
+      const refData = await Promise.all(refs.map((ref) => resolvePlateReferenceDataUrl(ref)));
       const plateTarget = adultShortTargetFor("plate", shots.findIndex((x) => x.id === shot.id) + 1);
       const res = await fetch("/api/skidmarks/generate-still-siray", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: buildAdultShortsStillPrompt(character, shot),
-          referenceImageDataUrls: [refData],
+          prompt: buildAdultShortsStillPrompt(people, shot, { adult: isAdult }),
+          referenceImageDataUrls: refData,
           mediaTarget: plateTarget,
         }),
       });
@@ -220,7 +261,8 @@ export function AdultShortsPanel() {
     const index = now.shots.findIndex((x) => x.id === shotId);
     const shot = now.shots[index];
     if (!shot) return false;
-    const character = resolveShortsRenderCharacter(getSkidmarksSnapshot());
+    const people = shortsShotPeople(resolveShortsStarring(getSkidmarksSnapshot()), shot);
+    const adultNow = adultShortIsAdult(now);
     const startImageUrl = resolveAdultShortsStartImage(now.shots, index);
     if (!startImageUrl && !shot.sirayTaskId) {
       setShotError(
@@ -243,7 +285,7 @@ export function AdultShortsPanel() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              prompt: buildAdultShortsMotionPrompt(character, shot),
+              prompt: buildAdultShortsMotionPrompt(people, shot, { adult: adultNow }),
               startImageUrl,
               durationSec: shot.durationSec,
               ...(taskId ? { sirayTaskId: taskId } : {}),
@@ -329,6 +371,174 @@ export function AdultShortsPanel() {
     }
   };
 
+  /** One shot's editor, opened from its tile: every control the stacked rows had. */
+  const renderShotPanel = (shot: AdultShortsShot, index: number) => {
+    const isBusy = busy?.shotId === shot.id;
+    const armed = armedRenderId === shot.id;
+    const clipCost = formatUsd(estimateAdultShortsClipCostUsd(shot.durationSec));
+    const people = shortsShotPeople(starringPeople, shot);
+    const pictureCount = Math.max(0, ...people.map((p) => p.referenceUrls.length));
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-end gap-2">
+          <select
+            value={shot.durationSec}
+            onChange={(e) => patchShot(shot.id, { durationSec: clampAdultShortsDuration(Number(e.target.value)) })}
+            aria-label={`Shot ${index + 1} length`}
+            className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white"
+          >
+            {Array.from({ length: ADULT_SHORTS_MAX_SHOT_SEC - ADULT_SHORTS_MIN_SHOT_SEC + 1 }, (_, i) => i + ADULT_SHORTS_MIN_SHOT_SEC).map(
+              (sec) => (
+                <option key={sec} value={sec}>
+                  {sec}s
+                </option>
+              )
+            )}
+          </select>
+          {shots.length > 1 && (
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={() => {
+                patchAdultShorts((s) => ({ ...s, shots: s.shots.filter((x) => x.id !== shot.id) }));
+                setOpenShotId(null);
+              }}
+              aria-label={`Remove shot ${index + 1}`}
+              className="rounded-md px-2 py-1 text-xs text-white/40 hover:text-white/80"
+            >
+              Remove
+            </button>
+          )}
+        </div>
+
+        <textarea
+          value={shot.prompt}
+          onChange={(e) => patchShot(shot.id, { prompt: e.target.value })}
+          rows={3}
+          placeholder="What happens in this shot, e.g. lounging on a velvet couch in a band room, laughing, glitter falling, slow push-in"
+          aria-label={`Shot ${index + 1} prompt`}
+          className="w-full resize-y rounded-md border border-white/10 bg-black/30 px-3 py-2 text-base text-white placeholder:text-white/30 sm:text-sm"
+        />
+
+        {/* Who's in this shot: everyone starring unless some are unticked. */}
+        {starringList.length > 1 && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-white/60">
+            <span className="mr-0.5">In this shot</span>
+            {starringList.map((p) => {
+              const on = people.some((x) => sameAdultShortPerson(x.name, p.name));
+              return (
+                <button
+                  key={p.name}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => toggleShotPerson(shot, p.name)}
+                  className={[
+                    "min-h-[28px] rounded-full border px-2.5 py-0.5",
+                    on ? "border-sky-400/70 bg-sky-500/15 text-white" : "border-white/15 text-white/50",
+                  ].join(" ")}
+                >
+                  {p.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
+          {pictureCount > 1 && (
+            <span className="flex items-center gap-1">
+              From
+              {Array.from({ length: pictureCount }, (_, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => patchShot(shot.id, { referenceIndex: i })}
+                  aria-pressed={shot.referenceIndex === i}
+                  className={[
+                    "rounded-md border px-2 py-0.5",
+                    shot.referenceIndex === i ? "border-red-400/60 text-white" : "border-white/10 text-white/50",
+                  ].join(" ")}
+                >
+                  {i + 1}
+                </button>
+              ))}
+            </span>
+          )}
+          {index > 0 && (
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={shot.chainFromPrevious}
+                onChange={(e) => patchShot(shot.id, { chainFromPrevious: e.target.checked })}
+              />
+              Start from shot {index}&apos;s last frame
+            </label>
+          )}
+        </div>
+
+        <div className="flex gap-3">
+          <div className="flex w-32 shrink-0 flex-col gap-1.5">
+            <div className="flex aspect-video items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/40 text-[11px] text-white/30">
+              {shot.plateUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={shot.plateUrl} alt={`Shot ${index + 1} plate`} className="h-full w-full object-cover" />
+              ) : (
+                "No plate"
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={Boolean(busy) || queueRunning}
+              onClick={() => void makePlate(shot)}
+              className="rounded-md border border-white/15 px-2 py-1 text-xs text-white/80 hover:bg-white/[0.06] disabled:opacity-40"
+            >
+              {isBusy && busy?.kind === "plate"
+                ? "Making…"
+                : `${shot.plateUrl ? "Remake" : "Make"} plate ${formatUsd(ADULT_SHORTS_STILL_COST_USD)}`}
+            </button>
+          </div>
+          <div className="flex min-w-0 max-w-md flex-1 flex-col gap-1.5">
+            <div className="flex aspect-video items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/40 text-[11px] text-white/30">
+              {shot.clipUrl ? (
+                <video src={shot.clipUrl} controls playsInline preload="metadata" className="h-full w-full object-cover" />
+              ) : (
+                "No clip"
+              )}
+            </div>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                disabled={Boolean(busy) || queueRunning}
+                onClick={() => (armed || shot.sirayTaskId ? void renderClip(shot.id) : setArmedRenderId(shot.id))}
+                className={[
+                  "flex-1 rounded-md px-2 py-1 text-xs font-medium disabled:opacity-40",
+                  armed ? "bg-red-500 text-white" : "bg-red-500/70 text-white hover:bg-red-500/90",
+                ].join(" ")}
+              >
+                {isBusy && busy?.kind === "clip"
+                  ? "Rendering…"
+                  : shot.sirayTaskId
+                    ? "Keep waiting"
+                    : armed
+                      ? `Tap again: ${clipCost}`
+                      : `${shot.clipUrl ? "Re-render" : "Render"} ${clipCost}`}
+              </button>
+              {shot.clipUrl && shot.clipUrl.startsWith("https:") && (
+                <a
+                  href={buildForceDownloadUrl(shot.clipUrl)}
+                  className="rounded-md border border-white/15 px-2 py-1 text-xs text-white/70 hover:text-white"
+                >
+                  Download
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+        {errors[shot.id] && <p className="text-xs text-red-300">{errors[shot.id]}</p>}
+      </div>
+    );
+  };
+
   return (
     <div id={SHORTS_EDITOR_ID} className="flex scroll-mt-4 flex-col gap-6">
       <section className="flex flex-col gap-3">
@@ -340,195 +550,70 @@ export function AdultShortsPanel() {
             {finishedCount}/{shots.length} clips done · plate {formatUsd(ADULT_SHORTS_STILL_COST_USD)} each
           </p>
         </div>
-        <div className="flex min-w-0 items-center gap-2 text-xs text-white/60">
-          {character.referenceUrls[0] && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={character.referenceUrls[0]} alt="" className="h-7 w-7 shrink-0 rounded-full object-cover object-top" />
-          )}
-          <label htmlFor="shorts-starring" className="shrink-0">
-            Starring
-          </label>
-          <select
-            id="shorts-starring"
-            value={starring?.sourceKey ?? ""}
-            onChange={(e) => pickStarring(e.target.value)}
+
+        {/* This episode's own 18+ switch (2026-09-30): off for new shorts. */}
+        <label className="flex items-center gap-2 self-start text-xs text-white/70">
+          <input
+            type="checkbox"
+            checked={isAdult}
             disabled={Boolean(busy) || queueRunning}
-            className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2 py-1 text-base text-white sm:flex-none sm:text-xs"
-          >
-            {!starring && <option value="">{state.character.name.trim() || "Pick someone from the Cast row"}</option>}
-            {cast.map((c) => (
-              <option key={c.sourceKey} value={c.sourceKey} disabled={Boolean(c.blockedReason)}>
+            onChange={(e) => {
+              const adult = e.target.checked;
+              patchAdultShorts((s) => ({ ...s, adult }));
+              flushSkidmarksSessionNow();
+            }}
+          />
+          <span>
+            18+ episode
+            <span className="ml-1 text-white/40">{isAdult ? "· spicy allowed, no sex acts" : "· fully clothed, nothing sexual"}</span>
+          </span>
+        </label>
+
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-white/60">
+          <span className="mr-0.5 shrink-0">Starring</span>
+          {cast.length === 0 && <span className="text-white/40">Add people in the Cast row above.</span>}
+          {cast.map((c) => {
+            const on = starringList.some((p) => sameAdultShortPerson(p.name, c.name));
+            const face = shortsCastPictures(c)[0];
+            const full = !on && starringList.length >= ADULT_SHORTS_MAX_STARRING;
+            return (
+              <button
+                key={c.sourceKey}
+                type="button"
+                aria-pressed={on}
+                disabled={Boolean(c.blockedReason) || full || Boolean(busy) || queueRunning}
+                onClick={() => toggleStarring(c.sourceKey)}
+                title={c.blockedReason ?? (on ? `Take ${c.name} out of this episode` : `Put ${c.name} in this episode`)}
+                className={[
+                  "flex min-h-[32px] items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2.5 disabled:opacity-40",
+                  on ? "border-sky-400/70 bg-sky-500/15 text-white" : "border-white/15 text-white/60 hover:border-white/30",
+                ].join(" ")}
+              >
+                {face ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={face} alt="" className="h-6 w-6 rounded-full object-cover object-top" />
+                ) : (
+                  <span className="h-6 w-6 rounded-full bg-white/10" />
+                )}
                 {c.name}
-              </option>
-            ))}
-          </select>
+              </button>
+            );
+          })}
         </div>
-        {!character.referenceUrls.length && (
+        {starringPeople.some((p) => p.referenceUrls.length === 0) && (
           <p className="text-xs text-white/40">
-            {character.name.trim() ? `${character.name.trim()} has no pictures yet.` : "Pick who's in this episode."} Add her
-            pictures on her card in the Cast row above.
+            {starringPeople
+              .filter((p) => p.referenceUrls.length === 0)
+              .map((p) => p.name)
+              .join(" and ")}{" "}
+            {starringPeople.filter((p) => p.referenceUrls.length === 0).length === 1 ? "has" : "have"} no pictures yet. Add them on
+            their card in the Cast row above.
           </p>
         )}
 
-        {shots.map((shot, index) => {
-          const isBusy = busy?.shotId === shot.id;
-          const armed = armedRenderId === shot.id;
-          const clipCost = formatUsd(estimateAdultShortsClipCostUsd(shot.durationSec));
-          return (
-            <div key={shot.id} className="rounded-2xl border border-white/10 bg-white/[0.02] p-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-medium text-white">
-                  Shot {index + 1}
-                  {/* Every Shorts clip renders on Siray Wan 3.0 spicy (2026-09-30 engine chip). */}
-                  <span title="Video on Siray" className="ml-1.5 align-middle text-[9px] font-bold tracking-wide text-red-400">
-                    {videoBackendTagLabel("siray")}
-                  </span>
-                </p>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={shot.durationSec}
-                    onChange={(e) => patchShot(shot.id, { durationSec: clampAdultShortsDuration(Number(e.target.value)) })}
-                    aria-label={`Shot ${index + 1} length`}
-                    className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white"
-                  >
-                    {Array.from({ length: ADULT_SHORTS_MAX_SHOT_SEC - ADULT_SHORTS_MIN_SHOT_SEC + 1 }, (_, i) => i + ADULT_SHORTS_MIN_SHOT_SEC).map(
-                      (sec) => (
-                        <option key={sec} value={sec}>
-                          {sec}s
-                        </option>
-                      )
-                    )}
-                  </select>
-                  {shots.length > 1 && (
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => patchAdultShorts((s) => ({ ...s, shots: s.shots.filter((x) => x.id !== shot.id) }))}
-                      aria-label={`Remove shot ${index + 1}`}
-                      className="rounded-md px-2 py-1 text-xs text-white/40 hover:text-white/80"
-                    >
-                      Remove
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <textarea
-                value={shot.prompt}
-                onChange={(e) => patchShot(shot.id, { prompt: e.target.value })}
-                rows={3}
-                placeholder="What happens in this shot, e.g. lounging on a velvet couch in a band room, laughing, glitter falling, slow push-in"
-                aria-label={`Shot ${index + 1} prompt`}
-                className="mt-2 w-full resize-y rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30"
-              />
-
-              <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-white/60">
-                {character.referenceUrls.length > 1 && (
-                  <span className="flex items-center gap-1">
-                    From
-                    {character.referenceUrls.map((_, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        onClick={() => patchShot(shot.id, { referenceIndex: i })}
-                        aria-pressed={shot.referenceIndex === i}
-                        className={[
-                          "rounded-md border px-2 py-0.5",
-                          shot.referenceIndex === i ? "border-red-400/60 text-white" : "border-white/10 text-white/50",
-                        ].join(" ")}
-                      >
-                        {i + 1}
-                      </button>
-                    ))}
-                  </span>
-                )}
-                {index > 0 && (
-                  <label className="flex items-center gap-1.5">
-                    <input
-                      type="checkbox"
-                      checked={shot.chainFromPrevious}
-                      onChange={(e) => patchShot(shot.id, { chainFromPrevious: e.target.checked })}
-                    />
-                    Start from shot {index}&apos;s last frame
-                  </label>
-                )}
-              </div>
-
-              <div className="mt-3 flex gap-3">
-                <div className="flex w-32 shrink-0 flex-col gap-1.5">
-                  <div className="flex h-20 items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/40 text-[11px] text-white/30">
-                    {shot.plateUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={shot.plateUrl} alt={`Shot ${index + 1} plate`} className="h-full w-full object-cover" />
-                    ) : (
-                      "No plate"
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    disabled={Boolean(busy) || queueRunning}
-                    onClick={() => void makePlate(shot)}
-                    className="rounded-md border border-white/15 px-2 py-1 text-xs text-white/80 hover:bg-white/[0.06] disabled:opacity-40"
-                  >
-                    {isBusy && busy?.kind === "plate"
-                      ? "Making…"
-                      : `${shot.plateUrl ? "Remake" : "Make"} plate ${formatUsd(ADULT_SHORTS_STILL_COST_USD)}`}
-                  </button>
-                </div>
-                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                  <div className="flex h-20 items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/40 text-[11px] text-white/30">
-                    {shot.clipUrl ? (
-                      <video src={shot.clipUrl} controls playsInline preload="metadata" className="h-full w-full object-cover" />
-                    ) : (
-                      "No clip"
-                    )}
-                  </div>
-                  <div className="flex gap-1.5">
-                    <button
-                      type="button"
-                      disabled={Boolean(busy) || queueRunning}
-                      onClick={() => (armed || shot.sirayTaskId ? void renderClip(shot.id) : setArmedRenderId(shot.id))}
-                      className={[
-                        "flex-1 rounded-md px-2 py-1 text-xs font-medium disabled:opacity-40",
-                        armed ? "bg-red-500 text-white" : "bg-red-500/70 text-white hover:bg-red-500/90",
-                      ].join(" ")}
-                    >
-                      {isBusy && busy?.kind === "clip"
-                        ? "Rendering…"
-                        : shot.sirayTaskId
-                          ? "Keep waiting"
-                          : armed
-                            ? `Tap again: ${clipCost}`
-                            : `${shot.clipUrl ? "Re-render" : "Render"} ${clipCost}`}
-                    </button>
-                    {shot.clipUrl && shot.clipUrl.startsWith("https:") && (
-                      <a
-                        href={buildForceDownloadUrl(shot.clipUrl)}
-                        className="rounded-md border border-white/15 px-2 py-1 text-xs text-white/70 hover:text-white"
-                      >
-                        Download
-                      </a>
-                    )}
-                  </div>
-                </div>
-              </div>
-              {errors[shot.id] && <p className="mt-2 text-xs text-red-300">{errors[shot.id]}</p>}
-            </div>
-          );
-        })}
-
-        {shots.length < ADULT_SHORTS_MAX_SHOTS && (
-          <button
-            type="button"
-            onClick={() => patchAdultShorts((s) => ({ ...s, shots: [...s.shots, buildAdultShortsShot()] }))}
-            className="rounded-md border border-dashed border-white/15 px-3 py-2 text-sm text-white/60 hover:border-white/30 hover:text-white"
-          >
-            + Add shot
-          </button>
-        )}
-
         {/* Render every unfinished shot in order, with Stop (the same
-            controls as Sunnybank's Render all, 2026-09-30). */}
+            controls as Sunnybank's Render all, 2026-09-30). At the top,
+            above the grid. */}
         {(unfinished.length > 1 || queueRunning) && (
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -545,7 +630,7 @@ export function AdultShortsPanel() {
                 ? "Rendering…"
                 : queueArmed
                   ? `Tap again: ${queueCost}`
-                  : `Render ${unfinished.length} clips ${queueCost}`}
+                  : `Render all ${unfinished.length} clips ${queueCost}`}
             </button>
             {queueRunning && (
               <button
@@ -564,6 +649,41 @@ export function AdultShortsPanel() {
             )}
           </div>
         )}
+
+        <ShotGrid
+          tiles={shots.map((shot, index): ShotTileView => {
+            const isBusy = busy?.shotId === shot.id;
+            const rendering = (isBusy && busy?.kind === "clip") || Boolean(shot.sirayTaskId);
+            return {
+              id: shot.id,
+              number: index + 1,
+              pictureUrl: shot.plateUrl,
+              clipUrl: shot.clipUrl,
+              status: rendering ? "rendering" : shot.clipUrl ? "rendered" : errors[shot.id] ? "failed" : "empty",
+              ...(isBusy && busy?.kind === "plate" ? { statusText: "Making plate…" } : {}),
+              caption: shot.prompt.trim() || undefined,
+              // Every Shorts clip renders on Siray Wan 3.0 spicy (2026-09-30 engine chip).
+              engine: { label: videoBackendTagLabel("siray"), title: "Video on Siray" },
+            };
+          })}
+          openId={openShotId && shots.some((x) => x.id === openShotId) ? openShotId : null}
+          onToggle={setOpenShotId}
+          onAdd={
+            shots.length < ADULT_SHORTS_MAX_SHOTS
+              ? () => {
+                  const added = buildAdultShortsShot();
+                  patchAdultShorts((s) => ({ ...s, shots: [...s.shots, added] }));
+                  setOpenShotId(added.id);
+                }
+              : undefined
+          }
+          renderPanel={(id) => {
+            const index = shots.findIndex((x) => x.id === id);
+            const shot = shots[index];
+            if (!shot) return null;
+            return renderShotPanel(shot, index);
+          }}
+        />
         {queueNote && <p className="text-xs text-white/60">{queueNote}</p>}
       </section>
 

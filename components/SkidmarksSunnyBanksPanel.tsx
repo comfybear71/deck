@@ -7,6 +7,7 @@ import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { triggerBlobDownload } from "@/lib/clipRenders";
 import { SkidmarksConfirmDialog } from "@/components/SkidmarksConfirmDialog";
 import { TrashIcon } from "@/components/SkidmarksRenderedClipsShelf";
+import { ShotGrid, type ShotTileView } from "@/components/ShotGrid";
 import { estimateRowVideoCostUsd } from "@/lib/clipGeneration";
 import {
   extractVideoBackendOverride,
@@ -330,6 +331,8 @@ export interface SunnyBanksRenderedClip {
   lineLabel: string;
   videoUrl: string;
   durationSec?: number;
+  /** The engine that made it (clips from before 2026-09-30 were all LTX). */
+  videoBackend?: RowVideoBackend;
 }
 
 const PLATE_CAST = CAST_LIST.filter((c) => c.referenceImage);
@@ -1237,6 +1240,7 @@ export function collectRenderedClips(args: {
           lineLabel: chunk.line.length > 0 ? chunk.line : chunk.action?.trim() || "Silent hold",
         videoUrl: stored.videoUrl,
         durationSec: stored.durationSec,
+        ...(stored.videoBackend ? { videoBackend: stored.videoBackend } : {}),
       });
     });
   }
@@ -1855,6 +1859,8 @@ export function SkidmarksSunnyBanksPanel() {
   const clipsByAct = groupSunnyBanksClipsByAct(actIds, renderedClips);
   /** Act rows Stuart tapped open or shut, per episode. Component state only. */
   const [clipRowToggles, setClipRowToggles] = useState<Record<string, boolean>>({});
+  /** The clip tile that's open in the Clips grid (`"<act>:<line index>"`). Component state only. */
+  const [openClipKey, setOpenClipKey] = useState<string | null>(null);
   /** The episode's pinned folder name (`ep01-the-first-fleet`) when it
    * has one, else its name. Read only: the zip never pins a folder. */
   const zipEpisodeName =
@@ -2973,44 +2979,70 @@ export function SkidmarksSunnyBanksPanel() {
                       (group.clips.length === 0 ? (
                         <p className="text-[10px] leading-snug text-white/30">Nothing rendered in this act yet.</p>
                       ) : (
-                        <div className="flex gap-2.5 overflow-x-auto overscroll-x-contain pb-1 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
-                          {group.clips.map((clip) => (
-                            <div
-                              key={`${clip.act}:${clip.index}:${clip.videoUrl}`}
-                              className="flex w-44 shrink-0 touch-pan-x touch-pan-y flex-col gap-1.5"
-                            >
-                              <video
-                                src={clip.videoUrl}
-                                controls
-                                playsInline
-                                preload="metadata"
-                                className="h-28 w-44 rounded-xl bg-black object-cover"
-                              />
-                              <p className="truncate text-[11px] font-medium leading-tight text-white/70">
-                                {clip.characterName}
-                                {typeof clip.durationSec === "number"
-                                  ? ` \u00b7 ${clip.durationSec.toFixed(1)}s`
-                                  : ""}
-                              </p>
-                              <p className="truncate text-[10px] leading-tight text-white/40">
-                                Line {clip.index + 1} · {clip.lineLabel}
-                              </p>
-                              <div className="flex items-center justify-end">
-                                <button
-                                  type="button"
-                                  onClick={() => setPendingClipRemove(clip)}
-                                  disabled={running}
-                                  aria-label={`Remove the clip for line ${clip.index + 1} so it can be rendered again`}
-                                  title="Remove this clip"
-                                  className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-white/45 transition-colors hover:border-rose-400/30 hover:text-rose-300/90 disabled:cursor-not-allowed disabled:text-white/25"
-                                >
-                                  <TrashIcon />
-                                  Remove
-                                </button>
+                        // The shared shot grid (2026-09-30, the same one Shorts
+                        // uses): each Done line is a tile; tap it for the full
+                        // player and its Remove.
+                        <ShotGrid
+                          labelPrefix="Line"
+                          tiles={group.clips.map(
+                            (clip): ShotTileView => ({
+                              id: `${clip.act}:${clip.index}`,
+                              number: clip.index + 1,
+                              pictureUrl: null,
+                              clipUrl: clip.videoUrl,
+                              status: "rendered",
+                              caption: `${clip.characterName}${
+                                typeof clip.durationSec === "number" ? ` \u00b7 ${clip.durationSec.toFixed(1)}s` : ""
+                              }`,
+                              // Clips from before the engine was saved were all LTX.
+                              engine: {
+                                label: videoBackendTagLabel(clip.videoBackend ?? "ltx"),
+                                title: `Video on ${videoBackendName(clip.videoBackend ?? "ltx")}`,
+                              },
+                            }),
+                          )}
+                          openId={openClipKey}
+                          onToggle={setOpenClipKey}
+                          panelTitle={(tile) => `Act ${group.act} · line ${tile.number}`}
+                          renderPanel={(id) => {
+                            const clip = group.clips.find((c) => `${c.act}:${c.index}` === id);
+                            if (!clip) return null;
+                            return (
+                              <div className="flex flex-col gap-1.5">
+                                <video
+                                  key={clip.videoUrl}
+                                  src={clip.videoUrl}
+                                  controls
+                                  playsInline
+                                  preload="metadata"
+                                  className="aspect-video w-full max-w-xl rounded-xl bg-black object-contain"
+                                />
+                                <p className="truncate text-[11px] font-medium leading-tight text-white/70">
+                                  {clip.characterName}
+                                  {typeof clip.durationSec === "number"
+                                    ? ` \u00b7 ${clip.durationSec.toFixed(1)}s`
+                                    : ""}
+                                </p>
+                                <p className="text-[10px] leading-tight text-white/40">
+                                  Line {clip.index + 1} · {clip.lineLabel}
+                                </p>
+                                <div className="flex items-center justify-end">
+                                  <button
+                                    type="button"
+                                    onClick={() => setPendingClipRemove(clip)}
+                                    disabled={running}
+                                    aria-label={`Remove the clip for line ${clip.index + 1} so it can be rendered again`}
+                                    title="Remove this clip"
+                                    className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-white/45 transition-colors hover:border-rose-400/30 hover:text-rose-300/90 disabled:cursor-not-allowed disabled:text-white/25"
+                                  >
+                                    <TrashIcon />
+                                    Remove
+                                  </button>
+                                </div>
                               </div>
-                            </div>
-                          ))}
-                        </div>
+                            );
+                          }}
+                        />
                       ))}
                   </div>
                 );
