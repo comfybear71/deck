@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { videoBackendTagLabel } from "@/lib/videoBackendRouting";
 import {
   ADULT_SHORTS_MAX_REFERENCES,
@@ -10,6 +10,8 @@ import {
   ADULT_SHORTS_STILL_COST_USD,
   buildAdultShortsMotionPrompt,
   buildAdultShortsShot,
+  adultShortEpisodeCode,
+  adultShortEpisodeNumbers,
   buildAdultShortsStillPrompt,
   clampAdultShortsDuration,
   estimateAdultShortsClipCostUsd,
@@ -34,6 +36,9 @@ import {
   readImageFileAsDataUrl,
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
+import { setShortsBusy } from "@/lib/shortsBusy";
+import { runSunnyBanksRenderQueue } from "@/lib/sunnyBanksRenderQueue";
+import { SHORTS_EDITOR_ID } from "./ShortsEpisodeRow";
 
 /**
  * Adult shorts (2026-09-28) — the screen behind the fourth landing tile.
@@ -43,6 +48,12 @@ import {
  * from that plate (or from the previous clip's last frame when chained).
  * Every paid action is a deliberate tap with its price on the button;
  * Render is two taps. Nothing here runs on its own.
+ *
+ * Since 2026-09-30 this is the open episode from the Shorts EPISODES row
+ * (`ShortsEpisodeRow`): every change is saved onto that card as it
+ * happens. "Render N clips" runs the unfinished shots one after another,
+ * with the same Stop as Sunnybank (the shot already rendering finishes,
+ * later shots are never billed).
  */
 
 const REFERENCE_MAX_DIMENSION = 1600;
@@ -82,6 +93,17 @@ export function AdultShortsPanel() {
   const [savingTitle, setSavingTitle] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [confirmNew, setConfirmNew] = useState(false);
+  /** "Render N clips": armed after the first tap, running while the queue goes. */
+  const [queueArmed, setQueueArmed] = useState(false);
+  const [queueRunning, setQueueRunning] = useState(false);
+  const [queueNote, setQueueNote] = useState<string | null>(null);
+  const stopRequestedRef = useRef(false);
+  const [stopRequested, setStopRequested] = useState(false);
+  // The EPISODES row can't switch episodes while anything here is going.
+  useEffect(() => {
+    setShortsBusy(Boolean(busy) || queueRunning, "panel");
+  }, [busy, queueRunning]);
+  useEffect(() => () => setShortsBusy(false, "panel"), []);
   const currentSaved = state.currentSavedId ? state.saved.find((x) => x.id === state.currentSavedId) ?? null : null;
   const unsaved = editorHasUnsavedChanges(state);
 
@@ -212,16 +234,24 @@ export function AdultShortsPanel() {
     }
   };
 
-  const renderClip = async (shot: AdultShortsShot, index: number) => {
-    if (busy) return;
+  /** Renders one shot's clip. `true` once it's saved; `false` if it failed or is still waiting on Siray. */
+  const renderClip = async (shotId: string, fromQueue = false): Promise<boolean> => {
+    if (busy && !fromQueue) return false;
     setArmedRenderId(null);
-    const startImageUrl = resolveAdultShortsStartImage(shots, index);
+    // Read the editor fresh: in "Render N clips" the previous shot's last
+    // frame (for a chained shot) was only just saved.
+    const now = getAdultShortsState();
+    const index = now.shots.findIndex((x) => x.id === shotId);
+    const shot = now.shots[index];
+    if (!shot) return false;
+    const character = now.character;
+    const startImageUrl = resolveAdultShortsStartImage(now.shots, index);
     if (!startImageUrl && !shot.sirayTaskId) {
       setShotError(
         shot.id,
         shot.chainFromPrevious ? "Render the previous clip first, or make this shot's plate." : "Make the plate first."
       );
-      return;
+      return false;
     }
     setShotError(shot.id, null);
     setBusy({ shotId: shot.id, kind: "clip" });
@@ -276,9 +306,10 @@ export function AdultShortsPanel() {
         }
         patchShot(shot.id, { clipUrl: json.videoUrl, lastFrameUrl: json.lastFrameUrl ?? null, sirayTaskId: null });
         flushSkidmarksSessionNow();
-        return;
+        return true;
       }
       setShotError(shot.id, "Siray is still rendering. Tap Keep waiting. It won't charge twice.");
+      return false;
     } catch (err) {
       setShotError(
         shot.id,
@@ -286,15 +317,44 @@ export function AdultShortsPanel() {
           ? "The connection dropped, but Siray has the job. Tap Keep waiting. It won't charge twice."
           : friendlyError(err, "Siray clip failed.")
       );
+      return false;
     } finally {
       setBusy(null);
     }
   };
 
   const finishedCount = shots.filter((s) => s.clipUrl).length;
+  const unfinished = shots.filter((s) => !s.clipUrl);
+  const queueCost = formatUsd(unfinished.reduce((sum, s) => sum + estimateAdultShortsClipCostUsd(s.durationSec), 0));
+  const episodeNumber = state.currentSavedId ? adultShortEpisodeNumbers(state.saved).get(state.currentSavedId) : undefined;
+
+  /** "Render N clips" (two taps): every unfinished shot, in order, with Stop. */
+  const renderAll = async () => {
+    if (busy || queueRunning) return;
+    setQueueArmed(false);
+    setQueueNote(null);
+    stopRequestedRef.current = false;
+    setStopRequested(false);
+    setQueueRunning(true);
+    try {
+      const ids = getAdultShortsState().shots.map((x) => x.id);
+      const run = await runSunnyBanksRenderQueue(ids, {
+        skip: (id) => Boolean(getAdultShortsState().shots.find((x) => x.id === id)?.clipUrl),
+        shouldStop: () => stopRequestedRef.current,
+        render: (id) => renderClip(id, true),
+      });
+      if (run.outcome === "stopped") setQueueNote(`Stopped before shot ${run.index + 1}. Later shots were not billed.`);
+      else if (run.outcome === "halted") setQueueNote(`Stopped at shot ${run.index + 1}. Later shots were not billed.`);
+      else setQueueNote(run.rendered ? `Rendered ${run.rendered} clip${run.rendered === 1 ? "" : "s"}.` : null);
+    } finally {
+      stopRequestedRef.current = false;
+      setStopRequested(false);
+      setQueueRunning(false);
+    }
+  };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div id={SHORTS_EDITOR_ID} className="flex scroll-mt-4 flex-col gap-6">
       <section className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
         <div className="flex items-center justify-between">
           <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">Character</p>
@@ -359,7 +419,9 @@ export function AdultShortsPanel() {
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">Shots</p>
+          <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">
+            Shots{episodeNumber ? ` · ${adultShortEpisodeCode(episodeNumber)}` : ""}
+          </p>
           <p className="text-xs text-white/40">
             {finishedCount}/{shots.length} clips done · plate {formatUsd(ADULT_SHORTS_STILL_COST_USD)} each
           </p>
@@ -461,7 +523,7 @@ export function AdultShortsPanel() {
                   </div>
                   <button
                     type="button"
-                    disabled={Boolean(busy)}
+                    disabled={Boolean(busy) || queueRunning}
                     onClick={() => void makePlate(shot)}
                     className="rounded-md border border-white/15 px-2 py-1 text-xs text-white/80 hover:bg-white/[0.06] disabled:opacity-40"
                   >
@@ -481,8 +543,8 @@ export function AdultShortsPanel() {
                   <div className="flex gap-1.5">
                     <button
                       type="button"
-                      disabled={Boolean(busy)}
-                      onClick={() => (armed || shot.sirayTaskId ? void renderClip(shot, index) : setArmedRenderId(shot.id))}
+                      disabled={Boolean(busy) || queueRunning}
+                      onClick={() => (armed || shot.sirayTaskId ? void renderClip(shot.id) : setArmedRenderId(shot.id))}
                       className={[
                         "flex-1 rounded-md px-2 py-1 text-xs font-medium disabled:opacity-40",
                         armed ? "bg-red-500 text-white" : "bg-red-500/70 text-white hover:bg-red-500/90",
@@ -521,6 +583,45 @@ export function AdultShortsPanel() {
             + Add shot
           </button>
         )}
+
+        {/* Render every unfinished shot in order, with Stop (the same
+            controls as Sunnybank's Render all, 2026-09-30). */}
+        {(unfinished.length > 1 || queueRunning) && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={Boolean(busy) || queueRunning}
+              onClick={() => (queueArmed ? void renderAll() : setQueueArmed(true))}
+              onBlur={() => setQueueArmed(false)}
+              className={[
+                "rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40",
+                queueArmed ? "bg-red-500" : "bg-red-500/70 hover:bg-red-500/90",
+              ].join(" ")}
+            >
+              {queueRunning
+                ? "Rendering…"
+                : queueArmed
+                  ? `Tap again: ${queueCost}`
+                  : `Render ${unfinished.length} clips ${queueCost}`}
+            </button>
+            {queueRunning && (
+              <button
+                type="button"
+                onClick={() => {
+                  stopRequestedRef.current = true;
+                  setStopRequested(true);
+                }}
+                disabled={stopRequested}
+                aria-label={stopRequested ? "Stopping after this shot" : "Stop after this shot"}
+                title="Stop after this shot"
+                className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/85 hover:border-white/40 disabled:opacity-50"
+              >
+                {stopRequested ? "Stopping…" : "Stop"}
+              </button>
+            )}
+          </div>
+        )}
+        {queueNote && <p className="text-xs text-white/60">{queueNote}</p>}
       </section>
 
       <section className="rounded-2xl border border-white/10 bg-white/[0.02] p-4" aria-label="Save or start new">

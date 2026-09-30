@@ -23,8 +23,12 @@ export const ADULT_SHORTS_MAX_SHOTS = 10;
 export const ADULT_SHORTS_MIN_SHOT_SEC = 2;
 export const ADULT_SHORTS_MAX_SHOT_SEC = 10;
 export const ADULT_SHORTS_DEFAULT_SHOT_SEC = 5;
-/** Saved shorts kept in the 18+ Library tab (URLs only, so this stays small). */
-export const ADULT_SHORTS_MAX_SAVED = 50;
+/** Saved shorts (Shorts episodes, 2026-09-30) kept in the session and the
+ * 18+ Library tab. URLs only, so this stays small; high enough to be
+ * unlimited in practice. Every one is also its own `deck_items` row. */
+export const ADULT_SHORTS_MAX_SAVED = 999;
+/** Highest episode number (`EP999`). */
+export const ADULT_SHORTS_MAX_EPISODE_NUMBER = 999;
 
 /** Siray Seedream 4.5 spicy still, per image (matches `lib/sirayClient.ts`). */
 export const ADULT_SHORTS_STILL_COST_USD = 0.04;
@@ -75,10 +79,18 @@ export interface AdultShortsSaved {
   character: AdultShortsCharacter;
   shots: AdultShortsShot[];
   /** This short's folder name in the readable Blob tree
-   * (`deck/shorts/shorts/blonde-girl-1/`, `lib/deckMediaPaths.ts`).
+   * (`deck/shorts/episodes/ep01-blonde-girl-1/` since 2026-09-30; older
+   * shorts `deck/shorts/shorts/blonde-girl-1/`, `lib/deckMediaPaths.ts`).
    * Pinned from its name the first time it makes a file, so a rename
    * never moves it. Absent on shorts from before. */
   mediaSlug?: string;
+  /**
+   * Its episode number on the Shorts EPISODES row (2026-09-30): `1` is
+   * EP01. Pinned the first time the card is saved after this change;
+   * shorts from before have none and are numbered by `savedAt`, oldest
+   * first (`adultShortEpisodeNumbers`), so nothing needs rewriting.
+   */
+  episodeNumber?: number;
 }
 
 export interface AdultShortsState {
@@ -195,9 +207,14 @@ function normalizeSaved(value: unknown): AdultShortsSaved[] {
       character: normalizeCharacter(r.character),
       shots,
       ...(isSafeDeckMediaSlug(r.mediaSlug) ? { mediaSlug: r.mediaSlug } : {}),
+      ...(isEpisodeNumber(r.episodeNumber) ? { episodeNumber: r.episodeNumber } : {}),
     });
   }
   return out;
+}
+
+function isEpisodeNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= ADULT_SHORTS_MAX_EPISODE_NUMBER;
 }
 
 export function normalizeAdultShortsState(value: unknown): AdultShortsState | null {
@@ -249,6 +266,9 @@ const cloneCharacter = (c: AdultShortsCharacter): AdultShortsCharacter => ({ ...
  */
 export function saveAdultShortToLibrary(state: AdultShortsState, now: Date, title?: string, id: string = mintAdultShortsId("short")): AdultShortsState {
   const existing = state.currentSavedId ? state.saved.find((x) => x.id === state.currentSavedId) : undefined;
+  const episodeNumber = existing
+    ? (adultShortEpisodeNumbers(state.saved).get(existing.id) ?? nextAdultShortEpisodeNumber(state.saved))
+    : nextAdultShortEpisodeNumber(state.saved);
   const entry: AdultShortsSaved = {
     id: existing?.id ?? id,
     title: (title ?? "").trim() || existing?.title || suggestAdultShortTitle(state, now),
@@ -256,10 +276,128 @@ export function saveAdultShortToLibrary(state: AdultShortsState, now: Date, titl
     character: cloneCharacter(state.character),
     shots: cloneShots(state.shots).map((s) => ({ ...s, sirayTaskId: null })),
     ...((state.mediaSlug ?? existing?.mediaSlug) ? { mediaSlug: state.mediaSlug ?? existing?.mediaSlug } : {}),
+    episodeNumber,
   };
   const rest = state.saved.filter((x) => x.id !== entry.id);
   return { ...state, saved: [entry, ...rest].slice(0, ADULT_SHORTS_MAX_SAVED), currentSavedId: entry.id };
 }
+
+// ---- Episodes (2026-09-30) ------------------------------------------------
+//
+// Shorts now works like Sunnybank: a sideways EPISODES row of cards with
+// "+ New", and every change is saved onto the open card as it happens.
+// A card is a saved short (the Library entry, its own `deck_items` row,
+// kind `adult-short`), so no new kind, table or seed is needed: the short
+// Stuart already has is EP01, and the editor's shots are saved onto it by
+// the next edit. Nothing is written on load.
+
+/**
+ * Every saved short's episode number. A pinned `episodeNumber` is kept;
+ * any card without one gets the next free number in `savedAt` order,
+ * oldest first (ties by id), so the numbers never change between loads.
+ */
+export function adultShortEpisodeNumbers(saved: readonly AdultShortsSaved[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const taken = new Set<number>();
+  for (const entry of saved) {
+    if (isEpisodeNumber(entry.episodeNumber) && !taken.has(entry.episodeNumber)) {
+      out.set(entry.id, entry.episodeNumber);
+      taken.add(entry.episodeNumber);
+    }
+  }
+  const rest = saved
+    .filter((entry) => !out.has(entry.id))
+    .slice()
+    .sort((a, b) => (a.savedAt < b.savedAt ? -1 : a.savedAt > b.savedAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  let n = 1;
+  for (const entry of rest) {
+    while (taken.has(n)) n += 1;
+    out.set(entry.id, n);
+    taken.add(n);
+  }
+  return out;
+}
+
+/** The number a brand-new episode gets: one more than the highest so far. */
+export function nextAdultShortEpisodeNumber(saved: readonly AdultShortsSaved[]): number {
+  let max = 0;
+  for (const n of adultShortEpisodeNumbers(saved).values()) max = Math.max(max, n);
+  return Math.min(ADULT_SHORTS_MAX_EPISODE_NUMBER, max + 1);
+}
+
+/** `1` → `EP01`, `12` → `EP12`, `105` → `EP105`. */
+export function adultShortEpisodeCode(n: number): string {
+  return `EP${String(Math.max(1, Math.floor(n))).padStart(2, "0")}`;
+}
+
+/** The small line under a card's title: "5 shots · 4 clips". */
+export function describeAdultShortEpisode(shots: readonly Pick<AdultShortsShot, "clipUrl">[]): string {
+  const clips = shots.filter((s) => s.clipUrl).length;
+  return `${shots.length} shot${shots.length === 1 ? "" : "s"} · ${clips} clip${clips === 1 ? "" : "s"}`;
+}
+
+/** The first finished clip, used as the card's thumbnail. */
+export function firstAdultShortClipUrl(shots: readonly Pick<AdultShortsShot, "clipUrl">[]): string | null {
+  return shots.find((s) => typeof s.clipUrl === "string" && s.clipUrl.startsWith("https:"))?.clipUrl ?? null;
+}
+
+function sameEditorAsCard(state: AdultShortsState, card: AdultShortsSaved): boolean {
+  const strip = (shots: readonly AdultShortsShot[]) => shots.map((s) => ({ ...s, sirayTaskId: null }));
+  return (
+    JSON.stringify(card.character) === JSON.stringify(state.character) &&
+    JSON.stringify(strip(card.shots)) === JSON.stringify(strip(state.shots)) &&
+    (state.mediaSlug ?? card.mediaSlug) === card.mediaSlug
+  );
+}
+
+/**
+ * Auto-save (like Sunnybank's episode cards): the open editor is written
+ * onto its card whenever it changes. The card is the one it was opened
+ * from or last saved as (`currentSavedId`), updated in place so the row
+ * doesn't reshuffle; an editor with real work and no card gets a new
+ * card, first in the row, with the next episode number, once a shot has
+ * something in it. Returns `state` itself when nothing needs saving
+ * (before the 18+ confirm, a blank editor, or no change), so loading and
+ * no-op patches never write.
+ */
+export function autoSaveAdultShortEditor(state: AdultShortsState, now: Date, id: string = mintAdultShortsId("short")): AdultShortsState {
+  if (!state.ageConfirmed || !editorHasContent(state)) return state;
+  const card = state.currentSavedId ? state.saved.find((x) => x.id === state.currentSavedId) : undefined;
+  if (card && sameEditorAsCard(state, card)) return state;
+  // A new card only once a shot has something in it, so "+ New" (which
+  // keeps the character) doesn't make an empty episode.
+  if (!card && !state.shots.some((s) => s.prompt.trim() || s.plateUrl || s.clipUrl)) return state;
+  if (!card && state.saved.length >= ADULT_SHORTS_MAX_SAVED) return state;
+  const mediaSlug = state.mediaSlug ?? card?.mediaSlug;
+  const entry: AdultShortsSaved = {
+    id: card?.id ?? id,
+    title: card?.title || suggestAdultShortTitle(state, now),
+    savedAt: now.toISOString(),
+    character: cloneCharacter(state.character),
+    shots: cloneShots(state.shots).map((s) => ({ ...s, sirayTaskId: null })),
+    ...(mediaSlug ? { mediaSlug } : {}),
+    episodeNumber: card
+      ? (adultShortEpisodeNumbers(state.saved).get(card.id) ?? nextAdultShortEpisodeNumber(state.saved))
+      : nextAdultShortEpisodeNumber(state.saved),
+  };
+  const saved = card ? state.saved.map((x) => (x.id === card.id ? entry : x)) : [entry, ...state.saved];
+  return { ...state, saved, currentSavedId: entry.id };
+}
+
+/**
+ * What a card shows: the live editor when it's the open card (so the
+ * row shows the editor's shots the moment the page loads, before
+ * anything is saved onto the card), else the card's own saved copy.
+ */
+export function adultShortEpisodeView(
+  state: AdultShortsState,
+  entry: AdultShortsSaved,
+): { shots: AdultShortsShot[]; character: AdultShortsCharacter } {
+  return state.currentSavedId === entry.id
+    ? { shots: state.shots, character: state.character }
+    : { shots: entry.shots, character: entry.character };
+}
+
 
 /** Clear the editor for a fresh short. The Library is untouched. A new
  * short gets its own Blob folder name when it makes its first file. */

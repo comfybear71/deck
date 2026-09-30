@@ -11,7 +11,7 @@ import {
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
 import { getSunnyBanksBusy, setSunnyBanksBusy, subscribeSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
-import { DownloadGlyph, EditGlyph, TILE_CORNER_BUTTON_CLASS, TrashGlyph } from "@/components/TileCornerGlyphs";
+import { EpisodeCardsRow, type EpisodeRowNotice } from "@/components/EpisodeCardsRow";
 import { downloadSunnyBanksEpisodeZip, SUNNY_BANKS_EDITOR_ID } from "@/components/SkidmarksSunnyBanksPanel";
 import {
   buildEmptySunnyBanksLive,
@@ -46,7 +46,8 @@ function firstClipUrl(workspace: SunnyBanksWorkspaceSnapshot): string | null {
  * band" albums. Tap one to open it. The dotted + tile on the far right
  * starts a new episode.
  *
- * Each card has the same small round corner buttons as a band tile
+ * The row itself is the shared `EpisodeCardsRow` (Shorts uses the same
+ * one, 2026-09-30). Each card has the same small round corner buttons as a band tile
  * (2026-09-30): the bin (top left) deletes the card after a second tap,
  * the pencil (top right) opens the episode and scrolls to the editor,
  * and the download icon under it builds the episode zip (script, gold
@@ -61,7 +62,7 @@ function firstClipUrl(workspace: SunnyBanksWorkspaceSnapshot): string | null {
 export function SunnyBanksEpisodeRow() {
   const studioState = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const busy = useSyncExternalStore(subscribeSunnyBanksBusy, getSunnyBanksBusy, () => false);
-  const [notice, setNotice] = useState<{ text: string; tone: "ok" | "warn" | "error" } | null>(null);
+  const [notice, setNotice] = useState<EpisodeRowNotice>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const live = studioState.sunnyBanks?.live ?? getSunnyBanksLiveOrDefault(studioState);
@@ -166,108 +167,37 @@ export function SunnyBanksEpisodeRow() {
     }
   };
 
+  const byId = (id: string) => workspaces.find((workspace) => workspace.id === id);
   return (
-    <div>
-      <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-white/40">Episodes</p>
-      <div className="flex touch-pan-x touch-pan-y items-start gap-3 overflow-x-auto py-1 pl-0.5 pr-1 [scrollbar-width:thin]">
-        {workspaces.map((workspace) => {
-          const clip = firstClipUrl(workspace);
-          const active = workspace.id === activeId;
-          const confirming = confirmDeleteId === workspace.id;
-          const downloading = downloadingId === workspace.id;
-          return (
-            <div key={workspace.id} className="relative shrink-0">
-              <button
-                type="button"
-                onClick={() => handleOpen(workspace)}
-                disabled={busy}
-                aria-label={`Open ${workspace.label}`}
-                aria-pressed={active}
-                className={`relative block h-28 w-28 touch-manipulation overflow-hidden rounded-2xl bg-gradient-to-br from-amber-300/25 via-orange-400/15 to-zinc-900 text-left disabled:opacity-60 ${
-                  active ? "ring-2 ring-inset ring-amber-300" : "ring-1 ring-inset ring-white/10"
-                }`}
-              >
-                {clip && (
-                  <video
-                    src={`${clip}#t=0.1`}
-                    muted
-                    playsInline
-                    preload="metadata"
-                    aria-hidden
-                    className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-                  />
-                )}
-                <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-2 pb-1.5 pt-4">
-                  <span className="block truncate text-[11px] font-semibold text-white">{workspace.label}</span>
-                  <span className="block truncate text-[9px] text-white/60">{describeSunnyBanksWorkspace(workspace)}</span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDelete(workspace)}
-                disabled={busy}
-                aria-label={confirming ? `Tap again to delete ${workspace.label}` : `Delete ${workspace.label}`}
-                title="Delete episode"
-                className={`${TILE_CORNER_BUTTON_CLASS} left-1.5 top-1.5 ${
-                  confirming ? "bg-red-500/80 text-white" : "bg-black/50 text-white/70 hover:bg-red-500/60"
-                }`}
-              >
-                <TrashGlyph />
-              </button>
-              <button
-                type="button"
-                onClick={() => handleEdit(workspace)}
-                disabled={busy}
-                aria-label={`Edit ${workspace.label}`}
-                title="Open in the editor"
-                className={`${TILE_CORNER_BUTTON_CLASS} right-1.5 top-1.5 bg-black/50 text-white/80 hover:bg-black/70`}
-              >
-                <EditGlyph />
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleDownload(workspace)}
-                disabled={busy}
-                aria-label={`Download ${workspace.label} (.zip)`}
-                title="Download episode (.zip)"
-                className={`${TILE_CORNER_BUTTON_CLASS} right-1.5 top-9 bg-black/50 text-white/80 hover:bg-black/70`}
-              >
-                {downloading ? (
-                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-white/70" aria-hidden />
-                ) : (
-                  <DownloadGlyph />
-                )}
-              </button>
-            </div>
-          );
-        })}
-        <button
-          type="button"
-          onClick={handleNew}
-          disabled={busy}
-          aria-label="New episode"
-          className="flex h-28 w-28 shrink-0 touch-manipulation flex-col items-center justify-center gap-1.5 rounded-2xl border border-dashed border-white/25 bg-white/[0.02] transition-colors hover:border-amber-300/40 hover:bg-amber-300/[0.04] active:scale-[0.98] disabled:opacity-60"
-        >
-          <span className="flex h-8 w-8 items-center justify-center rounded-full border border-white/20 text-base text-white/50">
-            +
-          </span>
-          <span className="text-[11px] font-medium tracking-wide text-white/50">New</span>
-        </button>
-      </div>
-      {notice && (
-        <p
-          role={notice.tone === "error" ? "alert" : "status"}
-          className={`mt-1.5 text-[11px] leading-snug ${
-            notice.tone === "error"
-              ? "text-rose-300/90"
-              : notice.tone === "warn"
-                ? "text-amber-200/90"
-                : "text-emerald-200/90"
-          }`}
-        >
-          {notice.text}
-        </p>
-      )}
-    </div>
+    <EpisodeCardsRow
+      cards={workspaces.map((workspace) => ({
+        id: workspace.id,
+        label: workspace.label,
+        sub: describeSunnyBanksWorkspace(workspace),
+        clipUrl: firstClipUrl(workspace),
+        active: workspace.id === activeId,
+      }))}
+      busy={busy}
+      confirmDeleteId={confirmDeleteId}
+      downloadingId={downloadingId}
+      notice={notice}
+      onOpen={(id) => {
+        const workspace = byId(id);
+        if (workspace) handleOpen(workspace);
+      }}
+      onEdit={(id) => {
+        const workspace = byId(id);
+        if (workspace) handleEdit(workspace);
+      }}
+      onDelete={(id) => {
+        const workspace = byId(id);
+        if (workspace) handleDelete(workspace);
+      }}
+      onDownload={(id) => {
+        const workspace = byId(id);
+        if (workspace) void handleDownload(workspace);
+      }}
+      onNew={handleNew}
+    />
   );
 }

@@ -107,11 +107,36 @@ describe("sections, songs, shorts", () => {
       currentSavedId: null,
       character: { ...s.character, name: "BLONDE GIRL _1" },
     }));
+    // Since 2026-09-30: an episode folder, `deck/shorts/episodes/ep01-<name>`.
     const plate = adultShortTargetFor("plate", 2);
-    expect(plate).toEqual({ folder: "deck/shorts/shorts/blonde-girl-1", name: "blonde-girl-1-plate-02" });
+    expect(plate).toEqual({ folder: "deck/shorts/episodes/ep01-blonde-girl-1", name: "ep01-blonde-girl-1-plate-02" });
     patchAdultShorts((s) => ({ ...s, character: { ...s.character, name: "Someone else" } }));
-    expect(adultShortTargetFor("clip", 2)).toEqual({ folder: "deck/shorts/shorts/blonde-girl-1", name: "blonde-girl-1-clip-02" });
-    expect(getAdultShortsState().mediaSlug).toBe("blonde-girl-1");
+    expect(adultShortTargetFor("clip", 2)).toEqual({
+      folder: "deck/shorts/episodes/ep01-blonde-girl-1",
+      name: "ep01-blonde-girl-1-clip-02",
+    });
+    expect(getAdultShortsState().mediaSlug).toBe("ep01-blonde-girl-1");
+  });
+
+  it("a short pinned before episodes keeps its old folder", () => {
+    patchAdultShorts((s) => ({ ...s, ageConfirmed: true, mediaSlug: "blonde-girl-1" }));
+    expect(adultShortTargetFor("clip", 3)).toEqual({ folder: "deck/shorts/shorts/blonde-girl-1", name: "blonde-girl-1-clip-03" });
+  });
+
+  it("an episode's number comes from its card", () => {
+    patchAdultShorts((s) => ({
+      ...s,
+      ageConfirmed: true,
+      mediaSlug: undefined,
+      currentSavedId: "short_b",
+      character: { name: "Skylar", look: "", referenceUrls: [] },
+      shots: [{ ...s.shots[0], prompt: "on a terrace" }],
+      saved: [
+        { id: "short_a", title: "First", savedAt: "2026-09-01T00:00:00.000Z", character: { name: "", look: "", referenceUrls: [] }, shots: [{ ...s.shots[0], prompt: "x" }] },
+        { id: "short_b", title: "Terrace", savedAt: "2026-09-02T00:00:00.000Z", character: { name: "", look: "", referenceUrls: [] }, shots: [{ ...s.shots[0], prompt: "x" }] },
+      ],
+    }));
+    expect(adultShortTargetFor("plate", 1)).toEqual({ folder: "deck/shorts/episodes/ep02-terrace", name: "ep02-terrace-plate-01" });
   });
 });
 

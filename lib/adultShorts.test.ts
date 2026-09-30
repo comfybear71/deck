@@ -174,3 +174,82 @@ describe("adult shorts Blob folder name", () => {
     expect(openSavedAdultShort(fresh, saved.saved[0].id).mediaSlug).toBe("blonde-girl-1");
   });
 });
+
+describe("Shorts episodes (2026-09-30)", () => {
+  const card = (id: string, savedAt: string, episodeNumber?: number) => ({
+    id,
+    title: id,
+    savedAt,
+    character: { name: "", look: "", referenceUrls: [] },
+    shots: [{ ...buildAdultShortsShot(`${id}_s`), prompt: "x" }],
+    ...(episodeNumber ? { episodeNumber } : {}),
+  });
+
+  it("numbers cards by their pinned number, else oldest first, and never reuses one", async () => {
+    const { adultShortEpisodeNumbers, nextAdultShortEpisodeNumber, adultShortEpisodeCode } = await import("./adultShorts");
+    const saved = [card("c", "2026-09-03"), card("b", "2026-09-02", 1), card("a", "2026-09-01")];
+    const n = adultShortEpisodeNumbers(saved);
+    expect([n.get("b"), n.get("a"), n.get("c")]).toEqual([1, 2, 3]);
+    expect(nextAdultShortEpisodeNumber(saved)).toBe(4);
+    expect(nextAdultShortEpisodeNumber([])).toBe(1);
+    expect(adultShortEpisodeCode(1)).toBe("EP01");
+    expect(adultShortEpisodeCode(105)).toBe("EP105");
+  });
+
+  it("keeps a pinned episode number through normalize and drops a junk one", () => {
+    const state = normalizeAdultShortsState({ saved: [card("a", "2026-09-01", 7), { ...card("b", "2026-09-02"), episodeNumber: -3 }] })!;
+    expect(state.saved.map((x) => x.episodeNumber)).toEqual([7, undefined]);
+  });
+
+  it("auto-save: nothing before the 18+ confirm, for a blank editor, or when nothing changed", async () => {
+    const { autoSaveAdultShortEditor } = await import("./adultShorts");
+    const now = new Date("2026-09-30T06:00:00Z");
+    const blank = emptyAdultShortsState();
+    expect(autoSaveAdultShortEditor(blank, now)).toBe(blank);
+    const notConfirmed = { ...blank, shots: [{ ...blank.shots[0], prompt: "beach" }] };
+    expect(autoSaveAdultShortEditor(notConfirmed, now)).toBe(notConfirmed);
+    // A character alone is not an episode yet.
+    const onlyCharacter = { ...blank, ageConfirmed: true, character };
+    expect(autoSaveAdultShortEditor(onlyCharacter, now)).toBe(onlyCharacter);
+
+    const first = autoSaveAdultShortEditor({ ...onlyCharacter, shots: [{ ...blank.shots[0], prompt: "beach" }] }, now, "short_new");
+    expect(first.saved).toHaveLength(1);
+    expect(first.saved[0]).toMatchObject({ id: "short_new", episodeNumber: 1, character: { name: "Skye" } });
+    expect(first.currentSavedId).toBe("short_new");
+    expect(autoSaveAdultShortEditor(first, now)).toBe(first);
+  });
+
+  it("auto-save updates the open card in place: same id, title, number and place in the row", async () => {
+    const { autoSaveAdultShortEditor } = await import("./adultShorts");
+    const base: AdultShortsState = {
+      ...emptyAdultShortsState(),
+      ageConfirmed: true,
+      saved: [card("newer", "2026-09-02"), card("older", "2026-09-01")],
+      currentSavedId: "older",
+      character,
+      shots: [{ ...buildAdultShortsShot("s1"), prompt: "terrace", sirayTaskId: "task_1" }],
+    };
+    const after = autoSaveAdultShortEditor(base, new Date("2026-09-30T06:00:00Z"));
+    expect(after.saved.map((x) => x.id)).toEqual(["newer", "older"]);
+    expect(after.saved[1]).toMatchObject({ id: "older", title: "older", episodeNumber: 1, character: { name: "Skye" } });
+    expect(after.saved[1].shots[0]).toMatchObject({ prompt: "terrace", sirayTaskId: null });
+    expect(after.saved[0]).toBe(base.saved[0]);
+  });
+
+  it("the open card shows the live editor; the others their saved copy", async () => {
+    const { adultShortEpisodeView, describeAdultShortEpisode, firstAdultShortClipUrl } = await import("./adultShorts");
+    const state: AdultShortsState = {
+      ...emptyAdultShortsState(),
+      saved: [card("a", "2026-09-01"), card("b", "2026-09-02")],
+      currentSavedId: "a",
+      shots: [
+        { ...buildAdultShortsShot("s1") },
+        { ...buildAdultShortsShot("s2"), clipUrl: "https://x.test/2.mp4" },
+      ],
+    };
+    expect(adultShortEpisodeView(state, state.saved[0]).shots.map((s) => s.id)).toEqual(["s1", "s2"]);
+    expect(adultShortEpisodeView(state, state.saved[1]).shots.map((s) => s.id)).toEqual(["b_s"]);
+    expect(describeAdultShortEpisode(state.shots)).toBe("2 shots · 1 clip");
+    expect(firstAdultShortClipUrl(state.shots)).toBe("https://x.test/2.mp4");
+  });
+});

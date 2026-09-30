@@ -106,6 +106,65 @@ export interface CharacterLoraEntry {
    * overrides a built-in regular's own voice). Absent = no voice set.
    */
   voiceId?: string;
+  /**
+   * Optional profile (2026-09-30, Shorts characters): age, a short bio, a
+   * chat personality and the "AI-generated" label. Saved on this card, so
+   * on the character's own `deck_items` row. Absent = never filled in.
+   */
+  profile?: CharacterProfile;
+}
+
+/** Youngest age a profile can say (Deck only makes made-up adults). */
+export const CHARACTER_PROFILE_MIN_AGE = 21;
+export const CHARACTER_PROFILE_MAX_AGE = 99;
+export const CHARACTER_PROFILE_BIO_MAX = 280;
+export const CHARACTER_PROFILE_PERSONALITY_MAX = 280;
+
+export interface CharacterProfile {
+  /** Whole years, 21 or over. Absent = not set. */
+  age?: number;
+  bio?: string;
+  /** How she talks in chat, e.g. "playful, teasing, short replies". */
+  chatPersonality?: string;
+  /** The "AI-generated" label. On by default and always saved with the profile. */
+  aiGenerated: boolean;
+}
+
+/** Why this age can't be saved, or `null` when it's fine (blank is fine: no age). */
+export function characterProfileAgeProblem(raw: string): string | null {
+  const t = raw.trim();
+  if (!t) return null;
+  if (!/^\d{1,3}$/.test(t)) return "Age is a whole number, like 24.";
+  const n = Number(t);
+  if (n < CHARACTER_PROFILE_MIN_AGE) return `Age must be ${CHARACTER_PROFILE_MIN_AGE} or over.`;
+  if (n > CHARACTER_PROFILE_MAX_AGE) return `Keep the age under ${CHARACTER_PROFILE_MAX_AGE + 1}.`;
+  return null;
+}
+
+/**
+ * A profile cleaned for saving, or `null` when it isn't one. An age under
+ * 21 (or not a whole number) is dropped, never saved. `aiGenerated` is
+ * always there: missing reads as on.
+ */
+export function normalizeCharacterProfile(raw: unknown): CharacterProfile | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const age =
+    typeof r.age === "number" &&
+    Number.isInteger(r.age) &&
+    r.age >= CHARACTER_PROFILE_MIN_AGE &&
+    r.age <= CHARACTER_PROFILE_MAX_AGE
+      ? r.age
+      : undefined;
+  const text = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
+  const bio = text(r.bio, CHARACTER_PROFILE_BIO_MAX);
+  const chatPersonality = text(r.chatPersonality, CHARACTER_PROFILE_PERSONALITY_MAX);
+  return {
+    ...(age !== undefined ? { age } : {}),
+    ...(bio ? { bio } : {}),
+    ...(chatPersonality ? { chatPersonality } : {}),
+    aiGenerated: r.aiGenerated !== false,
+  };
 }
 
 /**
@@ -341,6 +400,8 @@ function normalizeEntry(raw: unknown): CharacterLoraEntry | null {
     pictureRound: typeof r.pictureRound === "number" && r.pictureRound > 0 ? Math.floor(r.pictureRound) : 0,
     // Only present when set, so a card without a voice cleans to exactly what it did before.
     ...(normalizeElevenLabsVoiceId(r.voiceId) ? { voiceId: normalizeElevenLabsVoiceId(r.voiceId) as string } : {}),
+    // Same: only present once a profile has been saved.
+    ...(normalizeCharacterProfile(r.profile) ? { profile: normalizeCharacterProfile(r.profile) as CharacterProfile } : {}),
   };
 }
 

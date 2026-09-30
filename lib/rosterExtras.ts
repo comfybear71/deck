@@ -23,8 +23,9 @@ export const ROSTER_EXTRA_GROUPS: readonly RosterExtraGroup[] = ["music-video", 
 
 /** Same cap as the Skidmarks cast. */
 export const ROSTER_EXTRA_MAX_PICTURES = SKIDMARKS_CAST_MAX_PICTURES;
-/** Per group, so the session row stays small. */
-export const ROSTER_EXTRA_MAX_PER_GROUP = 60;
+/** Per group. High enough to be unlimited in practice (2026-09-30: "add
+ * unlimited girls" in Shorts); pictures are URLs, so the row stays small. */
+export const ROSTER_EXTRA_MAX_PER_GROUP = 500;
 
 export interface RosterExtraCharacter {
   id: string;

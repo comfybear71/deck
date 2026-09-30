@@ -11,6 +11,7 @@
  */
 import { deckMediaSlug } from "./deckMediaPaths";
 import { isAllowedSunnyBanksClipUrl } from "./sunnyBanksClipProxy";
+import { submitZipDownloadForm } from "./zipFormDownload";
 
 export const SUNNY_BANKS_CLIPS_ZIP_PATH = "/api/skidmarks/sunnybank/clips-zip";
 export const SUNNY_BANKS_CLIPS_ZIP_MAX = 200;
@@ -73,17 +74,6 @@ export function planSunnyBanksClipsZip(input: unknown): SunnyBanksClipsZipPlan {
 export function downloadSunnyBanksActZip(request: SunnyBanksClipsZipRequest): { ok: true } | { ok: false; error: string } {
   const plan = planSunnyBanksClipsZip(request);
   if (!plan.ok) return plan;
-  const form = document.createElement("form");
-  form.method = "POST";
-  form.action = SUNNY_BANKS_CLIPS_ZIP_PATH;
-  form.style.display = "none";
-  const field = document.createElement("input");
-  field.type = "hidden";
-  field.name = "request";
-  field.value = JSON.stringify(request);
-  form.appendChild(field);
-  document.body.appendChild(form);
-  form.submit();
-  form.remove();
+  submitZipDownloadForm(SUNNY_BANKS_CLIPS_ZIP_PATH, request);
   return { ok: true };
 }
