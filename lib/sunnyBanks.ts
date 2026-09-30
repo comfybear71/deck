@@ -26,6 +26,15 @@
  * main picture (`castPicture`, filled in by `lib/sunnyBanksVoices.ts`),
  * and a character without one shows a red hint and doesn't render.
  *
+ * **No held things in the looks (2026-10-01, Stuart approved):** EP02
+ * Act II row 1 asked for Nuggets "hands in pockets" and got him holding
+ * a meat pie, because his look said "meat pie held in both hands". The
+ * looks now describe body, face, hair and clothes only; what a character
+ * holds comes from their Cast card picture, or from the shot's own
+ * `[Action: …]` / `[Character Name: …]` text. Every look passes
+ * `stripHeldProps` from `lib/characterRoster.ts` unchanged, the same rule
+ * the Cast card and training pictures are drawn with.
+ *
  * **This module is prompt/voice *gold*, not a reimplementation of the
  * old Skidmarks Studio's Sunny Banks pipeline** (`comfybear71/skidmarks`,
  * `docs/SUNNY_BANKS_IMAGE_MOTION_STANDARD.md` +
@@ -81,8 +90,9 @@ export interface SunnyBanksCharacterLock {
    * wording and no loose props — a prop appears only when it's part of
    * the character, phrased as held or worn ("cigarette in her mouth"),
    * never as a bare noun a prompt could draw as the subject (EP01's
-   * coin-faced Dazza). A per-shot change goes in `[Character Name: …]`,
-   * never here. */
+   * coin-faced Dazza). Since 2026-10-01 nothing held and no arm pose at
+   * all: the Cast card picture and the shot's own text decide those. A
+   * per-shot change goes in `[Character Name: …]`, never here. */
   look: string;
   /** ElevenLabs voice id for this character's locked voice — Stuart's
    * own real ids, copied from his ElevenLabs account (2026-09-15), not
@@ -134,8 +144,7 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   Shazza: {
     name: "Shazza",
     look:
-      "middle-aged woman, huge curly blonde hair, gold hoop earrings, cigarette in her mouth, arms folded, " +
-      "leopard-print singlet top, frayed denim shorts",
+      "middle-aged woman, huge curly blonde hair, gold hoop earrings, leopard-print singlet top, frayed denim shorts",
     voiceId: "Vuun8WKmo2MZSUXgLPGw",
   },
   Dazza: {
@@ -150,16 +159,12 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   Nan: {
     name: "Nan",
     look:
-      "tiny elderly woman, grey hair in a bun, round glasses, cricket bat resting on her shoulder, " +
-      "teacup and saucer in her other hand, purple floral housecoat, pink bunny slippers",
+      "tiny elderly woman, grey hair in a bun, round glasses, purple floral housecoat, pink bunny slippers",
     voiceId: "u57uR2xbwGdASNetz0GB",
   },
   Hans: {
     name: "Hans",
-    // Matches his Cast card picture.
-    look:
-      "slim German backpacker, cork hat with dangling corks, khaki safari shirt, big canvas backpack, " +
-      "camera on a strap around his neck",
+    look: "slim German backpacker, cork hat with dangling corks, khaki safari shirt, big canvas backpack",
     guest: true,
     // No voice id yet — see this module's doc comment. Never guess
     // a stand-in here; a caller must surface this as a real gap.
@@ -168,8 +173,8 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
     name: "Nuggets",
     // Stuart (2026-09-29): Nuggets is a grown adult, just drawn cartoonish.
     look:
-      "skinny adult bloke in his late twenties, bald head, freckles, worried wide eyes, meat pie held in both " +
-      "hands, blue and yellow polo shirt, blue shorts, white socks, brown work boots",
+      "skinny adult bloke in his late twenties, bald head, freckles, worried wide eyes, blue and yellow polo " +
+      "shirt, blue shorts, white socks, brown work boots",
     voiceId: "URQwIuGxmxWfCgwXuDxA",
   },
   "Ranger Bazza": {
@@ -178,17 +183,13 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
     // offered a second outfit (Akubra, high-vis vest, mountain bike);
     // a scene that wants it says so with `[Character Ranger Bazza: …]`.
     look:
-      "portly middle-aged park ranger, short brown hair, dark sunglasses, bushy moustache, whistle on a " +
-      "lanyard around his neck, short-sleeved khaki ranger shirt, khaki trousers, brown belt",
+      "portly middle-aged park ranger, short brown hair, dark sunglasses, bushy moustache, short-sleeved khaki " +
+      "ranger shirt, khaki trousers, brown belt",
     voiceId: "lT1zujgSfYwPzAlTNE9z",
   },
   "Unit 4S": {
     name: "Unit 4S",
-    // Bucket hat + antennae + bulging eyes, a thong in each hand. "Flip-flop" (2026-09-30), not "thongs":
-    // to an image model outside Australia a thong is underwear.
-    look:
-      "skinny purple alien, two antennae, big round bulging eyes, wide toothy grin, teal bucket hat, " +
-      "a teal flip-flop held in each hand, bare feet",
+    look: "skinny purple alien, two antennae, big round bulging eyes, wide toothy grin, teal bucket hat, bare feet",
     voiceId: "9AMMyX2GM74yY0KQwYkF",
   },
 };
@@ -241,17 +242,17 @@ export function buildSunnyBanksCompositePlatePrompt(
   const trimmedOverride = appearanceOverride?.trim() || "";
   const trimmedAction = shotAction?.replace(/\s+/g, " ").trim() || "";
   const shotText = Boolean(trimmedOverride || trimmedAction);
-  const heldProp = /\b(cigarette|pie|teacup|cricket bat|thongs|flip-flops?|beer|camera|whistle)\b/i.test(
-    character.look
-  );
-  // What's held comes from the words (the shot's own text, then the look
-  // lock), never from image 2 (2026-10-01): "keep any held prop already
-  // visible" is how a stray prop in a picture got locked into a shot.
+  // What's held (2026-10-01, Stuart): the shot's own text when it has
+  // some, otherwise the Cast card picture. The look text never names a
+  // held thing any more (EP02 Act II row 1's meat pie came from it).
   const propLine = shotText
     ? "Held objects: only what this shot's text below names. Do not copy any object from image 2 that the text doesn't name. Do not invent anything beyond what it names."
-    : heldProp
-      ? "Only the held object named in the look lock. Do not copy any other object from image 2. Do not invent extra objects."
-      : "Empty hands. Do not copy any object from image 2. Do not invent a phone or extra objects.";
+    : "Held objects: only what image 2 already shows in their hands; if its hands are empty, keep them empty. Do not invent a phone or extra objects.";
+  // A silent shot's action sets the framing (2026-10-01): "Wide … walks
+  // away … side on" lost to a forced medium shot, dead centre.
+  const framingLine = trimmedAction
+    ? "Framing follows this shot's text below. Keep the locked place from image 1 behind them. One person only."
+    : "MEDIUM SHOT framing: figure large in frame, dead centre horizontally. Keep the locked place from image 1 behind them. One person only.";
   // An action says how they stand and move, so the pose comes from it,
   // not image 2. An override alone keeps the pose (as before).
   const bodyLine = trimmedAction
@@ -267,7 +268,7 @@ export function buildSunnyBanksCompositePlatePrompt(
     "Place that same person from image 2 into image 1.",
     bodyLine,
     "One person only. Only that person in frame, no one else appears. Empty of extra people and animals.",
-    "MEDIUM SHOT framing: figure large in frame, dead centre horizontally. Keep the locked place from image 1 behind them. One person only.",
+    framingLine,
     `Staging / tweak: ${character.name}, ${character.look}, at ${location.label}.`,
     propLine,
     "No captions, no watermarks, no name tags. Keep any signage that is already part of the locked place in image 1.",
@@ -509,7 +510,20 @@ export function buildSunnyBanksHoldBeatPathname(characterName: string, timestamp
  * image, not this string asking for a crowd. Callers must pass
  * `resolveSunnyBanksStartImage`, not the bible sheet.
  */
-export function buildSunnyBanksHoldPrompt(character: SunnyBanksCharacterLock): string {
+export function buildSunnyBanksHoldPrompt(character: SunnyBanksCharacterLock, shotAction?: string): string {
+  // A silent shot with its own `[Action: …]` (2026-10-01): the action
+  // (appended after this by the caller) sets framing and movement, so
+  // "holds their pose, subtle idle motion" and "Camera holds" are left
+  // out. EP02 Act II row 1 asked for a wide walk away, side on, and got
+  // Nuggets standing still facing the camera.
+  if (shotAction?.trim()) {
+    return (
+      `Use the provided start image as the first frame. ${character.name}, ${character.look}. Heat haze, flies. ` +
+      `Props and background stay exactly as the start image, nothing new enters frame. No dialogue. No cuts. ` +
+      `Same person and objects as the start image. ${SUNNY_BANKS_STYLE_LOCK}` +
+      accessoryLockSuffix(character)
+    );
+  }
   return (
     `Use the provided start image as the first frame. ${character.name}, ${character.look} holds their pose, ` +
     `subtle idle motion, weight shift, breathing, heat haze, flies. Props and background stay exactly as the ` +

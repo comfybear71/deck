@@ -724,6 +724,44 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     const startBody = JSON.parse(start![1].body as string);
     expect(startBody.prompt).toContain(action);
     expect(startBody.prompt).toContain("nobody talks");
+    // 2026-10-01: the action sets framing and movement, on the still and the clip.
+    expect(xaiBody.prompt).not.toContain("MEDIUM SHOT");
+    expect(xaiBody.prompt).toContain("Framing follows this shot's text below.");
+    expect(startBody.prompt).not.toContain("holds their pose");
+    expect(startBody.prompt).not.toContain("idle motion");
+  });
+
+  it("talking shots are unchanged (2026-10-01): the still keeps its medium shot and the speak prompt its gold shape", async () => {
+    mockElevenLabs(encodeTestMp3(4));
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/shazza-talk.mp4" });
+
+    const res = await POST(
+      speakBeatRequest({
+        characterName: "Shazza",
+        line: "Nuggets! Don't you walk away from me.",
+        action: "points at him",
+        locationId: "park_site_4",
+        locationLabel: "Park Site 4",
+      })
+    );
+    expect(res.status).toBe(200);
+    const xaiCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/v1/images/edits"));
+    const xaiBody = JSON.parse(xaiCall![1].body as string) as { prompt: string };
+    expect(xaiBody.prompt).toContain("MEDIUM SHOT framing: figure large in frame, dead centre horizontally.");
+    expect(xaiBody.prompt).not.toContain("This shot:");
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body as string).prompt as Record<
+      string,
+      { inputs?: Record<string, unknown> }
+    >;
+    const prompt = String(graph["340:319"]?.inputs?.value);
+    expect(prompt).toContain("is prominent, mouth and head move naturally while speaking");
+    expect(prompt).toContain("points at him");
   });
 
   it("no Cast card picture (2026-10-01): refused with missing_cast_picture before anything is billed, never the bare location", async () => {

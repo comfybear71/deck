@@ -58,6 +58,11 @@ export interface SunnyBanksLiveState {
   actScripts: SunnyBanksActKeyed<string>;
   characterOverrides: SunnyBanksActKeyed<Record<number, string>>;
   locationOverrides: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>>;
+  /** For a row whose script has a `[Location: …]` tag, the tag that was
+   * in force when its location dropdown was picked (2026-10-01). The
+   * saved pick only counts while the row still has that same tag;
+   * missing (every row saved before this) means the tag wins. */
+  locationPickTags?: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>>;
   runtimeMap: SunnyBanksActKeyed<Record<number, SunnyBanksRowRuntime>>;
   /** The saved card this live copy was opened from or last saved as. */
   episodeId?: string;
@@ -76,6 +81,8 @@ export interface SunnyBanksWorkspaceSnapshot {
   actScripts: SunnyBanksActKeyed<string>;
   characterOverrides: SunnyBanksActKeyed<Record<number, string>>;
   locationOverrides: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>>;
+  /** See `SunnyBanksLiveState.locationPickTags`. */
+  locationPickTags?: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>>;
   runtimeMap: SunnyBanksActKeyed<Record<number, SunnyBanksRowRuntime>>;
   /** Pinned media folder name (`deck/sunnybank/episodes/<mediaSlug>/`).
    * Set once, never re-derived from the label. Missing on older cards. */
@@ -101,6 +108,24 @@ export function cloneActRecord<T>(value: SunnyBanksActKeyed<T>, actIds?: readonl
   return next;
 }
 
+/**
+ * `locationPickTags` with empty acts dropped, or `undefined` when no row
+ * has one. Kept off the object entirely when empty so an episode with
+ * no such picks fingerprints exactly as it did before the field existed.
+ */
+export function compactLocationPickTags(
+  value: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>> | undefined,
+  actIds: readonly string[]
+): SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>> | undefined {
+  if (!value) return undefined;
+  const next: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>> = {};
+  for (const act of actIds) {
+    const row = value[act];
+    if (row && Object.keys(row).length > 0) next[act] = { ...row };
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 export function cloneSunnyBanksLive(live: SunnyBanksLiveState): SunnyBanksLiveState {
   const next: SunnyBanksLiveState = {
     workspaceTitle: live.workspaceTitle,
@@ -112,6 +137,8 @@ export function cloneSunnyBanksLive(live: SunnyBanksLiveState): SunnyBanksLiveSt
     locationOverrides: cloneActRecord(live.locationOverrides, live.actIds),
     runtimeMap: cloneActRecord(live.runtimeMap, live.actIds),
   };
+  const pickTags = compactLocationPickTags(live.locationPickTags, live.actIds);
+  if (pickTags) next.locationPickTags = pickTags;
   if (live.episodeId) next.episodeId = live.episodeId;
   if (live.mediaSlug) next.mediaSlug = live.mediaSlug;
   return next;
@@ -126,6 +153,7 @@ export function liveFromSunnyBanksWorkspace(workspace: SunnyBanksWorkspaceSnapsh
     actScripts: workspace.actScripts,
     characterOverrides: workspace.characterOverrides,
     locationOverrides: workspace.locationOverrides,
+    locationPickTags: workspace.locationPickTags,
     runtimeMap: workspace.runtimeMap,
     episodeId: workspace.id,
     mediaSlug: workspace.mediaSlug,
@@ -142,7 +170,8 @@ export function buildDefaultSunnyBanksLive(): SunnyBanksLiveState {
     activeAct: "I",
     actScripts: { ...seed.actScripts },
     characterOverrides: { I: {}, II: {}, III: {} },
-    locationOverrides: cloneActRecord(seed.locationOverrides, actIds),
+    // No saved row locations: the seed's scripts carry `[Location: …]` lines.
+    locationOverrides: { I: {}, II: {}, III: {} },
     runtimeMap: cloneActRecord(seed.runtimeMap as SunnyBanksLiveState["runtimeMap"], actIds),
   };
 }
@@ -214,13 +243,17 @@ export function fingerprintWorkspace(snapshot: {
   actScripts: SunnyBanksActKeyed<string>;
   characterOverrides: SunnyBanksActKeyed<Record<number, string>>;
   locationOverrides: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>>;
+  locationPickTags?: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>>;
   runtimeMap: SunnyBanksActKeyed<Record<number, SunnyBanksRowRuntime>>;
   episodeId?: string;
   mediaSlug?: string;
 }): string {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { episodeId, mediaSlug, ...content } = snapshot;
-  const payload = JSON.stringify(content);
+  const { episodeId, mediaSlug, locationPickTags, ...content } = snapshot;
+  // Empty or missing pick tags hash the same as before the field existed,
+  // and always in the same place, however the object was built.
+  const pickTags = compactLocationPickTags(locationPickTags, snapshot.actIds);
+  const payload = JSON.stringify(pickTags ? { ...content, locationPickTags: pickTags } : content);
   let hash = 5381;
   for (let i = 0; i < payload.length; i += 1) {
     hash = (hash * 33) ^ payload.charCodeAt(i);
@@ -372,6 +405,19 @@ function normalizeLocationMap(value: unknown, fallback: SunnyBanksLocationId): R
   return next;
 }
 
+/** A row → location key map, dropping anything malformed (no fallback). */
+function normalizeLocationKeyMap(value: unknown): Record<number, SunnyBanksLocationId> {
+  if (!value || typeof value !== "object") return {};
+  const next: Record<number, SunnyBanksLocationId> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0) continue;
+    const located = safeLocationKey(raw);
+    if (located) next[index] = located;
+  }
+  return next;
+}
+
 function normalizeActScripts(value: unknown, actIds: readonly string[]): SunnyBanksActKeyed<string> {
   const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const next: SunnyBanksActKeyed<string> = {};
@@ -395,6 +441,8 @@ export function normalizeSunnyBanksLive(value: unknown): SunnyBanksLiveState | n
   const characterRaw = v.characterOverrides && typeof v.characterOverrides === "object" ? v.characterOverrides : {};
   const locationRaw = v.locationOverrides && typeof v.locationOverrides === "object" ? v.locationOverrides : {};
   const runtimeRaw = v.runtimeMap && typeof v.runtimeMap === "object" ? v.runtimeMap : {};
+  const pickTagsRaw = v.locationPickTags && typeof v.locationPickTags === "object" ? v.locationPickTags : {};
+  const locationPickTags: SunnyBanksActKeyed<Record<number, SunnyBanksLocationId>> = {};
   const characterOverrides: SunnyBanksLiveState["characterOverrides"] = {};
   const locationOverrides: SunnyBanksLiveState["locationOverrides"] = {};
   const runtimeMap: SunnyBanksLiveState["runtimeMap"] = {};
@@ -402,6 +450,7 @@ export function normalizeSunnyBanksLive(value: unknown): SunnyBanksLiveState | n
     characterOverrides[act] = normalizeStringMap((characterRaw as Record<string, unknown>)[act]);
     locationOverrides[act] = normalizeLocationMap((locationRaw as Record<string, unknown>)[act], defaultLocationId);
     runtimeMap[act] = normalizeRuntimeMap((runtimeRaw as Record<string, unknown>)[act]);
+    locationPickTags[act] = normalizeLocationKeyMap((pickTagsRaw as Record<string, unknown>)[act]);
   }
   const live: SunnyBanksLiveState = {
     workspaceTitle: typeof v.workspaceTitle === "string" ? v.workspaceTitle : fallback.workspaceTitle,
@@ -413,6 +462,8 @@ export function normalizeSunnyBanksLive(value: unknown): SunnyBanksLiveState | n
     locationOverrides,
     runtimeMap,
   };
+  const pickTags = compactLocationPickTags(locationPickTags, ids);
+  if (pickTags) live.locationPickTags = pickTags;
   if (typeof v.episodeId === "string" && v.episodeId.length > 0) live.episodeId = v.episodeId;
   if (isSafeDeckMediaSlug(v.mediaSlug)) live.mediaSlug = v.mediaSlug;
   return live;
@@ -440,6 +491,7 @@ export function normalizeSunnyBanksWorkspace(value: unknown): SunnyBanksWorkspac
     locationOverrides: live.locationOverrides,
     runtimeMap: live.runtimeMap,
   };
+  if (live.locationPickTags) workspace.locationPickTags = live.locationPickTags;
   if (live.mediaSlug) workspace.mediaSlug = live.mediaSlug;
   return workspace;
 }
@@ -492,6 +544,7 @@ export function buildSunnyBanksWorkspaceFromLive(
     locationOverrides: cloned.locationOverrides,
     runtimeMap: cloned.runtimeMap,
   };
+  if (cloned.locationPickTags) snapshot.locationPickTags = cloned.locationPickTags;
   if (cloned.mediaSlug) snapshot.mediaSlug = cloned.mediaSlug;
   return snapshot;
 }

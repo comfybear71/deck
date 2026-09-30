@@ -17,6 +17,7 @@ import {
   SUNNY_BANKS_HELD_OBJECT_LOCK,
   SUNNY_BANKS_STYLE_LOCK,
 } from "./sunnyBanks";
+import { stripHeldProps } from "./characterRoster";
 
 describe("SUNNY_BANKS_CAST", () => {
   it("real reported ask (2026-09-15): all six series regulars plus the aliens have a real voice id, except Hans", () => {
@@ -65,7 +66,7 @@ describe("buildSunnyBanksSpeakingPrompt", () => {
     );
     expect(prompt).toBe(
       "Use the provided start image as the first frame. Shazza, middle-aged woman, huge curly blonde hair, gold " +
-        "hoop earrings, cigarette in her mouth, arms folded, leopard-print singlet top, frayed denim shorts is " +
+        "hoop earrings, leopard-print singlet top, frayed denim shorts is " +
         "prominent, mouth and head move naturally while speaking, subtle gesture. Props and " +
         "background stay exactly as the start image, nothing new enters frame. Shazza says: \"We haven't got " +
         "any shade, Dazza. So it's forty-seven degrees of structural integrity. Stop complaining and finish " +
@@ -169,7 +170,7 @@ describe("buildSunnyBanksCompositePlatePrompt", () => {
     expect(prompt).toContain("Place that same person from image 2 into image 1.");
     expect(prompt).toContain("Office Storefront");
     expect(prompt).toContain("Shazza");
-    expect(prompt).toContain("cigarette");
+    expect(prompt).toContain("leopard-print singlet top");
     expect(prompt).toContain(SUNNY_BANKS_STYLE_LOCK);
     expect(prompt).not.toContain("Use the provided start image as the first frame.");
     expect(prompt).not.toBe(buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Shazza));
@@ -217,20 +218,16 @@ describe("buildSunnyBanksCompositePlatePrompt", () => {
     expect(prompt).toContain("Dazza");
   });
 
-  it("EP02 Act I row 16 (2026-10-01): never keeps a prop just because it's in the picture", () => {
+  it("EP02 Act II row 1 (2026-10-01): with no shot text, only the Cast card picture decides what's held", () => {
     for (const character of Object.values(SUNNY_BANKS_CAST)) {
       const prompt = buildSunnyBanksCompositePlatePrompt(character, SUNNY_BANKS_LOCATIONS.office_booth);
-      expect(prompt).not.toContain("Keep any held prop already visible");
-      expect(prompt).toContain("Do not copy");
+      expect(prompt, character.name).not.toContain("Keep any held prop already visible");
+      expect(prompt, character.name).toContain(
+        "Held objects: only what image 2 already shows in their hands; if its hands are empty, keep them empty."
+      );
+      expect(prompt, character.name).not.toContain("named in the look lock");
+      expect(prompt, character.name).not.toMatch(/meat pie|cigarette|cricket bat|teacup|flip-flop|whistle|camera on/i);
     }
-    // Dazza's look names nothing held, so his hands are empty unless the shot says otherwise.
-    expect(buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Dazza, SUNNY_BANKS_LOCATIONS.office_booth)).toContain(
-      "Empty hands. Do not copy any object from image 2."
-    );
-    // A look that names what's held still says only that.
-    expect(buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Nuggets, SUNNY_BANKS_LOCATIONS.office_booth)).toContain(
-      "Only the held object named in the look lock. Do not copy any other object from image 2."
-    );
   });
 
   it("EP02 Act I row 16 (2026-10-01): a silent hold's [Action:] text reaches the start still and decides what's held", () => {
@@ -271,6 +268,88 @@ describe("buildSunnyBanksHoldPrompt", () => {
     const prompt = buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Dazza);
     expect(prompt).toContain(SUNNY_BANKS_HELD_OBJECT_LOCK);
     expect(prompt).toContain("No dialogue. Camera holds, no cuts.");
+  });
+});
+
+describe("look texts name nothing held (2026-10-01, EP02 Act II row 1's meat pie)", () => {
+  it("every built-in look is body, face, hair and clothes only: the same rule the Cast card pictures use", () => {
+    for (const character of Object.values(SUNNY_BANKS_CAST)) {
+      expect(stripHeldProps(character.look), character.name).toBe(character.look);
+      expect(character.look, character.name).not.toMatch(
+        /meat pie|cigarette|cricket bat|teacup|saucer|flip-flop|camera|whistle|lanyard|arms folded|\bheld\b|in (both|each|her other) hand/i
+      );
+    }
+  });
+
+  it("keeps each character's identity: Nuggets is still bald with freckles, Unit 4S still barefoot", () => {
+    expect(SUNNY_BANKS_CAST.Nuggets.look).toContain("bald head, freckles, worried wide eyes");
+    expect(SUNNY_BANKS_CAST.Nuggets.look).toContain("blue and yellow polo shirt");
+    expect(SUNNY_BANKS_CAST["Unit 4S"].look).toContain("bare feet");
+    expect(SUNNY_BANKS_CAST.Nan.look).toContain("pink bunny slippers");
+    expect(SUNNY_BANKS_CAST.Hans.look).toContain("cork hat with dangling corks");
+  });
+
+  it("Nuggets' silent hold with 'hands in pockets' no longer asks for a pie anywhere", () => {
+    const action =
+      "Wide. Nuggets walks slowly away from the Unit 4 caravan across the red dirt, hands in pockets, side on. Camera still. No other people";
+    const still = buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Nuggets, SUNNY_BANKS_LOCATIONS.park_site_4, undefined, action);
+    const motion = buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Nuggets, action);
+    expect(still).not.toMatch(/pie/i);
+    expect(motion).not.toMatch(/pie/i);
+    expect(still).toContain("hands in pockets");
+  });
+});
+
+describe("a silent shot's [Action] sets framing and movement (2026-10-01)", () => {
+  const action =
+    "Wide. Nuggets walks slowly away from the Unit 4 caravan across the red dirt, hands in pockets, side on. Camera still. No other people";
+
+  it("start still: no forced MEDIUM SHOT dead centre when the shot has an action", () => {
+    const prompt = buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Nuggets, SUNNY_BANKS_LOCATIONS.park_site_4, undefined, action);
+    expect(prompt).not.toContain("MEDIUM SHOT");
+    expect(prompt).not.toContain("dead centre");
+    expect(prompt).toContain("Framing follows this shot's text below.");
+    expect(prompt).toContain(`This shot: ${action}.`);
+    expect(prompt).toContain("Park Site 4");
+    expect(prompt).toContain("One person only.");
+  });
+
+  it("start still with no action (talking shots, plain holds) keeps the medium shot exactly as before", () => {
+    const plain = buildSunnyBanksCompositePlatePrompt(SUNNY_BANKS_CAST.Nuggets, SUNNY_BANKS_LOCATIONS.park_site_4);
+    expect(plain).toContain("MEDIUM SHOT framing: figure large in frame, dead centre horizontally.");
+    // A [Character …] look change alone isn't an action: framing stays.
+    const lookOnly = buildSunnyBanksCompositePlatePrompt(
+      SUNNY_BANKS_CAST.Shazza,
+      SUNNY_BANKS_LOCATIONS.park_site_4,
+      "standing by the Unit 4 caravan"
+    );
+    expect(lookOnly).toContain("MEDIUM SHOT framing");
+  });
+
+  it("hold motion prompt: drops 'holds their pose, subtle idle motion' and 'Camera holds' when there's an action", () => {
+    const prompt = buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Nuggets, action);
+    expect(prompt).not.toContain("holds their pose");
+    expect(prompt).not.toContain("idle motion");
+    expect(prompt).not.toContain("Camera holds");
+    expect(prompt).toContain("Use the provided start image as the first frame. Nuggets,");
+    expect(prompt).toContain("No dialogue. No cuts.");
+    expect(prompt).toContain("Same person and objects as the start image.");
+    expect(prompt).toContain(SUNNY_BANKS_STYLE_LOCK);
+    // Dazza keeps his held-object lock either way.
+    expect(buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Dazza, "walks off")).toContain(SUNNY_BANKS_HELD_OBJECT_LOCK);
+  });
+
+  it("hold motion prompt with no (or blank) action is the gold hold, unchanged", () => {
+    const gold = buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Nuggets);
+    expect(gold).toContain("holds their pose, subtle idle motion, weight shift, breathing, heat haze, flies.");
+    expect(gold).toContain("Camera holds, no cuts.");
+    expect(buildSunnyBanksHoldPrompt(SUNNY_BANKS_CAST.Nuggets, "   ")).toBe(gold);
+  });
+
+  it("talking shots are unchanged: the speaking prompt takes no action and keeps its gold shape", () => {
+    const prompt = buildSunnyBanksSpeakingPrompt(SUNNY_BANKS_CAST.Shazza, "Nuggets!");
+    expect(prompt).toContain("is prominent, mouth and head move naturally while speaking, subtle gesture.");
+    expect(prompt).toContain("Camera holds.");
   });
 });
 
