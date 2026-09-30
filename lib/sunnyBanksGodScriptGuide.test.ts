@@ -61,7 +61,13 @@ describe("SUNNY_BANKS_GOD_SCRIPT_EXAMPLE", () => {
     });
     expect(chunks[2].appearanceModifier).toContain("pile of $50 notes");
 
-    expect(chunks[3]).toMatchObject({ characterName: "Dazza", kind: "speak" });
+    // A voice tag after the colon stays in the spoken line — Eleven v3
+    // performs it (lib/elevenLabsSpeech.ts), so it must reach ElevenLabs.
+    expect(chunks[3]).toMatchObject({
+      characterName: "Dazza",
+      line: "[laughs] Yeah nah, told ya it'd work.",
+      kind: "speak",
+    });
 
     // The location set once at the top sticks for every following row.
     for (const chunk of chunks) expect(chunk.locationId).toBe("office_storefront");
@@ -69,7 +75,9 @@ describe("SUNNY_BANKS_GOD_SCRIPT_EXAMPLE", () => {
 
   it("never demonstrates a tag the parser doesn't know — no line is silently read aloud", () => {
     for (const chunk of parseSunnyBanksScriptBlock(SUNNY_BANKS_GOD_SCRIPT_EXAMPLE)) {
-      expect(chunk.line).not.toMatch(/\[(Outfit|silence|beat|SFX|pause)\b/i);
+      // Voice tags ([laughs], [short pause]) are allowed inside a line
+      // since the Eleven v3 switch; invented picture tags still aren't.
+      expect(chunk.line).not.toMatch(/\[(Outfit|silence|beat|SFX)\b/i);
       // A real tag that survived into the spoken line means the parser
       // stopped stripping it — exactly the bug this guide warns about.
       expect(chunk.line).not.toMatch(/\[(Location|Character|Action)\b/i);
@@ -96,7 +104,25 @@ describe("buildSunnyBanksGodScriptPrompt", () => {
     // The two that actually cost a paid render in live QA (2026-09-18).
     expect(prompt).toContain("[Outfit: ...]");
     expect(prompt).toContain("[silence]");
-    expect(prompt).toContain("Never invent a tag.");
+    expect(prompt).toContain("Never invent another picture tag");
+  });
+
+  it("teaches voice tags inside the line, after the colon — never on their own line", () => {
+    const prompt = buildSunnyBanksGodScriptPrompt();
+    expect(prompt).toContain("VOICE TAGS");
+    expect(prompt).toContain("[whispers]");
+    expect(prompt).toContain("Never put a voice tag on its own line or before the name.");
+    // The prompt's own voice-tag example must parse into one Speak row
+    // that keeps its tags.
+    const exampleLine = "Shazza: oi, here we go, [short pause] [whispers] another bus load of suckers...";
+    expect(prompt).toContain(exampleLine);
+    expect(parseSunnyBanksScriptBlock(exampleLine)).toEqual([
+      expect.objectContaining({
+        characterName: "Shazza",
+        kind: "speak",
+        line: "oi, here we go, [short pause] [whispers] another bus load of suckers...",
+      }),
+    ]);
   });
 
   it("embeds the same worked example the cheat sheet shows, so the two can't drift", () => {

@@ -139,6 +139,10 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(String(ttsUrl)).toContain("elevenlabs.io");
     expect(String(ttsUrl)).toContain("21m00Tcm4TlvDq8ikWAM");
     expect(JSON.parse(ttsInit.body).text).toBe("G'day, it's Hans.");
+    // Same model as a real Speak beat (the shared helper), so the ▶ is
+    // an honest preview of what a rendered clip will sound like.
+    expect(JSON.parse(ttsInit.body).model_id).toBe("eleven_v3");
+    expect(body.ttsModel).toBe("eleven_v3");
     expect(putMock).not.toHaveBeenCalled();
 
     const bad = await POST(postRequest({ kind: "voice-test", voiceId: "nope", line: "hi" }));
@@ -295,6 +299,60 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(body.audioMuxed).toBe(false);
     expect(body.audioMuxError).toMatch(/ffmpeg/i);
     expect(Buffer.compare(putMock.mock.calls[0][1], Buffer.from(videoBytes))).toBe(0);
+  });
+
+  it("audio tags (2026-09-30): the line reaches ElevenLabs v3 with its [tags]; the LTX prompt quotes only the words", async () => {
+    mockElevenLabs(encodeTestMp3(4));
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/tags.mp4" });
+
+    const line = "oi, here we go, [pause] [whispers] another bus load of suckers...";
+    const res = await POST(speakBeatRequest({ line }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.ttsModel).toBe("eleven_v3");
+
+    const tts = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(tts).toEqual({ text: line, model_id: "eleven_v3" });
+
+    const submitCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url).endsWith("/api/prompt"));
+    const graph = JSON.parse(fetchMock.mock.calls[submitCallIndex][1].body).prompt;
+    const promptNode = Object.values(graph as Record<string, { inputs?: Record<string, unknown> }>).find(
+      (node) => typeof node.inputs?.value === "string" && (node.inputs.value as string).includes("says:")
+    );
+    expect(promptNode?.inputs?.value).toContain('Shazza says: "oi, here we go, another bus load of suckers...".');
+    expect(promptNode?.inputs?.value).not.toContain("[whispers]");
+    expect(promptNode?.inputs?.value).not.toContain("[pause]");
+  });
+
+  it("audio tags: if v3 refuses the voice, the beat still renders on Multilingual v2 with the tags taken out (never read aloud)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ detail: { message: "Model not supported for this voice" } }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    mockElevenLabs(encodeTestMp3(3));
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/fallback.mp4" });
+
+    const res = await POST(speakBeatRequest({ line: "[sighs] We haven't got any shade, Dazza." }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.ttsModel).toBe("eleven_multilingual_v2");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).model_id).toBe("eleven_v3");
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      text: "We haven't got any shade, Dazza.",
+      model_id: "eleven_multilingual_v2",
+    });
   });
 
   it("real reported gold check: the submitted prompt matches Sunny Banks' own speaking-plate shape, not Skidmarks'", async () => {
