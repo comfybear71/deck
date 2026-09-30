@@ -36,7 +36,8 @@ function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
-function TrashIcon() {
+/** Shared with the Sunny Banks CLIPS strip's Remove so both look the same. */
+export function TrashIcon() {
   return (
     <svg aria-hidden viewBox="0 0 20 20" fill="none" className="h-3 w-3">
       <path

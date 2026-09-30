@@ -28,7 +28,7 @@ import { resolveMemberStillSleeve } from "./memberStillSleeve";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
 import type { SkidmarksState } from "./skidmarks";
 import { normalizeSkidmarksEpisodesState } from "./skidmarksEpisodes";
-import { SUNNY_BANKS_CAST, SUNNY_BANKS_STYLE_LOCK, resolveSunnyBanksStartImage } from "./sunnyBanks";
+import { SUNNY_BANKS_CAST, resolveSunnyBanksStartImage } from "./sunnyBanks";
 
 export type RosterGroup = "music-video" | "sunny-banks" | "skidmarks" | "adult-shorts";
 
@@ -280,6 +280,37 @@ export function startingPictures(char: RosterCharacter, entry: CharacterLoraEntr
   return [...new Set(all)].slice(0, CHARACTER_LORA_MAX_IMAGES);
 }
 
+/**
+ * A cartoon (Sunny Banks) character's own uploaded picture, when their
+ * first picture is one: Siray then copies that picture straight into all
+ * the training pictures, with no clean redraw first (2026-09-30: the
+ * redraw is where Stuart's flat 2D Hans first turned soft 3D). A built-in
+ * regular's first picture is the hand-cut hero still (a `/skidmarks/…`
+ * path, often holding a prop), which still gets the clean redraw.
+ * `null` for any other style.
+ */
+export function uploadedCartoonReference(
+  char: Pick<RosterCharacter, "thumbUrl" | "extraPictureUrls">,
+  style: CharacterTrainingStyle,
+): string | null {
+  if (style !== "cartoon") return null;
+  const first = char.thumbUrl ?? char.extraPictureUrls?.[0] ?? null;
+  return first && /^https:\/\//i.test(first) ? first : null;
+}
+
+/**
+ * What Redo also clears for a cartoon (Sunny Banks) character: the saved
+ * reference and its okay, so the run starts again from their current
+ * first picture (their own upload, via `uploadedCartoonReference`)
+ * instead of re-copying an old reference that had already drifted to 3D.
+ * Other styles keep their reference, as before.
+ */
+export function redoReferenceReset(
+  style: CharacterTrainingStyle,
+): Partial<Pick<CharacterLoraEntry, "referenceUrl" | "cleanReferenceApproved" | "cleanCandidateUrl">> {
+  return style === "cartoon" ? { referenceUrl: null, cleanReferenceApproved: false, cleanCandidateUrl: null } : {};
+}
+
 /** How many Siray pictures the one-tap flow will make, and the total rough cost. */
 export function oneTapCost(startingCount: number, target: number = AUTO_PICTURE_TARGET): { sirayPictures: number; totalUsd: number } {
   const sirayPictures = Math.max(0, target - startingCount);
@@ -508,8 +539,19 @@ function clip(text: string, max: number): string {
 const RENDER_3D_STYLE =
   "Stylised 3D animated caricature, like a feature-animation film still: exaggerated proportions, smooth rendered materials, soft cinematic light";
 
+/**
+ * The Sunny Banks look for Siray/Seedream pictures (2026-09-30). Not the
+ * video prompts' `SUNNY_BANKS_STYLE_LOCK`: Seedream has no negative
+ * prompt, so that lock's "not soft Pixar" put the word Pixar into every
+ * picture prompt, and with "even soft light" the pictures came out soft
+ * 3D (Hans, and Shazza's plates too). Positive 2D words only, and the
+ * word Pixar never appears. The video lock is unchanged.
+ */
+export const CARTOON_PICTURE_STYLE =
+  "flat 2D hand-drawn TV cartoon cel, thick black ink outlines, flat solid colour fills, no shading or gradients, no 3D render, no soft lighting, rubbery adult cartoon proportions, big heads, noodly arms, sun-bleached Aussie palette of dusty ochre and faded teal";
+
 function styleLine(style: CharacterTrainingStyle): string {
-  if (style === "cartoon") return `Keep the exact same cartoon style as the reference: ${SUNNY_BANKS_STYLE_LOCK}.`;
+  if (style === "cartoon") return `Keep the exact same flat 2D cartoon style as the reference: ${CARTOON_PICTURE_STYLE}.`;
   if (style === "render3d") return `Keep the exact same 3D cartoon look as the reference. ${RENDER_3D_STYLE}.`;
   return "Photographic, realistic light and skin, sharp focus.";
 }
@@ -572,11 +614,13 @@ export function buildCleanReferencePrompt(
   const animal = isAnimal(char.subjectWord);
   const who = whoWord(char.style, char.subjectWord, "man");
   const look = stripHeldProps(char.look);
+  // Cartoon: a flat pale backdrop, never "soft light" (it pulls Seedream toward shaded 3D).
+  const backdrop = char.style === "cartoon" ? "plain flat pale background." : "plain light background, even soft light.";
   const pose = animal
-    ? "Full body, standing, facing the viewer at a slight angle, neutral expression, plain light background, even soft light."
+    ? `Full body, standing, facing the viewer at a slight angle, neutral expression, ${backdrop}`
     : char.style === "faceless"
       ? "Full body standing, three-quarter view, arms hanging relaxed at the sides, hands open and empty, face in deep shadow under the hat brim, plain dark background, one soft key light."
-      : "Full body standing, facing the viewer at a slight angle, arms hanging relaxed straight down at the sides, hands open and empty, neutral expression, plain light background, even soft light.";
+      : `Full body standing, facing the viewer at a slight angle, arms hanging relaxed straight down at the sides, hands open and empty, neutral expression, ${backdrop}`;
   const parts = [
     hasReference
       ? `The same ${who} as in the reference image (${char.name}): exactly the same ${animal ? "species, face, markings, body shape and any clothes" : "face, hair, body shape and outfit"}, but a new pose.`
@@ -603,7 +647,7 @@ export function buildFacePrompt(char: Pick<RosterCharacter, "name" | "look" | "s
     `${char.name}: ${clip(stripHeldProps(char.look) || "an original made-up character", MAX_LOOK_CHARS)}.`,
     framing,
     EMPTY_HANDS_LINE,
-    char.style === "cartoon" ? `${SUNNY_BANKS_STYLE_LOCK}.` : char.style === "render3d" ? `${RENDER_3D_STYLE}.` : "Photographic, realistic.",
+    char.style === "cartoon" ? `${CARTOON_PICTURE_STYLE}.` : char.style === "render3d" ? `${RENDER_3D_STYLE}.` : "Photographic, realistic.",
     "A made-up adult, clearly over 25, not resembling any real person, fully clothed, one person only, no text.",
   ];
   return clip(parts.join(" "), MAX_PROMPT_CHARS);

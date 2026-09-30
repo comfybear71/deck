@@ -36,7 +36,9 @@ import {
   entryForRosterCharacter,
   minorBlockReason,
   oneTapCost,
+  redoReferenceReset,
   startingPictures,
+  uploadedCartoonReference,
   type RosterCharacter,
   type RosterGroup,
 } from "@/lib/characterRoster";
@@ -342,6 +344,27 @@ export function CharacterRosterGrid({
         // One-button faces: draw the clean picture (arms down, empty hands)
         // and use it straight away, with no stop to okay it.
         if (e.autoTrain && !e.cleanReferenceApproved) {
+          // A cartoon character's own uploaded picture is the reference as
+          // it is: no clean redraw, which is where a flat 2D upload turned
+          // soft 3D (2026-09-30).
+          const upload = uploadedCartoonReference(
+            { thumbUrl: char.thumbUrl ?? null, extraPictureUrls: char.extraPictureUrls ?? [] },
+            e.trainingStyle,
+          );
+          if (upload) {
+            try {
+              const ref = await ensureTrainingPicture(upload, characterReferenceTargetFor(e));
+              patchEntry(entryId, { referenceUrl: ref, cleanReferenceApproved: true, cleanCandidateUrl: null });
+              flushSkidmarksSessionNow();
+              failedRounds = 0;
+            } catch (err) {
+              failedRounds++;
+              if (failedRounds >= MAX_FAILED_ROUNDS) {
+                return fail(entryId, err instanceof Error ? err.message : "Couldn't load their picture to start from.");
+              }
+            }
+            continue;
+          }
           const src = char.thumbUrl ?? char.extraPictureUrls?.[0] ?? e.trainingImageUrls[0] ?? null;
           try {
             let refData: string | null = null;
@@ -529,6 +552,9 @@ export function CharacterRosterGrid({
       trainingImageUrls: keep,
       pictureRound: (fresh.pictureRound ?? 0) + 1,
       status: "draft",
+      // Cartoon (Sunny Banks): start again from their current first
+      // picture, not the old saved reference (2026-09-30).
+      ...redoReferenceReset(styleFor(char, fresh)),
     });
     setSelectedKey(null);
     startAuto(char);
