@@ -139,6 +139,13 @@ describe("trainer input by style", () => {
 });
 
 describe("empty hands in training pictures", () => {
+  it("strips the held props from every Sunny Banks look (2026-09-30 wording)", () => {
+    for (const c of Object.values(SUNNY_BANKS_CAST)) {
+      expect(stripHeldProps(c.look), c.name).not.toMatch(/cigarette|pie|teacup|cricket bat|flip-flop|whistle|camera|arms folded/i);
+    }
+    expect(stripHeldProps(SUNNY_BANKS_CAST.Nan.look)).toBe("tiny elderly woman, grey hair in a bun, round glasses, purple floral housecoat, pink bunny slippers");
+  });
+
   it("strips held props from a look but keeps the rest", () => {
     expect(stripHeldProps("tiny elderly woman, hair bun, round glasses, purple housecoat, teacup, cricket bat")).toBe(
       "tiny elderly woman, hair bun, round glasses, purple housecoat",

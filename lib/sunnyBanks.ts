@@ -8,6 +8,17 @@
  * `"sunnybank"` has sat in `SkidmarksProjectKind` since this app's
  * first commit, disabled, waiting for exactly this.
  *
+ * **Look locks rewritten (2026-09-30, Stuart approved):** the gold look
+ * strings named alternate outfits and loose props ("as on that plate —
+ * … beers, coins, or pink hair dryer depending on the plate"), and EP01
+ * rendered Dazza as a coin with his face on it — the prompt drew the
+ * prop as the subject. Each look is now one clear description of the
+ * character's hero picture (`public/skidmarks/sunnybanks/*-hero.jpg`,
+ * Unit 4S's single-figure plate, Hans's Blob picture), with a prop kept
+ * only when it's in that picture, phrased as held or worn. The Speak
+ * and Hold template shapes, style lock and global lock below are still
+ * the verbatim gold.
+ *
  * **This module is prompt/voice *gold*, not a reimplementation of the
  * old Skidmarks Studio's Sunny Banks pipeline** (`comfybear71/skidmarks`,
  * `docs/SUNNY_BANKS_IMAGE_MOTION_STANDARD.md` +
@@ -57,11 +68,14 @@ export interface SunnyBanksCharacterLock {
   /** Exact display name, as `NAME says:` expects it in the speaking
    * plate. */
   name: string;
-  /** Verbatim look lock from the gold table — inserted directly after
-   * the character's name in the speaking/hold plate templates below.
-   * Never invent a second costume; a character whose look genuinely
-   * varies by episode (Dazza) keeps that ambiguity in the lock text
-   * itself rather than this module guessing which one applies. */
+  /** Look lock — inserted directly after the character's name in the
+   * speaking/hold plate templates below. One clear description of their
+   * hero picture (2026-09-30): no "either / or / depending on the plate"
+   * wording and no loose props — a prop appears only when it's in the
+   * hero picture, phrased as held or worn ("cigarette in her mouth"),
+   * never as a bare noun a prompt could draw as the subject (EP01's
+   * coin-faced Dazza). A per-shot change goes in `[Character Name: …]`,
+   * never here. */
   look: string;
   /** ElevenLabs voice id for this character's locked voice — Stuart's
    * own real ids, copied from his ElevenLabs account (2026-09-15), not
@@ -133,7 +147,9 @@ export interface SunnyBanksCharacterLock {
 export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   Shazza: {
     name: "Shazza",
-    look: "big blonde hair, leopard-print top, cigarette, arms folded",
+    look:
+      "middle-aged woman, huge curly blonde hair, gold hoop earrings, cigarette in her mouth, arms folded, " +
+      "leopard-print singlet top, frayed denim shorts",
     voiceId: "Vuun8WKmo2MZSUXgLPGw",
     referenceImage: "/skidmarks/sunnybanks/shazza-reference.jpg",
     // Top row, 2nd body from left on the 1248×832 sheet (arms folded,
@@ -142,9 +158,11 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   },
   Dazza: {
     name: "Dazza",
+    // One look, matching dazza-hero.jpg (2026-09-30). The old lock listed
+    // "beers, coins, or pink hair dryer" and EP01 drew him as a coin.
     look:
-      "as on that plate — early: tall messy blonde, blue shirt, beers, coins, or pink hair dryer depending " +
-      "on the plate — later: wild mullet, stained blue singlet, stubbies, beer can",
+      "skinny adult bloke, wild spiky blonde hair, bulging eyes, gap-toothed grin, tattooed forearm, " +
+      "stained faded blue singlet, torn brown shorts, bare feet",
     voiceId: "Kn29eGLhsovCLwKvKi2q",
     referenceImage: "/skidmarks/sunnybanks/dazza-reference.jpg",
     // Front-left full figure on the 1168×784 sheet. Extract { left: 20, top: 8, width: 290, height: 470 }.
@@ -152,7 +170,9 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   },
   Nan: {
     name: "Nan",
-    look: "tiny elderly woman, hair bun, round glasses, purple housecoat, teacup, cricket bat",
+    look:
+      "tiny elderly woman, grey hair in a bun, round glasses, cricket bat resting on her shoulder, " +
+      "teacup and saucer in her other hand, purple floral housecoat, pink bunny slippers",
     voiceId: "u57uR2xbwGdASNetz0GB",
     referenceImage: "/skidmarks/sunnybanks/nan-reference.jpg",
     // Front-left full figure (bat + teacup + bunny slippers). Extract { left: 40, top: 20, width: 260, height: 420 }.
@@ -160,7 +180,10 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   },
   Hans: {
     name: "Hans",
-    look: "German backpacker, safari outfit, cork hat, camera around neck",
+    // Matches his picture on the Sunnybank bar (the face added as ArSGL).
+    look:
+      "slim German backpacker, cork hat with dangling corks, khaki safari shirt, big canvas backpack, " +
+      "camera on a strap around his neck",
     guest: true,
     // No voice id yet — see this module's doc comment. Never guess
     // a stand-in here; a caller must surface this as a real gap.
@@ -168,7 +191,9 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   Nuggets: {
     name: "Nuggets",
     // Stuart (2026-09-29): Nuggets is a grown adult, just drawn cartoonish.
-    look: "skinny adult bloke in his late twenties, buzz cut, blue and yellow jersey, meat pie",
+    look:
+      "skinny adult bloke in his late twenties, bald head, freckles, worried wide eyes, meat pie held in both " +
+      "hands, blue and yellow polo shirt, blue shorts, white socks, brown work boots",
     voiceId: "URQwIuGxmxWfCgwXuDxA",
     referenceImage: "/skidmarks/sunnybanks/nuggets-reference.jpg",
     // Front-left full figure with pie. Extract { left: 30, top: 8, width: 280, height: 500 }.
@@ -176,13 +201,12 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   },
   "Ranger Bazza": {
     name: "Ranger Bazza",
-    // Stuart's own confirmation (2026-09-15): both looks are real, not a
-    // stale/wrong description — same "as on that plate" ambiguity-
-    // preserving shape as Dazza's own entry above, since this module
-    // never guesses which one a given scene means.
+    // One look, matching ranger-bazza-hero.jpg (2026-09-30). The old lock
+    // offered a second outfit (Akubra, high-vis vest, mountain bike);
+    // a scene that wants it says so with `[Character Ranger Bazza: …]`.
     look:
-      "as on that plate — portly build either way: tan/khaki ranger uniform, sunglasses, moustache, whistle " +
-      "on a lanyard, or oversized Akubra, high-vis vest, mountain bike",
+      "portly middle-aged park ranger, short brown hair, dark sunglasses, bushy moustache, whistle on a " +
+      "lanyard around his neck, short-sleeved khaki ranger shirt, khaki trousers, brown belt",
     voiceId: "lT1zujgSfYwPzAlTNE9z",
     referenceImage: "/skidmarks/sunnybanks/ranger-bazza-reference.jpg",
     // Top row, 2nd body from left (¾, whistle) on the 1248×832 sheet.
@@ -192,10 +216,11 @@ export const SUNNY_BANKS_CAST: Record<string, SunnyBanksCharacterLock> = {
   "Unit 4S": {
     name: "Unit 4S",
     // Real reference plate (2026-09-15): bucket hat + antennae + bulging
-    // eyes confirmed, but no high-vis vest in frame — holding a pair of
-    // thongs instead. Updated to match the real art, not the originally
-    // relayed text.
-    look: "short purple alien, antennae, bulging eyes, teal bucket hat, holding a pair of thongs, bare feet",
+    // eyes, a thong in each hand. "Flip-flop" (2026-09-30), not "thongs":
+    // to an image model outside Australia a thong is underwear.
+    look:
+      "skinny purple alien, two antennae, big round bulging eyes, wide toothy grin, teal bucket hat, " +
+      "a teal flip-flop held in each hand, bare feet",
     voiceId: "9AMMyX2GM74yY0KQwYkF",
     referenceImage: "/skidmarks/sunnybanks/unit-4s-reference.jpg",
   },
@@ -240,7 +265,7 @@ export function buildSunnyBanksCompositePlatePrompt(
   appearanceOverride?: string
 ): string {
   const trimmedOverride = appearanceOverride?.trim() || "";
-  const heldProp = /\b(cigarette|pie|teacup|cricket bat|thongs|beer|camera|whistle)\b/i.test(
+  const heldProp = /\b(cigarette|pie|teacup|cricket bat|thongs|flip-flops?|beer|camera|whistle)\b/i.test(
     character.look
   );
   // An override changes what's held/worn on purpose, so the base
@@ -372,12 +397,14 @@ export function buildUnit4sLine(intensitySec: number): string {
 
 /**
  * Extra sentence appended *after* the gold Speak/Hold template for
- * Dazza only. His look lock lists alternate held objects ("beers,
+ * Dazza only. His old look lock listed alternate held objects ("beers,
  * coins, or pink hair dryer" / later "beer can") — live QA: LTX
  * treated that "or" as permission to morph or drop the prop mid-clip.
- * Gold look/voice/style strings stay verbatim (Jack-Ash hallmark
- * pattern: append, never rewrite the proven template). Shazza's
- * field-for-field gold `toBe(...)` test must keep matching exactly.
+ * It no longer names any object (2026-09-30: naming "coins" is what
+ * turned him into one); it only says whatever is in his hands in the
+ * start image stays put. The gold template itself is unchanged
+ * (Jack-Ash hallmark pattern: append, never rewrite the proven
+ * template).
  */
 export const SUNNY_BANKS_HELD_OBJECT_LOCK =
   "Held objects stay locked and static for the full duration — whatever is in the character's hands in the start image must not morph, swap, or disappear.";
@@ -385,8 +412,8 @@ export const SUNNY_BANKS_HELD_OBJECT_LOCK =
 function accessoryLockSuffix(character: SunnyBanksCharacterLock): string {
   if (character.name !== "Dazza") return "";
   return (
-    ` ${SUNNY_BANKS_HELD_OBJECT_LOCK} Dazza's beers, coins, pink hair dryer, or beer can remain exactly as ` +
-    `shown in the start image, without morphing or disappearing over the clip.`
+    ` ${SUNNY_BANKS_HELD_OBJECT_LOCK} Whatever Dazza is holding stays exactly as shown in the start image, ` +
+    `without morphing or disappearing over the clip.`
   );
 }
 
