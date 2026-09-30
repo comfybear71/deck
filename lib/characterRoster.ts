@@ -176,10 +176,20 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
   // Same name as one already in the group: their pictures go to that
   // character instead of making a second tile.
   const extras = normalizeRosterExtrasState(state.rosterExtras);
+  // An added character's name also lives on its own card (`deck_items`),
+  // where a rename is saved (`lib/characterEdits.ts`). The card wins, so a
+  // rename still shows after an older session copy is loaded.
+  const cardNameByKey = new Map(
+    (state.characterLoras ?? emptyCharacterLorasState()).characters
+      .filter((card) => card.sourceKey && card.name.trim())
+      .map((card) => [card.sourceKey as string, card.name.trim()]),
+  );
   for (const g of ROSTER_EXTRA_GROUPS) {
     // Adult shorts stay hidden until the 18+ confirm is ticked, like the editor character.
     if (g === "adult-shorts" && !adult?.ageConfirmed) continue;
-    for (const x of extras?.[g] ?? []) {
+    for (const extra of extras?.[g] ?? []) {
+      const cardName = cardNameByKey.get(rosterExtraSourceKey(g, extra.id));
+      const x = cardName ? { ...extra, name: cardName } : extra;
       const slug = slugifyCharacterName(x.name);
       const existing = out[g].find((c) => slugifyCharacterName(c.name) === slug);
       if (existing) {
