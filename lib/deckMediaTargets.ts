@@ -177,7 +177,7 @@ function pinAdultShortMediaSlug(): string {
 }
 
 /** `blonde-girl-1-plate-02` etc. for the open short; `n` is 1-based. */
-export function adultShortTargetFor(role: "ref" | "plate" | "clip", n: number): DeckMediaTarget {
+export function adultShortTargetFor(role: "ref" | "plate" | "clip" | "voice", n: number): DeckMediaTarget {
   return adultShortTarget(pinAdultShortMediaSlug(), role, n);
 }
 

@@ -26,7 +26,7 @@ import {
   type AdultShortsPerson,
   type AdultShortsShot,
 } from "./adultShorts";
-import { emptyCharacterLorasState, slugifyCharacterName } from "./characterLoras";
+import { emptyCharacterLorasState, normalizeElevenLabsVoiceId, slugifyCharacterName } from "./characterLoras";
 import { buildCharacterRoster, entryForRosterCharacter, type RosterCharacter } from "./characterRoster";
 import type { SkidmarksState } from "./skidmarks";
 
@@ -82,7 +82,15 @@ function resolvePerson(state: SkidmarksState, own: AdultShortsCharacter, confirm
   // Their own card's word (woman, man, person) goes in the prompt's adult line.
   const card = entryForRosterCharacter((state.characterLoras ?? emptyCharacterLorasState()).characters, cast.sourceKey);
   const subjectWord = (card?.subjectWord || cast.subjectWord || "person").trim();
-  return { name: own.name.trim() || cast.name, look: own.look.trim() || cast.look.trim(), referenceUrls: pictures, subjectWord };
+  // Their Cast card's voice (2026-09-30), for a shot with a Line.
+  const voiceId = normalizeElevenLabsVoiceId(card?.voiceId);
+  return {
+    name: own.name.trim() || cast.name,
+    look: own.look.trim() || cast.look.trim(),
+    referenceUrls: pictures,
+    subjectWord,
+    ...(voiceId ? { voiceId } : {}),
+  };
 }
 
 /**

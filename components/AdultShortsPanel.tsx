@@ -7,8 +7,13 @@ import {
   ADULT_SHORTS_MAX_SHOTS,
   ADULT_SHORTS_MIN_SHOT_SEC,
   ADULT_SHORTS_STILL_COST_USD,
+  ADULT_SHORTS_LINE_MAX,
+  adultShortSpeaker,
   buildAdultShortsMotionPrompt,
   buildAdultShortsShot,
+  buildAdultShortsTalkingPrompt,
+  formatAdultShortsTalkingCost,
+  isAdultShortTalkingShot,
   adultShortEpisodeCode,
   adultShortEpisodeNumbers,
   adultShortIsAdult,
@@ -67,6 +72,12 @@ import { SHORTS_EDITOR_ID } from "./ShortsEpisodeRow";
  * happens. "Render N clips" runs the unfinished shots one after another,
  * with the same Stop as Sunnybank (the shot already rendering finishes,
  * later shots are never billed).
+ *
+ * Talking shots (2026-09-30): a shot with a Line is voiced with the
+ * speaker's Cast card ElevenLabs voice and lip-synced on LTX from its
+ * plate (`/api/skidmarks/adult-shorts/render-talking`, the same pipeline
+ * as Sunnybank's talking lines). A shot with no Line stays a silent Siray
+ * clip, exactly as before.
  *
  * The old "Character" box (name, look, three pictures, 2026-09-28) was
  * removed on 2026-09-30: the Cast row above does that job. The episode's
@@ -262,6 +273,8 @@ export function AdultShortsPanel() {
     const people = shortsShotPeople(resolveShortsStarring(getSkidmarksSnapshot()), shot);
     const adultNow = adultShortIsAdult(now);
     const startImageUrl = resolveAdultShortsStartImage(now.shots, index);
+    // A shot with a Line talks: voiced, then LTX (a Siray job still waiting finishes first).
+    if (isAdultShortTalkingShot(shot) && !shot.sirayTaskId) return renderTalking(shot, index, people, adultNow, startImageUrl);
     if (!startImageUrl && !shot.sirayTaskId) {
       setShotError(
         shot.id,
@@ -339,8 +352,77 @@ export function AdultShortsPanel() {
     }
   };
 
+  /** A talking shot: the speaker's voice says the Line, then LTX lip-syncs the plate. One call, like Sunnybank's. */
+  const renderTalking = async (
+    shot: AdultShortsShot,
+    index: number,
+    people: ReturnType<typeof shortsShotPeople>,
+    adultNow: boolean,
+    startImageUrl: string | null,
+  ): Promise<boolean> => {
+    const speaker = adultShortSpeaker(people, shot);
+    if (!speaker) {
+      setShotError(shot.id, "Pick who's in this shot first.");
+      return false;
+    }
+    if (!speaker.voiceId) {
+      setShotError(shot.id, `${speaker.name} has no voice yet. Add their ElevenLabs voice ID on their Cast card.`);
+      return false;
+    }
+    if (!startImageUrl) {
+      setShotError(shot.id, shot.chainFromPrevious ? "Render the previous clip first, or make this shot's plate." : "Make the plate first.");
+      return false;
+    }
+    setShotError(shot.id, null);
+    setBusy({ shotId: shot.id, kind: "clip" });
+    try {
+      const res = await fetch("/api/skidmarks/adult-shorts/render-talking", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: buildAdultShortsTalkingPrompt(people, shot, speaker.name, { adult: adultNow }),
+          line: shot.line ?? "",
+          speakerName: speaker.name,
+          voiceId: speaker.voiceId,
+          startImageUrl,
+          mediaTarget: adultShortTargetFor("clip", index + 1),
+          voiceTarget: adultShortTargetFor("voice", index + 1),
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { videoUrl?: string; lastFrameUrl?: string | null; error?: string };
+      if (!res.ok || !json.videoUrl) throw new Error(json.error || `The talking clip failed (HTTP ${res.status}).`);
+      patchShot(shot.id, { clipUrl: json.videoUrl, lastFrameUrl: json.lastFrameUrl ?? null });
+      flushSkidmarksSessionNow();
+      return true;
+    } catch (err) {
+      setShotError(
+        shot.id,
+        isNetworkDrop(err) ? "The connection dropped while LTX was working. Tap Render to try again." : err instanceof Error ? err.message : "The talking clip failed."
+      );
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const unfinished = shots.filter((s) => !s.clipUrl);
-  const queueCost = formatUsd(unfinished.reduce((sum, s) => sum + estimateAdultShortsClipCostUsd(s.durationSec), 0));
+  const unfinishedTalking = unfinished.filter((s) => isAdultShortTalkingShot(s));
+  // Like Sunnybank's Render all: not while a talking shot's speaker has no voice.
+  const voiceless = unfinishedTalking
+    .map((s) => adultShortSpeaker(shortsShotPeople(starringPeople, s), s))
+    .filter((p): p is NonNullable<typeof p> => Boolean(p && !p.voiceId))
+    .map((p) => p.name)
+    .filter((n, i, all) => all.indexOf(n) === i);
+  const sirayQueueCost = formatUsd(
+    unfinished.filter((s) => !isAdultShortTalkingShot(s)).reduce((sum, s) => sum + estimateAdultShortsClipCostUsd(s.durationSec), 0)
+  );
+  // Talking shots are as long as their Line: priced per second, the way Sunnybank shows it.
+  const queueCost =
+    unfinishedTalking.length === 0
+      ? sirayQueueCost
+      : unfinishedTalking.length === unfinished.length
+        ? `talking ${formatAdultShortsTalkingCost()}`
+        : `${sirayQueueCost} + talking ${formatAdultShortsTalkingCost()}`;
   const episodeNumber = state.currentSavedId ? adultShortEpisodeNumbers(state.saved).get(state.currentSavedId) : undefined;
 
   /** "Render N clips" (two taps): every unfinished shot, in order, with Stop. */
@@ -372,8 +454,11 @@ export function AdultShortsPanel() {
   const renderShotPanel = (shot: AdultShortsShot, index: number) => {
     const isBusy = busy?.shotId === shot.id;
     const armed = armedRenderId === shot.id;
-    const clipCost = formatUsd(estimateAdultShortsClipCostUsd(shot.durationSec));
     const people = shortsShotPeople(starringPeople, shot);
+    const talking = isAdultShortTalkingShot(shot);
+    const speaker = talking ? adultShortSpeaker(people, shot) : null;
+    const noVoice = Boolean(talking && speaker && !speaker.voiceId);
+    const clipCost = talking ? formatAdultShortsTalkingCost() : formatUsd(estimateAdultShortsClipCostUsd(shot.durationSec));
     return (
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-end gap-2">
@@ -381,7 +466,9 @@ export function AdultShortsPanel() {
             value={shot.durationSec}
             onChange={(e) => patchShot(shot.id, { durationSec: clampAdultShortsDuration(Number(e.target.value)) })}
             aria-label={`Shot ${index + 1} length`}
-            className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white"
+            disabled={talking}
+            title={talking ? "A talking shot is as long as its Line." : undefined}
+            className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white disabled:opacity-40"
           >
             {Array.from({ length: ADULT_SHORTS_MAX_SHOT_SEC - ADULT_SHORTS_MIN_SHOT_SEC + 1 }, (_, i) => i + ADULT_SHORTS_MIN_SHOT_SEC).map(
               (sec) => (
@@ -416,6 +503,28 @@ export function AdultShortsPanel() {
           className="w-full resize-y rounded-md border border-white/10 bg-black/30 px-3 py-2 text-base text-white placeholder:text-white/30 sm:text-sm"
         />
 
+        {/* The Line (2026-09-30): something said = a talking shot on LTX; empty = silent on Siray. */}
+        <textarea
+          value={shot.line ?? ""}
+          onChange={(e) => {
+            const line = e.target.value.slice(0, ADULT_SHORTS_LINE_MAX);
+            patchAdultShorts((st) => ({
+              ...st,
+              shots: st.shots.map((x) => {
+                if (x.id !== shot.id) return x;
+                const rest = { ...x };
+                delete rest.line;
+                return line ? { ...rest, line } : rest;
+              }),
+            }));
+          }}
+          rows={2}
+          maxLength={ADULT_SHORTS_LINE_MAX}
+          placeholder="Line (optional), e.g. [whispers] You came back. Leave empty for a silent clip."
+          aria-label={`Shot ${index + 1} line`}
+          className="w-full resize-y rounded-md border border-white/10 bg-black/30 px-3 py-2 text-base text-white placeholder:text-white/30 sm:text-sm"
+        />
+
         {/* Who's in this shot: everyone starring unless some are unticked. */}
         {starringList.length > 1 && (
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-white/60">
@@ -438,6 +547,43 @@ export function AdultShortsPanel() {
               );
             })}
           </div>
+        )}
+
+        {/* Who says the Line, when more than one person is in the shot (default: the first). */}
+        {talking && people.length > 1 && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-white/60">
+            <span className="mr-0.5">Speaker</span>
+            {people.map((p) => {
+              const on = Boolean(speaker && sameAdultShortPerson(speaker.name, p.name));
+              return (
+                <button
+                  key={p.name}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    patchAdultShorts((st) => ({
+                      ...st,
+                      shots: st.shots.map((x) => {
+                        if (x.id !== shot.id) return x;
+                        const rest = { ...x };
+                        delete rest.speakerName;
+                        return sameAdultShortPerson(p.name, people[0].name) ? rest : { ...rest, speakerName: p.name };
+                      }),
+                    }))
+                  }
+                  className={[
+                    "min-h-[28px] rounded-full border px-2.5 py-0.5",
+                    on ? "border-amber-300/70 bg-amber-400/15 text-white" : "border-white/15 text-white/50",
+                  ].join(" ")}
+                >
+                  {p.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {noVoice && speaker && (
+          <p className="text-xs text-red-300">{speaker.name} has no voice yet. Add their ElevenLabs voice ID on their Cast card.</p>
         )}
 
         {index > 0 && (
@@ -485,7 +631,7 @@ export function AdultShortsPanel() {
             <div className="flex gap-1.5">
               <button
                 type="button"
-                disabled={Boolean(busy) || queueRunning}
+                disabled={Boolean(busy) || queueRunning || (noVoice && !shot.sirayTaskId)}
                 onClick={() => (armed || shot.sirayTaskId ? void renderClip(shot.id) : setArmedRenderId(shot.id))}
                 className={[
                   "flex-1 rounded-md px-2 py-1 text-xs font-medium disabled:opacity-40",
@@ -590,7 +736,8 @@ export function AdultShortsPanel() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={Boolean(busy) || queueRunning}
+              disabled={Boolean(busy) || queueRunning || voiceless.length > 0}
+              title={voiceless.length ? `${voiceless.join(" and ")} ${voiceless.length === 1 ? "has" : "have"} no voice yet.` : undefined}
               onClick={() => (queueArmed ? void renderAll() : setQueueArmed(true))}
               onBlur={() => setQueueArmed(false)}
               className={[
@@ -633,9 +780,11 @@ export function AdultShortsPanel() {
               clipUrl: shot.clipUrl,
               status: rendering ? "rendering" : shot.clipUrl ? "rendered" : errors[shot.id] ? "failed" : "empty",
               ...(isBusy && busy?.kind === "plate" ? { statusText: "Making plate…" } : {}),
-              caption: shot.prompt.trim() || undefined,
-              // Every Shorts clip renders on Siray Wan 3.0 spicy (2026-09-30 engine chip).
-              engine: { label: videoBackendTagLabel("siray"), title: "Video on Siray" },
+              caption: shot.prompt.trim() || shot.line?.trim() || undefined,
+              // A shot with a Line talks on LTX; every other Shorts clip is Siray Wan 3.0 spicy.
+              engine: isAdultShortTalkingShot(shot)
+                ? { label: videoBackendTagLabel("ltx"), title: "Talking, on LTX" }
+                : { label: videoBackendTagLabel("siray"), title: "Video on Siray" },
             };
           })}
           openId={openShotId && shots.some((x) => x.id === openShotId) ? openShotId : null}
@@ -649,6 +798,8 @@ export function AdultShortsPanel() {
                 }
               : undefined
           }
+          layout="split"
+          emptyPanelHint="Tap a shot to edit it here."
           renderPanel={(id) => {
             const index = shots.findIndex((x) => x.id === id);
             const shot = shots[index];
