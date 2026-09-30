@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useSyncExternalStore } from "react";
+import { videoBackendTagLabel } from "@/lib/videoBackendRouting";
 import {
   ADULT_SHORTS_MAX_REFERENCES,
   ADULT_SHORTS_MAX_SHOT_SEC,
@@ -371,7 +372,13 @@ export function AdultShortsPanel() {
           return (
             <div key={shot.id} className="rounded-2xl border border-white/10 bg-white/[0.02] p-3">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-medium text-white">Shot {index + 1}</p>
+                <p className="text-sm font-medium text-white">
+                  Shot {index + 1}
+                  {/* Every Shorts clip renders on Siray Wan 3.0 spicy (2026-09-30 engine chip). */}
+                  <span title="Video on Siray" className="ml-1.5 align-middle text-[9px] font-bold tracking-wide text-red-400">
+                    {videoBackendTagLabel("siray")}
+                  </span>
+                </p>
                 <div className="flex items-center gap-2">
                   <select
                     value={shot.durationSec}

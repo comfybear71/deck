@@ -238,3 +238,31 @@ describe("saved location keys are kept (2026-09-30)", () => {
     );
   });
 });
+
+describe("silent-row engine fields (2026-09-30)", () => {
+  it("keeps a row's videoBackend and the studio's Grok/H3 switch; drops junk", async () => {
+    const { normalizeSunnyBanksStudio, buildEmptySunnyBanksLive } = await import("./sunnyBanksWorkspace");
+    const live = buildEmptySunnyBanksLive();
+    const studio = normalizeSunnyBanksStudio({
+      live: {
+        ...live,
+        runtimeMap: {
+          I: {
+            0: { lineKey: "Ranger Bazza:", status: "done", videoUrl: "https://b/x.mp4", videoBackend: "h3" },
+            1: { lineKey: "Crowd:", status: "done", videoUrl: "https://b/y.mp4", videoBackend: "siray" },
+            2: { lineKey: "Shazza:", status: "done", videoUrl: "https://b/z.mp4" },
+          },
+        },
+      },
+      workspaces: [],
+      saveSeq: 0,
+      silentShotBackend: "h3",
+    })!;
+    expect(studio.silentShotBackend).toBe("h3");
+    expect(studio.live.runtimeMap.I[0].videoBackend).toBe("h3");
+    expect(studio.live.runtimeMap.I[1].videoBackend).toBeUndefined();
+    // An older Done row is untouched: no field invented.
+    expect("videoBackend" in studio.live.runtimeMap.I[2]).toBe(false);
+    expect(normalizeSunnyBanksStudio({ live, workspaces: [], saveSeq: 0, silentShotBackend: "ltx" })!.silentShotBackend).toBeUndefined();
+  });
+});

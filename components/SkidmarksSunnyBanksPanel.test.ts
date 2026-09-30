@@ -1205,3 +1205,59 @@ describe("inserting or removing a row keeps every other Done clip (2026-09-30)",
     expect(shownUrls(edited, doneAll(before))).toEqual([1, 2, 4, 5, 6].map((n) => `https://blob.example/beat-${n}.mp4`));
   });
 });
+
+describe("[GROK] / [LTX] / [H3] engine tags (2026-09-30)", () => {
+  it("a tag after the name picks the engine for that row and is not in the line", () => {
+    const rows = sunnyBanksQueueChunks(
+      parseSunnyBanksScriptBlock("Ranger Bazza: [H3]\nCrowd: [ltx]\nShazza: [GROK] You right?")
+    );
+    expect(rows.map((row) => [row.kind, row.characterName, row.line, row.videoBackend])).toEqual([
+      ["hold", "Ranger Bazza", "", "h3"],
+      ["hold", "Crowd", "", "ltx"],
+      ["speak", "Shazza", "You right?", "grok"],
+    ]);
+    // Never in `raw` (the row's clip key) or the spoken line.
+    expect(rows.every((row) => !/\[(GROK|LTX|H3)\]/i.test(row.raw + row.line))).toBe(true);
+  });
+
+  it("a tag alone on a line is used up by the next row only", () => {
+    const rows = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock("[GROK]\n[Action: waves]\nShazza:\nShazza:"));
+    expect(rows[0].videoBackend).toBe("grok");
+    expect(rows[0].action).toBe("waves");
+    expect(rows[1].videoBackend).toBeUndefined();
+  });
+
+  it("adding a tag to a finished row keeps its clip (same row key)", () => {
+    const before = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock("Ranger Bazza:"))[0];
+    const after = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock("Ranger Bazza: [H3]"))[0];
+    expect(after.raw).toBe(before.raw);
+  });
+
+  it("colours red, and Format leaves it where it was typed", () => {
+    const segments = buildSunnyBanksHighlightSegments("Ranger Bazza: [GROK]\n[h3]");
+    expect(segments.filter((s) => s.kind === "backend").map((s) => s.text)).toEqual(["[GROK]", "[h3]"]);
+    expect(SUNNY_BANKS_HIGHLIGHT_CLASSES.backend).toBe("text-red-400");
+    // Same blank line after each speech line as always; the tag stays put.
+    expect(formatSunnyBanksGodScript("Ranger Bazza: [GROK]\nShazza: [H3] Hi")).toBe(
+      "Ranger Bazza: [GROK]\n\nShazza: [H3] Hi"
+    );
+  });
+
+  it("editing the line on a queued row keeps its engine tag", () => {
+    expect(rewriteSunnyBanksSpeakerLine("Ranger Bazza: [H3]", "Ranger Bazza", "")).toBe("[H3] Ranger Bazza:");
+    expect(rewriteSunnyBanksSpeakerLine("[LTX] Shazza: hi", "Shazza", "hello")).toBe("[LTX] Shazza: hello");
+  });
+
+  it("the used engine survives re-keying a row's runtime", () => {
+    const script = "Ranger Bazza:";
+    const next = writeSunnyBanksRowRuntime(script, {}, 0, {
+      lineKey: "Ranger Bazza:",
+      status: "done",
+      videoUrl: "https://blob.example/a.mp4",
+      videoBackend: "grok",
+    });
+    const kept = preserveRenderedRuntimes(parseSunnyBanksScriptBlock("Ranger Bazza: [H3]"), next);
+    expect(kept[0].videoBackend).toBe("grok");
+    expect(kept[0].status).toBe("done");
+  });
+});

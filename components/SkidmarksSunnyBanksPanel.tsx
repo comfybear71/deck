@@ -7,7 +7,18 @@ import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { triggerBlobDownload } from "@/lib/clipRenders";
 import { SkidmarksConfirmDialog } from "@/components/SkidmarksConfirmDialog";
 import { TrashIcon } from "@/components/SkidmarksRenderedClipsShelf";
-import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
+import { estimateRowVideoCostUsd } from "@/lib/clipGeneration";
+import {
+  extractVideoBackendOverride,
+  ignoredVideoBackendWarning,
+  normalizeSilentShotBackend,
+  pickRowVideoBackend,
+  rowVideoBackendChip,
+  VIDEO_BACKEND_OVERRIDE_TAG_SOURCE,
+  videoBackendName,
+  videoBackendTagLabel,
+  type RowVideoBackend,
+} from "@/lib/videoBackendRouting";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
   buildSunnyBanksHoldPrompt,
@@ -45,6 +56,7 @@ import {
   getSkidmarksSnapshot,
   getSunnyBanksLiveOrDefault,
   patchSunnyBanksLive,
+  setSunnyBanksSilentShotBackend,
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
 import {
@@ -257,6 +269,10 @@ export interface SunnyBanksScriptChunk {
   action?: string;
   /** Extra look text from `[Character Name: description]` — not gold. */
   appearanceModifier?: string;
+  /** `[GROK]` / `[LTX]` / `[H3]` typed on this line or the tag-only line
+   * above it (2026-09-30): overrides which engine renders the row. Never
+   * part of `raw`, `line` or TTS. */
+  videoBackend?: RowVideoBackend;
 }
 
 /** Speak/Hold rows only — scene headers stay in the parse array but
@@ -287,6 +303,7 @@ interface GenerateBeatResponseBody {
   kind?: unknown;
   audioMuxed?: unknown;
   audioMuxError?: unknown;
+  videoBackend?: unknown;
 }
 
 type RowRuntime = SunnyBanksRowRuntime;
@@ -315,7 +332,6 @@ export interface SunnyBanksRenderedClip {
   durationSec?: number;
 }
 
-const HOLD_COST_USD = estimateLtxClipRenderCostUsd(SUNNY_BANKS_HOLD_DURATION_SEC);
 const PLATE_CAST = CAST_LIST.filter((c) => c.referenceImage);
 const FALLBACK_CHARACTER_NAME = PLATE_CAST[0]?.name ?? "";
 
@@ -471,11 +487,13 @@ function extractGodScriptTags(raw: string): {
   locationId?: SunnyBanksLocationId;
   actions: string[];
   appearanceModifiers: string[];
+  videoBackend?: RowVideoBackend;
 } {
   let locationId: SunnyBanksLocationId | undefined;
   const actions: string[] = [];
   const appearanceModifiers: string[] = [];
-  const rest = raw
+  const backend = extractVideoBackendOverride(raw);
+  const rest = backend.rest
     .replace(/\[Location:\s*([^\]]*)\]/gi, (_, token: string) => {
       const resolved = resolveSunnyBanksScriptLocationId(token) ?? unknownLocationKey(token);
       if (resolved) locationId = resolved;
@@ -493,7 +511,9 @@ function extractGodScriptTags(raw: string): {
     })
     .replace(/\s+/g, " ")
     .trim();
-  return { rest, locationId, actions, appearanceModifiers };
+  return backend.override
+    ? { rest, locationId, actions, appearanceModifiers, videoBackend: backend.override }
+    : { rest, locationId, actions, appearanceModifiers };
 }
 
 /** Highlight category for one bracket tag in the raw God Script text —
@@ -506,7 +526,7 @@ function extractGodScriptTags(raw: string): {
  * currently does not; see this module's own doc comment above
  * `extractGodScriptTags` for the real silent-beat mechanism (empty
  * dialogue after the speaker's name). */
-export type SunnyBanksHighlightTagKind = "location" | "character" | "action";
+export type SunnyBanksHighlightTagKind = "location" | "character" | "action" | "backend";
 export type SunnyBanksHighlightSegment =
   | { kind: "plain"; text: string }
   | { kind: SunnyBanksHighlightTagKind; text: string }
@@ -519,9 +539,14 @@ export type SunnyBanksHighlightSegment =
  * literal `[silence]` grouped into the same "action" color per Stuart's
  * explicit ask — `[silence]` is not a real parsed tag (see doc comment
  * above), only a display-only alias colored the same as `[Action: ]`. */
-const GOD_SCRIPT_HIGHLIGHT_TAG_RE = /\[Location:[^\]]*\]|\[Character\b[^\]]*\]|\[Action:[^\]]*\]|\[silence\]/gi;
+const GOD_SCRIPT_HIGHLIGHT_TAG_RE = new RegExp(
+  String.raw`\[Location:[^\]]*\]|\[Character\b[^\]]*\]|\[Action:[^\]]*\]|\[silence\]|` + VIDEO_BACKEND_OVERRIDE_TAG_SOURCE,
+  "gi"
+);
+const VIDEO_BACKEND_TAG_EXACT_RE = new RegExp(`^${VIDEO_BACKEND_OVERRIDE_TAG_SOURCE}$`, "i");
 
 function classifySunnyBanksHighlightTag(matchedText: string): SunnyBanksHighlightTagKind {
+  if (VIDEO_BACKEND_TAG_EXACT_RE.test(matchedText)) return "backend";
   const lower = matchedText.toLowerCase();
   if (lower.startsWith("[location:")) return "location";
   if (lower.startsWith("[character")) return "character";
@@ -611,6 +636,7 @@ export const SUNNY_BANKS_HIGHLIGHT_CLASSES: Record<SunnyBanksHighlightSegment["k
   location: "text-yellow-300",
   character: "text-cyan-300",
   action: "text-green-300",
+  backend: "text-red-400",
   speaker: "text-cyan-300",
 };
 
@@ -657,7 +683,10 @@ export function formatSunnyBanksGodScript(text: string): string {
   const tagTexts: string[] = [];
   let working = "";
   for (const segment of segments) {
-    if (segment.kind === "plain") {
+    // `[GROK]` / `[LTX]` / `[H3]` stay where they were typed (2026-09-30):
+    // moved onto a line of its own, one typed after `Bazza:` would switch
+    // the engine of the next row instead of this one.
+    if (segment.kind === "plain" || segment.kind === "backend") {
       working += segment.text;
     } else {
       const index = tagTexts.push(segment.text) - 1;
@@ -894,6 +923,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
   let currentLocation: SunnyBanksLocationId = SUNNY_BANKS_DEFAULT_LOCATION_ID;
   let pendingActions: string[] = [];
   let pendingAppearance: string[] = [];
+  let pendingBackend: RowVideoBackend | undefined;
   const rawLines = text.split(/\r?\n/);
   for (let sourceLineIndex = 0; sourceLineIndex < rawLines.length; sourceLineIndex += 1) {
     const rawLine = rawLines[sourceLineIndex];
@@ -918,6 +948,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     if (tagged.appearanceModifiers.length > 0) {
       pendingAppearance = [...pendingAppearance, ...tagged.appearanceModifiers];
     }
+    if (tagged.videoBackend) pendingBackend = tagged.videoBackend;
     if (!tagged.rest) continue;
     const ghostName = parseSunnyBanksGhostTargetName(tagged.rest);
     if (ghostName) {
@@ -935,6 +966,8 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       };
       if (action) chunk.action = action;
       if (appearanceModifier) chunk.appearanceModifier = appearanceModifier;
+      if (pendingBackend) chunk.videoBackend = pendingBackend;
+      pendingBackend = undefined;
       chunks.push(chunk);
       continue;
     }
@@ -964,6 +997,8 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     };
     if (action) chunk.action = action;
     if (appearanceModifier) chunk.appearanceModifier = appearanceModifier;
+    if (pendingBackend) chunk.videoBackend = pendingBackend;
+    pendingBackend = undefined;
     chunks.push(chunk);
   }
   return chunks;
@@ -1030,6 +1065,11 @@ export function rewriteSunnyBanksSpeakerLine(
     if (!match) break;
     tags.push(match[1]);
     rest = rest.slice(match[1].length);
+  }
+  // A `[GROK]` / `[LTX]` / `[H3]` typed after the name stays on the line.
+  const backend = extractVideoBackendOverride(rest).override;
+  if (backend && !tags.some((tag) => extractVideoBackendOverride(tag).override)) {
+    tags.push(`${videoBackendTagLabel(backend)} `);
   }
   const spoken = dialogue.replace(/\s+/g, " ").trim();
   const speaker = spoken.length > 0 ? `${name}: ${spoken}` : `${name}:`;
@@ -1740,6 +1780,10 @@ export function SkidmarksSunnyBanksPanel() {
   const locationOverridesByAct = live.locationOverrides;
   const runtimeMapByAct = live.runtimeMap;
   const workspaceTitle = live.workspaceTitle;
+  /** The Grok/H3 switch for silent rows (saved with the session). */
+  const silentShotBackend = normalizeSilentShotBackend(studioState.sunnyBanks?.silentShotBackend);
+  /** The free H3 key check's last answer, shown next to the switch. */
+  const [h3KeyCheck, setH3KeyCheck] = useState<string | null>(null);
   const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
   const [runningIndex, setRunningIndex] = useState<number | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
@@ -1792,7 +1836,14 @@ export function SkidmarksSunnyBanksPanel() {
       image: "",
     };
     const line = chunk.line;
-    return { chunk, index, characterName, character, location, locationProblem, line, kind: chunk.kind };
+    // Talking rows on LTX; silent rows on the switch, unless the line says
+    // [GROK] / [LTX] / [H3] (a Grok/H3 tag on a talking row is ignored).
+    const backendChoice = pickRowVideoBackend({
+      kind: chunk.kind,
+      override: chunk.videoBackend,
+      silentDefault: silentShotBackend,
+    });
+    return { chunk, index, characterName, character, location, locationProblem, line, kind: chunk.kind, backendChoice };
   });
 
   const renderedClips = collectRenderedClips({
@@ -1834,7 +1885,10 @@ export function SkidmarksSunnyBanksPanel() {
       );
 
   const overlayCostUsd = pendingRows.length * ESTIMATED_STILL_COST_USD;
-  const holdVideoCostUsd = pendingRows.filter((row) => row.kind === "hold").length * HOLD_COST_USD;
+  // Per row, on the engine each row will use (estimates; LTX's is Deck's stand-in rate).
+  const holdVideoCostUsd = pendingRows
+    .filter((row) => row.kind === "hold")
+    .reduce((sum, row) => sum + estimateRowVideoCostUsd(row.backendChoice.backend, SUNNY_BANKS_HOLD_DURATION_SEC), 0);
   const speakCount = pendingRows.filter((row) => row.kind === "speak").length;
 
   const canRenderAll =
@@ -1871,8 +1925,10 @@ export function SkidmarksSunnyBanksPanel() {
     mediaTarget?: DeckMediaTarget | null;
     /** The card's voice (and, for an added character, look and picture). */
     speaker?: ReturnType<typeof sunnyBanksSpeakerRequestExtras>;
+    /** The engine for a hold (a Speak beat is always LTX). */
+    videoBackend?: RowVideoBackend;
   }): Promise<
-    | { ok: true; videoUrl: string; durationSec: number; audioMuxed?: boolean }
+    | { ok: true; videoUrl: string; durationSec: number; audioMuxed?: boolean; videoBackend?: RowVideoBackend }
     | { ok: false; message: string }
   > => {
     const action = args.action?.trim() ?? "";
@@ -1893,6 +1949,7 @@ export function SkidmarksSunnyBanksPanel() {
           ? {
               kind: "hold",
               characterName: args.characterName,
+              ...(args.videoBackend ? { videoBackend: args.videoBackend } : {}),
               ...(appearanceModifier ? { appearanceModifier } : {}),
               locationId: args.locationId,
               ...(args.locationLabel ? { locationLabel: args.locationLabel } : {}),
@@ -1929,7 +1986,33 @@ export function SkidmarksSunnyBanksPanel() {
       videoUrl,
       durationSec: typeof body.durationSec === "number" ? body.durationSec : 0,
       audioMuxed: typeof body.audioMuxed === "boolean" ? body.audioMuxed : undefined,
+      videoBackend:
+        body.videoBackend === "ltx" || body.videoBackend === "grok" || body.videoBackend === "h3"
+          ? body.videoBackend
+          : args.videoBackend ?? "ltx",
     };
+  };
+
+  /** Free check that MiniMax accepts the server's key (lists one task,
+   * starts nothing). */
+  const handleCheckH3Key = async () => {
+    setH3KeyCheck("Checking…");
+    try {
+      const res = await fetch("/api/skidmarks/h3-key-check", { cache: "no-store" });
+      const body = (await res.json()) as { status?: unknown; message?: unknown };
+      const message = typeof body.message === "string" ? body.message : "";
+      setH3KeyCheck(
+        body.status === "ok"
+          ? "H3 key works."
+          : body.status === "missing"
+            ? "No MINIMAX_API_KEY on the server."
+            : body.status === "rejected"
+              ? `MiniMax refused the key${message ? `: ${message}` : "."}`
+              : `Couldn't check${message ? `: ${message}` : "."}`
+      );
+    } catch {
+      setH3KeyCheck("Couldn't reach Deck to check.");
+    }
   };
 
   /** Remove on a clip: its row goes back to Idle (no file deleted), ready for "Render 1 line". */
@@ -1985,11 +2068,12 @@ export function SkidmarksSunnyBanksPanel() {
           setRunningKind(row.kind);
           setRunningIndex(i);
           writeRuntime(i, { lineKey: row.chunk.raw, status: "rendering" });
+          const engine = videoBackendName(row.backendChoice.backend);
           setProgressText(
             cutaway
-              ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+              ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} on ${engine} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
               : row.kind === "hold"
-                ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+                ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} on ${engine} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
                 : `Line ${i + 1} of ${queue.length} — rendering ${lock!.name}'s line…`
           );
           try {
@@ -2005,6 +2089,7 @@ export function SkidmarksSunnyBanksPanel() {
               action: row.chunk.action,
               appearanceModifier: row.chunk.appearanceModifier,
               speaker: sunnyBanksSpeakerRequestExtras(lock),
+              videoBackend: row.kind === "hold" ? row.backendChoice.backend : undefined,
               // Filed under this episode's pinned folder (set once from
               // its name, so a rename never moves it) when it has one.
               mediaTarget: sunnybankBeatTarget({
@@ -2025,9 +2110,12 @@ export function SkidmarksSunnyBanksPanel() {
               videoUrl: result.videoUrl,
               durationSec: result.durationSec,
               audioMuxed: result.audioMuxed,
+              videoBackend: result.videoBackend,
               error:
                 result.audioMuxed === false
-                  ? "Clip finished, but the driving audio did not land in the file. Lips may move with no sound."
+                  ? result.videoBackend && result.videoBackend !== "ltx"
+                    ? `Clip finished on ${videoBackendName(result.videoBackend)}, but its own sound could not be swapped for silence.`
+                    : "Clip finished, but the driving audio did not land in the file. Lips may move with no sound."
                   : undefined,
             });
             return true;
@@ -2470,6 +2558,10 @@ export function SkidmarksSunnyBanksPanel() {
                       <span className="h-1.5 w-1.5 rounded-full bg-green-300" />
                       <span className="text-green-300/90">[Action: ] / [silence]</span>
                     </span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+                      <span className="text-red-400/90">[GROK] / [LTX] / [H3] video</span>
+                    </span>
                   </span>
                 </p>
 
@@ -2513,6 +2605,11 @@ export function SkidmarksSunnyBanksPanel() {
                         row.kind === "hold"
                           ? row.chunk.action?.trim() || "Silent hold"
                           : row.line;
+                      const rowChip = rowVideoBackendChip({
+                        status,
+                        used: runtime?.videoBackend,
+                        planned: row.backendChoice.backend,
+                      });
                       return (
                         <li key={`${activeAct}:${row.index}:${row.chunk.sourceLineIndex}`} className="min-w-0">
                           <div className="flex min-w-0 w-full items-start gap-1 overflow-x-hidden py-1.5 [touch-action:pan-y]">
@@ -2591,8 +2688,14 @@ export function SkidmarksSunnyBanksPanel() {
                                   </select>
                                 )}
                                 <span
+                                  title={`Renders on ${videoBackendName(rowChip)}`}
+                                  className="ml-auto shrink-0 text-[9px] font-bold tracking-wide text-red-400"
+                                >
+                                  {videoBackendTagLabel(rowChip)}
+                                </span>
+                                <span
                                   className={[
-                                    "ml-auto flex-shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
+                                    "flex-shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold",
                                     statusPillClass(status),
                                   ].join(" ")}
                                 >
@@ -2611,6 +2714,11 @@ export function SkidmarksSunnyBanksPanel() {
                               {!isStatic && row.locationProblem && (
                                 <p role="alert" className="pt-0.5 text-[10px] leading-snug text-red-300">
                                   {row.locationProblem}
+                                </p>
+                              )}
+                              {!isStatic && row.backendChoice.ignoredOverride && (
+                                <p className="pt-0.5 text-[10px] leading-snug text-amber-200/80">
+                                  {ignoredVideoBackendWarning(row.backendChoice.ignoredOverride)}
                                 </p>
                               )}
                               {isStatic ? (
@@ -2692,6 +2800,44 @@ export function SkidmarksSunnyBanksPanel() {
               </p>
             )}
 
+            {/* Grok/H3 switch for silent rows (2026-09-30). Talking rows
+              * are always LTX; a [GROK] / [LTX] / [H3] tag beats this. */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] leading-snug text-white/40">
+              <span>Silent shots on</span>
+              <span role="group" aria-label="Video engine for silent shots" className="inline-flex overflow-hidden rounded-full border border-white/10">
+                {(["grok", "h3"] as const).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    aria-pressed={silentShotBackend === option}
+                    onClick={() => {
+                      setSunnyBanksSilentShotBackend(option);
+                      setH3KeyCheck(null);
+                    }}
+                    disabled={running}
+                    className={[
+                      "min-h-[32px] px-2.5 font-semibold disabled:opacity-60",
+                      silentShotBackend === option ? "bg-red-400/15 text-red-300" : "text-white/45",
+                    ].join(" ")}
+                  >
+                    {videoBackendName(option)}
+                  </button>
+                ))}
+              </span>
+              <span>
+                ~${estimateRowVideoCostUsd(silentShotBackend, SUNNY_BANKS_HOLD_DURATION_SEC).toFixed(2)} per 5s · talking on LTX
+              </span>
+              {silentShotBackend === "h3" && (
+                <button
+                  type="button"
+                  onClick={() => void handleCheckH3Key()}
+                  className="min-h-[32px] font-medium text-white/55 underline decoration-white/25 underline-offset-2"
+                >
+                  Check H3 key
+                </button>
+              )}
+              {h3KeyCheck && <span role="status" className="text-white/60">{h3KeyCheck}</span>}
+            </div>
             <div className="flex items-stretch gap-2">
               <button
                 type="button"
@@ -2730,7 +2876,7 @@ export function SkidmarksSunnyBanksPanel() {
                 ? "Existing Crash Lab clips are already in the strip below. Tap + on a row to insert a shot between them, or − on an Idle row to drop it — one clip at a time, never a batch of these 46."
                 : `One clip at a time — overlay ~$${overlayCostUsd.toFixed(2)}${
                     pendingRows.filter((row) => row.kind === "hold").length > 0
-                      ? `, hold video ~$${holdVideoCostUsd.toFixed(2)}`
+                      ? `, silent video ~$${holdVideoCostUsd.toFixed(2)}`
                       : ""
                   }${speakCount > 0 ? `, speak video ~$0.13/s after TTS` : ""}. Stops if a line fails so later lines are not billed. Route still loads the full character lock by name for the gold prompts.`}
             </p>

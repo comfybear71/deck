@@ -195,6 +195,7 @@ import {
   type SunnyBanksLiveState,
   type SunnyBanksWorkspaceSnapshot,
 } from "./sunnyBanksWorkspace";
+import { DEFAULT_SILENT_SHOT_BACKEND, type SilentShotBackend } from "./videoBackendRouting";
 import {
   emptySkidmarksEpisodesState,
   normalizeSkidmarksEpisodesState,
@@ -3616,6 +3617,15 @@ function resolvedSunnyBanks(state: SkidmarksState): SkidmarksSunnyBanksState {
   );
 }
 
+/** The Grok/H3 switch for Sunnybank's silent rows (2026-09-30). Saved
+ * with the session (never `localStorage`); not part of any episode. */
+export function setSunnyBanksSilentShotBackend(backend: SilentShotBackend): void {
+  const current = getSkidmarksSnapshot();
+  const studio = resolvedSunnyBanks(current);
+  if ((studio.silentShotBackend ?? DEFAULT_SILENT_SHOT_BACKEND) === backend) return;
+  persist({ ...current, sunnyBanks: { ...studio, silentShotBackend: backend } });
+}
+
 /** Current Sunny Banks live episode — EP02 seed until the first persist. */
 export function getSunnyBanksLiveOrDefault(state: SkidmarksState = getSkidmarksSnapshot()): SunnyBanksLiveState {
   return cloneSunnyBanksLive(resolvedSunnyBanks(state).live);
@@ -3681,7 +3691,7 @@ function autoSaveSunnyBanksLive(studio: SkidmarksSunnyBanksState, live: SunnyBan
   }
   const savedLive: SunnyBanksLiveState = { ...live, episodeId: saved.id };
   if (saved.mediaSlug) savedLive.mediaSlug = saved.mediaSlug;
-  return { live: savedLive, workspaces, saveSeq };
+  return { ...studio, live: savedLive, workspaces, saveSeq };
 }
 
 /**
@@ -3728,6 +3738,7 @@ export function saveSunnyBanksProjectWorkspace(): SunnyBanksWorkspaceSnapshot {
   persist({
     ...current,
     sunnyBanks: {
+      ...studio,
       live,
       workspaces,
       saveSeq,
@@ -3785,6 +3796,7 @@ export function openSunnyBanksWorkspace(id: string): void {
   persist({
     ...current,
     sunnyBanks: {
+      ...current.sunnyBanks,
       live: liveFromSunnyBanksWorkspace(workspace),
       workspaces: current.sunnyBanks?.workspaces ?? [],
       saveSeq: current.sunnyBanks?.saveSeq ?? 0,

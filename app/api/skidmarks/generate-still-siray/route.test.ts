@@ -1,4 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Blob is mocked so this file can never upload a real file (2026-09-30:
+// a run with BLOB_READ_WRITE_TOKEN set in the shell put junk test images
+// into the live store). `put` rejects, which is exactly what the route
+// sees with no token: it keeps the image as a data: URL, not saved.
+const putMock = vi.fn();
+vi.mock("@vercel/blob", () => ({
+  put: (...args: unknown[]) => putMock(...args),
+  list: vi.fn(async () => ({ blobs: [] })),
+  del: vi.fn(async () => undefined),
+  head: vi.fn(async () => {
+    throw new Error("Blob is mocked in this test.");
+  }),
+}));
+
 import { POST } from "./route";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -22,6 +37,10 @@ describe("POST /api/skidmarks/generate-still-siray", () => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubEnv("SIRAY_API_KEY", "test-siray-key");
+    // No real Blob token in any test here, even if the shell has one.
+    vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
+    putMock.mockReset();
+    putMock.mockRejectedValue(new Error("Blob is mocked in this test."));
   });
 
   afterEach(() => {
@@ -65,6 +84,20 @@ describe("POST /api/skidmarks/generate-still-siray", () => {
     expect(submittedBody.model).toBe("bytedance/seedream-4.5-t2i-spicy");
     expect(submittedBody.images).toBeUndefined();
     expect(submittedBody.prompt).toBe("adult party glitter rain");
+    // No token: the route never tries Blob at all.
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it("with a Blob token, the save goes to the mocked put (never the real store)", async () => {
+    vi.stubEnv("BLOB_READ_WRITE_TOKEN", "test-token-not-real");
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { data: { task_id: "task-blob" } }))
+      .mockResolvedValueOnce(jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/b.png"] } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2]), { status: 200, headers: { "content-type": "image/png" } }));
+    const res = await POST(postRequest({ prompt: "wide", referenceImageDataUrls: [] }));
+    const body = await res.json();
+    expect(putMock).toHaveBeenCalledTimes(1);
+    expect(body.dataUrl).toMatch(/^data:image\/png;base64,/);
   });
 
   it("also accepts a missing referenceImageDataUrls field as zero refs (t2i)", async () => {

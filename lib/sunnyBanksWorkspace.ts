@@ -27,6 +27,7 @@ import {
 } from "./sunnyBanks";
 import { buildSunnyBanksDropBearsSeed, DROP_BEARS_TITLE } from "./sunnyBanksDropBears";
 import { deckMediaSlug, isSafeDeckMediaSlug, uniqueDeckMediaSlug } from "./deckMediaPaths";
+import { parseRowVideoBackend, type RowVideoBackend, type SilentShotBackend } from "./videoBackendRouting";
 
 export const SUNNY_BANKS_INITIAL_ACTS = ["I", "II", "III"] as const;
 
@@ -44,6 +45,9 @@ export interface SunnyBanksRowRuntime {
   audioMuxed?: boolean;
   characterName?: string;
   line?: string;
+  /** The engine that made this clip (2026-09-30). Missing on clips made
+   * before then, which were all LTX. */
+  videoBackend?: RowVideoBackend;
 }
 
 export interface SunnyBanksLiveState {
@@ -82,6 +86,10 @@ export interface SkidmarksSunnyBanksState {
   live: SunnyBanksLiveState;
   workspaces: SunnyBanksWorkspaceSnapshot[];
   saveSeq: number;
+  /** The Grok/H3 switch for silent rows (2026-09-30), saved with the
+   * session like Music video's per-clip engine. Missing means Grok. Not
+   * part of any episode, so flipping it never re-saves a card. */
+  silentShotBackend?: SilentShotBackend;
 }
 
 export function cloneActRecord<T>(value: SunnyBanksActKeyed<T>, actIds?: readonly string[]): SunnyBanksActKeyed<T> {
@@ -323,6 +331,8 @@ function normalizeRowRuntime(value: unknown): SunnyBanksRowRuntime | null {
   if (typeof v.audioMuxed === "boolean") row.audioMuxed = v.audioMuxed;
   if (typeof v.characterName === "string") row.characterName = v.characterName;
   if (typeof v.line === "string") row.line = v.line;
+  const videoBackend = parseRowVideoBackend(v.videoBackend);
+  if (videoBackend) row.videoBackend = videoBackend;
   return row;
 }
 
@@ -443,7 +453,9 @@ export function normalizeSunnyBanksStudio(value: unknown): SkidmarksSunnyBanksSt
     ? v.workspaces.map(normalizeSunnyBanksWorkspace).filter((row): row is SunnyBanksWorkspaceSnapshot => row !== null)
     : [];
   const saveSeq = typeof v.saveSeq === "number" && v.saveSeq >= 0 ? Math.floor(v.saveSeq) : workspaces.length;
-  return { live, workspaces, saveSeq };
+  const studio: SkidmarksSunnyBanksState = { live, workspaces, saveSeq };
+  if (v.silentShotBackend === "grok" || v.silentShotBackend === "h3") studio.silentShotBackend = v.silentShotBackend;
+  return studio;
 }
 
 export function buildSunnyBanksWorkspaceFromLive(

@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  checkMinimaxApiKey,
   downloadMinimaxH3Video,
   extractMinimaxErrorMessage,
   MINIMAX_H3_MODEL,
   MINIMAX_H3_RESOLUTION,
   pollMinimaxH3Video,
+  pollMinimaxH3VideoUntilDone,
   resolveMinimaxCredentials,
   submitMinimaxH3Video,
 } from "./minimaxH3";
@@ -254,5 +256,56 @@ describe("downloadMinimaxH3Video", () => {
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     const outcome = await downloadMinimaxH3Video("https://cdn.minimax.io/video.mp4");
     expect(outcome).toMatchObject({ ok: false, code: "network_error" });
+  });
+});
+
+describe("pollMinimaxH3VideoUntilDone / checkMinimaxApiKey (2026-09-30)", () => {
+  const creds = { apiKey: "k" };
+  function json(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  }
+
+  it("polls until succeeded", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ task: { status: "running" } }))
+      .mockResolvedValueOnce(json({ task: { status: "succeeded", content: { url: "https://x/v.mp4" } } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const out = await pollMinimaxH3VideoUntilDone("t1", creds, { deadlineMs: 60_000, intervalMs: 1 });
+    expect(out).toEqual({ ok: true, videoUrl: "https://x/v.mp4" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
+
+  it("an expired task is a failure, not pending forever", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json({ task: { status: "expired" } })));
+    const out = await pollMinimaxH3VideoUntilDone("t1", creds, { deadlineMs: 60_000, intervalMs: 1 });
+    expect(out.ok).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("gives up honestly at the deadline", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ task: { status: "queued" } })));
+    const out = await pollMinimaxH3VideoUntilDone("t1", creds, { deadlineMs: 5, intervalMs: 10 });
+    expect(out).toMatchObject({ ok: false, code: "timeout" });
+    vi.unstubAllGlobals();
+  });
+
+  it("the key check lists one task (free) and reads the answer", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(json({ data: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await checkMinimaxApiKey(creds)).toEqual({ status: "ok" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.minimax.io/v2/query/video_generation?page_num=1&page_size=1");
+    expect(init.method ?? "GET").toBe("GET");
+
+    fetchMock.mockResolvedValueOnce(json({ error: { message: "invalid api key" } }, 401));
+    expect(await checkMinimaxApiKey(creds)).toMatchObject({ status: "rejected" });
+    fetchMock.mockResolvedValueOnce(json({ base_resp: { status_code: 1004, status_msg: "login fail" } }));
+    expect(await checkMinimaxApiKey(creds)).toMatchObject({ status: "rejected", message: "login fail" });
+    fetchMock.mockResolvedValueOnce(json({}, 500));
+    expect(await checkMinimaxApiKey(creds)).toMatchObject({ status: "error" });
+    expect(await checkMinimaxApiKey(null)).toEqual({ status: "missing" });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    vi.unstubAllGlobals();
   });
 });

@@ -136,6 +136,14 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
     ],
   },
   {
+    title: "[GROK], [LTX] or [H3] picks the video engine",
+    body: [
+      "Talking lines always render on LTX, so the lips match the voice. Silent holds and Crowd cutaways render on Grok, or on H3 with the switch above Render.",
+      "Type [GROK], [LTX] or [H3] on a line (after the Name:, or alone on the line above it) to choose for that row. It shows red, is never spoken, and each row shows its engine. On a talking line only [LTX] counts: [GROK] and [H3] are ignored, with a note on the row.",
+    ],
+    example: "Ranger Bazza: [H3]\nCrowd: [LTX]\n[GROK]\nShazza:",
+  },
+  {
     title: "A line with no name continues the last speaker",
     body: [
       "Stray prose lines are not ignored — they become spoken words for whoever spoke last. Don't leave notes to yourself in the script.",
@@ -266,6 +274,13 @@ Follow these rules exactly. Do not improvise new syntax.
 6. NO "#" LINES except "# EPISODE: Title". Never write "# Act II",
    "# Scene" or any other markdown heading. Start an act with
    === ACT II ===.
+
+7. VIDEO ENGINE TAGS [GROK], [LTX] and [H3] are optional. Leave them
+   out unless asked: the tool already renders talking lines on LTX and
+   silent holds on Grok or H3. Written after the "Name:" (or alone on
+   the line above), one picks the engine for that row. On a talking
+   line only [LTX] counts; [GROK] and [H3] are ignored. They are never
+   spoken.
 
 === THE CAST (use these names exactly, including capitals) ===
 
