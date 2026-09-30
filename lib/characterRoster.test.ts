@@ -7,14 +7,17 @@ import {
   buildTrainingPicturePrompts,
   EMPTY_HANDS_LINE,
   minorBlockReason,
+  CARTOON_PICTURE_STYLE,
   oneTapCost,
+  redoReferenceReset,
   signatureLine,
   startingPictures,
   stripHeldProps,
   sunnyBanksNotReadyReason,
+  uploadedCartoonReference,
 } from "./characterRoster";
 import { buildSdxlTrainingInput } from "./replicateTrainer";
-import { SUNNY_BANKS_CAST } from "./sunnyBanks";
+import { SUNNY_BANKS_CAST, SUNNY_BANKS_STYLE_LOCK } from "./sunnyBanks";
 import { getSkidmarksSnapshot, type SkidmarksState } from "./skidmarks";
 import { buildSkidmarksCastMember } from "./skidmarksEpisodes";
 import {
@@ -102,7 +105,85 @@ describe("prompts", () => {
 
   it("carries the cartoon style lock for Sunny Banks", () => {
     const p = buildTrainingPicturePrompts({ name: "Nan", look: "tiny elderly woman", neverShow: "", style: "cartoon" }, 1)[0];
-    expect(p).toMatch(/thick black outlines/);
+    expect(p).toMatch(/thick black ink outlines/);
+  });
+});
+
+describe("Sunny Banks picture style (flat 2D, 2026-09-30)", () => {
+  const hans = { name: "Hans", look: "", neverShow: "", style: "cartoon" as const, subjectWord: "character" };
+  const allCartoonPrompts = () => [
+    ...buildTrainingPicturePrompts(hans, 15),
+    ...buildTrainingPicturePrompts(hans, 15, 0, 1),
+    buildCleanReferencePrompt(hans, true),
+    buildCleanReferencePrompt(hans, false),
+    buildFacePrompt(hans),
+  ];
+
+  it("every cartoon picture prompt uses the flat 2D picture style and never says Pixar", () => {
+    for (const p of allCartoonPrompts()) {
+      expect(p).toContain(CARTOON_PICTURE_STYLE);
+      expect(p).not.toMatch(/pixar/i);
+      expect(p).not.toContain(SUNNY_BANKS_STYLE_LOCK);
+    }
+    expect(CARTOON_PICTURE_STYLE).toMatch(/flat 2D hand-drawn TV cartoon cel/);
+    expect(CARTOON_PICTURE_STYLE).toMatch(/no 3D render/);
+  });
+
+  it("the cartoon clean picture asks for a flat pale background, not soft light", () => {
+    const clean = buildCleanReferencePrompt(hans, true);
+    expect(clean).toMatch(/plain flat pale background\./);
+    expect(clean).not.toMatch(/even soft light/);
+    const animal = buildCleanReferencePrompt({ ...hans, name: "Roo", subjectWord: "animal" }, true);
+    expect(animal).toMatch(/plain flat pale background\./);
+    expect(animal).not.toMatch(/even soft light/);
+  });
+
+  it("leaves photo, faceless and 3D pictures as they were", () => {
+    expect(buildCleanReferencePrompt({ name: "Nova", look: "silver bob", style: "photo" }, true)).toMatch(
+      /plain light background, even soft light\./,
+    );
+    const clive = { name: "Clive", look: "bowl cut", neverShow: "", style: "render3d" as const, subjectWord: "person" };
+    expect(buildTrainingPicturePrompts(clive, 1)[0]).toMatch(/3D cartoon look/);
+    expect(buildTrainingPicturePrompts(clive, 1)[0]).not.toContain(CARTOON_PICTURE_STYLE);
+    const jack = { name: "Jack Ash", look: "", neverShow: "", style: "faceless" as const };
+    expect(buildTrainingPicturePrompts(jack, 1)[0]).toMatch(/Photographic/);
+  });
+
+  it("the video style lock is unchanged", () => {
+    expect(SUNNY_BANKS_STYLE_LOCK).toMatch(/not soft Pixar/);
+  });
+});
+
+describe("cartoon reference picture: their own upload, and Redo starts from it", () => {
+  const upload = "https://x.public.blob.vercel-storage.com/deck/sunnybank/characters/hans/pictures/hans-picture-01-v2.jpg";
+
+  it("uses a Sunny Banks character's uploaded first picture as the reference", () => {
+    expect(uploadedCartoonReference({ thumbUrl: upload, extraPictureUrls: [] }, "cartoon")).toBe(upload);
+    expect(uploadedCartoonReference({ thumbUrl: null, extraPictureUrls: [upload] }, "cartoon")).toBe(upload);
+  });
+
+  it("finds Hans's upload on his added (+) tile", () => {
+    const extra = buildRosterExtraCharacter("Hans", "", { pictureUrls: [upload] }, 1, "chr_h");
+    const r = buildCharacterRoster(stateWith({ rosterExtras: { "music-video": [], "sunny-banks": [extra], "adult-shorts": [] } }));
+    const hansTile = r["sunny-banks"].find((c) => c.name === "Hans")!;
+    expect(hansTile.sourceKey).toBe("sbx:chr_h");
+    expect(uploadedCartoonReference(hansTile, hansTile.style)).toBe(upload);
+  });
+
+  it("keeps the clean redraw for a regular's hand-cut hero still and for other styles", () => {
+    const shazza = buildCharacterRoster(stateWith())["sunny-banks"].find((c) => c.name === "Shazza")!;
+    expect(shazza.thumbUrl).toMatch(/^\/skidmarks\/sunnybanks\//);
+    expect(uploadedCartoonReference(shazza, shazza.style)).toBeNull();
+    expect(uploadedCartoonReference({ thumbUrl: upload, extraPictureUrls: [] }, "photo")).toBeNull();
+    expect(uploadedCartoonReference({ thumbUrl: upload, extraPictureUrls: [] }, "render3d")).toBeNull();
+    expect(uploadedCartoonReference({ thumbUrl: null, extraPictureUrls: [] }, "cartoon")).toBeNull();
+  });
+
+  it("Redo clears the saved reference for cartoon only", () => {
+    expect(redoReferenceReset("cartoon")).toEqual({ referenceUrl: null, cleanReferenceApproved: false, cleanCandidateUrl: null });
+    expect(redoReferenceReset("photo")).toEqual({});
+    expect(redoReferenceReset("render3d")).toEqual({});
+    expect(redoReferenceReset("faceless")).toEqual({});
   });
 });
 

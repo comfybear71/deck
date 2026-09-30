@@ -24,6 +24,7 @@ import {
   shiftKeyedIndexRecord,
   unshiftKeyedIndexRecord,
   preserveRenderedRuntimes,
+  resetSunnyBanksClipRuntime,
   decodeSunnyBanksPastedScript,
   resolveSunnyBanksScriptLocationId,
   sunnyBanksQueueChunks,
@@ -951,5 +952,70 @@ describe("SUNNY_BANKS_HIGHLIGHT_CLASSES", () => {
     for (const segment of segments) {
       expect(SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]).toBeTruthy();
     }
+  });
+});
+
+describe("resetSunnyBanksClipRuntime (Remove on a clip)", () => {
+  const script = [
+    "Hans:",
+    "Hans: Guten tag, true blue Australian locals!",
+    "Shazza: It bloody well is if you've got a credit card, mate.",
+  ].join("\n");
+  const done = (lineKey: string, n: number) => ({
+    lineKey,
+    status: "done" as const,
+    videoUrl: `https://blob.example/beat-${n}.mp4`,
+  });
+
+  it("puts only that row back to Idle, keeping the other clips", () => {
+    const before = {
+      0: done("Hans:", 13),
+      1: done("Hans: Guten tag, true blue Australian locals!", 14),
+      2: done("Shazza: It bloody well is if you've got a credit card, mate.", 15),
+    };
+    const after = resetSunnyBanksClipRuntime(script, before, 1);
+    expect(after[1]).toEqual({
+      lineKey: "Hans: Guten tag, true blue Australian locals!",
+      status: "idle",
+      characterName: "Hans",
+      line: "Guten tag, true blue Australian locals!",
+    });
+    expect(after[0].videoUrl).toBe("https://blob.example/beat-13.mp4");
+    expect(after[2].videoUrl).toBe("https://blob.example/beat-15.mp4");
+
+    const shown = preserveRenderedRuntimes(parseSunnyBanksScriptBlock(script), after);
+    expect(shown[1].status).toBe("idle");
+    const clips = collectRenderedClips({
+      actIds: ["I"],
+      actScripts: { I: script },
+      characterOverrides: { I: {} },
+      runtimeMap: { I: after },
+    });
+    expect(clips.map((c) => c.index)).toEqual([0, 2]);
+  });
+
+  it("finds a clip stored under an older row number after a shot was inserted", () => {
+    // Hans's speak line was rendered as row 1; then a "+" hold went in above it.
+    const inserted = ["Hans:", "Hans:", ...script.split("\n").slice(1)].join("\n");
+    const before = {
+      0: done("Hans:", 13),
+      1: done("Hans: Guten tag, true blue Australian locals!", 14),
+      2: done("Shazza: It bloody well is if you've got a credit card, mate.", 15),
+    };
+    const shownBefore = preserveRenderedRuntimes(parseSunnyBanksScriptBlock(inserted), before);
+    expect(shownBefore[2].videoUrl).toBe("https://blob.example/beat-14.mp4");
+
+    const after = resetSunnyBanksClipRuntime(inserted, before, 2);
+    const shown = preserveRenderedRuntimes(parseSunnyBanksScriptBlock(inserted), after);
+    expect(shown[2].status).toBe("idle");
+    expect(shown[1]).toBeUndefined();
+    expect(shown[0].videoUrl).toBe("https://blob.example/beat-13.mp4");
+    expect(shown[3].videoUrl).toBe("https://blob.example/beat-15.mp4");
+    expect(Object.values(after).some((r) => r.videoUrl === "https://blob.example/beat-14.mp4")).toBe(false);
+  });
+
+  it("leaves the runtimes alone for a row that isn't there", () => {
+    const before = { 0: done("Hans:", 13) };
+    expect(resetSunnyBanksClipRuntime(script, before, 9)).toBe(before);
   });
 });

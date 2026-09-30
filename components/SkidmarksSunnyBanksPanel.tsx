@@ -5,6 +5,8 @@ import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { triggerBlobDownload } from "@/lib/clipRenders";
+import { SkidmarksConfirmDialog } from "@/components/SkidmarksConfirmDialog";
+import { TrashIcon } from "@/components/SkidmarksRenderedClipsShelf";
 import { estimateLtxClipRenderCostUsd } from "@/lib/clipGeneration";
 import { resolvePlateReferenceDataUrl } from "@/lib/plateGeneration";
 import {
@@ -1155,6 +1157,46 @@ export function collectRenderedClips(args: {
   return clips;
 }
 
+/**
+ * Remove on a clip in the CLIPS strip (2026-09-30): the row that clip
+ * belongs to goes back to Idle, so "Render 1 line" makes it again. Same
+ * Remove as Music video's rendered-clips shelf, but no file is deleted —
+ * the MP4 stays in Blob, and a new render saves beside it as `-v2`
+ * (`putDeckMediaOrLegacy` never overwrites).
+ *
+ * Works on the act's runtimes as the screen shows them
+ * (`preserveRenderedRuntimes`), since a Done clip can sit under an older
+ * row number after shots were inserted. Entries the screen doesn't use
+ * are kept where they were, except the removed clip itself, so it
+ * can't re-attach to this row or a look-alike one.
+ */
+export function resetSunnyBanksClipRuntime(
+  script: string,
+  runtimes: Record<number, RowRuntime>,
+  index: number
+): Record<number, RowRuntime> {
+  const parsed = parseSunnyBanksScriptBlock(script);
+  const chunk = sunnyBanksQueueChunks(parsed)[index];
+  if (!chunk) return runtimes;
+  const shown = preserveRenderedRuntimes(parsed, runtimes);
+  const removedUrl = shown[index]?.videoUrl;
+  const shownUrls = new Set(
+    Object.values(shown)
+      .map((r) => r.videoUrl)
+      .filter((u): u is string => Boolean(u))
+  );
+  const next: Record<number, RowRuntime> = {};
+  for (const [key, stored] of Object.entries(runtimes)) {
+    const k = Number(key);
+    if (k in shown) continue;
+    if (stored.videoUrl && (stored.videoUrl === removedUrl || shownUrls.has(stored.videoUrl))) continue;
+    next[k] = stored;
+  }
+  Object.assign(next, shown);
+  next[index] = { lineKey: chunk.raw, status: "idle", characterName: chunk.characterName, line: chunk.line };
+  return next;
+}
+
 /** Prompts for any episode source — the live working copy, or a saved
  * card straight off the EPISODES row. Parameterised (2026-09-18) so
  * "download that episode" doesn't have to load it into the editor
@@ -1543,6 +1585,8 @@ export function SkidmarksSunnyBanksPanel() {
   const [runningIndex, setRunningIndex] = useState<number | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
   const [clipsOpen, setClipsOpen] = useState(true);
+  /** The clip whose Remove was tapped, waiting on the confirm. */
+  const [pendingClipRemove, setPendingClipRemove] = useState<SunnyBanksRenderedClip | null>(null);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [scriptUndo, setScriptUndo] = useState<ScriptUndoSnapshot | null>(null);
   /** The acts row scrolls sideways, so a freshly added act can land
@@ -1704,6 +1748,18 @@ export function SkidmarksSunnyBanksPanel() {
       durationSec: typeof body.durationSec === "number" ? body.durationSec : 0,
       audioMuxed: typeof body.audioMuxed === "boolean" ? body.audioMuxed : undefined,
     };
+  };
+
+  /** Remove on a clip: its row goes back to Idle (no file deleted), ready for "Render 1 line". */
+  const handleRemoveClip = (clip: SunnyBanksRenderedClip) => {
+    if (runningRef.current) return;
+    patchSunnyBanksLive((prev) => ({
+      ...prev,
+      runtimeMap: {
+        ...prev.runtimeMap,
+        [clip.act]: resetSunnyBanksClipRuntime(prev.actScripts[clip.act] ?? "", prev.runtimeMap[clip.act] ?? {}, clip.index),
+      },
+    }));
   };
 
   const handleRenderAll = async () => {
@@ -2501,6 +2557,19 @@ export function SkidmarksSunnyBanksPanel() {
                           <p className="truncate text-[10px] leading-tight text-white/40">
                             Line {clip.index + 1} · {clip.lineLabel}
                           </p>
+                          <div className="flex items-center justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setPendingClipRemove(clip)}
+                              disabled={running}
+                              aria-label={`Remove the clip for line ${clip.index + 1} so it can be rendered again`}
+                              title="Remove this clip"
+                              className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-white/45 transition-colors hover:border-rose-400/30 hover:text-rose-300/90 disabled:cursor-not-allowed disabled:text-white/25"
+                            >
+                              <TrashIcon />
+                              Remove
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -2509,6 +2578,22 @@ export function SkidmarksSunnyBanksPanel() {
               ))}
             </div>
           ))}
+        <SkidmarksConfirmDialog
+          open={pendingClipRemove !== null}
+          title="Remove this clip?"
+          body={
+            pendingClipRemove
+              ? `Line ${pendingClipRemove.index + 1} (${pendingClipRemove.characterName}) goes back to Idle so you can render it again. The old video file is kept.`
+              : ""
+          }
+          confirmLabel="Remove clip"
+          onCancel={() => setPendingClipRemove(null)}
+          onConfirm={() => {
+            const target = pendingClipRemove;
+            setPendingClipRemove(null);
+            if (target) handleRemoveClip(target);
+          }}
+        />
       </div>
 
     </div>
