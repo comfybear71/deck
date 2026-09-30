@@ -148,6 +148,7 @@ export function SunnyBanksEpisodeRow() {
           actScripts: workspace.actScripts,
           characterOverrides: workspace.characterOverrides,
           locationOverrides: workspace.locationOverrides,
+          locationPickTags: workspace.locationPickTags,
           runtimeMap: workspace.runtimeMap,
         },
         ({ done, total }) => say(`Getting clip ${done} of ${total}…`)

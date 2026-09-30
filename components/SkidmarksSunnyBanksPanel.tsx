@@ -267,6 +267,10 @@ export interface SunnyBanksScriptChunk {
   sourceLineIndex: number;
   /** Locked park plate for this row and later rows, from `[Location: id]`. */
   locationId?: SunnyBanksLocationId;
+  /** Set only when a `[Location: …]` tag at or above this row (in this
+   * act's script) decided `locationId`; unset means `locationId` is the
+   * built-in default. See `resolveSunnyBanksRowLocationId`. */
+  locationTag?: SunnyBanksLocationId;
   /** Extra LTX prompt context from `[Action: text]` — not spoken TTS. */
   action?: string;
   /** Extra look text from `[Character Name: description]` — not gold. */
@@ -321,6 +325,7 @@ interface ScriptUndoSnapshot {
   actScripts: ActKeyed<string>;
   characterOverrides: ActKeyed<Record<number, string>>;
   locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
+  locationPickTags: ActKeyed<Record<number, SunnyBanksLocationId>>;
   runtimeMap: ActKeyed<Record<number, RowRuntime>>;
   workspaceTitle: string;
 }
@@ -900,6 +905,59 @@ export function parseSunnyBanksGodDocument(text: string, fallbackActId: string =
 }
 
 /**
+ * Which location a queue row renders at (2026-10-01, Stuart approved).
+ *
+ * - A row with a `[Location: …]` tag (its own, or the nearest one above
+ *   it in the act) renders at that tag. A location saved from the row's
+ *   dropdown only beats the tag when it was picked while that same tag
+ *   was in force (`pickedOverTag`), so whichever came last wins: pick
+ *   after writing the tag and the pick counts; change the tag after the
+ *   pick and the new tag counts.
+ * - A row with no tag uses its saved dropdown pick, else the act default.
+ *
+ * Why: EP02 Act II said `[Location: park_site_4]`, but every row still
+ * carried a saved "Tin Shed & Mower" from the old Crash Lab demo seed,
+ * and the saved value always won, on Grok and LTX alike.
+ */
+export function resolveSunnyBanksRowLocationId(
+  chunk: Pick<SunnyBanksScriptChunk, "locationId" | "locationTag">,
+  saved: SunnyBanksLocationId | undefined,
+  pickedOverTag: SunnyBanksLocationId | undefined,
+  defaultLocationId: SunnyBanksLocationId
+): SunnyBanksLocationId {
+  if (chunk.locationTag) {
+    return saved && pickedOverTag === chunk.locationTag ? saved : chunk.locationTag;
+  }
+  return saved ?? chunk.locationId ?? defaultLocationId;
+}
+
+/**
+ * The saved row maps after the row dropdown picks `locationId` (pure, for
+ * the panel and tests). On a tagged row the pick also records the tag it
+ * was made against; picking the tag itself just clears the row's pick.
+ */
+export function pickSunnyBanksRowLocation(
+  maps: {
+    locationOverrides: Record<number, SunnyBanksLocationId>;
+    locationPickTags: Record<number, SunnyBanksLocationId>;
+  },
+  rowIndex: number,
+  locationTag: SunnyBanksLocationId | undefined,
+  locationId: SunnyBanksLocationId
+): { locationOverrides: Record<number, SunnyBanksLocationId>; locationPickTags: Record<number, SunnyBanksLocationId> } {
+  const locationOverrides = { ...maps.locationOverrides };
+  const locationPickTags = { ...maps.locationPickTags };
+  delete locationPickTags[rowIndex];
+  if (locationTag && locationId === locationTag) {
+    delete locationOverrides[rowIndex];
+  } else {
+    locationOverrides[rowIndex] = locationId;
+    if (locationTag) locationPickTags[rowIndex] = locationTag;
+  }
+  return { locationOverrides, locationPickTags };
+}
+
+/**
  * Split a pasted script on newlines into Speak/Hold chunks.
  * Looks up speakers against `SUNNY_BANKS_CAST` keys (name-keyed
  * records, never a guessed id). Empty dialogue after a speaker prefix
@@ -924,6 +982,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
   const chunks: SunnyBanksScriptChunk[] = [];
   let previousName = "";
   let currentLocation: SunnyBanksLocationId = SUNNY_BANKS_DEFAULT_LOCATION_ID;
+  let taggedLocation: SunnyBanksLocationId | undefined;
   let pendingActions: string[] = [];
   let pendingAppearance: string[] = [];
   let pendingBackend: RowVideoBackend | undefined;
@@ -946,7 +1005,10 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       continue;
     }
     const tagged = extractGodScriptTags(raw);
-    if (tagged.locationId) currentLocation = tagged.locationId;
+    if (tagged.locationId) {
+      currentLocation = tagged.locationId;
+      taggedLocation = tagged.locationId;
+    }
     if (tagged.actions.length > 0) pendingActions = [...pendingActions, ...tagged.actions];
     if (tagged.appearanceModifiers.length > 0) {
       pendingAppearance = [...pendingAppearance, ...tagged.appearanceModifiers];
@@ -969,6 +1031,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       };
       if (action) chunk.action = action;
       if (appearanceModifier) chunk.appearanceModifier = appearanceModifier;
+      if (taggedLocation) chunk.locationTag = taggedLocation;
       if (pendingBackend) chunk.videoBackend = pendingBackend;
       pendingBackend = undefined;
       chunks.push(chunk);
@@ -1000,6 +1063,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     };
     if (action) chunk.action = action;
     if (appearanceModifier) chunk.appearanceModifier = appearanceModifier;
+    if (taggedLocation) chunk.locationTag = taggedLocation;
     if (pendingBackend) chunk.videoBackend = pendingBackend;
     pendingBackend = undefined;
     chunks.push(chunk);
@@ -1385,6 +1449,7 @@ export function collectSunnyBanksEpisodePrompts(source: {
   actScripts: ActKeyed<string>;
   characterOverrides: ActKeyed<Record<number, string>>;
   locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
+  locationPickTags?: ActKeyed<Record<number, SunnyBanksLocationId>>;
   defaultLocationId: SunnyBanksLocationId;
 }) {
   const prompts: Array<{
@@ -1400,15 +1465,16 @@ export function collectSunnyBanksEpisodePrompts(source: {
     const chunks = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(source.actScripts[act] ?? ""));
     const overrides = source.characterOverrides[act] ?? {};
     const locations = source.locationOverrides[act] ?? {};
+    const pickTags = source.locationPickTags?.[act] ?? {};
     chunks.forEach((chunk, index) => {
       const characterName = overrides[index] ?? chunk.characterName;
       const lock = speakerLock(characterName);
-      const locationId = locations[index] ?? chunk.locationId ?? source.defaultLocationId;
+      const locationId = resolveSunnyBanksRowLocationId(chunk, locations[index], pickTags[index], source.defaultLocationId);
       const kind = chunk.kind;
       const extra = [chunk.action, chunk.appearanceModifier].filter(Boolean).join(" ");
       const gold = lock
         ? kind === "hold"
-          ? buildSunnyBanksHoldPrompt(lock)
+          ? buildSunnyBanksHoldPrompt(lock, chunk.action)
           : buildSunnyBanksSpeakingPrompt(lock, chunk.line)
         : kind === "hold"
           ? buildSunnyBanksLocationCutawayPrompt(chunk.action)
@@ -1439,6 +1505,7 @@ export interface SunnyBanksEpisodeZipSource {
   actScripts: ActKeyed<string>;
   characterOverrides: ActKeyed<Record<number, string>>;
   locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
+  locationPickTags?: ActKeyed<Record<number, SunnyBanksLocationId>>;
   runtimeMap: ActKeyed<Record<number, RowRuntime>>;
 }
 
@@ -1782,6 +1849,7 @@ export function SkidmarksSunnyBanksPanel() {
   const defaultLocationId = live.defaultLocationId;
   const characterOverridesByAct = live.characterOverrides;
   const locationOverridesByAct = live.locationOverrides;
+  const locationPickTagsByAct = live.locationPickTags ?? {};
   const runtimeMapByAct = live.runtimeMap;
   const workspaceTitle = live.workspaceTitle;
   /** The Grok/H3 switch for silent rows (saved with the session). */
@@ -1811,6 +1879,7 @@ export function SkidmarksSunnyBanksPanel() {
   const scriptText = actScripts[activeAct] ?? "";
   const characterOverrides = characterOverridesByAct[activeAct] ?? {};
   const locationOverrides = locationOverridesByAct[activeAct] ?? {};
+  const locationPickTags = locationPickTagsByAct[activeAct] ?? {};
   const parsed = parseSunnyBanksScriptBlock(scriptText);
   const remappedRuntime = preserveRenderedRuntimes(parsed, runtimeMapByAct[activeAct] ?? {});
   const running = runningKind !== null;
@@ -1829,7 +1898,7 @@ export function SkidmarksSunnyBanksPanel() {
   const locations = sunnyBanksLocationList(studioState.locations);
   const queue = sunnyBanksQueueChunks(parsed).map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
-    const locationId = locationOverrides[index] ?? chunk.locationId ?? defaultLocationId;
+    const locationId = resolveSunnyBanksRowLocationId(chunk, locationOverrides[index], locationPickTags[index], defaultLocationId);
     const character = speakerLock(characterName);
     // An unknown location is never quietly swapped for the storefront
     // (EP01's Park Site 4 scene was): the row says so and Render waits.
@@ -2160,6 +2229,7 @@ export function SkidmarksSunnyBanksPanel() {
       actScripts: cloneActRecord(actScripts, actIds),
       characterOverrides: cloneActRecord(characterOverridesByAct, actIds),
       locationOverrides: cloneActRecord(locationOverridesByAct, actIds),
+      locationPickTags: cloneActRecord(locationPickTagsByAct, actIds),
       runtimeMap: cloneActRecord(runtimeMapByAct, actIds),
       workspaceTitle,
     });
@@ -2173,6 +2243,7 @@ export function SkidmarksSunnyBanksPanel() {
       actScripts: cloneActRecord(scriptUndo.actScripts, scriptUndo.actIds),
       characterOverrides: cloneActRecord(scriptUndo.characterOverrides, scriptUndo.actIds),
       locationOverrides: cloneActRecord(scriptUndo.locationOverrides, scriptUndo.actIds),
+      locationPickTags: cloneActRecord(scriptUndo.locationPickTags, scriptUndo.actIds),
       runtimeMap: cloneActRecord(scriptUndo.runtimeMap, scriptUndo.actIds),
       workspaceTitle: scriptUndo.workspaceTitle,
       defaultLocationId,
@@ -2250,6 +2321,7 @@ export function SkidmarksSunnyBanksPanel() {
       const actScriptsNext = { ...prev.actScripts };
       const characterNext = { ...prev.characterOverrides };
       const locationNext = { ...prev.locationOverrides };
+      const pickTagsNext = { ...(prev.locationPickTags ?? {}) };
       const runtimeNext = { ...prev.runtimeMap };
       for (const id of nextIds) {
         if (!(id in actScriptsNext)) actScriptsNext[id] = "";
@@ -2261,6 +2333,7 @@ export function SkidmarksSunnyBanksPanel() {
         actScriptsNext[id] = doc.actScripts[id] ?? "";
         characterNext[id] = {};
         locationNext[id] = {};
+        delete pickTagsNext[id];
       }
       if (!doc.actIds.includes(prev.activeAct)) actScriptsNext[prev.activeAct] = "";
       return {
@@ -2271,6 +2344,7 @@ export function SkidmarksSunnyBanksPanel() {
         actScripts: actScriptsNext,
         characterOverrides: characterNext,
         locationOverrides: locationNext,
+        locationPickTags: pickTagsNext,
         runtimeMap: runtimeNext,
       };
     });
@@ -2293,8 +2367,16 @@ export function SkidmarksSunnyBanksPanel() {
     patchSunnyBanksLive((prev) => {
       const act = prev.activeAct;
       const script = prev.actScripts[act] ?? "";
+      // The new hold sits under this row, so it gets this row's place
+      // the same way (same tag, same pick).
       const shiftedLocations = shiftKeyedIndexRecord(prev.locationOverrides[act] ?? {}, insertAt);
-      shiftedLocations[insertAt] = row.location.id;
+      const shiftedPickTags = shiftKeyedIndexRecord(prev.locationPickTags?.[act] ?? {}, insertAt);
+      const picked = pickSunnyBanksRowLocation(
+        { locationOverrides: shiftedLocations, locationPickTags: shiftedPickTags },
+        insertAt,
+        row.chunk.locationTag,
+        row.location.id
+      );
       const nextScript = insertSunnyBanksLineAfter(script, row.chunk.sourceLineIndex, holdLine);
       return {
         ...prev,
@@ -2311,7 +2393,8 @@ export function SkidmarksSunnyBanksPanel() {
           ...prev.characterOverrides,
           [act]: shiftKeyedIndexRecord(prev.characterOverrides[act] ?? {}, insertAt),
         },
-        locationOverrides: { ...prev.locationOverrides, [act]: shiftedLocations },
+        locationOverrides: { ...prev.locationOverrides, [act]: picked.locationOverrides },
+        locationPickTags: { ...(prev.locationPickTags ?? {}), [act]: picked.locationPickTags },
       };
     });
     if (!scriptOpen) setScriptOpen(true);
@@ -2332,7 +2415,13 @@ export function SkidmarksSunnyBanksPanel() {
           ? `${script.replace(/\n+$/, "")}\n${holdLine}`
           : holdLine;
       const shiftedLocations = shiftKeyedIndexRecord(prev.locationOverrides[act] ?? {}, 0);
-      shiftedLocations[0] = first?.location.id ?? prev.defaultLocationId;
+      const shiftedPickTags = shiftKeyedIndexRecord(prev.locationPickTags?.[act] ?? {}, 0);
+      const picked = pickSunnyBanksRowLocation(
+        { locationOverrides: shiftedLocations, locationPickTags: shiftedPickTags },
+        0,
+        first?.chunk.locationTag,
+        first?.location.id ?? prev.defaultLocationId
+      );
       return {
         ...prev,
         actScripts: { ...prev.actScripts, [act]: nextScript },
@@ -2344,7 +2433,8 @@ export function SkidmarksSunnyBanksPanel() {
           ...prev.characterOverrides,
           [act]: shiftKeyedIndexRecord(prev.characterOverrides[act] ?? {}, 0),
         },
-        locationOverrides: { ...prev.locationOverrides, [act]: shiftedLocations },
+        locationOverrides: { ...prev.locationOverrides, [act]: picked.locationOverrides },
+        locationPickTags: { ...(prev.locationPickTags ?? {}), [act]: picked.locationPickTags },
       };
     });
     if (!scriptOpen) setScriptOpen(true);
@@ -2373,6 +2463,10 @@ export function SkidmarksSunnyBanksPanel() {
         locationOverrides: {
           ...prev.locationOverrides,
           [act]: unshiftKeyedIndexRecord(prev.locationOverrides[act] ?? {}, rowIndex),
+        },
+        locationPickTags: {
+          ...(prev.locationPickTags ?? {}),
+          [act]: unshiftKeyedIndexRecord(prev.locationPickTags?.[act] ?? {}, rowIndex),
         },
         // Every Done row below moves up with its clip (2026-09-30).
         runtimeMap: {
@@ -2667,16 +2761,23 @@ export function SkidmarksSunnyBanksPanel() {
                                     value={row.location.id}
                                     onChange={(e) => {
                                       const locationId = e.target.value as SunnyBanksLocationId;
-                                      patchSunnyBanksLive((prev) => ({
-                                        ...prev,
-                                        locationOverrides: {
-                                          ...prev.locationOverrides,
-                                          [prev.activeAct]: {
-                                            ...(prev.locationOverrides[prev.activeAct] ?? {}),
-                                            [row.index]: locationId,
+                                      patchSunnyBanksLive((prev) => {
+                                        const act = prev.activeAct;
+                                        const picked = pickSunnyBanksRowLocation(
+                                          {
+                                            locationOverrides: prev.locationOverrides[act] ?? {},
+                                            locationPickTags: prev.locationPickTags?.[act] ?? {},
                                           },
-                                        },
-                                      }));
+                                          row.index,
+                                          row.chunk.locationTag,
+                                          locationId
+                                        );
+                                        return {
+                                          ...prev,
+                                          locationOverrides: { ...prev.locationOverrides, [act]: picked.locationOverrides },
+                                          locationPickTags: { ...(prev.locationPickTags ?? {}), [act]: picked.locationPickTags },
+                                        };
+                                      });
                                     }}
                                     disabled={running}
                                     title={row.location.label}

@@ -229,8 +229,7 @@ describe("parseSunnyBanksScriptBlock", () => {
     expect(gold).toContain("bare feet");
     expect(gold).not.toContain("holding the bucket hat brim");
     expect(SUNNY_BANKS_CAST["Unit 4S"].look).toBe(
-      "skinny purple alien, two antennae, big round bulging eyes, wide toothy grin, teal bucket hat, " +
-        "a teal flip-flop held in each hand, bare feet"
+      "skinny purple alien, two antennae, big round bulging eyes, wide toothy grin, teal bucket hat, bare feet"
     );
   });
 
@@ -296,8 +295,7 @@ describe("parseSunnyBanksScriptBlock", () => {
       locationId: "caravan_interior",
     });
     expect(SUNNY_BANKS_CAST[queue[0].characterName].look).toBe(
-      "skinny purple alien, two antennae, big round bulging eyes, wide toothy grin, teal bucket hat, " +
-        "a teal flip-flop held in each hand, bare feet"
+      "skinny purple alien, two antennae, big round bulging eyes, wide toothy grin, teal bucket hat, bare feet"
     );
     expect(SUNNY_BANKS_CAST[queue[0].characterName].look).toContain("bare feet");
     expect(SUNNY_BANKS_CAST[queue[0].characterName].look).not.toMatch(/shoe|boot|sneaker/i);

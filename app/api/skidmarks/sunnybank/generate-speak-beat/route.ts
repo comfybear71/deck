@@ -356,7 +356,8 @@ export async function POST(request: Request) {
     durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, silentDurationSec);
     prompt = isLocationCutaway
       ? buildLocationCutawayPrompt(action)
-      : buildSunnyBanksHoldPrompt(character!);
+      : // With an [Action:], the action sets framing and movement (2026-10-01).
+        buildSunnyBanksHoldPrompt(character!, action);
   } else {
     if (!voiceId) {
       return NextResponse.json(

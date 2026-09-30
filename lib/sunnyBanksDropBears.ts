@@ -12,6 +12,13 @@ import { getSunnyBanksLocation, SUNNY_BANKS_CAST, type SunnyBanksLocationId } fr
  *
  * Speaker remap: Crash Lab's "The Unit 4s" → this app's CAST key
  * `Unit 4S`. Look/voice gold in `lib/sunnyBanks.ts` is untouched.
+ *
+ * **Locations are `[Location: …]` lines in the script (2026-10-01).**
+ * The seed used to save a location on every row instead, and those
+ * saved rows outlived the demo: EP02's own Act II, rewritten as
+ * `[Location: park_site_4]`, still rendered at the tin shed. The seed
+ * now writes a tag line wherever the place changes and saves no row
+ * locations at all.
  */
 
 export const DROP_BEARS_JOB_ID = fixture.jobId;
@@ -38,7 +45,6 @@ export type DropBearsSeedRuntime = {
 export type DropBearsPanelSeed = {
   defaultLocationId: SunnyBanksLocationId;
   actScripts: Record<ActId, string>;
-  locationOverrides: Record<ActId, Record<number, SunnyBanksLocationId>>;
   runtimeMap: Record<ActId, Record<number, DropBearsSeedRuntime>>;
 };
 
@@ -54,11 +60,6 @@ function isLocationId(value: string): value is SunnyBanksLocationId {
  * initial state. Every speaker is a `SUNNY_BANKS_CAST` key. */
 export function buildSunnyBanksDropBearsSeed(): DropBearsPanelSeed {
   const actScripts: Record<ActId, string> = { I: "", II: "", III: "" };
-  const locationOverrides: Record<ActId, Record<number, SunnyBanksLocationId>> = {
-    I: {},
-    II: {},
-    III: {},
-  };
   const runtimeMap: Record<ActId, Record<number, DropBearsSeedRuntime>> = {
     I: {},
     II: {},
@@ -75,22 +76,27 @@ export function buildSunnyBanksDropBearsSeed(): DropBearsPanelSeed {
   for (const act of ACTS) {
     const beats = grouped[act];
     const lines = beats.map((beat) => `${beat.speaker}: ${beat.line}`);
-    actScripts[act] = lines.join("\n");
+    const script: string[] = [];
+    let place: SunnyBanksLocationId | null = null;
     beats.forEach((beat, index) => {
       const locationId = isLocationId(beat.locationId) ? beat.locationId : "main_entrance_sign";
-      locationOverrides[act][index] = locationId;
+      if (locationId !== place) {
+        script.push(`[Location: ${locationId}]`);
+        place = locationId;
+      }
+      script.push(lines[index]);
       runtimeMap[act][index] = {
         lineKey: lines[index],
         status: "done",
         videoUrl: crashLabClipUrl(beat.clipFile),
       };
     });
+    actScripts[act] = script.join("\n");
   }
 
   return {
     defaultLocationId: "main_entrance_sign",
     actScripts,
-    locationOverrides,
     runtimeMap,
   };
 }
