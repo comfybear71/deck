@@ -101,9 +101,7 @@ export function AdultShortsPanel() {
   const snapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const state = getAdultShortsState(snapshot);
   const { shots } = state;
-  // Everyone starring, each read through their own Cast card (the
-  // episode's own pictures first, so each shot's "From N" still means the
-  // same picture).
+  // Everyone starring, each read through their own Cast card (main face first).
   const starringPeople = resolveShortsStarring(snapshot);
   const starringList = adultShortStarring(state);
   const cast = shortsCastList(snapshot);
@@ -215,7 +213,7 @@ export function AdultShortsPanel() {
     if (busy) return;
     const people = shortsShotPeople(starringPeople, shot);
     // One picture of each person in the shot, in the order the prompt names them.
-    const refs = shortsPlateReferences(people, shot.referenceIndex);
+    const refs = shortsPlateReferences(people);
     const missing = people.filter((p) => p.referenceUrls.length === 0).map((p) => p.name);
     if (missing.length) {
       setShotError(shot.id, `Add pictures of ${missing.join(" and ")} on their Cast card first.`);
@@ -341,7 +339,6 @@ export function AdultShortsPanel() {
     }
   };
 
-  const finishedCount = shots.filter((s) => s.clipUrl).length;
   const unfinished = shots.filter((s) => !s.clipUrl);
   const queueCost = formatUsd(unfinished.reduce((sum, s) => sum + estimateAdultShortsClipCostUsd(s.durationSec), 0));
   const episodeNumber = state.currentSavedId ? adultShortEpisodeNumbers(state.saved).get(state.currentSavedId) : undefined;
@@ -377,7 +374,6 @@ export function AdultShortsPanel() {
     const armed = armedRenderId === shot.id;
     const clipCost = formatUsd(estimateAdultShortsClipCostUsd(shot.durationSec));
     const people = shortsShotPeople(starringPeople, shot);
-    const pictureCount = Math.max(0, ...people.map((p) => p.referenceUrls.length));
     return (
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-end gap-2">
@@ -444,27 +440,8 @@ export function AdultShortsPanel() {
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
-          {pictureCount > 1 && (
-            <span className="flex items-center gap-1">
-              From
-              {Array.from({ length: pictureCount }, (_, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => patchShot(shot.id, { referenceIndex: i })}
-                  aria-pressed={shot.referenceIndex === i}
-                  className={[
-                    "rounded-md border px-2 py-0.5",
-                    shot.referenceIndex === i ? "border-red-400/60 text-white" : "border-white/10 text-white/50",
-                  ].join(" ")}
-                >
-                  {i + 1}
-                </button>
-              ))}
-            </span>
-          )}
-          {index > 0 && (
+        {index > 0 && (
+          <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
             <label className="flex items-center gap-1.5">
               <input
                 type="checkbox"
@@ -473,8 +450,8 @@ export function AdultShortsPanel() {
               />
               Start from shot {index}&apos;s last frame
             </label>
-          )}
-        </div>
+          </div>
+        )}
 
         <div className="flex gap-3">
           <div className="flex w-32 shrink-0 flex-col gap-1.5">
@@ -542,14 +519,9 @@ export function AdultShortsPanel() {
   return (
     <div id={SHORTS_EDITOR_ID} className="flex scroll-mt-4 flex-col gap-6">
       <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">
-            Shots{episodeNumber ? ` · ${adultShortEpisodeCode(episodeNumber)}` : ""}
-          </p>
-          <p className="text-xs text-white/40">
-            {finishedCount}/{shots.length} clips done · plate {formatUsd(ADULT_SHORTS_STILL_COST_USD)} each
-          </p>
-        </div>
+        <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">
+          Shots{episodeNumber ? ` · ${adultShortEpisodeCode(episodeNumber)}` : ""}
+        </p>
 
         {/* This episode's own 18+ switch (2026-09-30): off for new shorts. */}
         <label className="flex items-center gap-2 self-start text-xs text-white/70">
