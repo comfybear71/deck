@@ -139,6 +139,7 @@
  * see `lib/minimaxH3.ts`'s module doc comment.
  */
 
+import type { RowVideoBackend } from "./videoBackendRouting";
 import { getSkidmarksCharacterLock, shotPromptMentionsLockedCharacter } from "./plateGeneration";
 import { songMediaSlug, type DeckMediaProject } from "./deckMediaPaths";
 import {
@@ -240,6 +241,21 @@ const SIRAY_SECOND_RATE_USD = 0.18;
 
 export function estimateSirayClipRenderCostUsd(durationSec: number): number {
   return durationSec * SIRAY_SECOND_RATE_USD;
+}
+
+/** Grok Imagine video 1.5 at 720p ($0.14/s, xAI pricing) plus its
+ * $0.01 start image: what a silent Sunnybank row costs on Grok
+ * (`SILENT_SHOT_GROK_RESOLUTION`, `lib/videoBackendRouting.ts`). */
+export function estimateGrok720pClipRenderCostUsd(durationSec: number): number {
+  return durationSec * CLIP_SECOND_RATE_REFERENCE_TO_VIDEO_USD + PER_REFERENCE_IMAGE_USD;
+}
+
+/** One row's video cost on the engine it renders on. Estimates only
+ * (LTX is Deck's own stand-in rate; see `estimateLtxClipRenderCostUsd`). */
+export function estimateRowVideoCostUsd(backend: RowVideoBackend, durationSec: number): number {
+  if (backend === "grok") return estimateGrok720pClipRenderCostUsd(durationSec);
+  if (backend === "h3") return estimateH3ClipRenderCostUsd(durationSec);
+  return estimateLtxClipRenderCostUsd(durationSec);
 }
 
 /**

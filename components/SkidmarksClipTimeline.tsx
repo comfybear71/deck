@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { musicVideoClipBackend, videoBackendName, videoBackendTagLabel } from "@/lib/videoBackendRouting";
 import {
   formatSegmentRange,
+  resolveInstrumentalVideoModel,
   SKIDMARKS_SEGMENT_LABEL_META,
   type SkidmarksAnalysisStatus,
   type SkidmarksBand,
@@ -179,6 +181,14 @@ function SegmentRow({
   const renderedPlateCount = segment.plates.filter((p) => renderedPlateIds.has(p.id)).length;
   const allPlatesRendered = segment.plates.length > 0 && renderedPlateCount === segment.plates.length;
   const somePlatesRendered = renderedPlateCount > 0 && !allPlatesRendered;
+  // Red engine chip (2026-09-30): the engine this clip's latest render
+  // used, else what Render would use (Vocal on LTX, Instrumental on the
+  // clip's H3/Grok/Siray switch).
+  const backend = musicVideoClipBackend({
+    vocal: meta.vocal,
+    instrumentalModel: resolveInstrumentalVideoModel(segment.instrumentalVideoModel),
+    sent: segment.plates.map((plate) => plate.lastSent),
+  });
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.02]">
@@ -212,6 +222,9 @@ function SegmentRow({
           ].join(" ")}
         >
           {meta.label}
+        </span>
+        <span title={`Video on ${videoBackendName(backend)}`} className="shrink-0 text-[9px] font-bold tracking-wide text-red-400">
+          {videoBackendTagLabel(backend)}
         </span>
         <span className="ml-auto shrink-0" aria-hidden="true">
           {allPlatesRendered ? (

@@ -1,5 +1,14 @@
 import { del, list, put } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import {
+  classifyXaiVideoHttpFailure,
+  classifyXaiVideoJobError,
+  extractXaiErrorMessage,
+  pollXaiVideoJob as pollXaiVideoJob_,
+  postXaiVideoGeneration,
+  resolveXaiVideoModel,
+  type XaiVideoStartOutcome,
+} from "@/lib/xaiVideo";
 import { decodeDataUrl } from "@/lib/dataUrl";
 import {
   buildClipRenderLastFramePathname,
@@ -23,7 +32,7 @@ import {
 } from "@/lib/comfyCloud";
 import {
   downloadMinimaxH3Video,
-  pollMinimaxH3Video,
+  pollMinimaxH3VideoUntilDone,
   resolveMinimaxCredentials,
   submitMinimaxH3Video,
   type MinimaxCredentials,
@@ -237,14 +246,10 @@ export const runtime = "nodejs";
 // response overhead.
 export const maxDuration = 300;
 
-const XAI_VIDEO_MODEL_ENV_VAR = "XAI_VIDEO_MODEL";
-const XAI_VIDEO_GENERATIONS_URL = "https://api.x.ai/v1/videos/generations";
-const xaiVideoStatusUrl = (requestId: string) =>
-  `https://api.x.ai/v1/videos/${encodeURIComponent(requestId)}`;
-/** Verified live in this sandbox against the image-to-video path (see
- * this file's module doc comment) \u2014 the current xAI video model as
- * of this build. */
-const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
+export { classifyXaiVideoHttpFailure, classifyXaiVideoJobError, extractXaiErrorMessage };
+
+// xAI video constants, error helpers and the start/poll calls live in
+// `lib/xaiVideo.ts` (2026-09-30), shared with the Sunnybank silent-row path.
 
 const MAX_PROMPT_LENGTH = 2000;
 /** xAI's own documented examples for `reference_images` never show more
@@ -319,7 +324,6 @@ export const MAX_LTX_CLIP_DURATION_SEC = 15;
 const MIN_LTX_AUDIO_INPUT_SEC = 2;
 
 const START_TIMEOUT_MS = 20_000;
-const POLL_TIMEOUT_MS = 20_000;
 /** Kept short \u2014 this is a cheap `HEAD` sanity check right after our own
  * `put()`, not a real download; it should never meaningfully add to the
  * time Stuart's already waited for the render itself. */
@@ -357,71 +361,7 @@ export const SIRAY_POLL_DEADLINE_MS = 240_000;
 const MAX_SIRAY_REFERENCE_IMAGES = 1;
 
 
-function resolveXaiVideoModel(): string {
-  return process.env[XAI_VIDEO_MODEL_ENV_VAR] || DEFAULT_XAI_VIDEO_MODEL;
-}
-
-/** Same OpenAI-compatible error shape as `app/api/skidmarks/generate-still/
- * route.ts`'s `extractXaiErrorMessage` \u2014 xAI's synchronous "the request
- * itself was rejected" errors (bad key, malformed body) use this shape;
- * a job that started fine but failed *during* generation instead reports
- * through `classifyXaiVideoJobError` below. */
-export function extractXaiErrorMessage(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") return null;
-  const err = (payload as { error?: unknown }).error;
-  if (typeof err === "string") return err || null;
-  if (err && typeof err === "object") {
-    const message = (err as { message?: unknown }).message;
-    return typeof message === "string" && message ? message : null;
-  }
-  return null;
-}
-
-/** Classifies a failed *synchronous* HTTP response \u2014 either the
- * initial `POST /v1/videos/generations` start call being rejected (bad
- * key, bad body, rate limit) or a later `GET /v1/videos/{request_id}`
- * poll itself returning a non-2xx (as opposed to a 200 whose *body*
- * reports `status: "failed"` \u2014 see `classifyXaiVideoJobError` for
- * that, separate, case). Same taxonomy as the still route's
- * `classifyXaiFailure`, kept as its own copy here since each Skidmarks
- * API route is self-contained (no shared `lib/xai.ts` today). */
-export function classifyXaiVideoHttpFailure(upstreamStatus: number): { httpStatus: number; code: string } {
-  if (upstreamStatus === 401 || upstreamStatus === 403) {
-    return { httpStatus: upstreamStatus, code: "auth_error" };
-  }
-  if (upstreamStatus === 429) return { httpStatus: 429, code: "rate_limited" };
-  if (upstreamStatus === 402) return { httpStatus: 402, code: "payment_required" };
-  if (upstreamStatus === 400 || upstreamStatus === 422) {
-    return { httpStatus: 422, code: "invalid_request" };
-  }
-  return { httpStatus: 502, code: "upstream_error" };
-}
-
-/** Classifies a *deferred job* failure \u2014 the start call succeeded (a
- * real `request_id` came back) but polling `GET /v1/videos/{request_id}`
- * eventually reported `status: "failed"` with this documented
- * `error.code` (see
- * https://docs.x.ai/developers/rest-api-reference/inference/videos).
- * Distinct from `classifyXaiVideoHttpFailure` \u2014 this is xAI's own
- * async-generation error taxonomy, not a synchronous HTTP status. */
-export function classifyXaiVideoJobError(code: string | undefined): { httpStatus: number; code: string } {
-  switch (code) {
-    case "invalid_argument":
-      return { httpStatus: 422, code: "invalid_request" };
-    case "permission_denied":
-      return { httpStatus: 403, code: "permission_denied" };
-    case "failed_precondition":
-      return { httpStatus: 422, code: "unsupported_request" };
-    case "service_unavailable":
-      return { httpStatus: 503, code: "upstream_unavailable" };
-    default:
-      return { httpStatus: 502, code: "upstream_error" };
-  }
-}
-
-type StartOutcome =
-  | { ok: true; requestId: string }
-  | { ok: false; status: number; code: string; error: string };
+type StartOutcome = XaiVideoStartOutcome;
 
 
 /** Turns a plate still (data: or https Vercel Blob) into a data:image URL
@@ -494,162 +434,15 @@ async function startXaiVideoJob(
     body.resolution = CLIP_RESOLUTION_REFERENCE_TO_VIDEO;
   }
 
-  let res: Response;
-  try {
-    res = await fetch(XAI_VIDEO_GENERATIONS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(START_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const timedOut = err instanceof Error && err.name === "TimeoutError";
-    return {
-      ok: false,
-      status: 502,
-      code: timedOut ? "timeout" : "network_error",
-      error: timedOut
-        ? `xAI's video API did not respond within ${START_TIMEOUT_MS / 1000}s.`
-        : `Could not reach xAI's video API: ${err instanceof Error ? err.message : "network error"}.`,
-    };
-  }
-
-  let payload: unknown = null;
-  try {
-    payload = await res.json();
-  } catch {
-    // Handled by the !res.ok / no-request_id checks below either way.
-  }
-
-  if (!res.ok) {
-    const message = extractXaiErrorMessage(payload);
-    const { httpStatus, code } = classifyXaiVideoHttpFailure(res.status);
-    return {
-      ok: false,
-      status: httpStatus,
-      code,
-      error: `xAI's video API returned ${res.status}${message ? `: ${message}` : "."}`,
-    };
-  }
-
-  const requestId = (payload as { request_id?: unknown } | null)?.request_id;
-  if (typeof requestId !== "string" || !requestId) {
-    return {
-      ok: false,
-      status: 502,
-      code: "no_request_id",
-      error: "xAI's video API accepted the request but returned no request_id to poll.",
-    };
-  }
-  return { ok: true, requestId };
+  return postXaiVideoGeneration(body, apiKey, START_TIMEOUT_MS);
 }
 
-type PollOutcome =
-  | { ok: true; videoUrl: string; durationSec: number }
-  | { ok: false; status: number; code: string; error: string };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-interface XaiVideoStatusBody {
-  status?: unknown;
-  video?: { url?: unknown; duration?: unknown; respect_moderation?: unknown };
-  error?: { code?: unknown; message?: unknown };
-}
-
-async function pollXaiVideoJob(requestId: string, apiKey: string, requestedDurationSec: number): Promise<PollOutcome> {
-  const deadline = Date.now() + POLL_DEADLINE_MS;
-
-  while (true) {
-    let res: Response;
-    try {
-      res = await fetch(xaiVideoStatusUrl(requestId), {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
-      });
-    } catch (err) {
-      return {
-        ok: false,
-        status: 502,
-        code: "network_error",
-        error: `Could not reach xAI's video API while polling: ${err instanceof Error ? err.message : "network error"}.`,
-      };
-    }
-
-    let payload: XaiVideoStatusBody | null = null;
-    try {
-      payload = (await res.json()) as XaiVideoStatusBody;
-    } catch {
-      // Handled by the !res.ok check below.
-    }
-
-    if (!res.ok) {
-      const message = extractXaiErrorMessage(payload);
-      const { httpStatus, code } = classifyXaiVideoHttpFailure(res.status);
-      return {
-        ok: false,
-        status: httpStatus,
-        code,
-        error: `xAI's video API returned ${res.status} while polling${message ? `: ${message}` : "."}`,
-      };
-    }
-
-    const status = payload?.status;
-
-    if (status === "done") {
-      const videoUrl = typeof payload?.video?.url === "string" ? payload.video.url : "";
-      const respectsModeration = payload?.video?.respect_moderation !== false;
-      if (!respectsModeration || !videoUrl) {
-        return {
-          ok: false,
-          status: 502,
-          code: "moderated",
-          error: "xAI's video render was blocked by moderation and returned no playable video.",
-        };
-      }
-      const durationSec =
-        typeof payload?.video?.duration === "number" ? payload.video.duration : requestedDurationSec;
-      return { ok: true, videoUrl, durationSec };
-    }
-
-    if (status === "failed") {
-      const code = typeof payload?.error?.code === "string" ? payload.error.code : undefined;
-      const message = typeof payload?.error?.message === "string" ? payload.error.message : undefined;
-      const { httpStatus, code: mappedCode } = classifyXaiVideoJobError(code);
-      return {
-        ok: false,
-        status: httpStatus,
-        code: mappedCode,
-        error: `xAI's video render failed${message ? `: ${message}` : "."}`,
-      };
-    }
-
-    if (status === "expired") {
-      return {
-        ok: false,
-        status: 504,
-        code: "expired",
-        error: "xAI's video render request expired before finishing.",
-      };
-    }
-
-    // "pending" (or any other in-flight value) \u2014 keep polling until
-    // the deadline. See this file's module doc comment's "no
-    // resume-after-timeout" note for what happens past this point.
-    if (Date.now() + POLL_INTERVAL_MS > deadline) {
-      return {
-        ok: false,
-        status: 504,
-        code: "timeout",
-        error:
-          `xAI's video render was still processing after ${Math.round(POLL_DEADLINE_MS / 1000)}s \u2014 this ` +
-          "route stopped waiting. The render may still finish on xAI's side, but this app has no way to check " +
-          "back on it; try again in a bit.",
-      };
-    }
-    await sleep(POLL_INTERVAL_MS);
-  }
+/** Grok's poll loop with this route's own deadline (`lib/xaiVideo.ts`). */
+function pollXaiVideoJob(requestId: string, apiKey: string, requestedDurationSec: number) {
+  return pollXaiVideoJob_(requestId, apiKey, requestedDurationSec, {
+    deadlineMs: POLL_DEADLINE_MS,
+    intervalMs: POLL_INTERVAL_MS,
+  });
 }
 
 interface GenerateClipRequestBody {
@@ -1379,29 +1172,11 @@ function bufferToDataUrl(bytes: Uint8Array, mimeType: string): string {
  * finish the job server-side, but nothing here checks back on it
  * later).
  */
-async function pollMinimaxH3JobUntilDone(
-  taskId: string,
-  creds: MinimaxCredentials
-): Promise<{ ok: true; videoUrl: string } | { ok: false; status: number; code: string; error: string }> {
-  const deadline = Date.now() + MINIMAX_POLL_DEADLINE_MS;
-  while (true) {
-    const tick = await pollMinimaxH3Video(taskId, creds);
-    if (!tick.ok) return tick;
-    if (tick.status === "done") return { ok: true, videoUrl: tick.videoUrl };
-
-    if (Date.now() + POLL_INTERVAL_MS > deadline) {
-      return {
-        ok: false,
-        status: 504,
-        code: "timeout",
-        error:
-          `MiniMax's H3 render was still processing after ${Math.round(MINIMAX_POLL_DEADLINE_MS / 1000)}s \u2014 ` +
-          "this route stopped waiting. The render may still finish on MiniMax's side, but this app has no way " +
-          "to check back on it; try again in a bit.",
-      };
-    }
-    await sleep(POLL_INTERVAL_MS);
-  }
+function pollMinimaxH3JobUntilDone(taskId: string, creds: MinimaxCredentials) {
+  return pollMinimaxH3VideoUntilDone(taskId, creds, {
+    deadlineMs: MINIMAX_POLL_DEADLINE_MS,
+    intervalMs: POLL_INTERVAL_MS,
+  });
 }
 
 /**

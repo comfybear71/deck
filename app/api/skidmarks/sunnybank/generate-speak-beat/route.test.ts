@@ -721,4 +721,129 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(body.error).toContain("XAI_API_KEY");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  describe("silent rows on Grok or H3 (2026-09-30)", () => {
+    function json(body: unknown, status = 200): Response {
+      return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+    }
+    const target = {
+      folder: "deck/sunnybank/episodes/ep01/act-ii",
+      name: "ep01-act-ii-beat-05-ranger-bazza-hold",
+    };
+
+    it("a Bazza hold on Grok: composite, Grok 1.5 at 720p with the composed still, silence muxed, same file name", async () => {
+      vi.stubEnv("COMFY_CLOUD_API_KEY", "");
+      mockXaiComposite();
+      fetchMock
+        .mockResolvedValueOnce(json({ request_id: "grok-1" }))
+        .mockResolvedValueOnce(json({ status: "done", video: { url: "https://vidgen.x.ai/v.mp4", duration: 5, respect_moderation: true } }))
+        .mockResolvedValueOnce(new Response(new Uint8Array([7, 7, 7]), { status: 200 }));
+      putMock.mockResolvedValueOnce({ url: "https://blob.example/deck/sunnybank/episodes/ep01/act-ii/bazza.mp4" });
+
+      const res = await POST(
+        holdBeatRequest({ characterName: "Ranger Bazza", videoBackend: "grok", mediaTarget: target })
+      );
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.videoBackend).toBe("grok");
+      expect(body.kind).toBe("hold");
+      expect(body.persisted).toBe(true);
+      expect(body.durationSec).toBeCloseTo(5, 0);
+
+      const urls = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(urls.some((url) => url.includes("/v1/images/edits"))).toBe(true);
+      expect(urls.some((url) => url.includes("comfy") || url.endsWith("/api/prompt"))).toBe(false);
+      expect(urls.some((url) => url.includes("elevenlabs.io"))).toBe(false);
+      const start = fetchMock.mock.calls.find(([url]) => String(url) === "https://api.x.ai/v1/videos/generations");
+      expect(start).toBeTruthy();
+      const startBody = JSON.parse(start![1].body as string);
+      expect(startBody.model).toBe("grok-imagine-video-1.5");
+      expect(startBody.resolution).toBe("720p");
+      expect(startBody.duration).toBe(5);
+      expect(startBody.aspect_ratio).toBe("16:9");
+      expect(startBody.image.url).toMatch(/^data:image\//);
+      expect(startBody.prompt).toContain("holds their pose");
+      expect(startBody.prompt).toContain("nobody talks");
+
+      // Same readable name an LTX hold gets (`mediaTarget`).
+      expect(String(putMock.mock.calls[0][0])).toContain("deck/sunnybank/episodes/ep01/act-ii/");
+      expect(String(putMock.mock.calls[0][0])).toContain("ep01-act-ii-beat-05-ranger-bazza-hold");
+    });
+
+    it("a Crowd cutaway on H3: no composite, MiniMax-H3 at 768P for 5s on the location still", async () => {
+      vi.stubEnv("COMFY_CLOUD_API_KEY", "");
+      vi.stubEnv("MINIMAX_API_KEY", "test-minimax-key");
+      fetchMock
+        .mockResolvedValueOnce(json({ task_id: "h3-1" }))
+        .mockResolvedValueOnce(json({ task: { status: "succeeded", content: { url: "https://cdn.minimax.io/v.mp4" } } }))
+        .mockResolvedValueOnce(new Response(new Uint8Array([5, 5]), { status: 200 }));
+      putMock.mockResolvedValueOnce({ url: "https://blob.example/crowd-h3.mp4" });
+
+      const res = await POST(holdBeatRequest({ characterName: "Crowd", action: "drone over the park", videoBackend: "h3" }));
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.videoBackend).toBe("h3");
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/v1/images/edits"))).toBe(false);
+      const submit = fetchMock.mock.calls.find(([url]) => String(url) === "https://api.minimax.io/v2/video_generation");
+      expect(submit).toBeTruthy();
+      const submitBody = JSON.parse(submit![1].body as string);
+      expect(submitBody.model).toBe("MiniMax-H3");
+      expect(submitBody.resolution).toBe("768P");
+      expect(submitBody.duration).toBe(5);
+      expect(submitBody.content[0].text).toContain("drone over the park");
+      expect(submitBody.content[1].role).toBe("first_frame");
+    });
+
+    it("H3 with no MINIMAX_API_KEY answers missing_api_key and never submits", async () => {
+      vi.stubEnv("MINIMAX_API_KEY", "");
+      const res = await POST(holdBeatRequest({ characterName: "Crowd", videoBackend: "h3" }));
+      const body = await res.json();
+      expect(res.status).toBe(501);
+      expect(body.code).toBe("missing_api_key");
+      expect(body.error).toContain("MINIMAX_API_KEY");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(putMock).not.toHaveBeenCalled();
+    });
+
+    it("a Grok failure is reported and nothing is saved", async () => {
+      fetchMock.mockResolvedValueOnce(json({ error: "Incorrect API key" }, 401));
+      const res = await POST(holdBeatRequest({ characterName: "Crowd", videoBackend: "grok" }));
+      const body = await res.json();
+      expect(res.status).toBe(401);
+      expect(body.code).toBe("auth_error");
+      expect(putMock).not.toHaveBeenCalled();
+    });
+
+    it("a talking row asking for Grok still renders on LTX, and the tag never reaches ElevenLabs", async () => {
+      mockElevenLabs(encodeTestMp3(2.5));
+      mockXaiComposite();
+      mockUploads();
+      mockSubmit();
+      mockJobPoll();
+      mockDownload(new Uint8Array([1]));
+      putMock.mockResolvedValueOnce({ url: "https://blob.example/speak.mp4" });
+
+      const res = await POST(speakBeatRequest({ line: "[GROK] Crikey, mate.", videoBackend: "grok" }));
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.videoBackend).toBe("ltx");
+      const [, ttsInit] = fetchMock.mock.calls[0];
+      expect(JSON.parse(ttsInit.body).text).toBe("Crikey, mate.");
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/v1/videos/generations"))).toBe(false);
+    });
+
+    it("no videoBackend keeps the old LTX hold", async () => {
+      mockXaiComposite();
+      mockUploads();
+      mockSubmit();
+      mockJobPoll();
+      mockDownload(new Uint8Array([1]));
+      putMock.mockResolvedValueOnce({ url: "https://blob.example/ltx-hold.mp4" });
+      const res = await POST(holdBeatRequest());
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.videoBackend).toBe("ltx");
+      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/prompt"))).toBe(true);
+    });
+  });
 });

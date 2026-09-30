@@ -864,6 +864,12 @@ export function SkidmarksScriptSequencePanel({
               <span className={SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[tag.kind]}>{tag.label}</span>
             </span>
           ))}
+          {/* Each clip's red engine chip (2026-09-30): Vocal on LTX,
+            * Instrumental on Grok, Siray or H3. */}
+          <span className="inline-flex items-center gap-1">
+            <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+            <span className="text-red-400/90">[LTX] / [GROK] / [SIRAY] / [H3] video</span>
+          </span>
         </span>
       </p>
 

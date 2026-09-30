@@ -301,7 +301,13 @@ export async function pollMinimaxH3Video(taskId: string, creds: MinimaxCredentia
     }
     return { ok: true, status: "done", videoUrl };
   }
-  if (status === "failed" || status === "cancelled" || status === "canceled" || status === "error") {
+  if (
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "canceled" ||
+    status === "expired" ||
+    status === "error"
+  ) {
     const message = extractMinimaxErrorMessage(raw);
     return {
       ok: false,
@@ -344,4 +350,82 @@ export async function downloadMinimaxH3Video(url: string): Promise<DownloadMinim
       error: "Could not read the finished H3 video's bytes.",
     };
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Polls an H3 job to completion (`pollMinimaxH3Video` once every
+ * `intervalMs`) until done, failed, or `deadlineMs` runs out — then an
+ * honest `timeout` (MiniMax may still finish it; nothing checks back).
+ * Moved here from `app/api/skidmarks/generate-clip/route.ts`
+ * (2026-09-30) so the Sunnybank silent-row path uses the same loop.
+ */
+export async function pollMinimaxH3VideoUntilDone(
+  taskId: string,
+  creds: MinimaxCredentials,
+  options: { deadlineMs: number; intervalMs: number }
+): Promise<{ ok: true; videoUrl: string } | MinimaxFailure> {
+  const deadline = Date.now() + options.deadlineMs;
+  while (true) {
+    const tick = await pollMinimaxH3Video(taskId, creds);
+    if (!tick.ok) return tick;
+    if (tick.status === "done") return { ok: true, videoUrl: tick.videoUrl };
+
+    if (Date.now() + options.intervalMs > deadline) {
+      return {
+        ok: false,
+        status: 504,
+        code: "timeout",
+        error:
+          `MiniMax's H3 render was still processing after ${Math.round(options.deadlineMs / 1000)}s \u2014 ` +
+          "this route stopped waiting. The render may still finish on MiniMax's side, but this app has no way " +
+          "to check back on it; try again in a bit.",
+      };
+    }
+    await sleep(options.intervalMs);
+  }
+}
+
+export type MinimaxKeyCheckOutcome =
+  | { status: "ok" }
+  | { status: "missing" }
+  | { status: "rejected"; message: string }
+  | { status: "error"; message: string };
+
+/**
+ * A free key check (2026-09-30): lists at most one H3 task from the last
+ * 7 days (`GET /v2/query/video_generation?page_num=1&page_size=1`,
+ * MiniMax's documented "List tasks"). Starts nothing and costs nothing.
+ * 200 means MiniMax accepted the key; 401/403 (or the legacy `1004`
+ * "not authorized" code) means it refused it. Never returns the key.
+ */
+export async function checkMinimaxApiKey(creds: MinimaxCredentials | null): Promise<MinimaxKeyCheckOutcome> {
+  if (!creds) return { status: "missing" };
+  let res: Response;
+  try {
+    res = await fetch(`${MINIMAX_VIDEO_BASE}/v2/query/video_generation?page_num=1&page_size=1`, {
+      headers: authHeaders(creds),
+      signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
+    });
+  } catch (err) {
+    return { status: "error", message: networkFailure("checking the key", err).error };
+  }
+  let payload: unknown = null;
+  try {
+    payload = await res.json();
+  } catch {
+    // A status code is enough to answer.
+  }
+  const message = extractMinimaxErrorMessage(payload);
+  const legacyCode = (payload as { base_resp?: { status_code?: unknown } } | null)?.base_resp?.status_code;
+  if (res.status === 401 || res.status === 403 || legacyCode === 1004) {
+    return { status: "rejected", message: message || `MiniMax returned HTTP ${res.status}.` };
+  }
+  if (!res.ok) {
+    return { status: "error", message: `MiniMax returned HTTP ${res.status}${message ? `: ${message}` : "."}` };
+  }
+  return { status: "ok" };
 }

@@ -210,3 +210,22 @@ describe("SUNNY_BANKS_GOD_SCRIPT_RULES", () => {
     expect(text).toMatch(/used up by the next row|attach to the next row/i);
   });
 });
+
+describe("the video engine tag rule (2026-09-30)", () => {
+  it("its example parses to three silent rows on the engines it names", async () => {
+    const { parseSunnyBanksScriptBlock, sunnyBanksQueueChunks } = await import("@/components/SkidmarksSunnyBanksPanel");
+    const rule = SUNNY_BANKS_GOD_SCRIPT_RULES.find((r) => r.title.includes("[GROK]"))!;
+    const rows = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(rule.example!));
+    expect(rows.map((row) => [row.kind, row.videoBackend])).toEqual([
+      ["hold", "h3"],
+      ["hold", "ltx"],
+      ["hold", "grok"],
+    ]);
+  });
+
+  it("the LLM prompt says the tags are optional and never spoken", () => {
+    const prompt = buildSunnyBanksGodScriptPrompt();
+    expect(prompt).toContain("[GROK], [LTX] and [H3] are optional");
+    expect(prompt).toContain("never\n   spoken");
+  });
+});

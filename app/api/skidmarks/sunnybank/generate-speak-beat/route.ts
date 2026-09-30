@@ -25,6 +25,13 @@ import {
   uploadComfyCloudInput,
 } from "@/lib/comfyCloud";
 import { muxClipAudio } from "@/lib/muxClipAudio";
+import { renderSilentShotVideo, SILENT_SHOT_PROMPT_SUFFIX } from "@/lib/silentShotVideo";
+import {
+  parseRowVideoBackend,
+  pickRowVideoBackend,
+  stripVideoBackendTags,
+  type RowVideoBackend,
+} from "@/lib/videoBackendRouting";
 
 /**
  * POST /api/skidmarks/sunnybank/generate-speak-beat — the first real
@@ -104,6 +111,17 @@ import { muxClipAudio } from "@/lib/muxClipAudio";
  * already has (`lib/clipRenderBlob.ts`, `lib/scriptSequenceRunner.ts`,
  * `lib/serverVideoFrame.ts`) and Sunny Banks will reuse once there's a
  * real episode/beat model to hang it off.
+ *
+ * **Silent rows on Grok or H3 (2026-09-30)** — a Hold (a character
+ * hold or a Crowd cutaway) now renders on the engine in `videoBackend`:
+ * `"grok"` (Grok Imagine video 1.5 at 720p, the default the panel
+ * sends), `"h3"` (MiniMax H3 at 768P) or `"ltx"` (this route's original
+ * LTX path). Same start still (the composite, or the location for a
+ * cutaway), same 5s, same `mediaTarget` file naming. Grok and H3 make
+ * their own soundtrack and xAI has no switch to turn it off, so the 5s
+ * silent MP3 is muxed over it and the saved clip is silent. A Speak
+ * beat always uses LTX, whatever `videoBackend` says. Omitted means
+ * LTX, so an older caller keeps the old behaviour.
  */
 
 export const runtime = "nodejs";
@@ -129,6 +147,12 @@ const MAX_LTX_CLIP_DURATION_SEC = 15;
 const SPEAK_BEAT_POLL_DEADLINE_MS = 240_000;
 
 type BeatKind = "speak" | "hold";
+
+/** Grok and H3 are given whatever is left of Vercel's 300s, less a
+ * margin for the download, mux and Blob save, up to the same 240s the
+ * LTX poll gets. */
+const SILENT_SHOT_BUDGET_MS = 270_000;
+const SILENT_SHOT_MIN_DEADLINE_MS = 30_000;
 
 /** A voice test's line is one short sentence ("G'day, it's Hans."). */
 const VOICE_TEST_MAX_CHARS = 120;
@@ -180,6 +204,9 @@ interface GenerateSpeakBeatRequestBody {
    * "+"): their name, look and picture (Deck's own Blob only). For a
    * built-in with no picture of their own (Hans): just the picture. */
   characterCard?: unknown;
+  /** `"ltx"` | `"grok"` | `"h3"` (2026-09-30). Holds only; a Speak beat
+   * always renders on LTX. Missing or unknown → LTX. */
+  videoBackend?: unknown;
 }
 
 /** `kind: "voice-test"` — the ▶ on a character's panel: speak one short
@@ -210,6 +237,7 @@ function parseBeatKind(value: unknown): BeatKind {
 }
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
   let body: GenerateSpeakBeatRequestBody;
   try {
     body = (await request.json()) as GenerateSpeakBeatRequestBody;
@@ -221,7 +249,9 @@ export async function POST(request: Request) {
 
   const kind = parseBeatKind(body.kind);
   const characterName = typeof body.characterName === "string" ? body.characterName.trim() : "";
-  const line = typeof body.line === "string" ? body.line.trim() : "";
+  // A `[GROK]` / `[LTX]` / `[H3]` tag never reaches ElevenLabs. The
+  // panel already strips it; this is the belt to that.
+  const line = typeof body.line === "string" ? stripVideoBackendTags(body.line).trim() : "";
   const locationId = typeof body.locationId === "string" ? body.locationId.trim() : "";
   const locationLabel = typeof body.locationLabel === "string" ? body.locationLabel.replace(/\s+/g, " ").trim().slice(0, 80) : "";
   const startImageDataUrl = await resolveBeatStartImage(body.startImageDataUrl, body.locationImage);
@@ -261,8 +291,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const creds = resolveComfyCloudCredentials();
-  if (!creds) {
+  // Talking beats stay on LTX; a hold uses the engine the panel chose.
+  const videoBackend: RowVideoBackend =
+    kind === "hold"
+      ? pickRowVideoBackend({ kind, override: parseRowVideoBackend(body.videoBackend) ?? "ltx" }).backend
+      : "ltx";
+
+  const creds = videoBackend === "ltx" ? resolveComfyCloudCredentials() : null;
+  if (videoBackend === "ltx" && !creds) {
     return NextResponse.json(
       {
         error:
@@ -386,6 +422,22 @@ export async function POST(request: Request) {
     plateDataUrl = plated.dataUrl;
   }
 
+  if (videoBackend !== "ltx") {
+    return runSilentShotAndPersist({
+      backend: videoBackend,
+      characterName: character?.name ?? cutawayLabel,
+      prompt: `${prompt} ${SILENT_SHOT_PROMPT_SUFFIX}`,
+      durationSec,
+      silentAudioBytes: audioBytes,
+      startImageDataUrl: plateDataUrl,
+      mediaTarget: parseDeckMediaTarget(body.mediaTarget),
+      deadlineMs: Math.min(
+        SPEAK_BEAT_POLL_DEADLINE_MS,
+        Math.max(SILENT_SHOT_MIN_DEADLINE_MS, SILENT_SHOT_BUDGET_MS - (Date.now() - startedAt))
+      ),
+    });
+  }
+
   return runLtxAndPersist({
     characterName: character?.name ?? cutawayLabel,
     kind,
@@ -394,9 +446,46 @@ export async function POST(request: Request) {
     audioBytes,
     audioContentType,
     startImageDataUrl: plateDataUrl,
-    creds,
+    creds: creds!,
     mediaTarget: parseDeckMediaTarget(body.mediaTarget),
     ttsModel,
+  });
+}
+
+/** A hold on Grok or H3: render, replace the engine's own sound with the
+ * 5s silent track, save under the same name an LTX hold would get. */
+async function runSilentShotAndPersist(args: {
+  backend: Exclude<RowVideoBackend, "ltx">;
+  characterName: string;
+  prompt: string;
+  durationSec: number;
+  silentAudioBytes: Uint8Array;
+  startImageDataUrl: string;
+  mediaTarget: DeckMediaTarget | null;
+  deadlineMs: number;
+}) {
+  const rendered = await renderSilentShotVideo({
+    backend: args.backend,
+    prompt: args.prompt,
+    startImageDataUrl: args.startImageDataUrl,
+    durationSec: args.durationSec,
+    deadlineMs: args.deadlineMs,
+  });
+  if (!rendered.ok) {
+    return NextResponse.json(
+      { error: rendered.error, code: rendered.code, videoBackend: args.backend },
+      { status: rendered.status }
+    );
+  }
+  const muxed = await muxClipAudio(rendered.bytes, args.silentAudioBytes);
+  return persistBeatVideo({
+    videoBytes: muxed.ok ? muxed.bytes : rendered.bytes,
+    muxed,
+    characterName: args.characterName,
+    kind: "hold",
+    durationSec: args.durationSec,
+    mediaTarget: args.mediaTarget,
+    videoBackend: args.backend,
   });
 }
 
@@ -479,13 +568,48 @@ async function runLtxAndPersist(args: {
   // track — live QA: lips moved, no sound. A failed mux still returns
   // the paid picture.
   const muxed = await muxClipAudio(downloadResult.bytes, args.audioBytes);
-  const videoBytes = muxed.ok ? muxed.bytes : downloadResult.bytes;
-  const audioMuxed = muxed.ok;
+  return persistBeatVideo({
+    videoBytes: muxed.ok ? muxed.bytes : downloadResult.bytes,
+    muxed,
+    characterName: args.characterName,
+    kind: args.kind,
+    durationSec: args.durationSec,
+    mediaTarget: args.mediaTarget,
+    ttsModel: args.ttsModel,
+    videoBackend: "ltx",
+  });
+}
 
+/** Saves a finished beat (`mediaTarget` naming, or the old timestamped
+ * path) and answers the panel. Same "never throw away a render Stuart
+ * already paid for" rule as every other backend in this app — a Blob
+ * failure still returns the real bytes as a data: URL, honestly flagged
+ * as not saved. `audioMuxed: false` is the honest flag for a mux miss. */
+async function persistBeatVideo(args: {
+  videoBytes: Uint8Array;
+  muxed: { ok: true } | { ok: false; message: string };
+  characterName: string;
+  kind: BeatKind;
+  durationSec: number;
+  mediaTarget: DeckMediaTarget | null;
+  ttsModel?: string;
+  videoBackend: RowVideoBackend;
+}) {
+  const { videoBytes, muxed } = args;
+  const audioMuxed = muxed.ok;
   const pathname =
     args.kind === "hold"
       ? buildSunnyBanksHoldBeatPathname(args.characterName, Date.now())
       : buildSunnyBanksSpeakBeatPathname(args.characterName, Date.now());
+  const common = {
+    durationSec: args.durationSec,
+    character: args.characterName,
+    kind: args.kind,
+    videoBackend: args.videoBackend,
+    audioMuxed,
+    ...(muxed.ok ? {} : { audioMuxError: muxed.message }),
+    ...(args.ttsModel ? { ttsModel: args.ttsModel } : {}),
+  };
   try {
     const blob = await putDeckMediaOrLegacy(Buffer.from(videoBytes), {
       target: args.mediaTarget,
@@ -493,30 +617,13 @@ async function runLtxAndPersist(args: {
       contentType: "video/mp4",
       legacyPathname: pathname,
     });
-    return NextResponse.json({
-      videoUrl: blob.url,
-      durationSec: args.durationSec,
-      character: args.characterName,
-      kind: args.kind,
-      persisted: true,
-      audioMuxed,
-      ...(muxed.ok ? {} : { audioMuxError: muxed.message }),
-      ...(args.ttsModel ? { ttsModel: args.ttsModel } : {}),
-    });
+    return NextResponse.json({ videoUrl: blob.url, persisted: true, ...common });
   } catch (err) {
-    // Same "never throw away a render Stuart already paid for" rule as
-    // every other backend in this app — a Blob failure still returns
-    // the real bytes as a data: URL, honestly flagged as not saved.
     return NextResponse.json({
       videoUrl: `data:video/mp4;base64,${Buffer.from(videoBytes).toString("base64")}`,
-      durationSec: args.durationSec,
-      character: args.characterName,
-      kind: args.kind,
       persisted: false,
       persistError: err instanceof Error ? err.message : "Vercel Blob upload failed for an unknown reason.",
-      audioMuxed,
-      ...(muxed.ok ? {} : { audioMuxError: muxed.message }),
-      ...(args.ttsModel ? { ttsModel: args.ttsModel } : {}),
+      ...common,
     });
   }
 }
