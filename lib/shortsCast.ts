@@ -11,10 +11,9 @@
  * moved or written.
  *
  * Renders read her through the Cast card (`resolveShortsRenderCharacter`):
- * the episode's own pictures stay first and in the same order, so a
- * shot's "From 2" still means the same picture, then any pictures her Cast
- * card has on top (added from the Cast row, or a card-only girl like
- * Skye). Nothing here writes anything.
+ * her Cast card's pictures first, main face first (2026-09-30, the
+ * "From 1/2/3" picker is gone), then any of the episode's own she
+ * doesn't have there. Nothing here writes anything.
  */
 
 import {
@@ -60,11 +59,11 @@ export function shortsCharacterFromCast(c: Pick<RosterCharacter, "name" | "look"
 }
 
 /**
- * Who the open episode's plates and clips are made of: her name, look and
- * pictures, read through her Cast card. The episode's own pictures stay
- * first (same order, so shots keep pointing at the same picture); her
- * Cast card fills any gaps. Her look comes from the episode, else from
- * her Cast card. A girl who isn't on the Cast row keeps the episode's copy.
+ * Who the open episode's plates and clips are made of: their name, look
+ * and pictures, read through their Cast card. The Cast card's pictures
+ * come first, main face first; the episode's own copy fills any gaps.
+ * Their look comes from the episode, else from their Cast card. Someone
+ * who isn't on the Cast row keeps the episode's copy.
  */
 export function resolveShortsRenderCharacter(state: SkidmarksState): AdultShortsCharacter {
   const adult = normalizeAdultShortsState(state.adultShorts);
@@ -76,7 +75,7 @@ export function resolveShortsRenderCharacter(state: SkidmarksState): AdultShorts
 function resolvePerson(state: SkidmarksState, own: AdultShortsCharacter, confirmed: boolean): AdultShortsPerson {
   const cast = confirmed ? findShortsCastCharacter(state, own.name) : null;
   if (!cast) return { ...own, referenceUrls: own.referenceUrls.slice() };
-  const pictures = [...new Set([...own.referenceUrls, ...shortsCastPictures(cast)].filter(usablePicture))].slice(
+  const pictures = [...new Set([...shortsCastPictures(cast), ...own.referenceUrls].filter(usablePicture))].slice(
     0,
     ADULT_SHORTS_MAX_REFERENCES,
   );
@@ -103,14 +102,16 @@ export function shortsShotPeople(starring: readonly AdultShortsPerson[], shot: P
 
 /**
  * The pictures a shot's plate is made from: one per person in the shot,
- * in the same order as the prompt names them. "From N" picks each
- * person's Nth picture (their first when they have fewer).
+ * in the same order as the prompt names them. Each person's main Cast
+ * card face, or their next picture if that one is already used by
+ * someone before them. (2026-09-30: the "From 1/2/3" picker is gone, so
+ * a shot's old saved `referenceIndex` is ignored, not deleted.)
  */
-export function shortsPlateReferences(people: readonly AdultShortsCharacter[], referenceIndex: number): string[] {
+export function shortsPlateReferences(people: readonly AdultShortsCharacter[]): string[] {
   const out: string[] = [];
   for (const p of people) {
-    const url = p.referenceUrls[referenceIndex] ?? p.referenceUrls[0];
-    if (url && !out.includes(url)) out.push(url);
+    const url = p.referenceUrls.find((u) => !out.includes(u));
+    if (url) out.push(url);
   }
   return out.slice(0, ADULT_SHORTS_MAX_PEOPLE_PER_SHOT);
 }

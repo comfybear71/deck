@@ -86,10 +86,25 @@ describe("anyone can star, and more than one person", () => {
     expect(motion).toContain("Keep everyone's identity consistent");
   });
 
-  it("each person's own picture goes to the plate, in order; From 2 picks each one's second (or their first)", () => {
-    const people = [SKYLAR, BROTHER];
-    expect(shortsPlateReferences(people, 0)).toEqual([REF(1), BRO(1)]);
-    expect(shortsPlateReferences(people, 1)).toEqual([REF(2), BRO(1)]);
+  it("each person's main face goes to the plate, one each, in order (no From picker)", () => {
+    expect(shortsPlateReferences([SKYLAR, BROTHER])).toEqual([REF(1), BRO(1)]);
+    expect(shortsPlateReferences([BROTHER, SKYLAR])).toEqual([BRO(1), REF(1)]);
+    // One person in the shot: just their main face, as before.
+    expect(shortsPlateReferences([SKYLAR])).toEqual([REF(1)]);
+    // Nobody in the shot: no pictures (made from the words only).
+    expect(shortsPlateReferences([])).toEqual([]);
+  });
+
+  it("two people sharing the same first picture: the second gets their next one", () => {
+    const twin = { name: "Twin", look: "", referenceUrls: [REF(1), BRO(2)] };
+    expect(shortsPlateReferences([SKYLAR, twin])).toEqual([REF(1), BRO(2)]);
+  });
+
+  it("an old shot's saved From index is kept on the shot but no longer picks the picture", () => {
+    const st = normalizeAdultShortsState({ ageConfirmed: true, character: SKYLAR, shots: EP01.shots, saved: [EP01] })!;
+    expect(st.shots[0].referenceIndex).toBe(1);
+    expect(st.saved[0].shots[0].referenceIndex).toBe(1);
+    expect(shortsPlateReferences(shortsShotPeople([{ ...SKYLAR }], st.shots[0]))).toEqual([REF(1)]);
   });
 
   it("a shot has everyone starring by default, or just its own picks", () => {

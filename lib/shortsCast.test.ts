@@ -65,7 +65,7 @@ describe("Skylar's pictures and look live on her Cast card (the old Character bo
     const st = skylarState();
     const r = resolveShortsRenderCharacter(st);
     expect(r).toEqual(SKYLAR);
-    // Shot 1 still picks picture 2 ("From 2"), and the still prompt is unchanged.
+    // Her pictures keep their order, and the still prompt is unchanged.
     expect(r.referenceUrls[1]).toBe(REF(2));
     expect(buildAdultShortsStillPrompt(r, { prompt: "walks in" })).toBe(buildAdultShortsStillPrompt(SKYLAR, { prompt: "walks in" }));
   });
