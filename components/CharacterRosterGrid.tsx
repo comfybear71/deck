@@ -60,6 +60,14 @@ import {
   type RosterExtraGroup,
 } from "@/lib/rosterExtras";
 import { SKIDMARKS_CAST_MAX_PICTURES, buildSkidmarksCastMember, castNameFromFileName } from "@/lib/skidmarksEpisodes";
+import {
+  CHARACTER_NAME_MAX,
+  characterCanBeEdited,
+  characterDeleteBlocker,
+  deleteRosterCharacter,
+  renameRosterCharacter,
+} from "@/lib/characterEdits";
+import { TILE_CORNER_BUTTON_SHAPE_CLASS, TrashGlyph } from "./TileCornerGlyphs";
 
 /**
  * The thumbnail grid at the top of the Characters screen (2026-09-29):
@@ -288,6 +296,14 @@ export function CharacterRosterGrid({
   const [viewer, setViewer] = useState<{ entryId: string; index: number } | { url: string } | null>(null);
   const running = useRef(new Set<string>());
   const refCache = useRef(new Map<string, string>());
+  /** The open character's name while it's being typed over (tap the name). */
+  const [nameDraft, setNameDraft] = useState<{ key: string; value: string } | null>(null);
+  /** Escape was pressed: the blur that follows must not save. */
+  const cancelRename = useRef(false);
+  /** The bin was tapped once on this character; a second tap deletes. */
+  const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
+  /** A line under the open character's name: why a rename or delete didn't happen, or what to check. */
+  const [editNotice, setEditNotice] = useState<{ key: string; text: string; tone: "warn" | "error" } | null>(null);
 
   const adultConfirmed = Boolean(normalizeAdultShortsState(snapshot.adultShorts)?.ageConfirmed);
   const allChars = useMemo(() => ROSTER_GROUPS.flatMap((g) => roster[g.id]), [roster]);
@@ -657,6 +673,141 @@ export function CharacterRosterGrid({
   const selected = selectedKey ? charByKey.get(selectedKey) ?? null : null;
   const selectedEntry = selected ? entryForRosterCharacter(characters, selected.sourceKey) : null;
 
+  const openCharacter = (key: string) => {
+    setSelectedKey(key);
+    setNameDraft(null);
+    setConfirmDeleteKey(null);
+    setEditNotice(null);
+  };
+
+  const closeSelected = () => {
+    setSelectedKey(null);
+    setNameDraft(null);
+    setConfirmDeleteKey(null);
+    setEditNotice(null);
+  };
+
+  /** Enter or leaving the box saves the name; Escape puts the old one back. */
+  const commitName = (char: RosterCharacter) => {
+    const draft = nameDraft && nameDraft.key === char.sourceKey && !cancelRename.current ? nameDraft.value : null;
+    cancelRename.current = false;
+    setNameDraft(null);
+    if (draft === null || draft.trim() === char.name.trim()) return;
+    const result = renameRosterCharacter(char, draft);
+    if (!result.ok) {
+      setEditNotice({ key: char.sourceKey, text: result.error, tone: "error" });
+      return;
+    }
+    if (result.sourceKey !== char.sourceKey) setSelectedKey(result.sourceKey);
+    setEditNotice(result.note ? { key: result.sourceKey, text: result.note, tone: "warn" } : null);
+  };
+
+  /** Two taps, like the bin on an episode card: the first says what will happen, the second removes. */
+  const tapDelete = (char: RosterCharacter, entry: CharacterLoraEntry | null) => {
+    const blocker = characterDeleteBlocker(char, snapshot);
+    if (blocker) {
+      setConfirmDeleteKey(null);
+      setEditNotice({ key: char.sourceKey, text: blocker, tone: "error" });
+      return;
+    }
+    if (confirmDeleteKey !== char.sourceKey) {
+      setConfirmDeleteKey(char.sourceKey);
+      setEditNotice({
+        key: char.sourceKey,
+        text:
+          `Tap the bin again to take ${char.name} off the list.` +
+          (entry?.status === "ready" ? " Their trained LoRA card goes too." : "") +
+          " Their pictures and files stay in storage.",
+        tone: "warn",
+      });
+      return;
+    }
+    const result = deleteRosterCharacter(char);
+    if (!result.ok) {
+      setConfirmDeleteKey(null);
+      setEditNotice({ key: char.sourceKey, text: result.error, tone: "error" });
+      return;
+    }
+    closeSelected();
+  };
+
+  /**
+   * The top line of an open character: their name (tap it to rename),
+   * the bin, and the close ✕. Built-in Sunny Banks regulars keep a plain
+   * name and no bin (their names are Deck's cast list).
+   */
+  const renderPanelHeader = (char: RosterCharacter, entry: CharacterLoraEntry | null, extra?: ReactNode) => {
+    const editable = characterCanBeEdited(char, snapshot);
+    const editing = editable && nameDraft?.key === char.sourceKey;
+    const confirming = confirmDeleteKey === char.sourceKey;
+    const notice = editNotice?.key === char.sourceKey ? editNotice : null;
+    return (
+      <>
+        <div className="flex items-center justify-between gap-2">
+          {editing ? (
+            <input
+              autoFocus
+              value={nameDraft?.value ?? ""}
+              onChange={(e) => setNameDraft({ key: char.sourceKey, value: e.target.value })}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={() => commitName(char)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                else if (e.key === "Escape") {
+                  cancelRename.current = true;
+                  e.currentTarget.blur();
+                }
+              }}
+              maxLength={CHARACTER_NAME_MAX}
+              aria-label={`Rename ${char.name}`}
+              className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/40 px-2 py-1 text-xs text-white"
+            />
+          ) : editable ? (
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmDeleteKey(null);
+                setEditNotice(null);
+                setNameDraft({ key: char.sourceKey, value: char.name });
+              }}
+              className="min-w-0 truncate text-left text-sm font-semibold text-white"
+              title="Tap to rename"
+              aria-label={`${char.name}. Tap to rename`}
+            >
+              {char.name}
+            </button>
+          ) : (
+            <p className="truncate text-sm font-semibold text-white">{char.name}</p>
+          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {extra}
+            {editable && (
+              <button
+                type="button"
+                onClick={() => tapDelete(char, entry)}
+                aria-label={confirming ? `Tap again to delete ${char.name}` : `Delete ${char.name}`}
+                title="Delete character"
+                className={`${TILE_CORNER_BUTTON_SHAPE_CLASS} ${
+                  confirming ? "bg-red-500/80 text-white" : "bg-black/50 text-white/70 hover:bg-red-500/60"
+                }`}
+              >
+                <TrashGlyph />
+              </button>
+            )}
+            <button type="button" onClick={closeSelected} className="px-1 text-xs text-white/40" aria-label="Close">
+              ✕
+            </button>
+          </div>
+        </div>
+        {notice && (
+          <p role={notice.tone === "error" ? "alert" : "status"} className={`mt-1 text-[11px] ${notice.tone === "error" ? "text-red-300" : "text-amber-200/80"}`}>
+            {notice.text}
+          </p>
+        )}
+      </>
+    );
+  };
+
   const renderSelected = (char: RosterCharacter) => {
     const entry = entryForRosterCharacter(characters, char.sourceKey);
     const face = entry?.referenceUrl ?? char.thumbUrl;
@@ -681,12 +832,7 @@ export function CharacterRosterGrid({
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-2">
-              <p className="truncate text-sm font-semibold text-white">{char.name}</p>
-              <button type="button" onClick={() => setSelectedKey(null)} className="text-xs text-white/40" aria-label="Close">
-                ✕
-              </button>
-            </div>
+            {renderPanelHeader(char, entry)}
 
             {char.blockedReason ? (
               <p className="mt-1 text-xs text-red-200/80">{char.blockedReason}</p>
@@ -838,44 +984,49 @@ export function CharacterRosterGrid({
     );
   };
 
-  /** A ticked face, opened: just its pictures (X to remove each) and Redo. A failed one shows why and Try again. */
+  /**
+   * An opened face: its name (tap to rename), the bin and ✕ on every face.
+   * A ticked one also shows its pictures (X to remove each) and Redo; a
+   * failed one shows why and Try again.
+   */
   const renderSimpleSelected = (char: RosterCharacter) => {
     const entry = entryForRosterCharacter(characters, char.sourceKey);
-    if (!entry) return null;
-    if (entry.status === "failed")
+    if (entry?.status === "failed")
       return (
-        <div className="col-span-full flex flex-wrap items-center gap-2 rounded-xl border border-red-400/25 bg-black/30 p-3">
-          <p className="min-w-0 flex-1 text-xs text-red-200/90">{entry.error ?? "That didn't finish."}</p>
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedKey(null);
-              startAuto(char);
-            }}
-            className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-medium text-white"
-          >
-            Try again
-          </button>
+        <div className="col-span-full rounded-xl border border-red-400/25 bg-black/30 p-3">
+          {renderPanelHeader(char, entry)}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <p className="min-w-0 flex-1 text-xs text-red-200/90">{entry.error ?? "That didn't finish."}</p>
+            <button
+              type="button"
+              onClick={() => {
+                closeSelected();
+                startAuto(char);
+              }}
+              className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-medium text-white"
+            >
+              Try again
+            </button>
+          </div>
         </div>
       );
-    if (entry.status !== "ready") return null;
+    if (!entry || entry.status !== "ready")
+      return <div className="col-span-full rounded-xl border border-white/10 bg-black/30 p-3">{renderPanelHeader(char, entry)}</div>;
     const pics = entry.trainingImageUrls;
     return (
       <div className="col-span-full rounded-xl border border-emerald-400/25 bg-black/30 p-3">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <p className="truncate text-sm font-semibold text-white">{char.name}</p>
-          <div className="flex items-center gap-2">
+        <div className="mb-2">
+          {renderPanelHeader(
+            char,
+            entry,
             <button
               type="button"
               onClick={() => redo(char, entry)}
               className="rounded-md border border-white/20 px-3 py-1 text-xs text-white/85 hover:border-white/40"
             >
               Redo
-            </button>
-            <button type="button" onClick={() => setSelectedKey(null)} className="px-1 text-xs text-white/40" aria-label="Close">
-              ✕
-            </button>
-          </div>
+            </button>,
+          )}
         </div>
         {pics.length === 0 ? (
           <p className="text-[11px] text-white/40">No pictures kept for {char.name}. Redo makes a new set.</p>
@@ -1358,9 +1509,9 @@ export function CharacterRosterGrid({
                   const face = entry?.referenceUrl ?? c.thumbUrl;
                   const isSel = selectedKey === c.sourceKey;
                   if (simple) {
-                    // Only a ticked (or failed) face opens; the rest stay closed.
-                    const opens = entry?.status === "ready" || entry?.status === "failed";
-                    const toggle = () => setSelectedKey(isSel ? null : c.sourceKey);
+                    // Every face opens (name, rename, bin, ✕); a ticked one also shows its pictures.
+                    const trained = entry?.status === "ready";
+                    const toggle = () => (isSel ? closeSelected() : openCharacter(c.sourceKey));
                     return (
                       <div
                         key={c.sourceKey}
@@ -1373,10 +1524,9 @@ export function CharacterRosterGrid({
                         >
                           <button
                             type="button"
-                            onClick={opens ? toggle : undefined}
-                            className={`block h-full w-full ${opens ? "" : "cursor-default"}`}
-                            aria-label={opens ? `Show ${c.name}'s pictures` : c.name}
-                            tabIndex={opens ? 0 : -1}
+                            onClick={toggle}
+                            className="block h-full w-full"
+                            aria-label={trained ? `Show ${c.name}'s pictures` : `Open ${c.name}`}
                           >
                             {face ? (
                               // eslint-disable-next-line @next/next/no-img-element
@@ -1400,7 +1550,7 @@ export function CharacterRosterGrid({
                     <button
                       key={c.sourceKey}
                       type="button"
-                      onClick={() => setSelectedKey(isSel ? null : c.sourceKey)}
+                      onClick={() => (isSel ? closeSelected() : openCharacter(c.sourceKey))}
                       className={`flex min-w-0 flex-col items-center gap-1 rounded-lg p-1 text-left ${isSel ? "bg-sky-500/15" : ""}`}
                     >
                       <span

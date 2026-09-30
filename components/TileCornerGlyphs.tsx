@@ -58,8 +58,13 @@ export function DownloadGlyph() {
   );
 }
 
-/** Shape of a round corner button on a tile (`h-6 w-6`). Colour classes
+/** Shape of a round corner button on a tile (`h-6 w-6`), without the
+ * `absolute`, for the same button sitting in a row (the bin in an open
+ * character's panel). Colour classes
  * (normally `bg-black/50 text-white/80`) are added by the caller so a
  * state like "tap again to delete" can swap them cleanly. */
-export const TILE_CORNER_BUTTON_CLASS =
-  "absolute flex h-6 w-6 touch-manipulation items-center justify-center rounded-full backdrop-blur-sm transition-colors hover:text-white disabled:opacity-60";
+export const TILE_CORNER_BUTTON_SHAPE_CLASS =
+  "flex h-6 w-6 touch-manipulation items-center justify-center rounded-full backdrop-blur-sm transition-colors hover:text-white disabled:opacity-60";
+
+/** The same round button pinned to a tile corner (the caller adds `left-*`/`top-*`). */
+export const TILE_CORNER_BUTTON_CLASS = `absolute ${TILE_CORNER_BUTTON_SHAPE_CLASS}`;
