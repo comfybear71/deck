@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { parseDeckMediaTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
 import { putDeckMediaOrLegacy } from "@/lib/deckMediaPut";
 import { decodeDataUrl } from "@/lib/dataUrl";
-import { synthesizeSunnyBanksLine } from "@/lib/elevenLabsSpeech";
+import { stripElevenLabsAudioTags, synthesizeSunnyBanksLine } from "@/lib/elevenLabsSpeech";
 import { estimateMp3DurationSec } from "@/lib/mp3Slice";
 import { encodeSilentMp3, padMp3ToMinimumDurationSec } from "@/lib/silentMp3";
 import {
@@ -178,7 +178,8 @@ interface GenerateSpeakBeatRequestBody {
 
 /** `kind: "voice-test"` — the ▶ on a character's panel: speak one short
  * line with a voice id and hand back the audio. ElevenLabs only: no
- * picture, no Comfy, no Blob. */
+ * picture, no Comfy, no Blob. Same `synthesizeSunnyBanksLine` as a real
+ * Speak beat, so the ▶ hears the same model (Eleven v3, v2 fallback). */
 async function voiceTest(body: GenerateSpeakBeatRequestBody) {
   const voiceId = normalizeElevenLabsVoiceId(body.voiceId);
   const line = typeof body.line === "string" ? body.line.replace(/\s+/g, " ").trim().slice(0, VOICE_TEST_MAX_CHARS) : "";
@@ -194,6 +195,7 @@ async function voiceTest(body: GenerateSpeakBeatRequestBody) {
   }
   return NextResponse.json({
     audioDataUrl: `data:${speech.contentType};base64,${Buffer.from(speech.bytes).toString("base64")}`,
+    ttsModel: speech.modelId,
   });
 }
 
@@ -269,6 +271,9 @@ export async function POST(request: Request) {
   let audioContentType: string;
   let durationSec: number;
   let prompt: string;
+  /** Which ElevenLabs model spoke (Speak only): `eleven_v3`, or
+   * `eleven_multilingual_v2` when v3 refused and the tags were dropped. */
+  let ttsModel: string | undefined;
 
   if (kind === "hold") {
     audioBytes = encodeSilentMp3(SUNNY_BANKS_HOLD_DURATION_SEC);
@@ -302,6 +307,7 @@ export async function POST(request: Request) {
       );
     }
     audioContentType = speechOutcome.contentType;
+    ttsModel = speechOutcome.modelId;
     const rawDurationSec = estimateMp3DurationSec(speechOutcome.bytes);
     if (rawDurationSec <= 0) {
       return NextResponse.json(
@@ -337,7 +343,12 @@ export async function POST(request: Request) {
     // appearance change on frame 0, so the beat goes straight to the
     // new action place and starts talking. Duration is the real audio.
     durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, paddedDurationSec);
-    prompt = buildSunnyBanksSpeakingPrompt(character!, line);
+    // `line` went to ElevenLabs with its audio tags (`[whispers]`,
+    // `[pause]`, …) intact — Eleven v3 performs them. The picture prompt
+    // quotes only the words: the tag's delivery is already in the audio
+    // LTX lip-syncs to, and a quoted "[whispers]" is just noise to it.
+    // A tag-only line ("[laughs]") keeps its text so the quote isn't empty.
+    prompt = buildSunnyBanksSpeakingPrompt(character!, stripElevenLabsAudioTags(line) || line);
   }
 
   // `[Action:]` and the appearance modifier are extra LTX context after
@@ -377,6 +388,7 @@ export async function POST(request: Request) {
     startImageDataUrl: plateDataUrl,
     creds,
     mediaTarget: parseDeckMediaTarget(body.mediaTarget),
+    ttsModel,
   });
 }
 
@@ -395,6 +407,7 @@ async function runLtxAndPersist(args: {
   startImageDataUrl: string;
   creds: NonNullable<ReturnType<typeof resolveComfyCloudCredentials>>;
   mediaTarget: DeckMediaTarget | null;
+  ttsModel?: string;
 }) {
   const decodedImage = decodeDataUrl(args.startImageDataUrl);
   if (!decodedImage) {
@@ -480,6 +493,7 @@ async function runLtxAndPersist(args: {
       persisted: true,
       audioMuxed,
       ...(muxed.ok ? {} : { audioMuxError: muxed.message }),
+      ...(args.ttsModel ? { ttsModel: args.ttsModel } : {}),
     });
   } catch (err) {
     // Same "never throw away a render Stuart already paid for" rule as
@@ -494,6 +508,7 @@ async function runLtxAndPersist(args: {
       persistError: err instanceof Error ? err.message : "Vercel Blob upload failed for an unknown reason.",
       audioMuxed,
       ...(muxed.ok ? {} : { audioMuxError: muxed.message }),
+      ...(args.ttsModel ? { ttsModel: args.ttsModel } : {}),
     });
   }
 }

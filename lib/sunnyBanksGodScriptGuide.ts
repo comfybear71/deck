@@ -21,6 +21,16 @@
  * parser change that breaks the documented shape fails a test rather
  * than silently teaching the wrong format.
  *
+ * **Voice tags (2026-09-30).** Speech now goes through ElevenLabs'
+ * Eleven v3 (`lib/elevenLabsSpeech.ts`), which performs inline audio
+ * tags — `[whispers]`, `[laughs]`, `[short pause]` — instead of reading
+ * them out. So "anything else in brackets is spoken aloud" is no longer
+ * true *inside a spoken line*: the parser leaves those brackets in the
+ * line and v3 treats them as delivery. The three picture tags are
+ * unchanged. A voice tag on its own line, or in front of the `Name:`,
+ * is still a trap (it becomes a spoken row for the previous speaker),
+ * so the rules say "after the colon".
+ *
  * Not a validator and not a linter — this is documentation. Checking a
  * pasted script against these rules is a separate job nobody has asked
  * for yet.
@@ -66,12 +76,20 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
     ],
   },
   {
-    title: "There are exactly three tags",
+    title: "There are exactly three picture tags",
     body: [
-      "Anything else in square brackets is not a tag. It becomes dialogue and the character says those words out loud in a paid clip.",
-      "No [Outfit:], no [silence], no [beat], no [SFX]. Coloured = understood. White = it will be spoken.",
+      "[Location: …], [Character …] and [Action: …] change the picture. Each goes on its own line and is never spoken.",
+      "Don't invent more: no [Outfit:], no [SFX:], no [silence]. Coloured = a picture tag. White = the spoken line.",
     ],
     example: "[Location: office_storefront]\n[Character Shazza: holding a rusty tin]\n[Action: counts a stack of bills]",
+  },
+  {
+    title: "Voice tags go inside the line, after the colon",
+    body: [
+      "Any other [word] inside a spoken line tells the voice how to say it (ElevenLabs v3): [whispers], [laughs], [sighs], [shouts], [sarcastic], [excited], [short pause], [long pause]. It isn't read out.",
+      "Always after the Name: — a voice tag on its own line or before the name becomes its own clip. They stay white in the box. A voice that was never trained on a delivery may do it weakly.",
+    ],
+    example: "Shazza: oi, here we go, [short pause] [whispers] another bus load of suckers...",
   },
   {
     title: "Silence is an empty name",
@@ -137,7 +155,7 @@ export const SUNNY_BANKS_GOD_SCRIPT_EXAMPLE = [
   "Shazza:",
   "[Character Shazza: casual, sitting cross-legged on the floor behind the empty table, a massive pile of $50 notes spread out in front of her]",
   "Shazza: Are you bloody kidding me?! We made an absolute killing on this stuff!",
-  "Dazza: Yeah nah, told ya it'd work.",
+  "Dazza: [laughs] Yeah nah, told ya it'd work.",
 ].join("\n");
 
 /**
@@ -169,15 +187,24 @@ Follow these rules exactly. Do not improvise new syntax.
    with no line breaks becomes a single clip of the entire text read
    aloud.
 
-2. THERE ARE EXACTLY THREE BRACKET TAGS. Nothing else in square brackets
-   is understood:
+2. THERE ARE EXACTLY THREE PICTURE TAGS, each on its own line:
       [Location: <id>]
       [Character <Name>: <description>]
       [Action: <text>]
-   Any other bracketed text — [Outfit: ...], [silence], [beat], [SFX],
-   [pause], stage directions — is NOT a tag. It is treated as dialogue
-   and the character will literally say those words out loud in a paid
-   clip. Never invent a tag.
+   Never invent another picture tag — no [Outfit: ...], [SFX: ...],
+   [silence], [Scene: ...] or other stage directions on their own line.
+   Anything the parser doesn't recognise on its own line becomes
+   dialogue for the previous speaker and costs a paid clip.
+
+   VOICE TAGS are different: short delivery cues INSIDE a spoken line,
+   AFTER the "Name:", e.g.
+      Shazza: oi, here we go, [short pause] [whispers] another bus load of suckers...
+   The voice engine (ElevenLabs Eleven v3) performs them instead of
+   saying them. Good ones: [whispers], [laughs], [chuckles], [sighs],
+   [shouts], [sarcastic], [excited], [nervous], [short pause],
+   [long pause]. Use them sparingly, only for how the words sound —
+   never for movement, props or sound effects (that is [Action: ...]).
+   Never put a voice tag on its own line or before the name.
 
 3. A SPOKEN LINE is:      Name: dialogue goes here
    A SILENT HOLD is:      Name:
