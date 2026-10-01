@@ -103,12 +103,16 @@ const STYLE_LABELS: Record<CharacterTrainingStyle, string> = {
  * The Cast thumbnails on every genre screen (Sunnybank, Music video,
  * Skidmarks, Shorts), one size for all (Stuart, 2026-09-30: twice the old
  * size). Each face is 176px square (the old sideways-row face was 88px).
- * On a phone it's two across, shrinking to fit (about 162px on a 390px
- * iPhone, 155px on a 375px one); on a wider screen as many 176px faces
- * as fit, wrapping onto the next line.
+ *
+ * One sideways row (Stuart, 2026-10-01): the wrapping grid dropped the
+ * dotted + onto a second line on the left. Now the faces sit on one line
+ * that scrolls sideways (mouse, trackpad or a swipe), with the + last at
+ * the far right, the same as the LOCATIONS row. Every face keeps its
+ * 176px size on a phone too (184px tile with 4px padding each side).
  */
-export const CAST_GRID_CLASS = "grid grid-cols-2 gap-2 sm:grid-cols-[repeat(auto-fill,184px)]";
-export const CAST_TILE_CLASS = "mx-auto w-full min-w-0 max-w-[184px]";
+export const CAST_ROW_CLASS =
+  "flex touch-pan-x touch-pan-y items-start gap-3 overflow-x-auto pb-1 [scrollbar-width:thin]";
+export const CAST_ROW_TILE_CLASS = "w-[184px] shrink-0";
 
 const EMPTY_GROUP_TEXT: Record<RosterGroup, string> = {
   "music-video": "No characters yet. Add a band member, or tap + Add a character.",
@@ -1635,12 +1639,10 @@ export function CharacterRosterGrid({
         const list = g.id === "music-video" ? onlyBandCharacters(roster[g.id], bandMemberIds) : roster[g.id];
         const done = list.filter((c) => entryForRosterCharacter(characters, c.sourceKey)?.status === "ready").length;
         const plan = groupPlan(list);
-        // Sunny Banks and Shorts faces used to scroll sideways in one row
-        // (2026-09-30). The same day Stuart asked for every genre's Cast
-        // thumbnails at twice the size and identical, wrapping cleanly on an
-        // iPhone, so every genre now uses the same two-across grid
-        // (`CAST_TILE_CLASS`). The sideways-row code stays for a switch back.
-        const asRow = false;
+        // Every genre's Cast row (simple mode) is one sideways-scrolling
+        // line of 176px faces with the + last (2026-10-01, Stuart), like
+        // LOCATIONS. The full roster screen keeps its grid.
+        const asRow = simple;
         return (
           <div key={g.id}>
             <div className={simple ? "hidden" : "mb-2 flex items-center justify-between gap-2"}>
@@ -1690,11 +1692,7 @@ export function CharacterRosterGrid({
               <>
               <div
                 className={
-                  asRow
-                    ? "flex touch-pan-x touch-pan-y items-start gap-3 overflow-x-auto pb-1 [scrollbar-width:thin]"
-                    : simple
-                      ? CAST_GRID_CLASS
-                      : "grid grid-cols-4 gap-2 sm:grid-cols-6"
+                  asRow ? CAST_ROW_CLASS : "grid grid-cols-4 gap-2 sm:grid-cols-6"
                 }
               >
                 {list.map((c) => {
@@ -1708,7 +1706,7 @@ export function CharacterRosterGrid({
                     return (
                       <div
                         key={c.sourceKey}
-                        className={`flex flex-col items-center gap-1 rounded-lg p-1 ${asRow ? "w-24 shrink-0" : CAST_TILE_CLASS} ${isSel ? "bg-emerald-500/10" : ""}`}
+                        className={`flex flex-col items-center gap-1 rounded-lg p-1 ${CAST_ROW_TILE_CLASS} ${isSel ? "bg-emerald-500/10" : ""}`}
                       >
                         <span
                           className={`relative block aspect-square w-full overflow-hidden rounded-lg bg-white/5 ${
@@ -1766,7 +1764,7 @@ export function CharacterRosterGrid({
                 {/* Simple mode: a dotted "+" tile after the faces adds another person
                     (Stuart, 2026-09-29: just the faces and a + tile, nothing else). */}
                 {simple && (g.id !== "adult-shorts" || adultConfirmed) && (
-                  <div className={`flex flex-col items-center gap-1 p-1 ${asRow ? "w-24 shrink-0" : CAST_TILE_CLASS}`}>
+                  <div className={`flex flex-col items-center gap-1 p-1 ${CAST_ROW_TILE_CLASS}`}>
                     <button
                       type="button"
                       onClick={() => (newCast.openGroup === g.id ? closeAddCast() : openAddCast(g.id))}
