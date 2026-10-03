@@ -17,6 +17,7 @@
  */
 
 import { isSafeDeckMediaSlug } from "./deckMediaPaths";
+import { buildSpeakerListenerText, resolveShotCastPositions } from "./shotCast";
 
 export const ADULT_SHORTS_MAX_REFERENCES = 3;
 export const ADULT_SHORTS_MAX_SHOTS = 10;
@@ -726,13 +727,36 @@ export function buildAdultShortsTalkingPrompt(
   opts?: AdultShortsPromptOptions,
 ): string {
   const people = peopleOf(who);
-  const speaking = speakerName.trim()
-    ? `${speakerName.trim()} speaks to camera, lips in sync with the audio.${people.length > 1 ? " Everyone else listens." : ""}`
-    : "";
+  const speaker = speakerName.trim();
+  const speakerPerson = people.find((p) => sameAdultShortPerson(p.name, speaker));
+  // More than one person (2026-10-03): the shared speaker/listener text
+  // every genre uses (lib/shotCast.ts): the speaker is the only one
+  // talking, everyone else keeps their mouth closed. Looks are already in
+  // the Characters line, so only names and places go here. One person:
+  // unchanged.
+  const speaking = !speaker
+    ? ""
+    : people.length > 1 && speakerPerson
+      ? `${speaker} speaks to camera. ${shortsSpeakerListenerText(people, speakerPerson, shot.prompt)}`
+      : `${speaker} speaks to camera, lips in sync with the audio.${people.length > 1 ? " Everyone else listens." : ""}`;
   const locks = [characterLine(people), speaking, adultShortsAdultLock(people), identityLine(people), contentLock(opts)]
     .filter(Boolean)
     .join(" ");
   return withLocks(shot, locks);
+}
+
+function shortsSpeakerListenerText(people: readonly AdultShortsPerson[], speaker: AdultShortsPerson, shotPrompt: string): string {
+  const ordered = [speaker, ...people.filter((p) => p !== speaker)];
+  // A Shorts plate is already made, so only places the shot text names.
+  const positions = resolveShotCastPositions(
+    ordered.map((p) => ({ name: p.name.trim() })),
+    [shotPrompt],
+    { defaults: false },
+  );
+  return buildSpeakerListenerText(
+    { name: ordered[0].name.trim(), position: positions[0] },
+    ordered.slice(1).map((p, i) => ({ name: p.name.trim(), position: positions[i + 1] })),
+  );
 }
 
 /** "~$0.13/s", the talking-shot price as Sunnybank shows it (as long as the line). */
