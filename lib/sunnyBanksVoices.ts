@@ -27,6 +27,11 @@ import { normalizeRosterExtrasState } from "./rosterExtras";
 import type { SkidmarksState } from "./skidmarks";
 import { SUNNY_BANKS_CAST, getSunnyBanksCharacterLock, resolveSunnyBanksStartImage, type SunnyBanksCharacterLock } from "./sunnyBanks";
 
+/** The look an added character with no written look gets: "as in their
+ * picture". Fine inside the one-person gold prompt; the multi-cast text
+ * leaves it out ("STUIE, on the right, is the only one speaking"). */
+export const SUNNY_BANKS_PICTURE_LOOK = "as in their picture";
+
 interface CardVoice {
   name: string;
   voiceId: string;
@@ -155,7 +160,7 @@ export function resolveSunnyBanksSpeaker(name: string, state: SkidmarksState): S
   if (!card || !card.added) return undefined;
   return {
     name: card.name,
-    look: card.look.trim() || "as in their picture",
+    look: card.look.trim() || SUNNY_BANKS_PICTURE_LOOK,
     voiceId: card.voiceId,
     ...withPicture,
   };
@@ -243,7 +248,7 @@ export function resolveSpeakBeatCharacter(
   if (!sameCard || !voiceId) return undefined;
   return {
     name: sameCard.name,
-    look: sameCard.look || "as in their picture",
+    look: sameCard.look || SUNNY_BANKS_PICTURE_LOOK,
     voiceId,
     ...withPicture,
   };
@@ -292,7 +297,7 @@ export function sunnyBanksCastCards(state: SkidmarksState): SunnyBanksCastCard[]
     const voice = cardVoices(state).get(name.toLowerCase());
     out.push({
       name,
-      look: extra.look.trim() || "as in their picture",
+      look: extra.look.trim() || SUNNY_BANKS_PICTURE_LOOK,
       picture: sunnyBanksCastPictures(name, state).main ?? blobPicture(extra.pictureUrls[0]),
       speaks: Boolean(voice),
     });
