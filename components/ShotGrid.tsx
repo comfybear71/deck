@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { CastChips } from "@/components/CastChips";
 
 /**
  * The shared SHOT GRID (Stuart, 2026-09-30): every genre's shot list as
@@ -39,6 +40,8 @@ export interface ShotTileView {
   statusText?: string;
   /** The engine chip, e.g. `[SIRAY]`. */
   engine?: { label: string; title?: string } | null;
+  /** Who is in the shot when it's two or more people (2026-10-03): drawn as chips under the tile. */
+  cast?: { names: readonly string[]; missing?: readonly string[] } | null;
 }
 
 const STATUS_TEXT: Record<ShotTileStatus, string> = {
@@ -181,6 +184,9 @@ function ShotTile({
         )}
       </div>
       {tile.caption && <p className="truncate px-0.5 text-[11px] leading-tight text-white/60">{tile.caption}</p>}
+      {tile.cast && tile.cast.names.length > 1 && (
+        <CastChips names={tile.cast.names} missing={tile.cast.missing} className="px-0.5" />
+      )}
     </div>
   );
 }
