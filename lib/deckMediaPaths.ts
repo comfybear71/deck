@@ -388,3 +388,24 @@ export function sunnybankBeatTarget(args: {
   };
   return isDeckMediaTarget(target) ? target : null;
 }
+
+/** A multi-cast shot's shared picture (2026-10-03):
+ * `deck/sunnybank/episodes/the-big-wet/act-v/the-big-wet-act-v-beat-03-stuie-bloom-plate`.
+ * Named after the first row of the scene that made it and everyone in it,
+ * so the folder reads like Deck. No slug → `null` (the old flat path). */
+export function sunnybankPlateTarget(args: {
+  episodeSlug: string | null | undefined;
+  actId: string;
+  beatNumber: number;
+  castNames: readonly string[];
+}): DeckMediaTarget | null {
+  if (!isSafeDeckMediaSlug(args.episodeSlug)) return null;
+  const episode = args.episodeSlug;
+  const act = `act-${deckMediaSlug(args.actId, "1")}`;
+  const who = args.castNames.map((n) => deckMediaSlug(n, "")).filter(Boolean).join("-") || "cast";
+  const target = {
+    folder: `${deckProjectFolder("sunnybank", episode)}/${act}`,
+    name: `${episode}-${act}-beat-${twoDigits(args.beatNumber)}-${who}-plate`.slice(0, 120).replace(/-+$/g, ""),
+  };
+  return isDeckMediaTarget(target) ? target : null;
+}

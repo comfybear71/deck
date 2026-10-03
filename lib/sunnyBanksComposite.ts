@@ -24,6 +24,8 @@ import {
 } from "@/lib/sunnyBanks";
 import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
 import { isAllowedTrainingImageUrl } from "@/lib/characterLoras";
+import { XAI_EDIT_MAX_IMAGES } from "@/lib/shotCast";
+import { buildSunnyBanksMultiCastPlatePrompt, type SunnyBanksShotCastMember } from "@/lib/sunnyBanksShotCast";
 
 const XAI_IMAGE_MODEL_ENV_VAR = "XAI_IMAGE_MODEL";
 const XAI_EDITS_URL = "https://api.x.ai/v1/images/edits";
@@ -195,14 +197,16 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
 
   // Same two-image edits payload Studio's generateFaceImage sends
   // (`images: [{ url, type: "image_url" }, …]` — location then person).
+  return postXaiEdit(apiKey, prompt, [opts.locationDataUrl, pictureDataUrl]);
+}
+
+/** One xAI `/v1/images/edits` call: `images` in the order given, one picture back. */
+async function postXaiEdit(apiKey: string, prompt: string, imageDataUrls: readonly string[]): Promise<SunnyBanksCompositeOutcome> {
   const body: Record<string, unknown> = {
     model: resolveXaiImageModel(),
     prompt,
     response_format: "b64_json",
-    images: [
-      { url: opts.locationDataUrl, type: "image_url" },
-      { url: pictureDataUrl, type: "image_url" },
-    ],
+    images: imageDataUrls.map((url) => ({ url, type: "image_url" })),
   };
 
   let res: Response;
@@ -259,6 +263,65 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
     code: "no_image",
     error: "xAI Grok Imagine succeeded but returned no image data.",
   };
+}
+
+/**
+ * A shot with 2–4 Cast characters (2026-10-03, Stuart's multi-cast spec):
+ * ONE xAI edits call, the location first, then each person's Cast card
+ * main picture in cast order — at most five pictures, xAI's documented
+ * cap ("up to five source images", docs.x.ai Multi-Image Editing,
+ * checked 2026-10-03). The prompt is `buildSunnyBanksMultiCastPlatePrompt`:
+ * exactly N people, each picture labelled with its name and place, all
+ * mouths closed. Any person without a picture is refused before xAI is
+ * called (`missing_cast_picture`).
+ */
+export async function compositeSunnyBanksCastOntoLocation(opts: {
+  locationDataUrl: string;
+  people: readonly SunnyBanksShotCastMember[];
+  locationId?: string;
+  locationLabel?: string;
+  /** The talking row's speaker, or null on a silent row. */
+  speaker?: string | null;
+  /** Everyone who talks on this shared picture. */
+  sceneSpeakers?: readonly string[];
+  shotAction?: string;
+}): Promise<SunnyBanksCompositeOutcome> {
+  const people = opts.people.slice(0, XAI_EDIT_MAX_IMAGES - 1);
+  const missing = people.find((p) => !p.pictureUrl);
+  if (missing) {
+    return { ok: false, status: 400, code: "missing_cast_picture", error: missingCastPictureMessage(missing.name) };
+  }
+  const resolvedKey = resolveXaiApiKey();
+  if (!resolvedKey) {
+    return {
+      ok: false,
+      status: 501,
+      code: "missing_api_key",
+      error: missingXaiApiKeyMessage("Sunny Banks plating (xAI Grok Imagine)"),
+    };
+  }
+  const pictures: string[] = [];
+  for (const person of people) {
+    const dataUrl = await readSunnyBanksBlobPictureDataUrl(person.pictureUrl!);
+    if (!dataUrl) {
+      return {
+        ok: false,
+        status: 400,
+        code: "invalid_request",
+        error: `Could not load ${person.name}'s Cast card picture (${person.pictureUrl}).`,
+      };
+    }
+    pictures.push(dataUrl);
+  }
+  const location = resolveLocationLock(opts.locationId ?? "", opts.locationLabel);
+  const prompt = buildSunnyBanksMultiCastPlatePrompt({
+    people,
+    location,
+    speaker: opts.speaker,
+    sceneSpeakers: opts.sceneSpeakers,
+    shotAction: opts.shotAction,
+  });
+  return postXaiEdit(resolvedKey.key, prompt, [opts.locationDataUrl, ...pictures]);
 }
 
 /**
