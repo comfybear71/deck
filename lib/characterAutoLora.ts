@@ -18,6 +18,7 @@ import { sirayOriginalTarget, type DeckMediaTarget } from "./deckMediaPaths";
 import { uploadSkidmarksMemberPhoto } from "./memberPhotoBlob";
 import { resolvePlateReferenceDataUrl } from "./plateGeneration";
 import { readImageFileAsDataUrl } from "./skidmarks";
+import { deckBuildHeaders } from "./deckBuild";
 
 const TRAINING_PICTURE_MAX_DIMENSION = 1600;
 const SIRAY_STILL_ENDPOINT = "/api/skidmarks/generate-still-siray";
@@ -78,7 +79,7 @@ export async function makeSirayPicture(
   try {
     res = await fetch(SIRAY_STILL_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...deckBuildHeaders() },
       body: JSON.stringify({
         prompt,
         referenceImageDataUrls: referenceDataUrl ? [referenceDataUrl] : [],

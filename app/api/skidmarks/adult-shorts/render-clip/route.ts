@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { staleDeckPageResponse } from "@/lib/deckBuildServer";
 import { deckMediaStem, parseDeckMediaTarget, type DeckMediaExtension, type DeckMediaTarget } from "@/lib/deckMediaPaths";
 import { putDeckMediaOrLegacy } from "@/lib/deckMediaPut";
 import { decodeDataUrl } from "@/lib/dataUrl";
@@ -93,6 +94,8 @@ async function saveToBlob(
 }
 
 export async function POST(request: Request) {
+  const stalePage = staleDeckPageResponse(request);
+  if (stalePage) return stalePage;
   const creds = resolveSirayCredentials();
   if (!creds) {
     return NextResponse.json(

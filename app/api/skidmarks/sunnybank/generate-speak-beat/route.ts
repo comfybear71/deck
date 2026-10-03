@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { staleDeckPageResponse } from "@/lib/deckBuildServer";
 import {
   deckMediaSlug,
   extensionForImageContentType,
@@ -297,6 +298,10 @@ export async function POST(request: Request) {
   }
 
   if (body.kind === "voice-test") return voiceTest(body);
+  // A page opened before the last update sends the old request: refuse it
+  // before anything is billed (`lib/deckBuild.ts`, EP05 Act V 2026-10-03).
+  const stalePage = staleDeckPageResponse(request);
+  if (stalePage) return stalePage;
 
   const kind = parseBeatKind(body.kind);
   const characterName = typeof body.characterName === "string" ? body.characterName.trim() : "";

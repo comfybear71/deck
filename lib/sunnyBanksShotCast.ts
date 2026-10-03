@@ -35,7 +35,7 @@ import {
   type ShotCast,
 } from "./shotCast";
 import { SUNNY_BANKS_STYLE_LOCK, type SunnyBanksLocationLock } from "./sunnyBanks";
-import type { SunnyBanksCastCard } from "./sunnyBanksVoices";
+import { SUNNY_BANKS_PICTURE_LOOK, type SunnyBanksCastCard } from "./sunnyBanksVoices";
 
 /** One person in a multi-cast shot, as the panel sends it. */
 export interface SunnyBanksShotCastMember {
@@ -165,7 +165,10 @@ export function parseSunnyBanksShotCast(value: unknown, characterName: string): 
     const v = raw as Record<string, unknown>;
     const name = cleanText(v.name, 60);
     if (!name || out.some((m) => sameShotCastName(m.name, name))) continue;
-    const member: SunnyBanksShotCastMember = { name, look: cleanText(v.look, 600) };
+    // "as in their picture" (a card with no written look) says nothing
+    // the picture doesn't: left out of the multi-cast text (EP05 Act V).
+    const look = cleanText(v.look, 600);
+    const member: SunnyBanksShotCastMember = { name, look: look.toLowerCase() === SUNNY_BANKS_PICTURE_LOOK ? "" : look };
     const picture = blobPicture(v.pictureUrl);
     if (picture) member.pictureUrl = picture;
     const position = cleanText(v.position, 60);

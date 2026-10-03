@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { staleDeckPageResponse } from "@/lib/deckBuildServer";
 import { ADULT_SHORTS_LINE_MAX } from "@/lib/adultShorts";
 import { normalizeElevenLabsVoiceId } from "@/lib/characterLoras";
 import {
@@ -100,6 +101,8 @@ async function saveToBlob(
 }
 
 export async function POST(request: Request) {
+  const stalePage = staleDeckPageResponse(request);
+  if (stalePage) return stalePage;
   let body: Body;
   try {
     body = (await request.json()) as Body;

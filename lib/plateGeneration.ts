@@ -73,6 +73,7 @@ import {
   type SkidmarksMember,
   type SkidmarksModelId,
 } from "./skidmarks";
+import { deckBuildHeaders } from "./deckBuild";
 
 /**
  * Stuart's locked look for specific recurring band-member characters,
@@ -839,7 +840,7 @@ export async function generatePlateStill(
   try {
     res = await fetch(GENERATE_STILL_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...deckBuildHeaders() },
       body: JSON.stringify(request),
     });
   } catch (err) {
@@ -992,7 +993,7 @@ export async function generatePlateStillViaSiray(
         : [];
     res = await fetch(GENERATE_STILL_SIRAY_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...deckBuildHeaders() },
       body: JSON.stringify({ prompt, referenceImageDataUrls }),
     });
   } catch (err) {
