@@ -12,9 +12,11 @@ import {
   generatePlateStill,
   generatePlateStillViaSiray,
   getSkidmarksCharacterLock,
+  plateGenerationHoldsIdentity,
   resolvePlateReferenceDataUrl,
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
+import { NO_MUSIC_VIDEO_CAST, prepareMusicVideoExtraCast, resolveMusicVideoShotCast } from "@/lib/musicVideoShotCast";
 import { songPlateTargetFor } from "@/lib/deckMediaTargets";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import {
@@ -226,7 +228,7 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
           ? (previousGeneratedThisRun?.featuresLockedCharacter ?? previousPersistedStill?.featuresLockedCharacter)
           : undefined;
 
-        const request = buildPlateGenerationRequest({
+        const baseParams = {
           shotPrompt: target.shotPrompt,
           vocal,
           model: segment.model,
@@ -234,9 +236,28 @@ export function SkidmarksAutoPlate({ segments, band, songTitleHint, onSetClipPla
           vocalist,
           continuityStillDataUrl,
           continuityFeaturesLockedCharacter,
-        });
-        featuresLockedCharacter = request.featuresLockedCharacter;
-        outcome = await generatePlateStill(request);
+        };
+        // Multi-cast (2026-10-03): other members this shot names, through
+        // the same helper as every genre. A missing picture skips this
+        // plate before it's billed.
+        const prepared = await prepareMusicVideoExtraCast(
+          plateGenerationHoldsIdentity(baseParams)
+            ? resolveMusicVideoShotCast({ members: band.members, vocalist, shotPrompt: target.shotPrompt })
+            : NO_MUSIC_VIDEO_CAST,
+          resolvePlateReferenceDataUrl
+        );
+        if (!prepared.ok) {
+          outcome = { ok: false, unconfigured: false, message: prepared.message };
+        } else {
+          const request = buildPlateGenerationRequest({
+            ...baseParams,
+            ...(prepared.extraCast.length > 0
+              ? { extraCast: prepared.extraCast, vocalistPosition: prepared.vocalistPosition }
+              : {}),
+          });
+          featuresLockedCharacter = request.featuresLockedCharacter;
+          outcome = await generatePlateStill(request);
+        }
       }
 
       if (outcome.ok) {

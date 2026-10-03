@@ -139,6 +139,8 @@ interface SkidmarksClipRenderProps {
    * character's (Jack Ash today) hallmarks carry into the video prompt
    * the same way they already do for stills. */
   vocalist?: SkidmarksMember;
+  /** The band's members, for a multi-cast Vocal clip (2026-10-03, `lib/musicVideoShotCast.ts`). */
+  bandMembers?: readonly SkidmarksMember[];
   /** The attached song's own durable Blob URL — required on the Vocal
    * path (Comfy Cloud slices a real window of it server-side); Render
    * stays disabled with an honest reason until it's set. Unused on the
@@ -273,6 +275,7 @@ export function SkidmarksClipRender({
   instrumentalVideoModel,
   onSetInstrumentalVideoModel,
   vocalist,
+  bandMembers,
   mp3AudioUrl,
   locked,
   onRenderStart,
@@ -333,6 +336,7 @@ export function SkidmarksClipRender({
       vocal,
       instrumentalVideoModel,
       vocalist,
+      bandMembers,
       mp3AudioUrl,
       userNegativePrompt: negativePrompt,
     });
@@ -347,6 +351,7 @@ export function SkidmarksClipRender({
     vocal,
     instrumentalVideoModel,
     vocalist,
+    bandMembers,
     mp3AudioUrl,
   ]);
 
@@ -404,6 +409,7 @@ export function SkidmarksClipRender({
         vocal,
         instrumentalVideoModel,
         vocalist,
+        bandMembers,
         mp3AudioUrl,
         userNegativePrompt: negativePrompt,
         segmentId,

@@ -61,6 +61,13 @@
  */
 
 import {
+  castFramingLine,
+  castImageLabelLines,
+  exactlyPeopleLine,
+  SHOT_CAST_KEEP_APART_LINE,
+  XAI_EDIT_MAX_IMAGES,
+} from "./shotCast";
+import {
   isLipSyncModel,
   readImageFileAsDataUrl,
   type SkidmarksMember,
@@ -431,6 +438,15 @@ export interface BuildPlateGenerationRequestParams {
    * person without locking the place, which is where this feature was
    * before 2026-09-19. */
   locationStillDataUrl?: string;
+  /** Other band members in this plate besides the vocalist (2026-10-03,
+   * multi-cast shots), already resolved to `data:` URLs, in the order
+   * `resolveShotCast` (lib/shotCast.ts) picked them. Only used when the
+   * plate holds the vocalist's identity; the background, the vocalist and
+   * these never go past five pictures (xAI's edit cap). Empty or absent =
+   * the one-person plate, byte for byte as before. */
+  extraCast?: ReadonlyArray<{ name: string; avatarImage: string; position?: string }>;
+  /** Where the vocalist stands when others are in frame ("on the left"). */
+  vocalistPosition?: string;
 }
 
 /**
@@ -560,13 +576,21 @@ export function buildPlateGenerationRequest(
       : null;
   const backgroundDataUrl = continuityStillDataUrl ?? locationStillDataUrl;
 
-  const references: { role: "continuity" | "location" | "identity"; dataUrl: string }[] = [];
+  const references: { role: "continuity" | "location" | "identity" | "cast"; dataUrl: string }[] = [];
   if (backgroundRole && backgroundDataUrl) {
     references.push({ role: backgroundRole, dataUrl: backgroundDataUrl });
   }
   if (identityDataUrl) {
     references.push({ role: "identity", dataUrl: identityDataUrl });
   }
+  // Multi-cast (2026-10-03): the other people, after the vocalist, up to
+  // xAI's five-picture cap. Only alongside a held identity.
+  const extraCast = identityDataUrl
+    ? (params.extraCast ?? [])
+        .filter((p) => p.avatarImage && p.name.trim())
+        .slice(0, Math.max(0, XAI_EDIT_MAX_IMAGES - references.length))
+    : [];
+  for (const person of extraCast) references.push({ role: "cast", dataUrl: person.avatarImage });
 
   const tagPrefix = (index: number) => (references.length > 1 ? `<IMAGE_${index}> ` : "");
   const identityIndex = references.findIndex((ref) => ref.role === "identity");
@@ -576,7 +600,7 @@ export function buildPlateGenerationRequest(
         ? `<IMAGE_${identityIndex}>`
         : "the provided reference photo"
       : "";
-  const backgroundIndex = references.findIndex((ref) => ref.role !== "identity");
+  const backgroundIndex = references.findIndex((ref) => ref.role !== "identity" && ref.role !== "cast");
   const backgroundRef =
     backgroundIndex >= 0
       ? references.length > 1
@@ -639,21 +663,38 @@ export function buildPlateGenerationRequest(
               "notes below."
       );
     }
-    parts.push(
-      `${identityRef} is the person \u2014 same face identity, hair, age, build and skin tone as ${who} in that ` +
-        "photo. Do not turn them into a different person."
-    );
-    if (backgroundIndex >= 0) {
-      parts.push(`Place that same person from ${identityRef} into ${backgroundRef}.`);
+    if (extraCast.length > 0) {
+      // Several people (2026-10-03): the same shared lines every genre uses.
+      const people = [
+        { name: who, position: params.vocalistPosition },
+        ...extraCast.map((p) => ({ name: p.name.trim(), position: p.position })),
+      ];
+      const firstImage = identityIndex + 1;
+      parts.push(exactlyPeopleLine(people.map((p) => p.name)));
+      parts.push(...castImageLabelLines(people, firstImage));
+      parts.push(
+        backgroundIndex >= 0
+          ? `Place these ${people.length} people into ${backgroundRef}. ${SHOT_CAST_KEEP_APART_LINE}`
+          : SHOT_CAST_KEEP_APART_LINE
+      );
+      parts.push(castFramingLine({ speaker: vocal ? who : null }));
+    } else {
+      parts.push(
+        `${identityRef} is the person \u2014 same face identity, hair, age, build and skin tone as ${who} in that ` +
+          "photo. Do not turn them into a different person."
+      );
+      if (backgroundIndex >= 0) {
+        parts.push(`Place that same person from ${identityRef} into ${backgroundRef}.`);
+      }
+      parts.push(
+        `Keep the EXACT face, hair and wardrobe from ${identityRef}. Do not restyle their hair, do not change ` +
+          "their gender, do not blend them with anyone else described below."
+      );
+      parts.push(
+        "One person only. Only that person appears in frame \u2014 do not invent a second person, a backing singer, " +
+          "a passer-by, or an extra body in the distance. Never merge two people into one face."
+      );
     }
-    parts.push(
-      `Keep the EXACT face, hair and wardrobe from ${identityRef}. Do not restyle their hair, do not change ` +
-        "their gender, do not blend them with anyone else described below."
-    );
-    parts.push(
-      "One person only. Only that person appears in frame \u2014 do not invent a second person, a backing singer, " +
-        "a passer-by, or an extra body in the distance. Never merge two people into one face."
-    );
   } else {
     parts.push(shotPrompt.trim());
   }

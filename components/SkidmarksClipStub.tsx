@@ -37,7 +37,13 @@ import {
   shotPromptMentionsLockedCharacter,
 } from "@/lib/plateGeneration";
 import { SIRAY_SEEDREAM_45_COST_USD } from "@/lib/sirayClient";
-import { resolveLocationStill } from "@/lib/plateLocation";
+import { CastChips } from "@/components/CastChips";
+import {
+  musicVideoMissingPictureMessage,
+  prepareMusicVideoExtraCast,
+  resolveMusicVideoShotCast,
+} from "@/lib/musicVideoShotCast";
+import { resolveLocationStill, savedLocationFor } from "@/lib/plateLocation";
 import {
   computeLtxPlateDurationSec,
   computePlateDurationSec,
@@ -544,6 +550,9 @@ interface SkidmarksPlateBoxProps {
   bandName: string;
   bandId: string;
   vocalist?: SkidmarksMember;
+  /** The band's members: the Cast cards a multi-cast plate picks from
+   * (2026-10-03, `lib/musicVideoShotCast.ts`). */
+  bandMembers?: readonly SkidmarksMember[];
   /** Only true for an *empty* slot when the clip has more than one —
    * removing a slot that already holds a real still is a separate,
    * more deliberate two-step (clear it first via the existing ×/
@@ -693,6 +702,7 @@ function SkidmarksPlateBox({
   bandName,
   bandId,
   vocalist,
+  bandMembers,
   canRemove,
   onSetStill,
   onRemove,
@@ -860,9 +870,26 @@ function SkidmarksPlateBox({
       setError("Add a shot prompt first \u2014 Generate needs something to go on.");
       return;
     }
+    // A location ticked "People already in this picture" (2026-10-03):
+    // the shot's [Location: …] picture is the plate as it is. Free.
+    const premade = savedLocationFor(trimmedPrompt);
+    if (premade?.peopleInPicture && premade.pictureUrl) {
+      setError(null);
+      onSetStill({ dataUrl: premade.pictureUrl, source: "library", createdAt: Date.now() });
+      flushSkidmarksSessionNow();
+      closeMenu();
+      return;
+    }
     setGenerating(true);
     setError(null);
     try {
+      // Multi-cast (2026-10-03): everyone this plate holds besides the
+      // vocalist. A missing picture refuses before anything is billed.
+      const shotCast = resolveMusicVideoShotCast({ members: bandMembers ?? [], vocalist, shotPrompt: trimmedPrompt });
+      if (shotCast.cast.isMulti && shotCast.cast.missingPicture.length > 0) {
+        setError(musicVideoMissingPictureMessage(shotCast.cast.missingPicture));
+        return;
+      }
       // A resolved vocalist's `avatarImage` may be a relative asset path
       // (the seeded Jack Ash reference photo — see `SEED_BANDS` in
       // `lib/skidmarks.ts`) rather than an already-a-`data:` URL upload;
@@ -929,7 +956,16 @@ function SkidmarksPlateBox({
         setBusyLabel("Generating\u2026");
       }
 
-      const request = buildPlateGenerationRequest({ ...requestParams, locationStillDataUrl });
+      let extra: { extraCast?: Array<{ name: string; avatarImage: string; position?: string }>; vocalistPosition?: string } = {};
+      if (shotCast.cast.isMulti && plateGenerationHoldsIdentity({ ...requestParams, locationStillDataUrl })) {
+        const prepared = await prepareMusicVideoExtraCast(shotCast, resolvePlateReferenceDataUrl);
+        if (!prepared.ok) {
+          setError(prepared.message);
+          return;
+        }
+        extra = { extraCast: prepared.extraCast, vocalistPosition: prepared.vocalistPosition };
+      }
+      const request = buildPlateGenerationRequest({ ...requestParams, locationStillDataUrl, ...extra });
 
       const outcome = await generatePlateStill(request);
       if (outcome.ok) {
@@ -1426,6 +1462,8 @@ export function SkidmarksClipStub({
   // Instrumental clip that never names a locked character still never
   // auto-features/locks anyone, so resolving this here is harmless.
   const vocalist = resolveVocalistForPrompt(band.members);
+  // Who this clip's plates hold (2026-10-03): chips under the shot prompt.
+  const shotCast = resolveMusicVideoShotCast({ members: band.members, vocalist, shotPrompt: segment.shotPrompt });
   const canAddPlate = segment.plates.length < MAX_PLATES_PER_CLIP;
 
   // The per-plate select rework's own resolution — see
@@ -1472,6 +1510,7 @@ export function SkidmarksClipStub({
             bandName={band.name}
             bandId={band.id}
             vocalist={vocalist}
+            bandMembers={band.members}
             canRemove={segment.plates.length > 1}
             onSetStill={(still) => onSetPlateStill(plate.id, still)}
             onRemove={() => onRemovePlate(plate.id)}
@@ -1502,6 +1541,9 @@ export function SkidmarksClipStub({
         aria-label="Shot prompt"
         className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] leading-relaxed text-white placeholder:text-white/30 focus:border-rose-400/40 focus:outline-none"
       />
+      {shotCast.cast.isMulti && (
+        <CastChips names={shotCast.cast.names} missing={shotCast.cast.missingPicture} />
+      )}
 
       <textarea
         value={segment.negativePrompt}
@@ -1537,6 +1579,7 @@ export function SkidmarksClipStub({
           instrumentalVideoModel={instrumentalVideoModel}
           onSetInstrumentalVideoModel={onSetClipInstrumentalModel}
           vocalist={vocalist}
+          bandMembers={band.members}
           mp3AudioUrl={mp3AudioUrl}
           locked={renderLocked}
           onRenderStart={onRenderStart}
