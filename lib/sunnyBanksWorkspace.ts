@@ -48,6 +48,12 @@ export interface SunnyBanksRowRuntime {
   /** The engine that made this clip (2026-09-30). Missing on clips made
    * before then, which were all LTX. */
   videoBackend?: RowVideoBackend;
+  /** A multi-cast shot's shared picture (2026-10-03): Deck Blob https
+   * only. Kept even when the video failed, so a retry (and the scene's
+   * other lines) reuse it instead of paying xAI again. */
+  plateUrl?: string;
+  /** Who was in that shot ("Stuie", "Bloom"), for the row's chips. */
+  castNames?: string[];
 }
 
 export interface SunnyBanksLiveState {
@@ -366,6 +372,17 @@ function normalizeRowRuntime(value: unknown): SunnyBanksRowRuntime | null {
   if (typeof v.line === "string") row.line = v.line;
   const videoBackend = parseRowVideoBackend(v.videoBackend);
   if (videoBackend) row.videoBackend = videoBackend;
+  if (typeof v.plateUrl === "string" && /^https:\/\/[^\s]+$/i.test(v.plateUrl) && v.plateUrl.length <= 1000) {
+    row.plateUrl = v.plateUrl;
+  }
+  if (Array.isArray(v.castNames)) {
+    const names = v.castNames
+      .filter((n): n is string => typeof n === "string")
+      .map((n) => n.replace(/\s+/g, " ").trim().slice(0, 60))
+      .filter(Boolean)
+      .slice(0, 4);
+    if (names.length > 1) row.castNames = names;
+  }
   return row;
 }
 

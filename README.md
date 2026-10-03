@@ -2620,6 +2620,42 @@ now (see "Explicitly out of scope" below).
   (`transcriptionStatus === "sparse"`) on a track where the configured
   provider's real output doesn't map to enough singing to trust.
 
+- **Multi-cast shots (2026-10-03, every genre)** — one shot can hold
+  1–4 Cast characters, each matched to their own Cast card picture,
+  silent or talking. One shared helper, `lib/shotCast.ts`
+  (`resolveShotCast`), decides who is in a shot for Sunnybank, Music
+  video and Shorts alike: an explicit `[Cast: A, B]` tag (Shorts: the
+  shot's own picks), then the speaker, then any `[Character X: …]` look
+  for another Cast card, then whole-word Cast names in the shot's
+  `[Action: …]` text, then the other speakers of the same scene.
+  Matching ignores capitals and spacing (`STUIE` = `Stuie`); names in
+  the spoken words never add anyone; deduped, capped at 4, main
+  picture only. Anyone picked with no picture refuses the row before
+  anything is billed (`missing_cast_picture`).
+  - **Plate:** one xAI `/v1/images/edits` call — the place first, then
+    one picture per person (xAI allows up to five images per edit:
+    docs.x.ai "Multi-image editing", checked 2026-10-03). The prompt
+    says "Exactly N people", labels each picture, closes every mouth,
+    and frames a lone talker nearer and larger. One-person shots send
+    exactly the same request as before.
+  - **Sunnybank:** talking lines straight under one `[Action:]`/`[Cast:]`
+    with no tag between them form a scene. The first line makes the
+    shared plate (saved to Blob as `…-beat-NN-stuie-bloom-plate`), the
+    rest reuse it (`scenePlateUrl`), and on LTX each line appends
+    Stuart's speaker/listener text to the gold speak prompt. Silent rows
+    append "everyone animates, mouths closed" to the gold hold prompt.
+    Engines unchanged: one start image into Grok 720p / H3 / LTX.
+  - **Music video:** plates send the other members after the vocalist
+    (`extraCast`), `MAX_REFERENCE_IMAGES` is 5, and Vocal clips get the
+    listener text.
+  - **Shorts:** the shot picker feeds the same helper; talking shots
+    with several people use the same speaker/listener text.
+  - **Locations:** "People already in this picture — don't add Cast"
+    (`DeckLocation.peopleInPicture`) uses a pre-made plate as it is.
+  - **UI:** small cast chips ("Stuie + Bloom", `components/CastChips.tsx`)
+    on Sunnybank rows, Music video clips and Shorts tiles. The Cheat
+    Sheet (`lib/sunnyBanksGodScriptGuide.ts`) teaches the tags.
+
 ### Ask Grok + action chips (v0 stub)
 
 The Propfolio detail sheet also ships an **action chips row** and an

@@ -37,13 +37,17 @@ import { findSunnyBanksLocation, sunnyBanksLocationList, sunnyBanksLocationProbl
 import { runSunnyBanksRenderQueue, sunnyBanksStoppedText } from "@/lib/sunnyBanksRenderQueue";
 import { downloadSunnyBanksActZip } from "@/lib/sunnyBanksClipsZip";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
+import { parseCastTagNames, sameShotCastName } from "@/lib/shotCast";
 import {
   resolveSunnyBanksSpeaker,
+  sunnyBanksCastCards,
   sunnyBanksSpeakerList,
   sunnyBanksSpeakerNames,
   sunnyBanksSpeakerRequestExtras,
 } from "@/lib/sunnyBanksVoices";
-import { sunnybankBeatTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
+import { sunnybankBeatTarget, sunnybankPlateTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
+import { resolveSunnyBanksRowCast, sunnyBanksMultiCastRequest } from "@/lib/sunnyBanksShotCast";
+import { CastChips } from "@/components/CastChips";
 import { setSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
 import {
   buildSunnyBanksGodScriptPrompt,
@@ -279,6 +283,22 @@ export interface SunnyBanksScriptChunk {
    * above it (2026-09-30): overrides which engine renders the row. Never
    * part of `raw`, `line` or TTS. */
   videoBackend?: RowVideoBackend;
+  /** `[Cast: A, B]` above this row or its scene (2026-10-03): exactly
+   * who is in the shot. Names as typed; matched to Cast cards later. */
+  castNames?: string[];
+  /** `[Character Other: …]` looks for Cast cards other than this row's
+   * own character (2026-10-03). Each look stays with its own person:
+   * it never lands on the speaker any more. */
+  castLooks?: Array<{ name: string; look: string }>;
+  /** Set only on the lines of a multi-line scene (2026-10-03): two or
+   * more talking lines in a row under one `[Action:]` or `[Cast:]`
+   * block, with no tag between them. They share one picture. */
+  sceneKey?: string;
+  /** The scene block's `[Action: …]`, for who's in it and the shared
+   * picture (the first line still uses it as its motion text). */
+  sceneAction?: string;
+  /** Everyone who has a line in the scene, in order. */
+  sceneSpeakers?: string[];
 }
 
 /** Speak/Hold rows only — scene headers stay in the parse array but
@@ -310,6 +330,9 @@ interface GenerateBeatResponseBody {
   audioMuxed?: unknown;
   audioMuxError?: unknown;
   videoBackend?: unknown;
+  /** Multi-cast shots (2026-10-03): the shared picture and who's in it. */
+  plateUrl?: unknown;
+  castNames?: unknown;
 }
 
 type RowRuntime = SunnyBanksRowRuntime;
@@ -339,6 +362,8 @@ export interface SunnyBanksRenderedClip {
   durationSec?: number;
   /** The engine that made it (clips from before 2026-09-30 were all LTX). */
   videoBackend?: RowVideoBackend;
+  /** Who was in a multi-cast shot (2026-10-03), for the tile's chips. */
+  castNames?: string[];
 }
 
 const FALLBACK_CHARACTER_NAME = CAST_LIST[0]?.name ?? "";
@@ -447,17 +472,40 @@ function unknownLocationKey(token: string): SunnyBanksLocationId | undefined {
   return t ? deckLocationKeyFromName(t) : undefined;
 }
 
-function parseCharacterLookTag(inner: string): string {
+/** Every Sunnybank Cast card (voice or not), for `[Character Name: …]`
+ *  and `[Cast: …]` names (2026-10-03). */
+function castCards() {
+  return sunnyBanksCastCards(getSkidmarksSnapshot());
+}
+
+/**
+ * `[Character Bloom: long blond man-bun…]` → `{ name: "Bloom", look: "long
+ * blond man-bun…" }`. Before 2026-10-03 the name was thrown away, so
+ * another character's look landed on the row's speaker (Bloom's man-bun
+ * on Ranger Bazza). `name` is the name as typed (`null` when the tag has
+ * none); the block parser decides whose look it is.
+ */
+export function parseCharacterLookTag(inner: string): { name: string | null; look: string } {
   const trimmed = inner.replace(/\s+/g, " ").trim();
-  if (!trimmed) return "";
+  if (!trimmed) return { name: null, look: "" };
   const colon = trimmed.match(/^([^:]+):\s*(.*)$/);
-  if (colon) return (colon[2] ?? "").replace(/\s+/g, " ").trim();
-  for (const name of speakerNames()) {
+  if (colon) {
+    const name = colon[1].replace(/\s+/g, " ").trim();
+    return { name: name || null, look: (colon[2] ?? "").replace(/\s+/g, " ").trim() };
+  }
+  const names = [...new Set([...speakerNames(), ...castCards().map((c) => c.name)])].sort((a, b) => b.length - a.length);
+  for (const name of names) {
     const re = new RegExp(`^${escapeRegExp(name)}\\s+(.*)$`, "i");
     const match = trimmed.match(re);
-    if (match) return (match[1] ?? "").replace(/\s+/g, " ").trim();
+    if (match) return { name, look: (match[1] ?? "").replace(/\s+/g, " ").trim() };
   }
-  return trimmed;
+  return { name: null, look: trimmed };
+}
+
+/** The Cast card a typed name means (any case), or `null`. */
+function castCardName(typed: string | null): string | null {
+  if (!typed) return null;
+  return castCards().find((c) => sameShotCastName(c.name, typed))?.name ?? null;
 }
 
 /** `Crowd:` (or any empty `Name:` that is not a CAST key) is a
@@ -494,12 +542,16 @@ function extractGodScriptTags(raw: string): {
   rest: string;
   locationId?: SunnyBanksLocationId;
   actions: string[];
-  appearanceModifiers: string[];
+  /** Every `[Character …]` look, each with the name it was typed with. */
+  looks: Array<{ name: string | null; look: string }>;
+  /** `[Cast: A, B]` names (2026-10-03). */
+  castNames: string[];
   videoBackend?: RowVideoBackend;
 } {
   let locationId: SunnyBanksLocationId | undefined;
   const actions: string[] = [];
-  const appearanceModifiers: string[] = [];
+  const looks: Array<{ name: string | null; look: string }> = [];
+  const castNames: string[] = [];
   const backend = extractVideoBackendOverride(raw);
   const rest = backend.rest
     .replace(/\[Location:\s*([^\]]*)\]/gi, (_, token: string) => {
@@ -513,15 +565,44 @@ function extractGodScriptTags(raw: string): {
       return " ";
     })
     .replace(/\[Character\s+([^\]]*)\]/gi, (_, inner: string) => {
-      const appearance = parseCharacterLookTag(inner);
-      if (appearance) appearanceModifiers.push(appearance);
+      const look = parseCharacterLookTag(inner);
+      if (look.look) looks.push(look);
+      return " ";
+    })
+    .replace(/\[Cast:\s*([^\]]*)\]/gi, (_, inner: string) => {
+      castNames.push(...parseCastTagNames(inner));
       return " ";
     })
     .replace(/\s+/g, " ")
     .trim();
   return backend.override
-    ? { rest, locationId, actions, appearanceModifiers, videoBackend: backend.override }
-    : { rest, locationId, actions, appearanceModifiers };
+    ? { rest, locationId, actions, looks, castNames, videoBackend: backend.override }
+    : { rest, locationId, actions, looks, castNames };
+}
+
+/**
+ * Splits a block's `[Character …]` looks for one row (2026-10-03): the
+ * row's own look (no name, its own name, or a name that isn't a Cast
+ * card: exactly what `appearanceModifier` got before) and looks for other
+ * Cast cards, which stay with their own person.
+ */
+function splitLooksForRow(
+  looks: ReadonlyArray<{ name: string | null; look: string }>,
+  characterName: string
+): { own: string[]; others: Array<{ name: string; look: string }> } {
+  const own: string[] = [];
+  const others: Array<{ name: string; look: string }> = [];
+  for (const entry of looks) {
+    const card = castCardName(entry.name);
+    if (!card || sameShotCastName(card, characterName)) {
+      own.push(entry.look);
+      continue;
+    }
+    const existing = others.find((o) => sameShotCastName(o.name, card));
+    if (existing) existing.look = `${existing.look} ${entry.look}`.trim();
+    else others.push({ name: card, look: entry.look });
+  }
+  return { own, others };
 }
 
 /** Highlight category for one bracket tag in the raw God Script text —
@@ -548,7 +629,7 @@ export type SunnyBanksHighlightSegment =
  * explicit ask — `[silence]` is not a real parsed tag (see doc comment
  * above), only a display-only alias colored the same as `[Action: ]`. */
 const GOD_SCRIPT_HIGHLIGHT_TAG_RE = new RegExp(
-  String.raw`\[Location:[^\]]*\]|\[Character\b[^\]]*\]|\[Action:[^\]]*\]|\[silence\]|` + VIDEO_BACKEND_OVERRIDE_TAG_SOURCE,
+  String.raw`\[Location:[^\]]*\]|\[Character\b[^\]]*\]|\[Cast:[^\]]*\]|\[Action:[^\]]*\]|\[silence\]|` + VIDEO_BACKEND_OVERRIDE_TAG_SOURCE,
   "gi"
 );
 const VIDEO_BACKEND_TAG_EXACT_RE = new RegExp(`^${VIDEO_BACKEND_OVERRIDE_TAG_SOURCE}$`, "i");
@@ -557,7 +638,8 @@ function classifySunnyBanksHighlightTag(matchedText: string): SunnyBanksHighligh
   if (VIDEO_BACKEND_TAG_EXACT_RE.test(matchedText)) return "backend";
   const lower = matchedText.toLowerCase();
   if (lower.startsWith("[location:")) return "location";
-  if (lower.startsWith("[character")) return "character";
+  // `[Cast: A, B]` (2026-10-03) is about people, so it's the character colour.
+  if (lower.startsWith("[character") || lower.startsWith("[cast:")) return "character";
   return "action";
 }
 
@@ -984,8 +1066,25 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
   let currentLocation: SunnyBanksLocationId = SUNNY_BANKS_DEFAULT_LOCATION_ID;
   let taggedLocation: SunnyBanksLocationId | undefined;
   let pendingActions: string[] = [];
-  let pendingAppearance: string[] = [];
+  let pendingLooks: Array<{ name: string | null; look: string }> = [];
+  let pendingCast: string[] = [];
   let pendingBackend: RowVideoBackend | undefined;
+  // Scenes (2026-10-03): a tag block, then the rows under it until the
+  // next tag line or scene header. Only a block with [Action:] or
+  // [Cast:] and two or more talking rows becomes a shared-picture scene.
+  interface SceneBlock {
+    actions: string[];
+    cast: string[];
+    looks: Array<{ name: string | null; look: string }>;
+    rows: SunnyBanksScriptChunk[];
+    ghost: boolean;
+  }
+  const blocks: SceneBlock[] = [];
+  let block: SceneBlock = { actions: [], cast: [], looks: [], rows: [], ghost: false };
+  const startBlock = () => {
+    if (block.rows.length > 0) blocks.push(block);
+    if (block.rows.length > 0 || block.ghost) block = { actions: [], cast: [], looks: [], rows: [], ghost: false };
+  };
   const rawLines = text.split(/\r?\n/);
   for (let sourceLineIndex = 0; sourceLineIndex < rawLines.length; sourceLineIndex += 1) {
     const rawLine = rawLines[sourceLineIndex];
@@ -994,6 +1093,8 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     if (parseSunnyBanksEpisodeHeader(raw) || parseSunnyBanksActHeader(raw) || isSunnyBanksMarkdownHeading(raw)) continue;
     const sceneLabel = parseSunnyBanksSceneHeader(raw);
     if (sceneLabel) {
+      startBlock();
+      block = { actions: [], cast: [], looks: [], rows: [], ghost: false };
       chunks.push({
         raw,
         characterName: "",
@@ -1005,22 +1106,32 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       continue;
     }
     const tagged = extractGodScriptTags(raw);
+    const hasSceneTag =
+      Boolean(tagged.locationId) || tagged.actions.length > 0 || tagged.looks.length > 0 || tagged.castNames.length > 0;
+    if (hasSceneTag) {
+      startBlock();
+      block.actions.push(...tagged.actions);
+      block.cast.push(...tagged.castNames);
+      block.looks.push(...tagged.looks);
+    }
     if (tagged.locationId) {
       currentLocation = tagged.locationId;
       taggedLocation = tagged.locationId;
     }
     if (tagged.actions.length > 0) pendingActions = [...pendingActions, ...tagged.actions];
-    if (tagged.appearanceModifiers.length > 0) {
-      pendingAppearance = [...pendingAppearance, ...tagged.appearanceModifiers];
-    }
+    if (tagged.looks.length > 0) pendingLooks = [...pendingLooks, ...tagged.looks];
+    if (tagged.castNames.length > 0) pendingCast = [...pendingCast, ...tagged.castNames];
     if (tagged.videoBackend) pendingBackend = tagged.videoBackend;
     if (!tagged.rest) continue;
     const ghostName = parseSunnyBanksGhostTargetName(tagged.rest);
     if (ghostName) {
       const action = pendingActions.join(" ").trim();
       pendingActions = [];
-      const appearanceModifier = pendingAppearance.join(" ").trim();
-      pendingAppearance = [];
+      // A cutaway never has cast: every look stays its old merged text.
+      const appearanceModifier = pendingLooks.map((l) => l.look).join(" ").trim();
+      pendingLooks = [];
+      pendingCast = [];
+      block.ghost = true;
       const chunk: SunnyBanksScriptChunk = {
         raw: tagged.rest,
         characterName: ghostName,
@@ -1051,8 +1162,11 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     }
     const action = pendingActions.join(" ").trim();
     pendingActions = [];
-    const appearanceModifier = pendingAppearance.join(" ").trim();
-    pendingAppearance = [];
+    const looks = splitLooksForRow(pendingLooks, characterName);
+    pendingLooks = [];
+    const appearanceModifier = looks.own.join(" ").trim();
+    const castNames = pendingCast;
+    pendingCast = [];
     const chunk: SunnyBanksScriptChunk = {
       raw: tagged.rest,
       characterName,
@@ -1063,12 +1177,54 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     };
     if (action) chunk.action = action;
     if (appearanceModifier) chunk.appearanceModifier = appearanceModifier;
+    if (castNames.length > 0) chunk.castNames = castNames;
+    if (looks.others.length > 0) chunk.castLooks = looks.others;
     if (taggedLocation) chunk.locationTag = taggedLocation;
     if (pendingBackend) chunk.videoBackend = pendingBackend;
     pendingBackend = undefined;
     chunks.push(chunk);
+    block.rows.push(chunk);
+    // Inline tags on the speaker's own line end its block there.
+    if (hasSceneTag) startBlock();
   }
+  startBlock();
+  for (const scene of blocks) markSunnyBanksScene(scene);
   return chunks;
+}
+
+/**
+ * Two or more talking lines in a row under one `[Action:]` / `[Cast:]`
+ * block, with no tag between them, are one scene (2026-10-03): they
+ * share one picture, and each line's cast includes everyone with a line
+ * in it. Anything else (one row, a silent hold or a Crowd cutaway in
+ * the run, no Action/Cast tag) is left exactly as before.
+ */
+function markSunnyBanksScene(scene: {
+  actions: string[];
+  cast: string[];
+  looks: Array<{ name: string | null; look: string }>;
+  rows: SunnyBanksScriptChunk[];
+  ghost: boolean;
+}): void {
+  if (scene.ghost || scene.rows.length < 2) return;
+  if (scene.actions.length === 0 && scene.cast.length === 0) return;
+  if (scene.rows.some((row) => row.kind !== "speak")) return;
+  const first = scene.rows[0];
+  const sceneKey = `scene-${first.sourceLineIndex}`;
+  const sceneAction = scene.actions.join(" ").trim();
+  const sceneSpeakers = scene.rows
+    .map((row) => row.characterName)
+    .filter((name, i, all) => all.findIndex((n) => sameShotCastName(n, name)) === i);
+  for (const row of scene.rows) {
+    row.sceneKey = sceneKey;
+    if (sceneAction) row.sceneAction = sceneAction;
+    row.sceneSpeakers = sceneSpeakers;
+    if (scene.cast.length > 0 && !row.castNames) row.castNames = [...scene.cast];
+    if (row !== first && !row.castLooks) {
+      const others = splitLooksForRow(scene.looks, row.characterName).others;
+      if (others.length > 0) row.castLooks = others;
+    }
+  }
 }
 
 /** Empty `Name:` Hold — the inserted shot between two existing clips. */
@@ -1305,6 +1461,7 @@ export function collectRenderedClips(args: {
         videoUrl: stored.videoUrl,
         durationSec: stored.durationSec,
         ...(stored.videoBackend ? { videoBackend: stored.videoBackend } : {}),
+        ...(stored.castNames && stored.castNames.length > 1 ? { castNames: stored.castNames } : {}),
       });
     });
   }
@@ -1896,6 +2053,7 @@ export function SkidmarksSunnyBanksPanel() {
 
   // The Locations row's list (or the built-ins until it has one).
   const locations = sunnyBanksLocationList(studioState.locations);
+  const castCardList = sunnyBanksCastCards(studioState);
   const queue = sunnyBanksQueueChunks(parsed).map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
     const locationId = resolveSunnyBanksRowLocationId(chunk, locationOverrides[index], locationPickTags[index], defaultLocationId);
@@ -1916,8 +2074,55 @@ export function SkidmarksSunnyBanksPanel() {
       override: chunk.videoBackend,
       silentDefault: silentShotBackend,
     });
-    return { chunk, index, characterName, character, location, locationProblem, line, kind: chunk.kind, backendChoice };
+    // Who's in the shot (2026-10-03): the shared helper, same as every genre.
+    const rowCast = resolveSunnyBanksRowCast(
+      {
+        kind: chunk.kind,
+        characterName,
+        cutaway: chunk.kind === "hold" && !character,
+        action: chunk.action,
+        sceneAction: chunk.sceneAction,
+        castNames: chunk.castNames,
+        castLooks: chunk.castLooks,
+        sceneSpeakers: chunk.sceneSpeakers,
+        appearanceModifier: chunk.appearanceModifier,
+      },
+      castCardList
+    );
+    return { chunk, index, characterName, character, location, locationProblem, line, kind: chunk.kind, backendChoice, rowCast };
   });
+  type QueueRow = (typeof queue)[number];
+  /** A scene's shared picture already made (a row in it kept its `plateUrl`). */
+  // Only a picture made with these same people counts: change who's in
+  // the shot and a new picture is made.
+  const plateFor = (row: QueueRow, from: QueueRow): string | undefined => {
+    const runtime = runtimeFor(from.index, from.chunk.raw);
+    const names = row.rowCast.cast.names;
+    const same =
+      runtime.castNames?.length === names.length &&
+      runtime.castNames.every((n) => names.some((m) => sameShotCastName(m, n)));
+    return same ? runtime.plateUrl : undefined;
+  };
+  const savedScenePlate = (row: QueueRow): string | undefined => {
+    if (!row.rowCast.cast.isMulti) return undefined;
+    if (!row.chunk.sceneKey) return plateFor(row, row);
+    for (const other of queue) {
+      if (other.chunk.sceneKey !== row.chunk.sceneKey) continue;
+      const url = plateFor(row, other);
+      if (url) return url;
+    }
+    return undefined;
+  };
+  /** Pictures this row still needs before it can render (one person or several). */
+  const rowMissingPictures = (row: QueueRow): string[] => {
+    if (row.location.peopleInPicture) return [];
+    if (row.rowCast.cast.isMulti) {
+      if (savedScenePlate(row)) return [];
+      return row.rowCast.cast.missingPicture;
+    }
+    if (!row.character || isSunnyBanksLocationCutaway(row.chunk)) return [];
+    return resolveSunnyBanksStartImage(row.character) ? [] : [row.character.name];
+  };
 
   const renderedClips = collectRenderedClips({
     actIds,
@@ -1973,8 +2178,8 @@ export function SkidmarksSunnyBanksPanel() {
       if (row.locationProblem || !row.location.image) return false;
       if (isSunnyBanksLocationCutaway(row.chunk)) return true;
       if (!row.character) return false;
-      // No Cast card picture: never rendered (red note on the row).
-      if (!resolveSunnyBanksStartImage(row.character)) return false;
+      // No Cast card picture (anyone in the shot): never rendered (red note on the row).
+      if (rowMissingPictures(row).length > 0) return false;
       if (row.kind === "speak") return !!row.character.voiceId && row.line.length > 0;
       return true;
     });
@@ -2004,9 +2209,20 @@ export function SkidmarksSunnyBanksPanel() {
     speaker?: ReturnType<typeof sunnyBanksSpeakerRequestExtras>;
     /** The engine for a hold (a Speak beat is always LTX). */
     videoBackend?: RowVideoBackend;
+    /** Multi-cast fields (2026-10-03). Empty for a one-person row, so its
+     * request is exactly what it was before. */
+    multiCast?: Record<string, unknown>;
   }): Promise<
-    | { ok: true; videoUrl: string; durationSec: number; audioMuxed?: boolean; videoBackend?: RowVideoBackend }
-    | { ok: false; message: string }
+    | {
+        ok: true;
+        videoUrl: string;
+        durationSec: number;
+        audioMuxed?: boolean;
+        videoBackend?: RowVideoBackend;
+        plateUrl?: string;
+        castNames?: string[];
+      }
+    | { ok: false; message: string; plateUrl?: string; castNames?: string[] }
   > => {
     const action = args.action?.trim() ?? "";
     const appearanceModifier = args.appearanceModifier?.trim() ?? "";
@@ -2035,6 +2251,7 @@ export function SkidmarksSunnyBanksPanel() {
               ...(action ? { action } : {}),
               ...mediaTarget,
               ...speaker,
+              ...(args.multiCast ?? {}),
             }
           : {
               characterName: args.characterName,
@@ -2047,18 +2264,27 @@ export function SkidmarksSunnyBanksPanel() {
               ...(action ? { action } : {}),
               ...mediaTarget,
               ...speaker,
+              ...(args.multiCast ?? {}),
             }
       ),
     });
     const body = (await res.json()) as GenerateBeatResponseBody;
     const videoUrl = typeof body.videoUrl === "string" ? body.videoUrl : "";
+    const plate = {
+      ...(typeof body.plateUrl === "string" && /^https:\/\//i.test(body.plateUrl) ? { plateUrl: body.plateUrl } : {}),
+      ...(Array.isArray(body.castNames) && body.castNames.every((n) => typeof n === "string")
+        ? { castNames: body.castNames as string[] }
+        : {}),
+    };
     if (!res.ok || !videoUrl) {
       return {
         ok: false,
         message: typeof body.error === "string" ? body.error : `Render failed (HTTP ${res.status}).`,
+        ...plate,
       };
     }
     return {
+      ...plate,
       ok: true,
       videoUrl,
       durationSec: typeof body.durationSec === "number" ? body.durationSec : 0,
@@ -2125,6 +2351,14 @@ export function SkidmarksSunnyBanksPanel() {
         },
       }));
     };
+    /** Shared pictures made during this run, by scene, so a two-hander's
+     * second line uses the first line's picture (2026-10-03). */
+    const scenePlatesThisRun: Record<string, string> = {};
+    /** The row number the scene's picture is named after (its first line). */
+    const firstSceneRowNumber = (row: QueueRow): number => {
+      const first = row.chunk.sceneKey ? queue.find((q) => q.chunk.sceneKey === row.chunk.sceneKey) : undefined;
+      return (first ?? row).index + 1;
+    };
     try {
       const run = await runSunnyBanksRenderQueue(queue, {
         skip: (row) => runtimeFor(row.index, row.chunk.raw).status === "done",
@@ -2142,8 +2376,13 @@ export function SkidmarksSunnyBanksPanel() {
             });
             return false;
           }
-          if (lock && !cutaway && !resolveSunnyBanksStartImage(lock)) {
-            writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: missingCastPictureMessage(lock.name) });
+          // Shared picture for a scene: one made earlier this run, or kept on a row.
+          const scenePlateUrl = row.rowCast.cast.isMulti
+            ? ((row.chunk.sceneKey ? scenePlatesThisRun[row.chunk.sceneKey] : undefined) ?? savedScenePlate(row))
+            : undefined;
+          const missing = row.rowCast.cast.isMulti && scenePlateUrl ? [] : rowMissingPictures(row);
+          if (lock && !cutaway && missing.length > 0) {
+            writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: missingCastPictureMessage(missing[0]) });
             return false;
           }
           setRunningKind(row.kind);
@@ -2171,6 +2410,21 @@ export function SkidmarksSunnyBanksPanel() {
               appearanceModifier: row.chunk.appearanceModifier,
               speaker: sunnyBanksSpeakerRequestExtras(lock),
               videoBackend: row.kind === "hold" ? row.backendChoice.backend : undefined,
+              multiCast: sunnyBanksMultiCastRequest({
+                people: row.rowCast.people,
+                sceneAction: row.chunk.action ? undefined : row.chunk.sceneAction,
+                sceneSpeakers: row.rowCast.sceneSpeakers,
+                scenePlateUrl,
+                plateTarget: row.rowCast.cast.isMulti
+                  ? sunnybankPlateTarget({
+                      episodeSlug: ensureSunnyBanksEpisodeMediaSlug(),
+                      actId: act,
+                      beatNumber: firstSceneRowNumber(row),
+                      castNames: row.rowCast.cast.names,
+                    })
+                  : null,
+                locationHasPeople: row.location.peopleInPicture === true,
+              }),
               // Filed under this episode's pinned folder (set once from
               // its name, so a rename never moves it) when it has one.
               mediaTarget: sunnybankBeatTarget({
@@ -2181,11 +2435,17 @@ export function SkidmarksSunnyBanksPanel() {
                 kind: row.kind,
               }),
             });
+            if (result.plateUrl && row.chunk.sceneKey) scenePlatesThisRun[row.chunk.sceneKey] = result.plateUrl;
+            const plateFields = {
+              ...(result.plateUrl ? { plateUrl: result.plateUrl } : {}),
+              ...(result.castNames && result.castNames.length > 1 ? { castNames: result.castNames } : {}),
+            };
             if (!result.ok) {
-              writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: result.message });
+              writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: result.message, ...plateFields });
               return false;
             }
             writeRuntime(i, {
+              ...plateFields,
               lineKey: row.chunk.raw,
               status: "done",
               videoUrl: result.videoUrl,
@@ -2820,11 +3080,41 @@ export function SkidmarksSunnyBanksPanel() {
                                   +
                                 </button>
                               </div>
-                              {!isStatic && !cutaway && row.character && !resolveSunnyBanksStartImage(row.character) && (
-                                <p role="alert" className="pt-0.5 text-[10px] leading-snug text-red-300">
-                                  {missingCastPictureMessage(row.character.name)}
-                                </p>
-                              )}
+                              {(() => {
+                                // Who's in the shot (2026-10-03): chips when it's two or more people.
+                                const chipNames = row.rowCast.cast.isMulti ? row.rowCast.cast.names : (runtime?.castNames ?? []);
+                                const missingNow = isStatic || cutaway ? [] : rowMissingPictures(row);
+                                return (
+                                  <>
+                                    {chipNames.length > 1 && (
+                                      <div className="flex min-w-0 items-center gap-1 pt-0.5">
+                                        <CastChips names={chipNames} missing={missingNow} />
+                                        {row.location.peopleInPicture && (
+                                          <span className="text-[9px] text-white/40">already in the picture</span>
+                                        )}
+                                      </div>
+                                    )}
+                                    {missingNow.map((name) => (
+                                      <p key={name} role="alert" className="pt-0.5 text-[10px] leading-snug text-red-300">
+                                        {missingCastPictureMessage(name)}
+                                      </p>
+                                    ))}
+                                    {runtime?.plateUrl && (
+                                      <details className="min-w-0 pt-0.5">
+                                        <summary className="cursor-pointer text-[10px] text-cyan-200/80 [-webkit-tap-highlight-color:transparent]">
+                                          Shared plate
+                                        </summary>
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        <img
+                                          src={runtime.plateUrl}
+                                          alt={`Shared plate: ${chipNames.join(" + ")}`}
+                                          className="mt-1 aspect-video w-full max-w-[320px] rounded-lg object-cover"
+                                        />
+                                      </details>
+                                    )}
+                                  </>
+                                );
+                              })()}
                               {!isStatic && row.locationProblem && (
                                 <p role="alert" className="pt-0.5 text-[10px] leading-snug text-red-300">
                                   {row.locationProblem}
@@ -3106,6 +3396,7 @@ export function SkidmarksSunnyBanksPanel() {
                                 label: videoBackendTagLabel(clip.videoBackend ?? "ltx"),
                                 title: `Video on ${videoBackendName(clip.videoBackend ?? "ltx")}`,
                               },
+                              ...(clip.castNames ? { cast: { names: clip.castNames } } : {}),
                             }),
                           )}
                           openId={openClipKey}

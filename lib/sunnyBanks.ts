@@ -59,6 +59,15 @@
  * scene with two characters is a silent Hold plus two separate Speak
  * beats (an over-the-shoulder cut back and forth), the same shape that
  * repo's own real, working episodes already use.
+ *
+ * **Update 2026-10-03 (multi-cast shots):** Stuart asked for the
+ * two-hander, so it is now built on top of the unchanged gold prompts:
+ * each Speak beat is still one voice and one speaker, but its start
+ * picture can hold up to four Cast characters (one shared plate per
+ * scene, `lib/sunnyBanksShotCast.ts`), and the speak prompt gets
+ * "<speaker> is the only one speaking … <other> listens silently, mouth
+ * closed" appended. Untested against a paid render when this was
+ * written; one-person beats are exactly as before.
  */
 
 /** Verbatim style lock — appended to every Sunny Banks motion prompt,
@@ -319,6 +328,9 @@ export interface SunnyBanksLocationLock {
   label: string;
   /** A repo file (`/skidmarks/sunnybanks/...`) or a Deck Blob URL. */
   image: string;
+  /** The picture already has the people in it (2026-10-03, the Locations
+   * row's "don't add Cast" tick): used as the start picture as it is. */
+  peopleInPicture?: true;
 }
 
 export const SUNNY_BANKS_DEFAULT_LOCATION_ID: SunnyBanksLocationId = "office_storefront";

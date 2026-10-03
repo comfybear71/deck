@@ -77,13 +77,13 @@ const DEFAULT_XAI_IMAGE_MODEL = "grok-imagine-image-2.0";
  * shot prompt plus this app's own framing/continuity/character-lock text
  * — generous, but still a real backstop against an unbounded body. */
 const MAX_PROMPT_LENGTH = 2000;
-/** xAI's own docs give two different ceilings for its `images` array
- * across different doc pages (three on one page, five on another) — this
- * app only ever sends up to two (a continuity plate + one vocalist
- * identity reference, see `lib/plateGeneration.ts`), so this is a sane,
- * conservative backstop rather than a number tuned to either documented
- * ceiling specifically. */
-const MAX_REFERENCE_IMAGES = 3;
+/** Five, xAI's documented ceiling for its `images` array (2026-10-03,
+ * checked on docs.x.ai "Multi-Image Editing": "up to five source
+ * images"; older copies of the docs said three). A multi-cast Music
+ * video plate sends the place plus up to four band members
+ * (`lib/plateGeneration.ts`, `lib/shotCast.ts`); a one-person plate still
+ * sends one or two. */
+const MAX_REFERENCE_IMAGES = 5;
 const UPSTREAM_TIMEOUT_MS = 55_000;
 
 

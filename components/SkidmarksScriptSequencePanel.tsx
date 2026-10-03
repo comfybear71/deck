@@ -28,6 +28,11 @@ import {
   resolveVocalistForPrompt,
 } from "@/lib/plateGeneration";
 import { resolveLocationStill } from "@/lib/plateLocation";
+import {
+  musicVideoMissingPictureMessage,
+  prepareMusicVideoExtraCast,
+  resolveMusicVideoShotCast,
+} from "@/lib/musicVideoShotCast";
 import { generateSkidmarksClip } from "@/lib/clipGeneration";
 import { uploadSkidmarksPlateStill } from "@/lib/plateStillBlob";
 import {
@@ -502,6 +507,16 @@ export function SkidmarksScriptSequencePanel({
 
   const buildGrokPlatesDeps = (): GeneratePlatesDeps => ({
     resolvePlaceStill: async (sceneText, bandName) => {
+      // Multi-cast (2026-10-03): a member this plate needs with no
+      // picture stops it here, before the place still is made.
+      const castCheck = resolveMusicVideoShotCast({
+        members: band.members,
+        vocalist: resolveVocalistForPrompt(band.members),
+        shotPrompt: sceneText,
+      });
+      if (castCheck.cast.isMulti && castCheck.cast.missingPicture.length > 0) {
+        return { ok: false, message: musicVideoMissingPictureMessage(castCheck.cast.missingPicture) };
+      }
       const placeOutcome = await resolveLocationStill({ sceneText, bandName });
       return placeOutcome.ok
         ? { ok: true, dataUrl: placeOutcome.dataUrl! }
@@ -515,6 +530,12 @@ export function SkidmarksScriptSequencePanel({
           message: `${vocalist.name || "The artist"}'s photo is missing — refusing to invent a face.`,
         };
       }
+      // Multi-cast (2026-10-03): the other members this shot names.
+      const prepared = await prepareMusicVideoExtraCast(
+        resolveMusicVideoShotCast({ members: band.members, vocalist, shotPrompt }),
+        resolvePlateReferenceDataUrl
+      );
+      if (!prepared.ok) return { ok: false, message: prepared.message };
       const request = buildPlateGenerationRequest({
         shotPrompt,
         vocal,
@@ -522,6 +543,9 @@ export function SkidmarksScriptSequencePanel({
         bandName,
         vocalist,
         locationStillDataUrl,
+        ...(prepared.extraCast.length > 0
+          ? { extraCast: prepared.extraCast, vocalistPosition: prepared.vocalistPosition }
+          : {}),
       });
       // Fail closed: Intro/Instrumental used to drop the identity ref inside
       // resolvePlateIdentity; never send a costume-only invent-a-face request.

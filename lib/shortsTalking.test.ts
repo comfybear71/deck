@@ -65,7 +65,11 @@ describe("Shorts talking shots (a shot with a Line)", () => {
     const on = buildAdultShortsTalkingPrompt([SKYLAR, BROTHER], { prompt: "Arm-wrestle" }, "SKYLAR", { adult: true });
     expect(on).toContain(ADULT_SHORTS_GROUP_ADULT_LOCK);
     expect(on).toContain(ADULT_SHORTS_CONTENT_LOCK);
-    expect(on).toContain("Everyone else listens.");
+    // More than one person (2026-10-03): the shared speaker/listener text.
+    expect(on).toContain("SKYLAR speaks to camera.");
+    expect(on).toContain("SKYLAR is the only one speaking, mouth and jaw in clear sync with the audio.");
+    expect(on).toContain("Brother listens silently, lips pressed together, mouth closed the whole clip.");
+    expect(on).not.toContain("Everyone else listens.");
   });
 
   it("the picture prompt quotes only the words; the tags go to ElevenLabs", () => {

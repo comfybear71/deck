@@ -227,15 +227,26 @@ describe("POST /api/skidmarks/generate-still", () => {
     expect(sentBody.image).toEqual({ url: httpsStill, type: "image_url" });
   });
 
-  it("rejects more reference images than this route accepts", async () => {
+  it("rejects more reference images than this route accepts (six: past xAI's five)", async () => {
     const res = await POST(
       postRequest({
         prompt: "a desert highway at night",
-        referenceImageDataUrls: [TINY_DATA_URL, TINY_DATA_URL, TINY_DATA_URL, TINY_DATA_URL],
+        referenceImageDataUrls: Array.from({ length: 6 }, () => TINY_DATA_URL),
       })
     );
     expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("at most 5");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends five pictures (a place plus four band members, 2026-10-03) to /images/edits in order", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { data: [{ b64_json: "DDDD", mime_type: "image/jpeg" }] }));
+    const refs = Array.from({ length: 5 }, (_, i) => `data:image/png;base64,iVBORw0KGgo${i}=`);
+    const res = await POST(postRequest({ prompt: "the whole band on stage", referenceImageDataUrls: refs }));
+    expect(res.status).toBe(200);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.x.ai/v1/images/edits");
+    expect(JSON.parse(init.body as string).images).toEqual(refs.map((u) => ({ url: u, type: "image_url" })));
   });
 
   it("calls /images/generations (not /images/edits) and returns a data: URL when there are no reference images", async () => {

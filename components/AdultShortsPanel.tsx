@@ -51,6 +51,7 @@ import {
   shortsCastPictures,
   shortsCharacterFromCast,
   shortsPlateReferences,
+  shortsShotCast,
   shortsShotPeople,
 } from "@/lib/shortsCast";
 import { ShotGrid, type ShotTileView } from "./ShotGrid";
@@ -225,7 +226,8 @@ export function AdultShortsPanel() {
     const people = shortsShotPeople(starringPeople, shot);
     // One picture of each person in the shot, in the order the prompt names them.
     const refs = shortsPlateReferences(people);
-    const missing = people.filter((p) => p.referenceUrls.length === 0).map((p) => p.name);
+    // The shared helper's answer (2026-10-03): anyone without a picture stops it here.
+    const missing = shortsShotCast(starringPeople, shot).missingPicture;
     if (missing.length) {
       setShotError(shot.id, `Add pictures of ${missing.join(" and ")} on their Cast card first.`);
       return;
@@ -773,6 +775,7 @@ export function AdultShortsPanel() {
           tiles={shots.map((shot, index): ShotTileView => {
             const isBusy = busy?.shotId === shot.id;
             const rendering = (isBusy && busy?.kind === "clip") || Boolean(shot.sirayTaskId);
+            const tileCast = shortsShotCast(starringPeople, shot);
             return {
               id: shot.id,
               number: index + 1,
@@ -785,6 +788,7 @@ export function AdultShortsPanel() {
               engine: isAdultShortTalkingShot(shot)
                 ? { label: videoBackendTagLabel("ltx"), title: "Talking, on LTX" }
                 : { label: videoBackendTagLabel("siray"), title: "Video on Siray" },
+              ...(tileCast.isMulti ? { cast: { names: tileCast.names, missing: tileCast.missingPicture } } : {}),
             };
           })}
           openId={openShotId && shots.some((x) => x.id === openShotId) ? openShotId : null}

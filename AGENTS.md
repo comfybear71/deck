@@ -1218,6 +1218,37 @@ members point at their character row by id (`characterId`); never copy
 character data into a band row. Every band/song edit must go through
 `persist()`. See `docs/deck/PER_ITEM_SAVING_MUSIC_VIDEO.md`.
 
+## Multi-cast shots (2026-10-03, every genre)
+
+- **One helper decides who is in a shot:** `lib/shotCast.ts`
+  `resolveShotCast`. Sunnybank (`lib/sunnyBanksShotCast.ts`), Music video
+  (`lib/musicVideoShotCast.ts`) and Shorts (`shortsShotCast` in
+  `lib/shortsCast.ts`) all call it. Never add a genre-only rule for who
+  is in frame; change the helper.
+- Order: explicit `[Cast: A, B]` (Shorts: the shot's picks) → speaker →
+  `[Character X: …]` naming another Cast card → whole-word Cast names in
+  the `[Action:]`/shot text → the scene's other speakers. Case-insensitive
+  (`STUIE` = `Stuie`), deduped, max 4, main picture only. Names inside
+  spoken words never count. `[Character <speaker>: …]` is still the
+  speaker's own look.
+- **Refuse before billing:** anyone picked without a picture →
+  `missing_cast_picture`, before TTS or xAI (skipped only when the
+  location is ticked "People already in this picture", or the scene's
+  shared plate already exists).
+- **One person = byte-identical request.** Gold prompts are appended to,
+  never edited. The xAI edit carries the place first, then one picture
+  per person; max 5 images (docs.x.ai multi-image editing, 2026-10-03).
+- **Sunnybank scenes:** 2+ talking rows straight under one `[Action:]`
+  or `[Cast:]` share one plate (Blob `…-beat-NN-<names>-plate`); later
+  lines send `scenePlateUrl` and never pay xAI again. LTX talking rows
+  append the speaker/listener text (positive only, cfg 1; prompt enhance
+  stays off). Never edit `workflow/LTX_2.3_IA2V_Cloud.json` for this.
+- **Don't** add H3 `reference_image` (can't combine with first_frame) or
+  Grok `reference_images` without an approved paid test. Video engines
+  still get one start image.
+- Follow-up (not built): speaker crop → LTX → feathered paste-back, as a
+  new workflow file, for when LTX moves the wrong mouth.
+
 ## PR process
 
 - Branch naming: `cursor/<descriptive-name>-<suffix>` (see `git log

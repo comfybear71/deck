@@ -141,6 +141,8 @@
 
 import type { RowVideoBackend } from "./videoBackendRouting";
 import { getSkidmarksCharacterLock, shotPromptMentionsLockedCharacter } from "./plateGeneration";
+import { NO_MUSIC_VIDEO_CAST, resolveMusicVideoShotCast } from "./musicVideoShotCast";
+import { buildSpeakerListenerText } from "./shotCast";
 import { songMediaSlug, type DeckMediaProject } from "./deckMediaPaths";
 import {
   getSkidmarksSnapshot,
@@ -518,6 +520,11 @@ export interface BuildClipGenerationRequestParams {
   /** The clip's shared shot-prompt text — always leads the built
    * prompt, never rewritten. */
   shotPrompt: string;
+  /** The band's members (2026-10-03, multi-cast shots). On a Vocal clip
+   * whose shot names other members, the vocalist is the only one singing
+   * and everyone else keeps their mouth closed (`lib/shotCast.ts`).
+   * Absent, or nobody else named = the prompt is exactly as before. */
+  bandMembers?: readonly SkidmarksMember[];
   bandName: string;
   /** The *selected* plate's still — this render's one and only image
    * source. See this module's doc comment for why this is singular now,
@@ -799,6 +806,18 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   // Stuart's own text first, always. Everything after it is either the
   // Vocal backend's lip-sync lock or Jack's own lock — never a camera
   // move he didn't write.
+  // Multi-cast (2026-10-03): the vocalist sings, everyone else in the
+  // plate listens with their mouth closed. Positive text only (LTX cfg 1).
+  const shotCast =
+    params.vocal && params.bandMembers
+      ? resolveMusicVideoShotCast({ members: params.bandMembers, vocalist: params.vocalist, shotPrompt: params.shotPrompt })
+      : NO_MUSIC_VIDEO_CAST;
+  const multiCastListenerText = shotCast.cast.isMulti
+    ? buildSpeakerListenerText(
+        { name: shotCast.cast.names[0], position: shotCast.vocalistPosition },
+        shotCast.extras.map((p) => ({ name: p.name, position: p.position }))
+      )
+    : "";
   const parts = [
     params.shotPrompt.trim(),
     motionText,
@@ -810,6 +829,7 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
     // card in the app. A lock card supplies none of them, so a new
     // locked character gets their own hallmarks and the standard wrap.
     params.vocal ? (lockedVocal && lock!.vocalLipSyncLock ? lock!.vocalLipSyncLock : VOCAL_LTX_PROMPT_LOCK) : "",
+    multiCastListenerText,
     locked ? (lock!.videoPromptHallmarks ?? lock!.promptHallmarks) : "",
     lockedVocal ? (lock!.vocalVideoNote ?? "") : "",
     lockedInstrumental ? (lock!.instrumentalVideoNote ?? "") : "",
@@ -835,7 +855,8 @@ export function buildClipGenerationRequest(params: BuildClipGenerationRequestPar
   };
   const negativeCueParts = [
     params.vocal ? lock?.negativeCues : undefined,
-    lockedVocal ? LOCKED_CHARACTER_SOLO_SHOT_NEGATIVE_CUES : undefined,
+    // A plate that deliberately holds several members can't also ban "a second person".
+    lockedVocal && !shotCast.cast.isMulti ? LOCKED_CHARACTER_SOLO_SHOT_NEGATIVE_CUES : undefined,
     // Stuart's own typed/pasted negative prompt — Vocal/LTX only, see
     // `BuildClipGenerationRequestParams.userNegativePrompt`'s doc
     // comment for why this never reaches an Instrumental request.

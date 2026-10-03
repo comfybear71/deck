@@ -248,3 +248,55 @@ export function resolveSpeakBeatCharacter(
     ...withPicture,
   };
 }
+
+/* ---- Multi-cast shots (2026-10-03): every Sunnybank Cast card ---- */
+
+/** One Sunnybank Cast card for `resolveShotCast` (lib/shotCast.ts): voice or not. */
+export interface SunnyBanksCastCard {
+  name: string;
+  look: string;
+  /** The Cast card main picture, or null. */
+  picture: string | null;
+  /** Has a voice (can say a line). */
+  speaks: boolean;
+}
+
+const castCardCache = new WeakMap<SkidmarksState, SunnyBanksCastCard[]>();
+
+/**
+ * Every Sunnybank Cast card: the built-in cast, then every character
+ * added with "+" (with or without a voice). A second person in a shot
+ * doesn't need a voice, only their main picture, so this list is wider
+ * than `sunnyBanksSpeakerNames`. Same pictures as `sunnyBanksCastPictures`.
+ */
+export function sunnyBanksCastCards(state: SkidmarksState): SunnyBanksCastCard[] {
+  const cached = castCardCache.get(state);
+  if (cached) return cached;
+  const out: SunnyBanksCastCard[] = [];
+  const seen = new Set<string>();
+  for (const key of Object.keys(SUNNY_BANKS_CAST)) {
+    const lock = resolveSunnyBanksSpeaker(key, state) ?? SUNNY_BANKS_CAST[key];
+    seen.add(lock.name.toLowerCase());
+    out.push({
+      name: lock.name,
+      look: lock.look,
+      picture: sunnyBanksCastPictures(lock.name, state).main,
+      speaks: Boolean(lock.voiceId),
+    });
+  }
+  const extras = normalizeRosterExtrasState(state.rosterExtras)?.["sunny-banks"] ?? [];
+  for (const extra of extras) {
+    const name = extra.name.trim();
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    const voice = cardVoices(state).get(name.toLowerCase());
+    out.push({
+      name,
+      look: extra.look.trim() || "as in their picture",
+      picture: sunnyBanksCastPictures(name, state).main ?? blobPicture(extra.pictureUrls[0]),
+      speaks: Boolean(voice),
+    });
+  }
+  castCardCache.set(state, out);
+  return out;
+}

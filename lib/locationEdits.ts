@@ -68,6 +68,23 @@ export function setDeckLocationPicture(genre: DeckLocationGenre, id: string, pic
   return { ok: true, value: pictureUrl };
 }
 
+/** "People already in this picture — don't add Cast" (2026-10-03). Unticked removes the flag. */
+export function setDeckLocationPeopleInPicture(genre: DeckLocationGenre, id: string, on: boolean): DeckLocationEdit<boolean> {
+  const list = savedDeckLocations(withBuiltInsSaved(getDeckLocationsState(), genre), genre);
+  if (!list.some((l) => l.id === id)) return { ok: false, error: "That location isn't on the row any more." };
+  materialised(genre);
+  patchDeckLocations((s) => ({
+    locations: s.locations.map((l) => {
+      if (l.id !== id) return l;
+      const { peopleInPicture: _old, ...rest } = l;
+      void _old;
+      return on ? { ...rest, peopleInPicture: true as const } : rest;
+    }),
+  }));
+  flushSkidmarksSessionNow();
+  return { ok: true, value: on };
+}
+
 /** The two-tap bin. The picture stays in Blob (nothing is ever deleted there). */
 export function deleteDeckLocation(genre: DeckLocationGenre, id: string): DeckLocationEdit<string> {
   const list = savedDeckLocations(withBuiltInsSaved(getDeckLocationsState(), genre), genre);

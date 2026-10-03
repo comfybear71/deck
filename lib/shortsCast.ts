@@ -29,6 +29,7 @@ import {
 import { emptyCharacterLorasState, normalizeElevenLabsVoiceId, slugifyCharacterName } from "./characterLoras";
 import { buildCharacterRoster, entryForRosterCharacter, type RosterCharacter } from "./characterRoster";
 import type { SkidmarksState } from "./skidmarks";
+import { resolveShotCast, sameShotCastName, type ShotCast } from "./shotCast";
 
 const EMPTY: AdultShortsCharacter = { name: "", look: "", referenceUrls: [] };
 
@@ -103,9 +104,28 @@ export function resolveShortsStarring(state: SkidmarksState): AdultShortsPerson[
   return adultShortStarring(adult).map((p) => resolvePerson(state, p, adult.ageConfirmed));
 }
 
+/**
+ * Who is in one Shorts shot, through the shared helper every genre uses
+ * (`resolveShotCast`, lib/shotCast.ts, 2026-10-03). The "In this shot"
+ * picker is the explicit list (its picks, else everyone starring), in
+ * starring order, capped at four. Each person's picture is their main
+ * Cast card face; a person with none is in `missingPicture`.
+ */
+export function shortsShotCast(starring: readonly AdultShortsPerson[], shot: Pick<AdultShortsShot, "castNames">): ShotCast {
+  const cards = starring.map((p) => ({ name: p.name, picture: p.referenceUrls[0] ?? null }));
+  return resolveShotCast({
+    cards,
+    explicit: adultShortShotPeople(starring, shot).map((p) => p.name),
+    max: ADULT_SHORTS_MAX_PEOPLE_PER_SHOT,
+  });
+}
+
 /** The people in one shot (its own picks, else everyone starring), at most the four one plate can use. */
 export function shortsShotPeople(starring: readonly AdultShortsPerson[], shot: Pick<AdultShortsShot, "castNames">): AdultShortsPerson[] {
-  return adultShortShotPeople(starring, shot).slice(0, ADULT_SHORTS_MAX_PEOPLE_PER_SHOT);
+  const cast = shortsShotCast(starring, shot);
+  return cast.members
+    .map((m) => starring.find((p) => sameShotCastName(p.name, m.name)))
+    .filter((p): p is AdultShortsPerson => Boolean(p));
 }
 
 /**

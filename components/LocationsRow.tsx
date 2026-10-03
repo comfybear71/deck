@@ -21,7 +21,13 @@ import {
   type DeckLocation,
   type DeckLocationGenre,
 } from "@/lib/deckLocations";
-import { addDeckLocation, deleteDeckLocation, renameDeckLocation, setDeckLocationPicture } from "@/lib/locationEdits";
+import {
+  addDeckLocation,
+  deleteDeckLocation,
+  renameDeckLocation,
+  setDeckLocationPeopleInPicture,
+  setDeckLocationPicture,
+} from "@/lib/locationEdits";
 import { uploadLocationPicture } from "@/lib/locationPicture";
 import { getDeckLocationsState, getSkidmarksSnapshot, subscribeSkidmarks } from "@/lib/skidmarks";
 import { TILE_CORNER_BUTTON_SHAPE_CLASS, TrashGlyph } from "./TileCornerGlyphs";
@@ -318,6 +324,21 @@ export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
             </button>
             <span className="text-[10px] text-white/35">In scripts: [Location: {open.key}]</span>
           </div>
+          {/* A pre-made plate (2026-10-03): used as the shot's picture as it
+              is, one person or several, silent or talking. */}
+          <label className="mt-2 flex min-h-[40px] cursor-pointer items-center gap-2 text-xs text-white/75">
+            <input
+              type="checkbox"
+              checked={open.peopleInPicture === true}
+              disabled={busy}
+              onChange={(e) => {
+                const result = setDeckLocationPeopleInPicture(genre, open.id, e.target.checked);
+                setNotice(result.ok ? null : { text: result.error, tone: "error" });
+              }}
+              className="h-4 w-4 accent-sky-500"
+            />
+            People already in this picture — don&apos;t add Cast
+          </label>
         </div>
       )}
       {!adding && !open && noticeLine}

@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { parseDeckMediaTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
+import {
+  deckMediaSlug,
+  extensionForImageContentType,
+  parseDeckMediaTarget,
+  type DeckMediaTarget,
+} from "@/lib/deckMediaPaths";
 import { putDeckMediaOrLegacy } from "@/lib/deckMediaPut";
 import { decodeDataUrl } from "@/lib/dataUrl";
 import { stripElevenLabsAudioTags, synthesizeSunnyBanksLine } from "@/lib/elevenLabsSpeech";
@@ -14,7 +19,19 @@ import {
   resolveSunnyBanksStartImage,
   SUNNY_BANKS_HOLD_DURATION_SEC,
 } from "@/lib/sunnyBanks";
-import { compositeSunnyBanksCharacterOntoLocation, resolveBeatStartImage } from "@/lib/sunnyBanksComposite";
+import {
+  compositeSunnyBanksCastOntoLocation,
+  compositeSunnyBanksCharacterOntoLocation,
+  readSunnyBanksBlobPictureDataUrl,
+  resolveBeatStartImage,
+} from "@/lib/sunnyBanksComposite";
+import {
+  buildSunnyBanksMultiCastHoldSuffix,
+  buildSunnyBanksSpeakerListenerSuffix,
+  parseSunnyBanksPlateUrl,
+  parseSunnyBanksSceneSpeakers,
+  parseSunnyBanksShotCast,
+} from "@/lib/sunnyBanksShotCast";
 import { normalizeElevenLabsVoiceId } from "@/lib/characterLoras";
 import { parseSunnyBanksCharacterCard, resolveSpeakBeatCharacter } from "@/lib/sunnyBanksVoices";
 import {
@@ -221,6 +238,26 @@ interface GenerateSpeakBeatRequestBody {
   /** `"ltx"` | `"grok"` | `"h3"` (2026-09-30). Holds only; a Speak beat
    * always renders on LTX. Missing or unknown → LTX. */
   videoBackend?: unknown;
+  /** Multi-cast shots (2026-10-03): `[{ name, look, pictureUrl, position,
+   * shotLook }]`, two to four people, the row's character first. Absent
+   * (every one-person row) = the request and render are exactly as
+   * before. See `lib/sunnyBanksShotCast.ts`. */
+  cast?: unknown;
+  /** The scene's `[Action: …]` on a later line of a two-hander: shapes
+   * the shared picture, never this line's motion text. */
+  sceneAction?: unknown;
+  /** Everyone who talks in this scene (framing of the shared picture). */
+  sceneSpeakers?: unknown;
+  /** The scene's shared picture an earlier line made (Deck Blob only):
+   * reused as this line's start picture, so the two-hander matches and
+   * xAI isn't paid twice. */
+  scenePlateUrl?: unknown;
+  /** Where a newly made shared picture goes in the Blob tree
+   * (`sunnybankPlateTarget`). */
+  plateTarget?: unknown;
+  /** `true` = the location's picture already has the people in it (the
+   * Locations row's tick): used as the start picture as it is. */
+  locationHasPeople?: unknown;
 }
 
 /** `kind: "voice-test"` — the ▶ on a character's panel: speak one short
@@ -289,6 +326,14 @@ export async function POST(request: Request) {
   const cardVoiceId = normalizeElevenLabsVoiceId(body.voiceId);
   const character = resolveSpeakBeatCharacter(characterName, parseSunnyBanksCharacterCard(body.characterCard), cardVoiceId);
   const isLocationCutaway = kind === "hold" && !character;
+  // Multi-cast (2026-10-03): only for a character row, never a cutaway.
+  const cast = character ? parseSunnyBanksShotCast(body.cast, character.name) : null;
+  const locationHasPeople = body.locationHasPeople === true;
+  const sceneAction = typeof body.sceneAction === "string" ? body.sceneAction.replace(/\s+/g, " ").trim().slice(0, 1200) : "";
+  const sceneSpeakers = parseSunnyBanksSceneSpeakers(body.sceneSpeakers);
+  const scenePlateUrl = cast ? parseSunnyBanksPlateUrl(body.scenePlateUrl) : null;
+  /** Sent back with every answer once a shared picture exists, so the row keeps it even when the video fails. */
+  const responseExtras: Record<string, unknown> = cast ? { castNames: cast.map((m) => m.name) } : {};
   const cutawayLabel = characterName || "Crowd";
   if (kind === "speak" && !character) {
     return NextResponse.json(
@@ -305,10 +350,20 @@ export async function POST(request: Request) {
     );
   }
   // Every character shot needs its Cast card picture: refuse before
-  // anything is billed, never fall back to the bare location.
-  if (character && !resolveSunnyBanksStartImage(character)) {
+  // anything is billed, never fall back to the bare location. A location
+  // that already has the people in it needs none (2026-10-03). A
+  // multi-cast shot needs everyone's, unless it reuses its scene's
+  // shared picture.
+  if (character && !locationHasPeople && !cast && !resolveSunnyBanksStartImage(character)) {
     return NextResponse.json(
       { error: missingCastPictureMessage(character.name), code: "missing_cast_picture" },
+      { status: 400 }
+    );
+  }
+  const castMissing = cast && !locationHasPeople && !scenePlateUrl ? cast.find((m) => !m.pictureUrl) : undefined;
+  if (castMissing) {
+    return NextResponse.json(
+      { error: missingCastPictureMessage(castMissing.name), code: "missing_cast_picture", ...responseExtras },
       { status: 400 }
     );
   }
@@ -358,6 +413,8 @@ export async function POST(request: Request) {
       ? buildLocationCutawayPrompt(action)
       : // With an [Action:], the action sets framing and movement (2026-10-01).
         buildSunnyBanksHoldPrompt(character!, action);
+    // Others in frame (2026-10-03): everyone animates, every mouth closed.
+    if (cast) prompt = `${prompt} ${buildSunnyBanksMultiCastHoldSuffix(cast)}`;
   } else {
     if (!voiceId) {
       return NextResponse.json(
@@ -415,6 +472,9 @@ export async function POST(request: Request) {
     // LTX lip-syncs to, and a quoted "[whispers]" is just noise to it.
     // A tag-only line ("[laughs]") keeps its text so the quote isn't empty.
     prompt = buildSunnyBanksSpeakingPrompt(character!, stripElevenLabsAudioTags(line) || line);
+    // Others in frame (2026-10-03, Stuart's wording): the speaker is the
+    // only one talking, everyone else listens with their mouth closed.
+    if (cast) prompt = `${prompt} ${buildSunnyBanksSpeakerListenerSuffix(cast, character!.name)}`;
   }
 
   // `[Action:]` and the appearance modifier are extra LTX context after
@@ -431,7 +491,39 @@ export async function POST(request: Request) {
   }
 
   let plateDataUrl = startImageDataUrl;
-  if (!isLocationCutaway) {
+  if (!isLocationCutaway && locationHasPeople) {
+    // The location picture already has the people in it: used as it is.
+  } else if (!isLocationCutaway && cast) {
+    // One shared picture for the scene: reuse it when an earlier line made it.
+    const reused = scenePlateUrl ? await readSunnyBanksBlobPictureDataUrl(scenePlateUrl) : null;
+    if (reused) {
+      plateDataUrl = reused;
+      responseExtras.plateUrl = scenePlateUrl;
+    } else {
+      const lateMissing = cast.find((m) => !m.pictureUrl);
+      if (lateMissing) {
+        return NextResponse.json(
+          { error: missingCastPictureMessage(lateMissing.name), code: "missing_cast_picture", ...responseExtras },
+          { status: 400 }
+        );
+      }
+      const plated = await compositeSunnyBanksCastOntoLocation({
+        locationDataUrl: startImageDataUrl,
+        people: cast,
+        locationId,
+        locationLabel: locationLabel || undefined,
+        speaker: kind === "speak" ? character!.name : null,
+        sceneSpeakers,
+        shotAction: action || sceneAction || undefined,
+      });
+      if (!plated.ok) {
+        return NextResponse.json({ error: plated.error, code: plated.code, ...responseExtras }, { status: plated.status });
+      }
+      plateDataUrl = plated.dataUrl;
+      const savedUrl = await saveSharedPlate(plated.dataUrl, cast.map((m) => m.name), parseDeckMediaTarget(body.plateTarget));
+      if (savedUrl) responseExtras.plateUrl = savedUrl;
+    }
+  } else if (!isLocationCutaway) {
     const plated = await compositeSunnyBanksCharacterOntoLocation({
       locationDataUrl: startImageDataUrl,
       character: character!,
@@ -449,6 +541,7 @@ export async function POST(request: Request) {
 
   if (videoBackend !== "ltx") {
     return runSilentShotAndPersist({
+      responseExtras,
       backend: videoBackend,
       characterName: character?.name ?? cutawayLabel,
       prompt: `${prompt} ${SILENT_SHOT_PROMPT_SUFFIX}`,
@@ -464,6 +557,7 @@ export async function POST(request: Request) {
   }
 
   return runLtxAndPersist({
+    responseExtras,
     characterName: character?.name ?? cutawayLabel,
     kind,
     prompt,
@@ -480,6 +574,7 @@ export async function POST(request: Request) {
 /** A hold on Grok or H3: render, replace the engine's own sound with the
  * 5s silent track, save under the same name an LTX hold would get. */
 async function runSilentShotAndPersist(args: {
+  responseExtras: Record<string, unknown>;
   backend: Exclude<RowVideoBackend, "ltx">;
   characterName: string;
   prompt: string;
@@ -498,7 +593,7 @@ async function runSilentShotAndPersist(args: {
   });
   if (!rendered.ok) {
     return NextResponse.json(
-      { error: rendered.error, code: rendered.code, videoBackend: args.backend },
+      { error: rendered.error, code: rendered.code, videoBackend: args.backend, ...args.responseExtras },
       { status: rendered.status }
     );
   }
@@ -511,6 +606,7 @@ async function runSilentShotAndPersist(args: {
     durationSec: args.durationSec,
     mediaTarget: args.mediaTarget,
     videoBackend: args.backend,
+    responseExtras: args.responseExtras,
   });
 }
 
@@ -520,6 +616,7 @@ function buildLocationCutawayPrompt(action: string): string {
 }
 
 async function runLtxAndPersist(args: {
+  responseExtras: Record<string, unknown>;
   characterName: string;
   kind: BeatKind;
   prompt: string;
@@ -534,7 +631,7 @@ async function runLtxAndPersist(args: {
   const decodedImage = decodeDataUrl(args.startImageDataUrl);
   if (!decodedImage) {
     return NextResponse.json(
-      { error: "Could not decode startImageDataUrl.", code: "invalid_request" },
+      { error: "Could not decode startImageDataUrl.", code: "invalid_request", ...args.responseExtras },
       { status: 400 }
     );
   }
@@ -550,7 +647,7 @@ async function runLtxAndPersist(args: {
     args.creds
   );
   if (!imageUpload.ok) {
-    return NextResponse.json({ error: imageUpload.error, code: imageUpload.code }, { status: imageUpload.status });
+    return NextResponse.json({ error: imageUpload.error, code: imageUpload.code, ...args.responseExtras }, { status: imageUpload.status });
   }
 
   const audioUpload = await uploadComfyCloudInput(
@@ -560,7 +657,7 @@ async function runLtxAndPersist(args: {
     args.creds
   );
   if (!audioUpload.ok) {
-    return NextResponse.json({ error: audioUpload.error, code: audioUpload.code }, { status: audioUpload.status });
+    return NextResponse.json({ error: audioUpload.error, code: audioUpload.code, ...args.responseExtras }, { status: audioUpload.status });
   }
 
   const workflow = buildLtx23Ia2vWorkflow({
@@ -572,20 +669,20 @@ async function runLtxAndPersist(args: {
 
   const submitResult = await submitComfyCloudWorkflow(workflow, args.creds);
   if (!submitResult.ok) {
-    return NextResponse.json({ error: submitResult.error, code: submitResult.code }, { status: submitResult.status });
+    return NextResponse.json({ error: submitResult.error, code: submitResult.code, ...args.responseExtras }, { status: submitResult.status });
   }
 
   const completionResult = await pollComfyCloudJob(submitResult.promptId, args.creds, SPEAK_BEAT_POLL_DEADLINE_MS);
   if (!completionResult.ok) {
     return NextResponse.json(
-      { error: completionResult.error, code: completionResult.code },
+      { error: completionResult.error, code: completionResult.code, ...args.responseExtras },
       { status: completionResult.status }
     );
   }
 
   const downloadResult = await downloadComfyCloudOutput(completionResult.videoFile, args.creds);
   if (!downloadResult.ok) {
-    return NextResponse.json({ error: downloadResult.error, code: downloadResult.code }, { status: downloadResult.status });
+    return NextResponse.json({ error: downloadResult.error, code: downloadResult.code, ...args.responseExtras }, { status: downloadResult.status });
   }
 
   // Bake the same MP3 LoadAudio already used (padded TTS or Hold
@@ -602,6 +699,7 @@ async function runLtxAndPersist(args: {
     mediaTarget: args.mediaTarget,
     ttsModel: args.ttsModel,
     videoBackend: "ltx",
+    responseExtras: args.responseExtras,
   });
 }
 
@@ -619,6 +717,8 @@ async function persistBeatVideo(args: {
   mediaTarget: DeckMediaTarget | null;
   ttsModel?: string;
   videoBackend: RowVideoBackend;
+  /** `castNames` / `plateUrl` of a multi-cast shot (2026-10-03). */
+  responseExtras?: Record<string, unknown>;
 }) {
   const { videoBytes, muxed } = args;
   const audioMuxed = muxed.ok;
@@ -634,6 +734,7 @@ async function persistBeatVideo(args: {
     audioMuxed,
     ...(muxed.ok ? {} : { audioMuxError: muxed.message }),
     ...(args.ttsModel ? { ttsModel: args.ttsModel } : {}),
+    ...(args.responseExtras ?? {}),
   };
   try {
     const blob = await putDeckMediaOrLegacy(Buffer.from(videoBytes), {
@@ -650,5 +751,30 @@ async function persistBeatVideo(args: {
       persistError: err instanceof Error ? err.message : "Vercel Blob upload failed for an unknown reason.",
       ...common,
     });
+  }
+}
+
+/**
+ * Saves a multi-cast shot's shared picture (2026-10-03) under its
+ * readable name (`…-beat-03-stuie-bloom-plate`), or the old flat
+ * `sunnybanks/plates/` folder when the episode has no folder name yet.
+ * A Blob miss never stops the render: the line still uses the picture,
+ * it just can't be reused by the scene's next line.
+ */
+async function saveSharedPlate(dataUrl: string, castNames: readonly string[], target: DeckMediaTarget | null): Promise<string | null> {
+  const decoded = decodeDataUrl(dataUrl);
+  if (!decoded) return null;
+  const ext = extensionForImageContentType(decoded.mimeType);
+  const who = castNames.map((n) => deckMediaSlug(n, "")).filter(Boolean).join("-") || "cast";
+  try {
+    const blob = await putDeckMediaOrLegacy(Buffer.from(decoded.bytes), {
+      target,
+      ext,
+      contentType: decoded.mimeType,
+      legacyPathname: `sunnybanks/plates/${who}-plate-${Date.now()}.${ext}`,
+    });
+    return blob.url;
+  } catch {
+    return null;
   }
 }

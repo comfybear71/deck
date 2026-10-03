@@ -29,8 +29,9 @@
  * tags — `[whispers]`, `[laughs]`, `[short pause]` — instead of reading
  * them out. So "anything else in brackets is spoken aloud" is no longer
  * true *inside a spoken line*: the parser leaves those brackets in the
- * line and v3 treats them as delivery. The three picture tags are
- * unchanged. A voice tag on its own line, or in front of the `Name:`,
+ * line and v3 treats them as delivery. The picture tags are
+ * unchanged by that (a fourth, `[Cast: A, B]`, arrived 2026-10-03 with
+ * multi-cast shots, see `lib/shotCast.ts`). A voice tag on its own line, or in front of the `Name:`,
  * is still a trap (it becomes a spoken row for the previous speaker),
  * so the rules say "after the colon".
  *
@@ -97,12 +98,31 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
     ],
   },
   {
-    title: "There are exactly three picture tags",
+    title: "There are exactly four picture tags",
     body: [
-      "[Location: …], [Character …] and [Action: …] change the picture. Each goes on its own line and is never spoken.",
+      "[Location: …], [Character …], [Action: …] and [Cast: …] change the picture. Each goes on its own line and is never spoken.",
       "Don't invent more: no [Outfit:], no [SFX:], no [silence]. Coloured = a picture tag. White = the spoken line.",
     ],
     example: "[Location: office_storefront]\n[Character Shazza: holding a rusty tin]\n[Action: counts a stack of bills]",
+  },
+  {
+    title: "Up to four people in one shot",
+    body: [
+      "A shot can hold up to four Cast characters, each matching their own Cast card picture. Name them and they're in: [Cast: Stuie, Bloom] says exactly who. Without [Cast:], anyone named in the [Action: …], or given their own [Character Name: …] look, is added to the speaker.",
+      "[Character Name: …] with the speaker's own name is still the speaker's look. With another Cast name, that look goes to that person only.",
+      "Names match Cast cards in any capitals (STUIE = Stuie). Names inside the spoken words don't add anyone. Everyone in the shot needs a Cast card picture, or the row turns red and won't render. The row shows who's in it: Stuie + Bloom.",
+    ],
+    example:
+      "[Location: water_tank_dam]\n[Character Bloom: long blond man-bun, grey harem pants, back to camera, yoga tree pose, foreground]\n[Action: Ranger Bazza rising out of the muddy dam with a snorkel, holding up a ticket book. Camera still.]\nRanger Bazza:",
+  },
+  {
+    title: "Two people talking in one shot",
+    body: [
+      "Put both lines straight under one [Action: …] (or [Cast: …]) with no tag between them. They become one scene: one shared picture with both people, used for each line. Each line, only the speaker's mouth moves; the other listens, mouth closed.",
+      "Say where each one stands in the [Action: …] (front left, on the right). A tag between two lines starts a new shot, so put [Location: …] above each line when you want them separate.",
+    ],
+    example:
+      "[Location: park_site_4]\n[Action: Both men stay in frame, mouths closed. BLOOM, front left, folds his arms; STUIE, on the right, scratches his head. Camera holds, no cuts.]\nSTUIE: Hello BLOOM\nBLOOM: Namaste STUIE",
   },
   {
     title: "Voice tags go inside the line, after the colon",
@@ -237,10 +257,11 @@ Follow these rules exactly. Do not improvise new syntax.
    with no line breaks becomes a single clip of the entire text read
    aloud.
 
-2. THERE ARE EXACTLY THREE PICTURE TAGS, each on its own line:
+2. THERE ARE EXACTLY FOUR PICTURE TAGS, each on its own line:
       [Location: <id>]
       [Character <Name>: <description>]
       [Action: <text>]
+      [Cast: <Name>, <Name>]
    Never invent another picture tag — no [Outfit: ...], [SFX: ...],
    [silence], [Scene: ...] or other stage directions on their own line.
    Anything the parser doesn't recognise on its own line becomes
@@ -336,6 +357,27 @@ ${locations}
 
    Good:  [Action: counts a thick stack of bills, wetting her thumb]
    Bad:   [Action: she counts the money, then walks outside and drives off]
+
+=== MORE THAN ONE PERSON IN A SHOT ===
+
+   A shot can hold up to four cast members, each kept to their own
+   picture. [Cast: Name, Name] on the line above says exactly who is in
+   it. Without it, the speaker plus anyone named in that shot's
+   [Action: ...] or given their own [Character Name: ...] look is in it.
+   Names inside the spoken words never add anyone.
+
+   TWO PEOPLE TALKING IN ONE SHOT: put both spoken lines straight under
+   one [Action: ...] with no tag between them. They share one picture;
+   on each line only the speaker talks and the other keeps their mouth
+   closed. Say where each one stands (front left, on the right).
+
+      [Location: park_site_4]
+      [Action: Both men stay in frame, mouths closed. BLOOM, front left, folds his arms; STUIE, on the right, scratches his head. Camera holds, no cuts.]
+      STUIE: Hello BLOOM
+      BLOOM: Namaste STUIE
+
+   To keep lines as separate shots, put a tag (e.g. [Location: id])
+   above each one.
 
 === A CORRECT EXAMPLE ===
 
