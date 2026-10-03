@@ -11,7 +11,9 @@ import { effectiveDeckLocations, findDeckLocation, type DeckLocation, type DeckL
 import type { SunnyBanksLocationLock } from "./sunnyBanks";
 
 function toLock(l: DeckLocation): SunnyBanksLocationLock {
-  return { id: l.key, label: l.name, image: l.pictureUrl ?? "" };
+  const lock: SunnyBanksLocationLock = { id: l.key, label: l.name, image: l.pictureUrl ?? "" };
+  if (l.peopleInPicture) lock.peopleInPicture = true;
+  return lock;
 }
 
 export function sunnyBanksLocationList(state: DeckLocationsState | null | undefined): SunnyBanksLocationLock[] {

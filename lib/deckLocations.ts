@@ -46,6 +46,11 @@ export interface DeckLocation {
   /** Deck Blob URL, or a repo file path (`/skidmarks/...`). `null` = no picture yet. */
   pictureUrl: string | null;
   createdAt: number;
+  /** Ticked on the Locations row (2026-10-03): "People already in this
+   * picture — don't add Cast". A pre-made plate is used as the shot's
+   * start picture as it is: no Cast picture is laid onto it, one person
+   * or several, silent or talking. Only ever `true`; unticked = absent. */
+  peopleInPicture?: true;
 }
 
 export interface DeckLocationsState {
@@ -115,6 +120,7 @@ export function normalizeDeckLocation(value: unknown): DeckLocation | null {
     name,
     pictureUrl: cleanPictureUrl(v.pictureUrl),
     createdAt: typeof v.createdAt === "number" && Number.isFinite(v.createdAt) ? v.createdAt : 0,
+    ...(v.peopleInPicture === true ? { peopleInPicture: true as const } : {}),
   };
 }
 
