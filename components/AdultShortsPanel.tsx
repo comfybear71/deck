@@ -58,6 +58,7 @@ import { ShotGrid, type ShotTileView } from "./ShotGrid";
 import { setShortsBusy } from "@/lib/shortsBusy";
 import { runSunnyBanksRenderQueue } from "@/lib/sunnyBanksRenderQueue";
 import { SHORTS_EDITOR_ID } from "./ShortsEpisodeRow";
+import { deckBuildHeaders } from "@/lib/deckBuild";
 
 /**
  * Adult shorts (2026-09-28) — the screen behind the fourth landing tile.
@@ -243,7 +244,7 @@ export function AdultShortsPanel() {
       const plateTarget = adultShortTargetFor("plate", shots.findIndex((x) => x.id === shot.id) + 1);
       const res = await fetch("/api/skidmarks/generate-still-siray", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...deckBuildHeaders() },
         body: JSON.stringify({
           prompt: buildAdultShortsStillPrompt(people, shot, { adult: isAdult }),
           referenceImageDataUrls: refData,
@@ -296,7 +297,7 @@ export function AdultShortsPanel() {
         try {
           res = await fetch("/api/skidmarks/adult-shorts/render-clip", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...deckBuildHeaders() },
             body: JSON.stringify({
               prompt: buildAdultShortsMotionPrompt(people, shot, { adult: adultNow }),
               startImageUrl,
@@ -380,7 +381,7 @@ export function AdultShortsPanel() {
     try {
       const res = await fetch("/api/skidmarks/adult-shorts/render-talking", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...deckBuildHeaders() },
         body: JSON.stringify({
           prompt: buildAdultShortsTalkingPrompt(people, shot, speaker.name, { adult: adultNow }),
           line: shot.line ?? "",

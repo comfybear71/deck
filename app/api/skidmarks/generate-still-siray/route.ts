@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { staleDeckPageResponse } from "@/lib/deckBuildServer";
 import { parseDeckMediaTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
 import { putDeckMediaOrLegacy } from "@/lib/deckMediaPut";
 import {
@@ -56,6 +57,8 @@ interface GenerateStillSirayRequestBody {
 }
 
 export async function POST(request: Request) {
+  const stalePage = staleDeckPageResponse(request);
+  if (stalePage) return stalePage;
   const creds = resolveSirayCredentials();
   if (!creds) {
     return NextResponse.json(

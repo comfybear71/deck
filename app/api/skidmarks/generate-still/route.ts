@@ -1,4 +1,5 @@
 import { FORCED_VIDEO_ASPECT_RATIO } from "@/lib/videoAspect";
+import { staleDeckPageResponse } from "@/lib/deckBuildServer";
 import { NextResponse } from "next/server";
 import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
 
@@ -272,6 +273,8 @@ function isReferenceImageUrl(value: unknown): value is string {
 }
 
 export async function POST(request: Request) {
+  const stalePage = staleDeckPageResponse(request);
+  if (stalePage) return stalePage;
   const resolvedKey = resolveXaiApiKey();
   if (!resolvedKey) {
     return NextResponse.json(

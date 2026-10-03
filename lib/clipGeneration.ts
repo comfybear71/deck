@@ -151,6 +151,7 @@ import {
   type SkidmarksInstrumentalVideoModel,
   type SkidmarksMember,
 } from "./skidmarks";
+import { deckBuildHeaders } from "./deckBuild";
 
 /** Per-plate render duration range — Grok's documented ceiling is 15s;
  * 5s is the floor this feature has always used. Real per-plate duration
@@ -992,7 +993,7 @@ async function postGenerateClip(
   try {
     res = await fetch(GENERATE_CLIP_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...deckBuildHeaders() },
       body: JSON.stringify(request),
     });
   } catch (err) {

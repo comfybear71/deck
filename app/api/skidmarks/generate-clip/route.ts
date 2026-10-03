@@ -1,4 +1,5 @@
 import { del, list, put } from "@vercel/blob";
+import { staleDeckPageResponse } from "@/lib/deckBuildServer";
 import { NextResponse } from "next/server";
 import {
   classifyXaiVideoHttpFailure,
@@ -1397,6 +1398,8 @@ async function handleInstrumentalSirayRender(
 }
 
 export async function POST(request: Request) {
+  const stalePage = staleDeckPageResponse(request);
+  if (stalePage) return stalePage;
   let body: GenerateClipRequestBody;
   try {
     body = await request.json();

@@ -1246,6 +1246,14 @@ character data into a band row. Every band/song edit must go through
 - **Don't** add H3 `reference_image` (can't combine with first_frame) or
   Grok `reference_images` without an approved paid test. Video engines
   still get one start image.
+- **Old pages are refused (2026-10-03, EP05 Act V):** Stuart's first live
+  test ran from a Safari tab opened before #240 went live, so the page
+  sent old one-person requests and every row was billed without the new
+  feature. Paid render routes now compare the page's build stamp
+  (`x-deck-build`, `lib/deckBuild.ts`, set in `next.config.ts` from
+  `VERCEL_GIT_COMMIT_SHA`) with their own and answer 409 `stale_page`
+  ("reload the page") before billing. Any new paid route or client fetch
+  must use `staleDeckPageResponse` / `deckBuildHeaders()` too.
 - Follow-up (not built): speaker crop → LTX → feathered paste-back, as a
   new workflow file, for when LTX moves the wrong mouth.
 
