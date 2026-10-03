@@ -46,7 +46,7 @@ import {
   sunnyBanksSpeakerRequestExtras,
 } from "@/lib/sunnyBanksVoices";
 import { sunnybankBeatTarget, sunnybankPlateTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
-import { resolveSunnyBanksRowCast, sunnyBanksMultiCastRequest } from "@/lib/sunnyBanksShotCast";
+import { resolveSunnyBanksRowCast, sunnyBanksMultiCastRequest, type SunnyBanksRowCast } from "@/lib/sunnyBanksShotCast";
 import { CastChips } from "@/components/CastChips";
 import { setSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
 import {
@@ -73,6 +73,7 @@ import {
   type SunnyBanksActKeyed,
   type SunnyBanksRowRuntime,
 } from "@/lib/sunnyBanksWorkspace";
+import { deckBuildHeaders } from "@/lib/deckBuild";
 
 /**
  * Sunny Banks' own first real screen (2026-09-15) — the thing that
@@ -313,6 +314,132 @@ export function sunnyBanksQueueChunks(chunks: readonly SunnyBanksScriptChunk[]):
   SunnyBanksScriptChunk & { kind: BeatKind }
 > {
   return chunks.filter(isSunnyBanksQueueChunk);
+}
+
+/** What one Render row sends to the speak-beat route. */
+export interface SunnyBanksBeatArgs {
+  kind: BeatKind;
+  characterName: string;
+  line: string;
+  locationId: string;
+  /** The location's name, for the compositing prompt. */
+  locationLabel?: string;
+  locationImage: string;
+  startImageDataUrl: string;
+  action?: string;
+  appearanceModifier?: string;
+  /** Where the finished clip goes in the Blob tree; `null` = old path. */
+  mediaTarget?: DeckMediaTarget | null;
+  /** The card's voice (and, for an added character, look and picture). */
+  speaker?: ReturnType<typeof sunnyBanksSpeakerRequestExtras>;
+  /** The engine for a hold (a Speak beat is always LTX). */
+  videoBackend?: RowVideoBackend;
+  /** Multi-cast fields (2026-10-03). Empty for a one-person row, so its
+   * request is exactly what it was before. */
+  multiCast?: Record<string, unknown>;
+}
+
+/**
+ * The JSON body for one row (2026-10-03: pulled out of the component so
+ * the tests send byte for byte what the page sends; EP05 Act V).
+ */
+export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<string, unknown> {
+  const action = args.action?.trim() ?? "";
+  const appearanceModifier = args.appearanceModifier?.trim() ?? "";
+  const mediaTarget = args.mediaTarget ? { mediaTarget: args.mediaTarget } : {};
+  const speaker = args.speaker ?? {};
+  // `action` and `appearanceModifier` travel as two separate fields —
+  // the route itself merges them into the motion prompt (2026-09-18).
+  return (
+    args.kind === "hold"
+      ? {
+          kind: "hold",
+          characterName: args.characterName,
+          ...(args.videoBackend ? { videoBackend: args.videoBackend } : {}),
+          ...(appearanceModifier ? { appearanceModifier } : {}),
+          locationId: args.locationId,
+          ...(args.locationLabel ? { locationLabel: args.locationLabel } : {}),
+          locationImage: args.locationImage,
+          startImageDataUrl: args.startImageDataUrl,
+          ...(action ? { action } : {}),
+          ...mediaTarget,
+          ...speaker,
+          ...(args.multiCast ?? {}),
+        }
+      : {
+          characterName: args.characterName,
+          ...(appearanceModifier ? { appearanceModifier } : {}),
+          line: args.line,
+          locationId: args.locationId,
+          ...(args.locationLabel ? { locationLabel: args.locationLabel } : {}),
+          locationImage: args.locationImage,
+          startImageDataUrl: args.startImageDataUrl,
+          ...(action ? { action } : {}),
+          ...mediaTarget,
+          ...speaker,
+          ...(args.multiCast ?? {}),
+        }
+  );
+}
+
+/**
+ * Everything one queue row sends (2026-10-03): its own fields plus who's
+ * in the shot, the scene's shared picture (if one is already made) and
+ * where a new shared picture is saved. Shared by Render and the tests.
+ */
+export function sunnyBanksRowBeatArgs(args: {
+  chunk: SunnyBanksScriptChunk & { kind: BeatKind };
+  characterName: string;
+  speaker: ReturnType<typeof sunnyBanksSpeakerRequestExtras>;
+  location: SunnyBanksLocationLock;
+  startImageDataUrl: string;
+  rowCast: SunnyBanksRowCast;
+  videoBackend: RowVideoBackend;
+  act: string;
+  episodeSlug: string | null;
+  rowNumber: number;
+  /** The scene's first row number (names the shared picture). */
+  sceneFirstRowNumber: number;
+  scenePlateUrl?: string;
+}): SunnyBanksBeatArgs {
+  const { chunk, rowCast } = args;
+  return {
+    kind: chunk.kind,
+    characterName: args.characterName,
+    line: chunk.line,
+    locationId: args.location.id,
+    locationLabel: args.location.label,
+    locationImage: args.location.image,
+    startImageDataUrl: args.startImageDataUrl,
+    action: chunk.action,
+    appearanceModifier: chunk.appearanceModifier,
+    speaker: args.speaker,
+    videoBackend: chunk.kind === "hold" ? args.videoBackend : undefined,
+    multiCast: sunnyBanksMultiCastRequest({
+      people: rowCast.people ?? [],
+      sceneAction: chunk.action ? undefined : chunk.sceneAction,
+      sceneSpeakers: rowCast.sceneSpeakers,
+      scenePlateUrl: rowCast.cast.isMulti ? args.scenePlateUrl : undefined,
+      plateTarget: rowCast.cast.isMulti
+        ? sunnybankPlateTarget({
+            episodeSlug: args.episodeSlug,
+            actId: args.act,
+            beatNumber: args.sceneFirstRowNumber,
+            castNames: rowCast.cast.names,
+          })
+        : null,
+      locationHasPeople: args.location.peopleInPicture === true,
+    }),
+    // Filed under this episode's pinned folder (set once from its name,
+    // so a rename never moves it) when it has one.
+    mediaTarget: sunnybankBeatTarget({
+      episodeSlug: args.episodeSlug,
+      actId: args.act,
+      beatNumber: args.rowNumber,
+      characterName: args.characterName,
+      kind: chunk.kind,
+    }),
+  };
 }
 
 export interface SunnyBanksGodDocument {
@@ -2192,27 +2319,7 @@ export function SkidmarksSunnyBanksPanel() {
     return dataUrl;
   };
 
-  const postBeat = async (args: {
-    kind: BeatKind;
-    characterName: string;
-    line: string;
-    locationId: string;
-    /** The location's name, for the compositing prompt. */
-    locationLabel?: string;
-    locationImage: string;
-    startImageDataUrl: string;
-    action?: string;
-    appearanceModifier?: string;
-    /** Where the finished clip goes in the Blob tree; `null` = old path. */
-    mediaTarget?: DeckMediaTarget | null;
-    /** The card's voice (and, for an added character, look and picture). */
-    speaker?: ReturnType<typeof sunnyBanksSpeakerRequestExtras>;
-    /** The engine for a hold (a Speak beat is always LTX). */
-    videoBackend?: RowVideoBackend;
-    /** Multi-cast fields (2026-10-03). Empty for a one-person row, so its
-     * request is exactly what it was before. */
-    multiCast?: Record<string, unknown>;
-  }): Promise<
+  const postBeat = async (args: SunnyBanksBeatArgs): Promise<
     | {
         ok: true;
         videoUrl: string;
@@ -2224,49 +2331,10 @@ export function SkidmarksSunnyBanksPanel() {
       }
     | { ok: false; message: string; plateUrl?: string; castNames?: string[] }
   > => {
-    const action = args.action?.trim() ?? "";
-    const appearanceModifier = args.appearanceModifier?.trim() ?? "";
-    const mediaTarget = args.mediaTarget ? { mediaTarget: args.mediaTarget } : {};
-    const speaker = args.speaker ?? {};
-    // `action` and `appearanceModifier` travel as two separate fields —
-    // the route itself merges them into the motion prompt (2026-09-18).
-    // Previously this client pre-merged them into one `action` string,
-    // which left the route with no way to also route the appearance
-    // text into the xAI compositing prompt (the actual picture) without
-    // sending it to LTX's motion prompt twice.
     const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        args.kind === "hold"
-          ? {
-              kind: "hold",
-              characterName: args.characterName,
-              ...(args.videoBackend ? { videoBackend: args.videoBackend } : {}),
-              ...(appearanceModifier ? { appearanceModifier } : {}),
-              locationId: args.locationId,
-              ...(args.locationLabel ? { locationLabel: args.locationLabel } : {}),
-              locationImage: args.locationImage,
-              startImageDataUrl: args.startImageDataUrl,
-              ...(action ? { action } : {}),
-              ...mediaTarget,
-              ...speaker,
-              ...(args.multiCast ?? {}),
-            }
-          : {
-              characterName: args.characterName,
-              ...(appearanceModifier ? { appearanceModifier } : {}),
-              line: args.line,
-              locationId: args.locationId,
-              ...(args.locationLabel ? { locationLabel: args.locationLabel } : {}),
-              locationImage: args.locationImage,
-              startImageDataUrl: args.startImageDataUrl,
-              ...(action ? { action } : {}),
-              ...mediaTarget,
-              ...speaker,
-              ...(args.multiCast ?? {}),
-            }
-      ),
+      headers: { "Content-Type": "application/json", ...deckBuildHeaders() },
+      body: JSON.stringify(sunnyBanksBeatRequestBody(args)),
     });
     const body = (await res.json()) as GenerateBeatResponseBody;
     const videoUrl = typeof body.videoUrl === "string" ? body.videoUrl : "";
@@ -2398,43 +2466,22 @@ export function SkidmarksSunnyBanksPanel() {
           );
           try {
             const startImageDataUrl = await resolveLocationDataUrl(row.location.image);
-            const result = await postBeat({
-              kind: row.kind,
-              characterName: lock?.name ?? row.characterName,
-              line: row.line,
-              locationId: row.location.id,
-              locationLabel: row.location.label,
-              locationImage: row.location.image,
-              startImageDataUrl,
-              action: row.chunk.action,
-              appearanceModifier: row.chunk.appearanceModifier,
-              speaker: sunnyBanksSpeakerRequestExtras(lock),
-              videoBackend: row.kind === "hold" ? row.backendChoice.backend : undefined,
-              multiCast: sunnyBanksMultiCastRequest({
-                people: row.rowCast.people,
-                sceneAction: row.chunk.action ? undefined : row.chunk.sceneAction,
-                sceneSpeakers: row.rowCast.sceneSpeakers,
-                scenePlateUrl,
-                plateTarget: row.rowCast.cast.isMulti
-                  ? sunnybankPlateTarget({
-                      episodeSlug: ensureSunnyBanksEpisodeMediaSlug(),
-                      actId: act,
-                      beatNumber: firstSceneRowNumber(row),
-                      castNames: row.rowCast.cast.names,
-                    })
-                  : null,
-                locationHasPeople: row.location.peopleInPicture === true,
-              }),
-              // Filed under this episode's pinned folder (set once from
-              // its name, so a rename never moves it) when it has one.
-              mediaTarget: sunnybankBeatTarget({
-                episodeSlug: ensureSunnyBanksEpisodeMediaSlug(),
-                actId: act,
-                beatNumber: row.index + 1,
+            const result = await postBeat(
+              sunnyBanksRowBeatArgs({
+                chunk: row.chunk,
                 characterName: lock?.name ?? row.characterName,
-                kind: row.kind,
-              }),
-            });
+                speaker: sunnyBanksSpeakerRequestExtras(lock),
+                location: row.location,
+                startImageDataUrl,
+                rowCast: row.rowCast,
+                videoBackend: row.backendChoice.backend,
+                act,
+                episodeSlug: ensureSunnyBanksEpisodeMediaSlug(),
+                rowNumber: row.index + 1,
+                sceneFirstRowNumber: firstSceneRowNumber(row),
+                scenePlateUrl,
+              })
+            );
             if (result.plateUrl && row.chunk.sceneKey) scenePlatesThisRun[row.chunk.sceneKey] = result.plateUrl;
             const plateFields = {
               ...(result.plateUrl ? { plateUrl: result.plateUrl } : {}),
