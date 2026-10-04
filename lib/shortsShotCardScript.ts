@@ -58,9 +58,9 @@ export interface ShotCardScriptInput {
   /** The episode's own places. */
   locations: readonly ShotCardScriptLocation[];
   /**
-   * The person a talking shot belongs to when nothing in the shot names
-   * anyone: only for the older one-person episodes (EP01, EP02), whose
-   * every Line was that person's. `null` for an episode with more people.
+   * The person a shot is of when nothing in the shot names anyone: only
+   * for the older one-person episodes (EP01, EP02), whose every shot was
+   * of that one person. `null` for an episode with more people.
    */
   onlyCharacter?: string | null;
 }
@@ -76,6 +76,8 @@ export interface ShotCardCharacter {
   source: ShotCardCharacterSource;
   /** Why this one deserves a second look, in plain words. */
   doubt?: string;
+  /** The prompt named several people and nothing said which one the shot is of. */
+  severalNamed?: true;
 }
 
 /** What happened to one shot, for the dry run and the report. */
@@ -202,9 +204,12 @@ export function resolveShotCardCharacter(
       name: named[0],
       source: "prompt",
       doubt: `The prompt names ${named.join(" and ")}; used ${named[0]} (named first).`,
+      severalNamed: true,
     };
   }
-  if (talking && onlyCharacter && squash(onlyCharacter)) {
+  // An older one-person episode (EP01, EP02): its shots were all of that
+  // one person ("She lifts her head…"), unless the prompt says nobody.
+  if (onlyCharacter && squash(onlyCharacter) && !saysNoPeople) {
     return {
       name: castSpelling(cast, onlyCharacter),
       source: "only-character",
@@ -298,12 +303,22 @@ export function shotCardEpisodeToScript(input: ShotCardScriptInput): ShotCardScr
     const who = resolveShotCardCharacter(shot, input.cast, input.onlyCharacter ?? null);
     const spoken = squash(shot.line);
     const talking = spoken.length > 0 && who.name !== null;
-    if (who.castNames && who.castNames.length > 1) lines.push(`[Cast: ${who.castNames.join(", ")}]`);
+    // Who's in the picture. The studio otherwise counts every Cast name in
+    // the [Action:] as in the shot ("…looking off at Liam" would add Liam),
+    // so a row whose person is known says exactly who with [Cast: …]: the
+    // shot's picks, or its one person when the prompt names others too.
+    // Only a prompt naming several people with nothing to choose between
+    // them is left to the studio (everyone named), and it's flagged.
+    const prompt = shot.prompt ?? "";
+    const others = who.name ? castNamesInPrompt(prompt, input.cast).filter((n) => !sameName(n, who.name!)) : [];
+    const pinned = who.castNames ?? (who.source === "picks" && who.name ? [who.name] : null) ?? (who.name && others.length > 0 && !who.severalNamed ? [who.name] : null);
+    if (pinned) lines.push(`[Cast: ${pinned.join(", ")}]`);
+    const inPicture = pinned ?? (who.name ? [who.name, ...others] : []);
     if (talking && who.name) {
       const look = squash(input.cast.find((c) => sameName(c.name, who.name!))?.look);
       lines.push(`[Character ${who.name}: ${look}]`);
     }
-    const action = asActionText(shot.prompt ?? "");
+    const action = asActionText(prompt);
     if (action) lines.push(`[Action: ${action}]`);
     if (spoken && !who.name) lines.push(`# Line (nobody named): ${spoken}`);
     const speakerLine = who.name ? (talking ? `${who.name}: ${spoken}` : `${who.name}:`) : "Crowd:";
@@ -331,8 +346,7 @@ export function shotCardEpisodeToScript(input: ShotCardScriptInput): ShotCardScr
     if (hasPlate) {
       row.plateUrl = plate;
       // The plate is only reused for the same people (see the studio's plate rules).
-      const names = who.castNames ?? (who.name ? [who.name] : []);
-      if (names.length > 0) row.castNames = names;
+      if (inPicture.length > 0) row.castNames = inPicture;
     }
     runtime[index] = row;
     rows.push({

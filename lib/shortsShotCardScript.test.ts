@@ -60,6 +60,8 @@ vi.mock("@/lib/skidmarks", async (importOriginal) => {
 const { parseSunnyBanksScriptBlock, sunnyBanksQueueChunks, preserveRenderedRuntimes, collectRenderedClips, inStudioGenre } = await import(
   "@/components/SkidmarksSunnyBanksPanel"
 );
+const { sunnyBanksCastCards, resolveSunnyBanksSpeaker } = await import("./sunnyBanksVoices");
+const { resolveSunnyBanksRowCast } = await import("./sunnyBanksShotCast");
 const { castNamesInPrompt, inferShotLocation, resolveShotCardCharacter, shotCardEpisodeToScript, shotCardEpisodeToStudioLive } = await import(
   "./shortsShotCardScript"
 );
@@ -126,6 +128,8 @@ describe("who each old shot is of", () => {
     // A Line with nobody named: only an older one-person episode lends its person.
     expect(resolveShotCardCharacter({ prompt: "She smiles.", line: "Hi!" }, CAST, "Cleo")).toMatchObject({ name: "Cleo", source: "only-character" });
     expect(resolveShotCardCharacter({ prompt: "She smiles.", line: "Hi!" }, CAST)).toMatchObject({ name: null, source: "none" });
+    expect(resolveShotCardCharacter({ prompt: "She turns to the window." }, CAST, "Cleo")).toMatchObject({ name: "Cleo", source: "only-character" });
+    expect(resolveShotCardCharacter({ prompt: "An empty room. No people." }, CAST, "Cleo")).toMatchObject({ name: null, source: "none" });
     // "Nobody" ticked.
     expect(resolveShotCardCharacter({ prompt: "Ava on the road.", nobodyInShot: true }, CAST)).toMatchObject({ name: null });
   });
@@ -142,8 +146,8 @@ describe("the converted script", () => {
   it("reads as headings, a location, a character line, the action and Name: line per shot", () => {
     const s = converted.script;
     expect(s.startsWith("=== ACT I — SCENE 1 — hostel_city ===")).toBe(true);
-    expect(s).toContain("[Location: hostel_city]\n[Character Ava: ]\n[Action: Night, city backpacker hostel courtyard. Close-up of Ava, looking off at Ben.]\nAva: [softly] I'm off up north tomorrow.");
-    expect(s).toContain("[Action: Ava walks away along the hostel wall.]\nAva:\n");
+    expect(s).toContain("[Location: hostel_city]\n[Cast: Ava]\n[Character Ava: ]\n[Action: Night, city backpacker hostel courtyard. Close-up of Ava, looking off at Ben.]\nAva: [softly] I'm off up north tomorrow.");
+    expect(s).toContain("[Cast: Ava]\n[Action: Ava walks away along the hostel wall.]\nAva:\n");
     expect(s).toMatch(/=== ACT I — SCENE 2 — highway_qld ===\n\n\[Location: highway_qld\]\n\[Action: Low angle on an empty Queensland highway[^\]]*\]\nCrowd:/);
     expect(s).toContain("=== ACT I — SCENE 3 — hostel_beach ===");
     // Several people in a shot: [Cast: …]; a Line over two lines is one row.
@@ -182,6 +186,25 @@ describe("the converted script", () => {
       collectRenderedClips({ actIds: ["I"], actScripts: { I: converted.script }, runtimeMap: { I: converted.runtime }, characterOverrides: {} }),
     );
     expect(clips.map((c) => c.index)).toEqual([0, 1, 2, 4, 5]);
+  });
+
+  it("says exactly who is in each picture, the same people the studio sees, so the old plates still count", () => {
+    const s = converted.script;
+    // Close-up of Ava "looking off at Ben": just Ava.
+    expect(s).toContain("[Cast: Ava]\n[Character Ava: ]\n[Action: Night, city backpacker hostel courtyard.");
+    const chunks = sunnyBanksQueueChunks(parsed(s));
+    const cards = sunnyBanksCastCards(STATE, "shorts");
+    chunks.forEach((c, i) => {
+      const lock = resolveSunnyBanksSpeaker(c.characterName, STATE, "shorts");
+      const rc = inStudioGenre("shorts", () =>
+        resolveSunnyBanksRowCast(
+          { kind: c.kind, characterName: c.characterName, cutaway: c.kind === "hold" && !lock, action: c.action, sceneAction: c.sceneAction, castNames: c.castNames, castLooks: c.castLooks, sceneSpeakers: c.sceneSpeakers, appearanceModifier: c.appearanceModifier },
+          cards,
+        ),
+      );
+      const plateFor = converted.runtime[i].castNames ?? [];
+      if (converted.runtime[i].plateUrl && rc.cast.names.length > 0) expect([...rc.cast.names].sort()).toEqual([...plateFor].sort());
+    });
   });
 
   it("places: the one the prompt names, else the shot before's; a tie keeps the current one", () => {
