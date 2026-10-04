@@ -141,13 +141,15 @@ describe("the Skidmarks Cast is Skidmarks' only cast", () => {
     },
   } as unknown as SkidmarksState;
 
-  it("Skidmarks speakers are only Skidmarks cards with a voice; no Sunny Banks built-ins", () => {
-    expect(sunnyBanksSpeakerNames(STATE, "skidmarks")).toEqual(["DAP"]);
-    expect(sunnyBanksSpeakerList(STATE, "skidmarks").map((c) => c.name)).toEqual(["DAP"]);
+  it("Skidmarks rows are only Skidmarks cards; no Sunny Banks built-ins. A card with no voice is silent only (2026-10-04)", () => {
+    expect(sunnyBanksSpeakerNames(STATE, "skidmarks")).toEqual(["Sparrow", "DAP"]);
+    expect(sunnyBanksSpeakerList(STATE, "skidmarks").map((c) => c.name)).toEqual(["DAP", "Sparrow"]);
     const dap = resolveSunnyBanksSpeaker("dap", STATE, "skidmarks");
     expect(dap).toMatchObject({ name: "DAP", look: CAST[0].look, voiceId: VOICE, castPicture: PIC });
     expect(resolveSunnyBanksSpeaker("Shazza", STATE, "skidmarks")).toBeUndefined();
-    expect(resolveSunnyBanksSpeaker("Sparrow", STATE, "skidmarks")).toBeUndefined();
+    // Sparrow has no voice and (here) no picture: their own silent row, which shows the missing-picture note.
+    const sparrow = resolveSunnyBanksSpeaker("Sparrow", STATE, "skidmarks");
+    expect(sparrow).toEqual({ name: "Sparrow", look: CAST[1].look });
   });
 
   it("every Skidmarks card can still be in a shot (multi-character), voice or not", () => {
