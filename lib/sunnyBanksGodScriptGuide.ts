@@ -140,6 +140,16 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
     example: "Shazza: Are you kidding me?   ← speaks\nShazza:                        ← silent hold",
   },
   {
+    title: "A silent character shot needs no voice",
+    body: [
+      "Any Cast character can have their own silent shot, with a voice ID or not (an animal, an extra): their name with nothing after the colon. Their Cast card picture goes into the shot with the location, so it's them, not a random lookalike. Tick them In this episode and give their card a picture.",
+      "Only talking needs a voice. Words after the colon for someone with no voice turn the row red.",
+      "Crowd: is a shot of the place with nobody from the Cast, and never adds Cast pictures, even with [Cast: …]. To show a Cast character, use their own name.",
+    ],
+    example:
+      "[Location: park]\n[Action: The sparrow on the park railing spots someone off screen, eyes go huge, then flaps away fast. Camera still.]\nSparrow:",
+  },
+  {
     title: "[Character …] on a talking line is a still pose",
     body: [
       "On a line with dialogue, describe a still pose only: standing or sitting, where they are, what they're holding. Movement goes in a silent hold (Name: with nothing after it) with an [Action: …].",
@@ -323,6 +333,15 @@ Follow these rules exactly. Do not improvise new syntax.${showNote}
    Any other name (e.g. "Crowd:") with an empty line after it renders a
    location shot with no character in it. Any other name WITH dialogue
    is rejected — only the cast above can speak.
+
+   A cast member who is not speaking yet (no voice) can still have
+   their own SILENT shot: their name with nothing after the colon. Their
+   Cast card picture is used, so it is them on screen. Never write words
+   after their name, and never use "Crowd:" for them ("Crowd:" never
+   shows a cast member, even with [Cast: ...]). For example:
+      [Location: park]
+      [Action: The sparrow on the park railing spots someone off screen, eyes go huge, then flaps away fast. Camera still.]
+      Sparrow:
 
 === THE LOCATIONS (use the id on the left, exactly) ===
 

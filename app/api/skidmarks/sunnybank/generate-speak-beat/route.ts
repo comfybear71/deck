@@ -17,6 +17,7 @@ import {
   buildSunnyBanksSpeakBeatPathname,
   buildSunnyBanksSpeakingPrompt,
   missingCastPictureMessage,
+  missingVoiceMessage,
   resolveSunnyBanksStartImage,
   SUNNY_BANKS_HOLD_DURATION_SEC,
 } from "@/lib/sunnyBanks";
@@ -361,7 +362,7 @@ export async function POST(request: Request) {
   const voiceId = cardVoiceId ?? character?.voiceId;
   if (kind === "speak" && !voiceId) {
     return NextResponse.json(
-      { error: `${character!.name} doesn't have a locked ElevenLabs voice yet.`, code: "missing_voice" },
+      { error: missingVoiceMessage(character!.name), code: "missing_voice" },
       { status: 400 }
     );
   }
@@ -434,7 +435,7 @@ export async function POST(request: Request) {
   } else {
     if (!voiceId) {
       return NextResponse.json(
-        { error: `${character!.name} doesn't have a locked ElevenLabs voice yet.`, code: "missing_voice" },
+        { error: missingVoiceMessage(character!.name), code: "missing_voice" },
         { status: 400 }
       );
     }

@@ -1259,6 +1259,21 @@ character data into a band row. Every band/song edit must go through
   `VERCEL_GIT_COMMIT_SHA`) with their own and answer 409 `stale_page`
   ("reload the page") before billing. Any new paid route or client fetch
   must use `staleDeckPageResponse` / `deckBuildHeaders()` too.
+- **Silent Cast characters need no voice (2026-10-04, the Skidmarks
+  sparrow):** live, `[Cast: Sparrow]` … `Crowd:` rendered a random bird,
+  because `Crowd:` never sends Cast pictures and a card with no voice ID
+  wasn't a row name. Now every added Cast card (Sunnybank "+" characters,
+  the shared Skidmarks Cast) is a `Name:` match whether or not it has a
+  voice (`sunnyBanksSpeakerNames` / `resolveSunnyBanksSpeaker` in
+  `lib/sunnyBanksVoices.ts`; no `voiceId` on the lock, like Hans before
+  his voice). `Sparrow:` with nothing after it is Sparrow's silent row
+  with their Cast card picture on the location; `[Cast:]`/Action names
+  still add up to 4. Talking still needs a voice: red row note and
+  `missing_voice` from the route before anything is billed
+  (`missingVoiceMessage`). `Crowd:` is unchanged — never a Cast picture,
+  even with `[Cast:]` (the multi-cast tests pin that). An unnamed line
+  still falls back to the first *voiced* character. Shorts and Music
+  video never needed a voice for silent shots.
 - Follow-up (not built): speaker crop → LTX → feathered paste-back, as a
   new workflow file, for when LTX moves the wrong mouth.
 

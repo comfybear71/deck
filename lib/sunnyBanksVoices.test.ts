@@ -123,10 +123,13 @@ describe("Sunny Banks speakers from cards", () => {
     expect(sunnyBanksCastPictures("Hans", s).main).toBe(DAZZA_REF);
   });
 
-  it("an added character becomes a speaker once voiced, and not before", () => {
+  it("an added character talks once voiced; before that (2026-10-04) only silent shots, with their picture", () => {
     const unvoiced = state([card("Kev", "sbx:chr_kev")], [kevExtra]);
-    expect(resolveSunnyBanksSpeaker("Kev", unvoiced)).toBeUndefined();
-    expect(sunnyBanksSpeakerNames(unvoiced)).not.toContain("Kev");
+    const silentKev = resolveSunnyBanksSpeaker("Kev", unvoiced)!;
+    expect(silentKev).toMatchObject({ name: "Kev", look: "as in their picture", castPicture: kevExtra.pictureUrls[0] });
+    expect(silentKev.voiceId).toBeUndefined();
+    expect(sunnyBanksSpeakerNames(unvoiced)).toContain("Kev");
+    expect(sunnyBanksSpeakerRequestExtras(silentKev)).toEqual({ characterCard: { name: "Kev", look: "as in their picture", pictureUrl: kevExtra.pictureUrls[0] } });
 
     const voiced = state([card("Kev", "sbx:chr_kev", VOICE_A)], [kevExtra]);
     const kev = resolveSunnyBanksSpeaker("kev", voiced)!;
@@ -151,13 +154,15 @@ describe("speak-beat route helpers", () => {
     expect(parseSunnyBanksCharacterCard("Kev")).toBeNull();
   });
 
-  it("resolves the built-in with only the card's picture, and an added character only with a voice", () => {
+  it("resolves the built-in with only the card's picture, and an added character with or without a voice", () => {
     expect(resolveSpeakBeatCharacter("Shazza", null, null)).toEqual(SUNNY_BANKS_CAST.Shazza);
     expect(resolveSpeakBeatCharacter("Shazza", null, null)?.castPicture).toBeUndefined();
     expect(resolveSpeakBeatCharacter("Dazza", { name: "Dazza", look: "", pictureUrl: DAZZA_REF }, null)).toEqual({ ...SUNNY_BANKS_CAST.Dazza, castPicture: DAZZA_REF });
     const hans = resolveSpeakBeatCharacter("Hans", { name: "Hans", look: "", pictureUrl: HANS_PIC }, VOICE_A);
     expect(hans?.castPicture).toBe(HANS_PIC);
-    expect(resolveSpeakBeatCharacter("Kev", { name: "Kev", look: "" }, null)).toBeUndefined();
+    // No voice (2026-10-04): still Kev, for a silent shot; the route refuses a talking one.
+    expect(resolveSpeakBeatCharacter("Kev", { name: "Kev", look: "", pictureUrl: HANS_PIC }, null)).toEqual({ name: "Kev", look: "as in their picture", castPicture: HANS_PIC });
+    expect(resolveSpeakBeatCharacter("Kev", null, null)).toBeUndefined();
     expect(resolveSpeakBeatCharacter("Kev", { name: "Kev", look: "" }, VOICE_A)).toMatchObject({ name: "Kev", voiceId: VOICE_A, look: "as in their picture" });
     expect(resolveSpeakBeatCharacter("Kev", { name: "Other", look: "" }, VOICE_A)).toBeUndefined();
   });
