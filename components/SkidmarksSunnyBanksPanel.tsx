@@ -7,6 +7,8 @@ import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
 import { triggerBlobDownload } from "@/lib/clipRenders";
 import { SkidmarksConfirmDialog } from "@/components/SkidmarksConfirmDialog";
 import { TrashIcon } from "@/components/SkidmarksRenderedClipsShelf";
+import { EpisodeExtrasRow } from "@/components/EpisodeExtrasRow";
+import { episodeExtrasZipEntries, type EpisodeExtra } from "@/lib/episodeExtras";
 import { ShotGrid, type ShotTileView } from "@/components/ShotGrid";
 import { estimateRowVideoCostUsd } from "@/lib/clipGeneration";
 import {
@@ -1855,6 +1857,8 @@ export interface SunnyBanksEpisodeZipSource {
   locationOverrides: ActKeyed<Record<number, SunnyBanksLocationId>>;
   locationPickTags?: ActKeyed<Record<number, SunnyBanksLocationId>>;
   runtimeMap: ActKeyed<Record<number, RowRuntime>>;
+  /** The episode's Extras (2026-10-04), into the zip's `extras/` folder. */
+  extras?: readonly EpisodeExtra[];
 }
 
 /**
@@ -1871,7 +1875,7 @@ export interface SunnyBanksEpisodeZipSource {
 export async function downloadSunnyBanksEpisodeZip(
   source: SunnyBanksEpisodeZipSource,
   onProgress?: (progress: { done: number; total: number }) => void
-): Promise<{ clipCount: number; fetchedClipCount: number }> {
+): Promise<{ clipCount: number; fetchedClipCount: number; extraCount: number; fetchedExtraCount: number }> {
   const clips = collectRenderedClips({
     actIds: source.actIds,
     actScripts: source.actScripts,
@@ -1886,10 +1890,16 @@ export async function downloadSunnyBanksEpisodeZip(
     prompts: collectSunnyBanksEpisodePrompts(source),
     clips,
     onProgress,
+    extras: episodeExtrasZipEntries(source.extras ?? []),
   });
   const zipBlob = new Blob([result.zipBytes.slice().buffer], { type: "application/zip" });
   triggerBlobDownload(zipBlob, result.filename);
-  return { clipCount: result.clipCount, fetchedClipCount: result.fetchedClipCount };
+  return {
+    clipCount: result.clipCount,
+    fetchedClipCount: result.fetchedClipCount,
+    extraCount: result.extraCount,
+    fetchedExtraCount: result.fetchedExtraCount,
+  };
 }
 
 
@@ -3484,6 +3494,9 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
           </p>
         )}
       </div>
+
+      {/* Extras (2026-10-04): the same row in every genre, below the acts/script. */}
+      <EpisodeExtrasRow genre={genre} />
 
       <div className="flex flex-col gap-3 border-t border-white/10 pt-4">
         <button

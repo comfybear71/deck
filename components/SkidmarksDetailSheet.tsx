@@ -25,6 +25,7 @@ import { SkidmarksClipTimeline } from "./SkidmarksClipTimeline";
 import { SkidmarksScriptSequencePanel } from "./SkidmarksScriptSequencePanel";
 import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
+import { EpisodeExtrasRow } from "@/components/EpisodeExtrasRow";
 import { SunnyBanksEpisodeRow } from "./SunnyBanksEpisodeRow";
 import { ShortsEpisodeRow } from "./ShortsEpisodeRow";
 import { AdultShortsPanel } from "./AdultShortsPanel";
@@ -591,6 +592,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       />
     ) : null;
 
+  /** Extras (2026-10-04): the same row as every other genre, for the open song. */
+  const extrasBlock = activeBand ? <EpisodeExtrasRow genre="music-video" /> : null;
+
   const renderedBlock =
     session.mp3 && activeBand ? (
       <SkidmarksRenderedClipsShelf renders={renders} onRemoved={removeRender} />
@@ -637,6 +641,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             <div className="flex min-w-0 flex-col gap-8">
               {scriptBlock}
               {timelineBlock}
+              {extrasBlock}
               {renderedBlock}
             </div>
           </div>
@@ -646,6 +651,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             {mp3Block}
             {scriptBlock}
             {timelineBlock}
+            {extrasBlock}
             {renderedBlock}
             {/* Finished Songs moved to Library (the shelf here was a duplicate). */}
             <button
