@@ -92,9 +92,9 @@ describe("EpisodeExtrasCards", () => {
 describe("the same row in all four genres", () => {
   it("every genre's episode screen mounts the one shared EpisodeExtrasRow", () => {
     const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
-    // Sunnybank and Skidmarks share the studio panel, which passes its genre.
+    // Sunnybank, Skidmarks and Shorts (every episode, 2026-10-05) share the studio panel, which passes its genre.
     expect(read("./SkidmarksSunnyBanksPanel.tsx")).toContain("<EpisodeExtrasRow genre={genre} />");
-    expect(read("./AdultShortsPanel.tsx")).toContain('<EpisodeExtrasRow genre="shorts" />');
+    expect(read("./SkidmarksDetailSheet.tsx")).toContain('<SkidmarksSunnyBanksPanel genre="shorts" />');
     expect(read("./SkidmarksDetailSheet.tsx")).toContain('<EpisodeExtrasRow genre="music-video" />');
     // No genre-only copy of the row anywhere.
     expect(read("./EpisodeExtrasRow.tsx")).not.toMatch(/genre === "(sunnybank|skidmarks|shorts|music-video)"/);

@@ -31,8 +31,7 @@ import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
 import { EpisodeExtrasRow } from "@/components/EpisodeExtrasRow";
 import { SunnyBanksEpisodeRow } from "./SunnyBanksEpisodeRow";
 import { ShortsEpisodesRow } from "./ShortsEpisodesRow";
-import { shortsOpenEditor } from "@/lib/shortsEpisodeCast";
-import { AdultShortsPanel } from "./AdultShortsPanel";
+import { ShortsAgeGate } from "./ShortsAgeGate";
 import { CharacterLorasPanel } from "./CharacterLorasPanel";
 import LocationsRow from "./LocationsRow";
 import { useIsPcShell } from "@/hooks/useIsPcShell";
@@ -607,11 +606,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     ) : null;
 
   /** Phone: single-column stack + link to Library. PC: 2-col desk. Finished Songs live in Library on both. */
-  // Which Shorts editor is open (2026-10-04): script episodes by default;
-  // the shot cards while a shot-card episode (EP01–EP03) is open.
-  const shortsState = getAdultShortsState(storeSnapshot);
-  const shortsScript = shortsOpenEditor(storeSnapshot.adultShorts) === "script";
-  const shortsAgeConfirmed = shortsState.ageConfirmed;
+  const shortsAgeConfirmed = getAdultShortsState(storeSnapshot).ageConfirmed;
   const renderDeskBody = (layout: "phone" | "pc") => (
     <div className="flex flex-col gap-8 pt-2">
       <SkidmarksLandingTiles activeKind={session.projectKind} onSelect={selectProjectKind} />
@@ -633,7 +628,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {session.projectKind === "sunnybank" && <CharacterLorasPanel group="sunny-banks" />}
       {/* Shorts matches Skidmarks (2026-10-04): one EPISODES row, then LOCATIONS, then the
           cast row, then the same script studio. The older shot-card episodes (EP01–EP03)
-          are on the same row and open in the shot cards, untouched. */}
+          are on the same row and open in that same script studio too (2026-10-05). */}
       {session.projectKind === "adult-shorts" && <ShortsEpisodesRow />}
       {session.projectKind === "adult-shorts" && <LocationsRow genre="adult-shorts" />}
       {session.projectKind === "adult-shorts" && <CharacterLorasPanel group="adult-shorts" />}
@@ -642,9 +637,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
       {session.projectKind === "skidmarks" && <SkidmarksSunnyBanksPanel genre="skidmarks" />}
 
-      {/* The 18+ confirm is the shot cards' gate; the script studio opens once it's done. */}
-      {session.projectKind === "adult-shorts" && shortsScript && shortsAgeConfirmed && <SkidmarksSunnyBanksPanel genre="shorts" />}
-      {session.projectKind === "adult-shorts" && !(shortsScript && shortsAgeConfirmed) && <AdultShortsPanel />}
+      {/* Every Shorts episode opens in the script studio (2026-10-05), the older
+          shot-card ones (EP01–EP03) converted to a script on the fly. The 18+
+          confirm comes first, once. */}
+      {session.projectKind === "adult-shorts" && shortsAgeConfirmed && <SkidmarksSunnyBanksPanel genre="shorts" />}
+      {session.projectKind === "adult-shorts" && !shortsAgeConfirmed && <ShortsAgeGate />}
 
       {session.projectKind === "music-video" &&
         (layout === "pc" ? (

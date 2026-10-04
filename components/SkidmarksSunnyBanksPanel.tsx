@@ -64,6 +64,7 @@ import {
   SUNNY_BANKS_GOD_SCRIPT_RULES,
 } from "@/lib/sunnyBanksGodScriptGuide";
 import {
+  adoptShortsShotCardLive,
   ensureSunnyBanksEpisodeMediaSlug,
   getSkidmarksSnapshot,
   getStudioState,
@@ -83,6 +84,7 @@ import {
   type SunnyBanksRowRuntime,
 } from "@/lib/sunnyBanksWorkspace";
 import { deckBuildHeaders } from "@/lib/deckBuild";
+import { shortsShotCardStudioLive } from "@/lib/shortsShotCardStudio";
 
 /**
  * Sunny Banks' own first real screen (2026-09-15) — the thing that
@@ -2258,11 +2260,20 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   // panel on screen with this `genre`).
   const studioState = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const studio = getStudioState(genre, studioState);
-  const live = studio?.live ?? getSunnyBanksLiveOrDefault(studioState, genre);
+  // Shorts (2026-10-05): an older shot-card episode (EP01–EP03) opens here
+  // too, converted to a script on the fly (`lib/shortsShotCardStudio.ts`).
+  const shotCardLive = genre === "shorts" ? shortsShotCardStudioLive(studioState) : null;
+  const live = shotCardLive ?? studio?.live ?? getSunnyBanksLiveOrDefault(studioState, genre);
   /** Every edit of this show's live episode (auto-saved onto its card),
-   * with the script helpers on this show even if it lands after a render. */
-  const patchLive = (updater: (prev: SunnyBanksLiveState) => SunnyBanksLiveState) =>
-    patchSunnyBanksLive((prev) => inStudioGenre(genre, () => updater(prev)), genre);
+   * with the script helpers on this show even if it lands after a render.
+   * The first edit of a converted shot-card episode saves it as a script
+   * episode (`adoptShortsShotCardLive`); just opening it saves nothing. */
+  const patchLive = (updater: (prev: SunnyBanksLiveState) => SunnyBanksLiveState) => {
+    const inGenre = (prev: SunnyBanksLiveState) => inStudioGenre(genre, () => updater(prev));
+    const shotCardBase = genre === "shorts" ? shortsShotCardStudioLive(getSkidmarksSnapshot()) : null;
+    if (shotCardBase) adoptShortsShotCardLive(shotCardBase, inGenre);
+    else patchSunnyBanksLive(inGenre, genre);
+  };
   const actIds = live.actIds;
   const activeAct = live.activeAct;
   const actScripts = live.actScripts;
@@ -2588,7 +2599,10 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       rowCast: row.rowCast,
       videoBackend: opts.videoBackend ?? row.backendChoice.backend,
       act,
-      episodeSlug: ensureSunnyBanksEpisodeMediaSlug(genre),
+      // A converted shot-card episode not saved yet: its own folder, nothing pinned.
+      episodeSlug:
+        (genre === "shorts" ? shortsShotCardStudioLive(getSkidmarksSnapshot())?.mediaSlug : undefined) ??
+        ensureSunnyBanksEpisodeMediaSlug(genre),
       rowNumber: row.index + 1,
       sceneFirstRowNumber: opts.sceneFirstRowNumber,
       scenePlateUrl: opts.scenePlateUrl,

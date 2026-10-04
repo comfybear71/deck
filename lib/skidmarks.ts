@@ -3842,6 +3842,36 @@ export function patchSunnyBanksLive(
 }
 
 /**
+ * The first change to an older Shorts shot-card episode shown in the
+ * script studio (2026-10-05, `lib/shortsShotCardStudio.ts`): `base` is
+ * the converted episode the studio is showing, built on the fly from the
+ * shot cards. Until now nothing was saved; this saves it as a script
+ * episode (a new card on the EPISODES row, in the shot cards' own folder
+ * so new clips land beside the old ones) and makes the script studio the
+ * open editor. The shot cards are not touched: they stay as the backup.
+ * An updater that changes nothing saves nothing.
+ */
+export function adoptShortsShotCardLive(
+  base: SunnyBanksLiveState,
+  updater: (live: SunnyBanksLiveState) => SunnyBanksLiveState
+): void {
+  const current = getSkidmarksSnapshot();
+  const next = updater(cloneSunnyBanksLive(base));
+  if (JSON.stringify(next) === JSON.stringify(base)) return;
+  const studio = resolvedSunnyBanks(current, "shorts");
+  const live: SunnyBanksLiveState = { ...next };
+  delete live.episodeId;
+  if (base.mediaSlug) live.mediaSlug = base.mediaSlug;
+  // Its own folder is the shot cards' folder, so it isn't "taken" here.
+  const taken = otherShowFolders(current, "shorts").filter((slug) => slug !== base.mediaSlug);
+  const autoSaved = autoSaveSunnyBanksLive(studio, live, "shorts", taken);
+  persist({ ...withStudio(current, "shorts", autoSaved), adultShorts: { ...getAdultShortsState(current), editor: "script" } });
+  if (autoSaved.workspaces !== studio.workspaces) {
+    episodeItemSyncFor("shorts")?.noteLocalChange(studio.workspaces, autoSaved.workspaces);
+  }
+}
+
+/**
  * Folder names another editor of the same show already uses (2026-10-04):
  * Shorts' script episodes share `deck/shorts/episodes/` with its
  * shot-card episodes (EP01–EP03), so a new script episode never takes a
