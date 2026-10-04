@@ -12,7 +12,8 @@ import {
 import { withTalkingPlateLine } from "./sunnyBanksComposite";
 import { ignoredVideoBackendWarning, pickRowVideoBackend } from "./videoBackendRouting";
 import { estimateRowVideoCostUsd } from "./clipGeneration";
-import { openShortsEpisodeScopeIn, shortsScriptEditorOpen } from "./shortsEpisodeCast";
+import { openShortsEpisodeScopeIn, shortsOpenEditor, shortsScriptEditorOpen } from "./shortsEpisodeCast";
+import { readFileSync } from "node:fs";
 import { episodeNameFirstMessage } from "./episodeCast";
 import { sunnybankBeatTarget, sunnybankPlateTarget } from "./deckMediaPaths";
 import { buildEmptySunnyBanksLive, normalizeSunnyBanksStudio } from "./sunnyBanksWorkspace";
@@ -178,7 +179,7 @@ describe("EP03 stays exactly as it is, on the shot cards", () => {
     expect(shortsScriptEditorOpen({ adultShorts: normalized })).toBe(false);
     expect(openShortsEpisodeScopeIn({ adultShorts: normalized })).toEqual({ episode: "ep03-backpackers", legacy: false, tickedIds: [] });
     // Junk never switches editors.
-    expect("editor" in normalizeAdultShortsState({ ...EP03_OPEN, editor: "cards" })!).toBe(false);
+    expect("editor" in normalizeAdultShortsState({ ...EP03_OPEN, editor: "bogus" })!).toBe(false);
   });
 
   it("with the script studio open, the scope is the script episode's, and EP03's card is untouched", () => {
@@ -198,5 +199,39 @@ describe("EP03 stays exactly as it is, on the shot cards", () => {
     expect(studio.live.mediaSlug).toBe("ep04-night-out");
     expect(studio.silentShotBackend).toBe("siray");
     expect(studio.plateEngine).toBe("grok");
+  });
+});
+
+describe("script episodes are the default; shot-card episodes open as before (2026-10-04)", () => {
+  const blank = { ageConfirmed: true, character: { name: "", look: "", referenceUrls: [] }, shots: [], saved: [], currentSavedId: null };
+
+  it("a Shorts with no shot-card episode open opens the script studio", () => {
+    expect(shortsOpenEditor(undefined)).toBe("script");
+    expect(shortsOpenEditor(null)).toBe("script");
+    expect(shortsOpenEditor(blank)).toBe("script");
+    // Saved shot-card episodes but none open: still the script studio.
+    expect(shortsOpenEditor({ ...blank, saved: EP03_OPEN.saved })).toBe("script");
+  });
+
+  it("the live session with EP03 open (nothing ever picked) stays on the shot cards", () => {
+    expect(shortsOpenEditor(EP03_OPEN)).toBe("cards");
+    expect(shortsOpenEditor(normalizeSkidmarksState({ adultShorts: EP03_OPEN }).adultShorts)).toBe("cards");
+  });
+
+  it("the EPISODES row's pick wins either way, and both picks survive a reload", () => {
+    expect(shortsOpenEditor({ ...EP03_OPEN, editor: "script" })).toBe("script");
+    expect(shortsOpenEditor({ ...blank, editor: "cards" })).toBe("cards");
+    expect(normalizeAdultShortsState({ ...EP03_OPEN, editor: "cards" })!.editor).toBe("cards");
+    expect(normalizeAdultShortsState({ ...EP03_OPEN, editor: "script" })!.editor).toBe("script");
+  });
+
+  it("one EPISODES row like Skidmarks: no editor switch; + New starts a script episode", () => {
+    const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
+    const sheet = read("../components/SkidmarksDetailSheet.tsx");
+    expect(sheet).toContain("<ShortsEpisodesRow />");
+    expect(sheet).not.toContain("ShortsEditorSwitch");
+    const row = read("../components/ShortsEpisodesRow.tsx");
+    expect(row).toContain("onNew={script.onNew}");
+    expect(row).toContain('useStudioEpisodeCards(\n    "shorts"');
   });
 });

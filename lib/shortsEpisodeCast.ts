@@ -20,7 +20,7 @@
  *
  * Pure: pass the session state in.
  */
-import { normalizeAdultShortsState, type AdultShortsSaved, type AdultShortsState } from "./adultShorts";
+import { editorHasContent, normalizeAdultShortsState, type AdultShortsSaved, type AdultShortsState } from "./adultShorts";
 import { isSafeDeckMediaSlug } from "./deckMediaPaths";
 import { NO_EPISODE_SCOPE, type EpisodeScope } from "./episodeCast";
 import type { SkidmarksState } from "./skidmarks";
@@ -54,9 +54,29 @@ export function shortsEpisodeScopeOf(adult: AdultShortsState | null | undefined)
   return { episode, legacy: card ? isOlderShortsEpisode(card) : false, tickedIds: [] };
 }
 
-/** Is Shorts' script studio the open editor (2026-10-04)? Absent = the shot cards. */
+/** Shorts' two editors (2026-10-04): the script studio, or the shot cards (EP01–EP03). */
+export type ShortsEditor = "script" | "cards";
+
+/**
+ * Which Shorts editor is open. Script episodes are the default
+ * (2026-10-04, Stuart: "Shorts must work exactly like Skidmarks"):
+ * "+ New" always starts one. The shot cards are open when their
+ * episode was picked on the EPISODES row, or, when nothing was ever
+ * picked, while a shot-card episode is open (a card, a name, a folder
+ * or work in it), so a
+ * session with EP03 open looks exactly as it did before.
+ */
+export function shortsOpenEditor(adultShorts: unknown): ShortsEditor {
+  const adult = normalizeAdultShortsState(adultShorts);
+  if (!adult) return "script";
+  if (adult.editor) return adult.editor;
+  const shotCardEpisodeOpen = Boolean(adult.currentSavedId || adult.title || adult.mediaSlug || editorHasContent(adult));
+  return shotCardEpisodeOpen ? "cards" : "script";
+}
+
+/** Is Shorts' script studio the open editor (2026-10-04)? See `shortsOpenEditor`. */
 export function shortsScriptEditorOpen(state: Pick<SkidmarksState, "adultShorts">): boolean {
-  return state.adultShorts?.editor === "script";
+  return shortsOpenEditor(state.adultShorts) === "script";
 }
 
 /**

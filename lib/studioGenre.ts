@@ -23,7 +23,7 @@
  * Anything that doesn't say which show it is means Sunny Banks, so every
  * Sunny Banks request, prompt and saved episode is exactly what it was.
  */
-import { ADULT_SHORTS_CONTENT_LOCK, ADULT_SHORTS_GROUP_ADULT_LOCK } from "./adultShorts";
+import { ADULT_SHORTS_CONTENT_LOCK, ADULT_SHORTS_GROUP_ADULT_LOCK, ADULT_SHORTS_MOTION_GROUP_ADULT_LOCK } from "./adultShorts";
 import { SUNNY_BANKS_LOOK, type StudioLook } from "./sunnyBanks";
 import type { SilentShotBackend } from "./videoBackendRouting";
 
@@ -111,8 +111,19 @@ export const SHORTS_TALKING_PLATE_LINE =
   "The speaker's head is level and their face is turned towards the camera (at most a three-quarter view), " +
   "mouth fully visible and not covered, not looking down.";
 
+/**
+ * The Shorts look on motion prompts (talking, silent, cutaway; 2026-10-04):
+ * the same, minus "same face, hair and body as their reference", which
+ * only a plate (made from the pictures) can follow. A talking row then
+ * ends the way a shot-card talking shot does (PR 252).
+ */
+export const SHORTS_MOTION_STYLE_LOCK =
+  "photorealistic live-action film footage, real people with natural skin texture, real light and real places, " +
+  `looks filmed by a real camera. ${ADULT_SHORTS_MOTION_GROUP_ADULT_LOCK} ${ADULT_SHORTS_CONTENT_LOCK}`;
+
 export const SHORTS_LOOK: StudioLook = {
   styleLock: SHORTS_STYLE_LOCK,
+  motionStyleLock: SHORTS_MOTION_STYLE_LOCK,
   ambienceSentence: "",
   idleAmbience: "",
   keepPlaceLine: "Do not swap the location for a different place.",

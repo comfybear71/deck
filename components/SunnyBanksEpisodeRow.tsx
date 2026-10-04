@@ -14,7 +14,7 @@ import {
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
 import { getSunnyBanksBusy, setSunnyBanksBusy, subscribeSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
-import { EpisodeCardsRow, type EpisodeRowNotice } from "@/components/EpisodeCardsRow";
+import { EpisodeCardsRow, type EpisodeCardView, type EpisodeRowNotice } from "@/components/EpisodeCardsRow";
 import { downloadSunnyBanksEpisodeZip, inStudioGenre, SUNNY_BANKS_EDITOR_ID } from "@/components/SkidmarksSunnyBanksPanel";
 import type { StudioGenre } from "@/lib/studioGenre";
 import { episodeExtrasFor, episodeFolderFor } from "@/lib/episodeExtras";
@@ -72,11 +72,47 @@ function studioExtrasFolder(genre: StudioGenre, slug: string | undefined): strin
   return isSafeDeckMediaSlug(slug) ? studioEpisodeFolder("shorts", slug) : null;
 }
 
+/** What a row's episode logic shares with the row it's shown in (one notice line, one bin confirm). */
+export interface EpisodeRowContext {
+  say: (text: string, tone?: "ok" | "warn" | "error") => void;
+  confirmDeleteId: string | null;
+  setConfirmDeleteId: (id: string | null) => void;
+}
+
+/** A show's episode cards and what each button does, for `EpisodeCardsRow`. */
+export interface EpisodeRowCards {
+  cards: EpisodeCardView[];
+  busy: boolean;
+  downloadingId: string | null;
+  onOpen: (id: string) => void;
+  onEdit: (id: string) => void;
+  onDelete: (id: string) => void;
+  onDownload: (id: string) => void;
+  onNew: () => void;
+}
+
 export function SunnyBanksEpisodeRow({ genre = "sunnybank" }: { genre?: StudioGenre } = {}) {
-  const studioState = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
-  const busy = useSyncExternalStore(subscribeSunnyBanksBusy, getSunnyBanksBusy, () => false);
   const [notice, setNotice] = useState<EpisodeRowNotice>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const say = (text: string, tone: "ok" | "warn" | "error" = "ok") => setNotice({ text, tone });
+  const row = useStudioEpisodeCards(genre, { say, confirmDeleteId, setConfirmDeleteId });
+  return <EpisodeCardsRow {...row} confirmDeleteId={confirmDeleteId} notice={notice} />;
+}
+
+/**
+ * The script studio's episode cards for one show (Sunny Banks, Skidmarks,
+ * Shorts' script episodes). Shared by `SunnyBanksEpisodeRow` and Shorts'
+ * EPISODES row (`ShortsEpisodesRow`, 2026-10-04), which also lists the
+ * older shot-card episodes. `shown` (Shorts only): whether the script
+ * studio is the editor on screen; `onShow` puts it there.
+ */
+export function useStudioEpisodeCards(
+  genre: StudioGenre,
+  { say, confirmDeleteId, setConfirmDeleteId }: EpisodeRowContext,
+  { shown = true, onShow }: { shown?: boolean; onShow?: () => void } = {},
+): EpisodeRowCards {
+  const studioState = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
+  const busy = useSyncExternalStore(subscribeSunnyBanksBusy, getSunnyBanksBusy, () => false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const studio = getStudioState(genre, studioState);
   const live = studio?.live ?? getSunnyBanksLiveOrDefault(studioState, genre);
@@ -86,8 +122,6 @@ export function SunnyBanksEpisodeRow({ genre = "sunnybank" }: { genre?: StudioGe
     (live.episodeId && workspaces.some((workspace) => workspace.id === live.episodeId) ? live.episodeId : null) ??
     workspaces.find((workspace) => workspace.fingerprint === liveFingerprint)?.id ??
     null;
-
-  const say = (text: string, tone: "ok" | "warn" | "error" = "ok") => setNotice({ text, tone });
 
   /** Save what's on screen first when no saved card already holds it. */
   const keepLiveWork = (): string | null => {
@@ -103,9 +137,18 @@ export function SunnyBanksEpisodeRow({ genre = "sunnybank" }: { genre?: StudioGe
 
   const handleOpen = (workspace: SunnyBanksWorkspaceSnapshot) => {
     setConfirmDeleteId(null);
-    if (busy || workspace.id === activeId) return;
+    if (busy) return;
+    if (workspace.id === activeId) {
+      // Already open behind the other Shorts editor: just show it.
+      if (!shown) {
+        onShow?.();
+        say(`Opened "${workspace.label}".`);
+      }
+      return;
+    }
     const saved = keepLiveWork();
     openSunnyBanksWorkspace(workspace.id, genre);
+    onShow?.();
     say(saved ? `Saved "${saved}", then opened "${workspace.label}".` : `Opened "${workspace.label}".`);
   };
 
@@ -125,6 +168,7 @@ export function SunnyBanksEpisodeRow({ genre = "sunnybank" }: { genre?: StudioGe
     if (busy) return;
     const saved = keepLiveWork();
     startNewSunnyBanksEpisode(genre);
+    onShow?.();
     say(saved ? `Saved "${saved}", then started a new episode.` : "Started a new episode.");
   };
 
@@ -201,36 +245,32 @@ export function SunnyBanksEpisodeRow({ genre = "sunnybank" }: { genre?: StudioGe
   };
 
   const byId = (id: string) => workspaces.find((workspace) => workspace.id === id);
-  return (
-    <EpisodeCardsRow
-      cards={workspaces.map((workspace) => ({
-        id: workspace.id,
-        label: workspace.label,
-        sub: describeSunnyBanksWorkspace(workspace),
-        clipUrl: firstClipUrl(workspace),
-        active: workspace.id === activeId,
-      }))}
-      busy={busy}
-      confirmDeleteId={confirmDeleteId}
-      downloadingId={downloadingId}
-      notice={notice}
-      onOpen={(id) => {
-        const workspace = byId(id);
-        if (workspace) handleOpen(workspace);
-      }}
-      onEdit={(id) => {
-        const workspace = byId(id);
-        if (workspace) handleEdit(workspace);
-      }}
-      onDelete={(id) => {
-        const workspace = byId(id);
-        if (workspace) handleDelete(workspace);
-      }}
-      onDownload={(id) => {
-        const workspace = byId(id);
-        if (workspace) void handleDownload(workspace);
-      }}
-      onNew={handleNew}
-    />
-  );
+  return {
+    cards: workspaces.map((workspace) => ({
+      id: workspace.id,
+      label: workspace.label,
+      sub: describeSunnyBanksWorkspace(workspace),
+      clipUrl: firstClipUrl(workspace),
+      active: shown && workspace.id === activeId,
+    })),
+    busy,
+    downloadingId,
+    onOpen: (id) => {
+      const workspace = byId(id);
+      if (workspace) handleOpen(workspace);
+    },
+    onEdit: (id) => {
+      const workspace = byId(id);
+      if (workspace) handleEdit(workspace);
+    },
+    onDelete: (id) => {
+      const workspace = byId(id);
+      if (workspace) handleDelete(workspace);
+    },
+    onDownload: (id) => {
+      const workspace = byId(id);
+      if (workspace) void handleDownload(workspace);
+    },
+    onNew: handleNew,
+  };
 }

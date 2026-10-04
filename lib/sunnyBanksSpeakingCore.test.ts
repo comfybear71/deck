@@ -5,10 +5,11 @@ import {
   SUNNY_BANKS_LOOK,
   buildLtxSpeakingCore,
   buildSunnyBanksSpeakingPrompt,
+  studioMotionStyleLock,
   type StudioLook,
   type SunnyBanksCharacterLock,
 } from "./sunnyBanks";
-import { STUDIO_GENRES, studioGenreProfile } from "./studioGenre";
+import { SHORTS_MOTION_STYLE_LOCK, studioGenreProfile } from "./studioGenre";
 
 /**
  * `buildSunnyBanksSpeakingPrompt` exactly as it was on master before the
@@ -42,7 +43,7 @@ describe("Sunny Banks / Skidmarks speaking prompt (unchanged by the shared core)
   it("is byte-identical to before for every regular, every show's look and every line", () => {
     expect(Object.keys(SUNNY_BANKS_CAST)).toContain("Dazza");
     let checked = 0;
-    for (const genre of STUDIO_GENRES) {
+    for (const genre of ["sunnybank", "skidmarks"] as const) {
       const look = studioGenreProfile(genre).look;
       for (const character of characters) {
         for (const line of LINES) {
@@ -55,6 +56,20 @@ describe("Sunny Banks / Skidmarks speaking prompt (unchanged by the shared core)
       expect(buildSunnyBanksSpeakingPrompt(character, "Default look.")).toBe(speakingPromptBefore(character, "Default look."));
     }
     expect(checked).toBeGreaterThan(20);
+  });
+
+  it("Sunny Banks and Skidmarks motion prompts end with their usual style lock; Shorts' ends with its motion lock", () => {
+    for (const genre of ["sunnybank", "skidmarks"] as const) {
+      const look = studioGenreProfile(genre).look;
+      expect(look.motionStyleLock).toBeUndefined();
+      expect(studioMotionStyleLock(look)).toBe(look.styleLock);
+    }
+    const shorts = studioGenreProfile("shorts").look;
+    expect(studioMotionStyleLock(shorts)).toBe(SHORTS_MOTION_STYLE_LOCK);
+    const p = buildSunnyBanksSpeakingPrompt({ name: "Ava", look: "short dark hair" }, "Hi.", shorts);
+    expect(p).toBe(`${buildLtxSpeakingCore("Ava", "Ava, short dark hair", "Hi.")} ${SHORTS_MOTION_STYLE_LOCK}`);
+    expect(p).not.toContain("as their reference");
+    expect(p).toMatch(/\badult\b[a-z ]{0,12}, clearly over 25/i);
   });
 
   it("the shared core is the speaking prompt minus the show's style lock", () => {

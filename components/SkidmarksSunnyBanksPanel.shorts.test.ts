@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkidmarksState } from "@/lib/skidmarks";
-import { SHORTS_STYLE_LOCK, SHORTS_TALKING_PLATE_LINE } from "@/lib/studioGenre";
+import { Mp3Encoder } from "@breezystack/lamejs";
+import { SHORTS_MOTION_STYLE_LOCK, SHORTS_STYLE_LOCK, SHORTS_TALKING_PLATE_LINE } from "@/lib/studioGenre";
+import { buildLtxSpeakingCore, missingVoiceMessage } from "@/lib/sunnyBanks";
 import { buildEmptySunnyBanksLive } from "@/lib/sunnyBanksWorkspace";
 
 /**
@@ -316,5 +318,108 @@ describe("a Shorts row through the real route (every outside call mocked)", () =
     expect(res.status).toBe(400);
     expect((await res.json()).code).toBe("no_plate_needed");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/** A real short MP3 standing in for ElevenLabs' answer (the route reads its length). */
+function testMp3(durationSec: number): Uint8Array {
+  const rate = 22050;
+  const encoder = new Mp3Encoder(1, rate, 64);
+  const pcm = new Int16Array(Math.round(durationSec * rate));
+  for (let i = 0; i < pcm.length; i++) pcm[i] = Math.round(Math.sin((2 * Math.PI * 440 * i) / rate) * 0x3fff);
+  const parts: Uint8Array[] = [];
+  for (let i = 0; i < pcm.length; i += 1152) parts.push(encoder.encodeBuffer(pcm.subarray(i, i + 1152)));
+  parts.push(encoder.flush());
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
+describe("Shorts talking rows work exactly like Skidmarks (2026-10-04)", () => {
+  const withState = (patch: Record<string, unknown>) => ({ ...STATE, ...patch }) as unknown as SkidmarksState;
+
+  it("the voice comes from the Cast card by name, with nobody starring", () => {
+    expect((STATE.adultShorts as { starring?: unknown }).starring).toBeUndefined();
+    expect(resolveSunnyBanksSpeaker("Ava", STATE, "shorts")?.voiceId).toBe(AVA_VOICE);
+    expect(resolveSunnyBanksSpeaker("ava", STATE, "shorts")?.voiceId).toBe(AVA_VOICE);
+  });
+
+  it("an old Starring list naming someone else doesn't change it", () => {
+    const stale = withState({
+      adultShorts: { ...(STATE.adultShorts as object), starring: [{ name: "Zed", look: "", referenceUrls: [AVA_PIC] }] },
+    });
+    expect(resolveSunnyBanksSpeaker("Ava", stale, "shorts")?.voiceId).toBe(AVA_VOICE);
+  });
+
+  it("a Cast card with no voice: the row has no voice (the red note on the row, Render all held) and the route refuses before any paid call", async () => {
+    const noVoice = withState({
+      characterLoras: {
+        characters: (STATE.characterLoras!.characters as unknown as Record<string, unknown>[]).map((c) => ({ ...c, voiceId: undefined })),
+      },
+    });
+    const lock = resolveSunnyBanksSpeaker("Ava", noVoice, "shorts");
+    expect(lock?.name).toBe("Ava");
+    expect(lock?.voiceId).toBeUndefined();
+    expect(missingVoiceMessage("Ava")).toMatch(/Ava/);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("ELEVENLABS_API_KEY", "test-elevenlabs-key");
+    vi.stubEnv("COMFY_CLOUD_API_KEY", "test-comfy-key");
+    try {
+      const body = { ...requestFor(rows(), 0, { rowPlateUrl: PLATE }) } as Record<string, unknown>;
+      delete body.voiceId;
+      const res = await POST(post(body));
+      expect(res.status).toBe(400);
+      expect((await res.json()).code).toBe("missing_voice");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("the talking row's LTX prompt is the shared Sunny Banks speaking prompt, then the Shorts adult lock and content rule", async () => {
+    const png = Buffer.from(TINY_DATA_URL.split(",")[1], "base64");
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
+      void _init;
+      const url = String(input);
+      if (url.includes("text-to-speech")) return new Response(new Blob([new Uint8Array(testMp3(3))]), { status: 200, headers: { "Content-Type": "audio/mpeg" } });
+      if (url === PLATE) return new Response(new Uint8Array(png), { status: 200, headers: { "Content-Type": "image/png" } });
+      if (url.endsWith("/api/upload/image")) return new Response(JSON.stringify({ name: "x", subfolder: "" }), { status: 200 });
+      if (url.endsWith("/api/prompt")) return new Response(JSON.stringify({ prompt_id: "job-1" }), { status: 200 });
+      if (url.includes("/api/jobs/"))
+        return new Response(JSON.stringify({ status: "completed", outputs: { "341": { images: [{ filename: "out.mp4", subfolder: "video", type: "output" }] } } }), { status: 200 });
+      if (url.includes("/api/view")) return new Response(null, { status: 302, headers: { location: "https://storage.example.com/clip.mp4" } });
+      if (url.startsWith("https://storage.example.com/")) return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("ELEVENLABS_API_KEY", "test-elevenlabs-key");
+    vi.stubEnv("ELEVEN_LABS_API_KEY", "");
+    vi.stubEnv("COMFY_CLOUD_API_KEY", "test-comfy-key");
+    vi.stubEnv("COMFY_URL", "");
+    putMock.mockReset();
+    putMock.mockImplementation(async (pathname: string) => ({ url: `https://abc123.public.blob.vercel-storage.com/${pathname}` }));
+    try {
+      const res = await POST(post(requestFor(rows(), 0, { rowPlateUrl: PLATE })));
+      expect(res.status).toBe(200);
+      // Ava's own voice from her Cast card, the Line with its tag.
+      const tts = fetchMock.mock.calls.find(([u]) => String(u).includes("text-to-speech"))!;
+      expect(String(tts[0])).toContain(AVA_VOICE);
+      const submit = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/api/prompt"))!;
+      const graph = JSON.stringify(JSON.parse(String(submit[1]?.body)).prompt);
+      const core = buildLtxSpeakingCore("Ava", `Ava, ${AVA_LOOK}`, "Nice night for it.");
+      const expected = `${core} ${SHORTS_MOTION_STYLE_LOCK}`;
+      expect(graph).toContain(JSON.stringify(expected).slice(1, -1));
+      expect(graph).not.toContain("same face, hair and body as their reference");
+      expect(graph).toMatch(/\badult\b[a-z ]{0,12}, clearly over 25/i);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
   });
 });

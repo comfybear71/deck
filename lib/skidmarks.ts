@@ -3388,11 +3388,12 @@ export function getAdultShortsState(state: SkidmarksState = getSkidmarksSnapshot
 
 /**
  * Which Shorts editor is open (2026-10-04): `"script"` (the script
- * studio, `shortsStudio`) or `null` (the shot cards, as before; EP01–EP03
- * always open there). Only the switch changes: no card is saved or
- * touched, so it never re-saves a shot-card episode.
+ * studio, `shortsStudio`), `"cards"` (the shot cards, EP01–EP03) or
+ * `null` (never picked: see `shortsOpenEditor`). Set by the EPISODES
+ * row. Only this flag changes: no card is saved or touched, so it never
+ * re-saves a shot-card episode.
  */
-export function setShortsEditor(editor: "script" | null): void {
+export function setShortsEditor(editor: "script" | "cards" | null): void {
   const current = getSkidmarksSnapshot();
   const base = getAdultShortsState(current);
   if ((base.editor ?? null) === editor) return;

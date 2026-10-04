@@ -19,6 +19,7 @@ import {
   missingCastPictureMessage,
   missingVoiceMessage,
   resolveSunnyBanksStartImage,
+  studioMotionStyleLock,
   SUNNY_BANKS_HOLD_DURATION_SEC,
 } from "@/lib/sunnyBanks";
 import {
@@ -786,7 +787,7 @@ function buildLocationCutawayPrompt(action: string, profile: StudioGenreProfile)
   const motion = action.replace(/\s+/g, " ").trim() || "Subtle ambient motion. Camera holds, no cuts.";
   const base = `Use the provided start image as the first frame. ${motion} No dialogue.`;
   // Shorts (2026-10-04): its adult and content locks reach every clip.
-  return profile.look.cutawayCarriesStyleLock ? `${base} ${profile.look.styleLock}` : base;
+  return profile.look.cutawayCarriesStyleLock ? `${base} ${studioMotionStyleLock(profile.look)}` : base;
 }
 
 async function runLtxAndPersist(args: {

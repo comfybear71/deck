@@ -30,9 +30,9 @@ import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
 import { EpisodeExtrasRow } from "@/components/EpisodeExtrasRow";
 import { SunnyBanksEpisodeRow } from "./SunnyBanksEpisodeRow";
-import { ShortsEpisodeRow } from "./ShortsEpisodeRow";
+import { ShortsEpisodesRow } from "./ShortsEpisodesRow";
+import { shortsOpenEditor } from "@/lib/shortsEpisodeCast";
 import { AdultShortsPanel } from "./AdultShortsPanel";
-import { ShortsEditorSwitch } from "./ShortsEditorSwitch";
 import { CharacterLorasPanel } from "./CharacterLorasPanel";
 import LocationsRow from "./LocationsRow";
 import { useIsPcShell } from "@/hooks/useIsPcShell";
@@ -607,9 +607,10 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     ) : null;
 
   /** Phone: single-column stack + link to Library. PC: 2-col desk. Finished Songs live in Library on both. */
-  // Which Shorts editor is open (2026-10-04); absent = the shot cards, as before.
+  // Which Shorts editor is open (2026-10-04): script episodes by default;
+  // the shot cards while a shot-card episode (EP01–EP03) is open.
   const shortsState = getAdultShortsState(storeSnapshot);
-  const shortsScript = shortsState.editor === "script";
+  const shortsScript = shortsOpenEditor(storeSnapshot.adultShorts) === "script";
   const shortsAgeConfirmed = shortsState.ageConfirmed;
   const renderDeskBody = (layout: "phone" | "pc") => (
     <div className="flex flex-col gap-8 pt-2">
@@ -630,12 +631,10 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {session.projectKind === "sunnybank" && <SunnyBanksEpisodeRow />}
       {session.projectKind === "sunnybank" && <LocationsRow genre="sunnybank" />}
       {session.projectKind === "sunnybank" && <CharacterLorasPanel group="sunny-banks" />}
-      {/* Shorts matches Sunnybank (2026-09-30): EPISODES, then LOCATIONS, then the cast row.
-          Since 2026-10-04 it has two editors: script episodes (the same studio as
-          Sunny Banks and Skidmarks) and the shot cards (EP01–EP03, untouched). */}
-      {session.projectKind === "adult-shorts" && <ShortsEditorSwitch />}
-      {session.projectKind === "adult-shorts" && shortsScript && <SunnyBanksEpisodeRow genre="shorts" />}
-      {session.projectKind === "adult-shorts" && !shortsScript && <ShortsEpisodeRow />}
+      {/* Shorts matches Skidmarks (2026-10-04): one EPISODES row, then LOCATIONS, then the
+          cast row, then the same script studio. The older shot-card episodes (EP01–EP03)
+          are on the same row and open in the shot cards, untouched. */}
+      {session.projectKind === "adult-shorts" && <ShortsEpisodesRow />}
       {session.projectKind === "adult-shorts" && <LocationsRow genre="adult-shorts" />}
       {session.projectKind === "adult-shorts" && <CharacterLorasPanel group="adult-shorts" />}
 

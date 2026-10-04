@@ -94,6 +94,11 @@ export interface StudioLook {
   idleAmbience: string;
   /** Plating: what the locked background must never turn into. */
   keepPlaceLine: string;
+  /** The style lock on motion prompts (talking, silent hold, cutaway)
+   * when it differs from the plate's (2026-10-04, Shorts: the video
+   * models get only the start image, so no "same face … as their
+   * reference"). Left out: `styleLock`, as always. */
+  motionStyleLock?: string;
   /** Plating a talking row (2026-10-04, Shorts): how the speaker's face
    * must sit so LTX can move the mouth. Left out: nothing is added. */
   talkingPlateLine?: string;
@@ -503,9 +508,14 @@ export function buildSunnyBanksSpeakingPrompt(
   look: StudioLook = SUNNY_BANKS_LOOK
 ): string {
   return (
-    `${buildLtxSpeakingCore(character.name, `${character.name}, ${character.look}`, line)} ${look.styleLock}` +
+    `${buildLtxSpeakingCore(character.name, `${character.name}, ${character.look}`, line)} ${studioMotionStyleLock(look)}` +
     accessoryLockSuffix(character)
   );
+}
+
+/** The style lock a motion prompt ends with: `motionStyleLock` when the show has one, else `styleLock`. */
+export function studioMotionStyleLock(look: StudioLook): string {
+  return look.motionStyleLock ?? look.styleLock;
 }
 
 /**
@@ -594,7 +604,7 @@ export function buildSunnyBanksHoldPrompt(
     return (
       `Use the provided start image as the first frame. ${character.name}, ${character.look}. ${look.ambienceSentence}` +
       `Props and background stay exactly as the start image, nothing new enters frame. No dialogue. No cuts. ` +
-      `Same person and objects as the start image. ${look.styleLock}` +
+      `Same person and objects as the start image. ${studioMotionStyleLock(look)}` +
       accessoryLockSuffix(character)
     );
   }
@@ -602,7 +612,7 @@ export function buildSunnyBanksHoldPrompt(
     `Use the provided start image as the first frame. ${character.name}, ${character.look} holds their pose, ` +
     `subtle idle motion, weight shift, breathing${look.idleAmbience}. Props and background stay exactly as the ` +
     `start image, nothing new enters frame. No dialogue. Camera holds, no cuts. Same person and objects as the ` +
-    `start image. ${look.styleLock}` +
+    `start image. ${studioMotionStyleLock(look)}` +
     accessoryLockSuffix(character)
   );
 }
