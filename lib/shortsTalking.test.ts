@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   ADULT_SHORTS_CONTENT_LOCK,
   ADULT_SHORTS_GENERAL_CONTENT_LOCK,
-  ADULT_SHORTS_GROUP_ADULT_LOCK,
   adultShortSpeaker,
   buildAdultShortsShot,
   buildAdultShortsTalkingPrompt,
@@ -12,6 +11,7 @@ import {
   normalizeAdultShortsState,
 } from "./adultShorts";
 import { talkingPromptWithLine } from "./adultShortsTalking";
+import { buildLtxSpeakingCore, buildSunnyBanksSpeakingPrompt } from "./sunnyBanks";
 import { buildCharacterLoraEntry } from "./characterLoras";
 import { resolveShortsStarring } from "./shortsCast";
 import { adultShortTarget } from "./deckMediaPaths";
@@ -58,18 +58,62 @@ describe("Shorts talking shots (a shot with a Line)", () => {
   });
 
   it("the LTX prompt keeps the adult lock and the episode's content rule", () => {
-    const off = buildAdultShortsTalkingPrompt([{ ...BROTHER, subjectWord: "man" }], { prompt: "At the caravan" }, "Brother", { adult: false });
-    expect(off).toContain("Brother speaks to camera, lips in sync with the audio.");
+    const off = buildAdultShortsTalkingPrompt([{ ...BROTHER, subjectWord: "man" }], { prompt: "At the caravan", line: "Hi." }, "Brother", { adult: false });
     expect(off).toContain("Adult man, clearly over 25");
     expect(off).toContain(ADULT_SHORTS_GENERAL_CONTENT_LOCK);
-    const on = buildAdultShortsTalkingPrompt([SKYLAR, BROTHER], { prompt: "Arm-wrestle" }, "SKYLAR", { adult: true });
-    expect(on).toContain(ADULT_SHORTS_GROUP_ADULT_LOCK);
+    expect(off).toMatch(/\badult\b[a-z ]{0,12}, clearly over 25/i);
+    const on = buildAdultShortsTalkingPrompt([SKYLAR, BROTHER], { prompt: "Arm-wrestle", line: "Go." }, "SKYLAR", { adult: true });
+    expect(on).toContain("Everyone shown is an adult, clearly over 25, a fictional AI-created character, photorealistic.");
+    expect(on).toMatch(/\badult\b[a-z ]{0,12}, clearly over 25/i);
     expect(on).toContain(ADULT_SHORTS_CONTENT_LOCK);
-    // More than one person (2026-10-03): the shared speaker/listener text.
-    expect(on).toContain("SKYLAR speaks to camera.");
+    // More than one person (2026-10-03): the shared speaker/listener text, after the speaking text.
     expect(on).toContain("SKYLAR is the only one speaking, mouth and jaw in clear sync with the audio.");
     expect(on).toContain("Brother listens silently, lips pressed together, mouth closed the whole clip.");
     expect(on).not.toContain("Everyone else listens.");
+    expect(on.indexOf('SKYLAR says: "Go."')).toBeLessThan(on.indexOf("SKYLAR is the only one speaking"));
+  });
+
+  it("talking shots open with the exact Sunny Banks speaking text (2026-10-04)", () => {
+    const line = "[whispers] So where do you think you'll be going next?";
+    const words = "So where do you think you'll be going next?";
+    const p = buildAdultShortsTalkingPrompt([{ ...BROTHER, subjectWord: "man" }], { prompt: "Close-up at the table.", line }, "Brother", { adult: false });
+    // The same core Sunny Banks/Skidmarks send, character for character.
+    const sb = buildSunnyBanksSpeakingPrompt({ name: "Brother", look: "short dark hair" }, words);
+    const core = buildLtxSpeakingCore("Brother", "Brother, short dark hair", words);
+    expect(sb.startsWith(core)).toBe(true);
+    expect(p.startsWith(core)).toBe(true);
+    expect(p).toContain("mouth and head move naturally while speaking, subtle gesture.");
+    expect(p).toContain(`Brother says: "${words}". Camera holds. Same person and objects as the start image.`);
+    // Then the shot prompt as extra context, then the locks.
+    expect(p).toBe(
+      `${core} Close-up at the table. Adult man, clearly over 25, fictional AI-created character, photorealistic. ${ADULT_SHORTS_GENERAL_CONTENT_LOCK}`,
+    );
+    expect(p).not.toContain("[whispers]");
+  });
+
+  it("talking shots drop the plate wording: no 'Character:' and no 'same face … as the reference'", () => {
+    const one = buildAdultShortsTalkingPrompt([{ ...BROTHER, subjectWord: "man" }], { prompt: "At the caravan", line: "Hi." }, "Brother");
+    const two = buildAdultShortsTalkingPrompt([SKYLAR, BROTHER], { prompt: "Arm-wrestle", line: "Go." }, "SKYLAR");
+    for (const p of [one, two]) {
+      expect(p).not.toMatch(/Characters?:/);
+      expect(p).not.toContain("same face, hair and body as");
+      expect(p).not.toContain("speaks to camera");
+    }
+  });
+
+  it("no look on the Cast card leaves it out cleanly", () => {
+    const p = buildAdultShortsTalkingPrompt([{ name: "Kira", look: "  ", referenceUrls: [] }], { prompt: "Verandah.", line: "Hello there." }, "Kira", { adult: false });
+    expect(p.startsWith("Use the provided start image as the first frame. Kira is prominent, mouth and head move naturally")).toBe(true);
+    expect(p).not.toMatch(/Kira, +is prominent/);
+    expect(p).not.toContain(",  ");
+    expect(p).toContain("Adult person, clearly over 25, fictional AI-created character, photorealistic.");
+  });
+
+  it("a long shot prompt is trimmed so the speaking text and the locks survive", () => {
+    const p = buildAdultShortsTalkingPrompt([{ ...BROTHER, subjectWord: "man" }], { prompt: "x".repeat(5000), line: "Hi." }, "Brother", { adult: false });
+    expect(p.length).toBeLessThanOrEqual(1900);
+    expect(p.startsWith("Use the provided start image as the first frame.")).toBe(true);
+    expect(p.endsWith(ADULT_SHORTS_GENERAL_CONTENT_LOCK)).toBe(true);
   });
 
   it("the picture prompt quotes only the words; the tags go to ElevenLabs", () => {
@@ -79,6 +123,9 @@ describe("Shorts talking shots (a shot with a Line)", () => {
     const long = talkingPromptWithLine("LOCKS.", "B", "x".repeat(3000));
     expect(long.endsWith(" LOCKS.")).toBe(true);
     expect(long.length).toBeLessThanOrEqual(2000);
+    // A prompt that already quotes the speaker's words goes as it is.
+    const built = buildAdultShortsTalkingPrompt([BROTHER], { prompt: "P.", line: "[whispers] Nobody move." }, "Brother");
+    expect(talkingPromptWithLine(built, "Brother", "[whispers] Nobody move.")).toBe(built);
   });
 
   it("the price reads the way Sunnybank shows talking lines", () => {

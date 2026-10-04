@@ -37,8 +37,9 @@ afterEach(() => {
 });
 
 describe("kinds", () => {
-  it("knows skidmarks-episode and adult-short, each in its project folder", () => {
+  it("knows skidmarks-episode, shorts-episode and adult-short, each in its project folder", () => {
     expect(isDeckItemKind("skidmarks-episode")).toBe(true);
+    expect(isDeckItemKind("shorts-episode")).toBe(true);
     expect(isDeckItemKind("adult-short")).toBe(true);
     expect(isDeckItemKind("adult-shorts")).toBe(false);
     expect(isDeckItemKind("sunnybank-episode")).toBe(true);
@@ -46,6 +47,7 @@ describe("kinds", () => {
     expect(DECK_ITEM_KIND_FOLDERS).toEqual({
       "sunnybank-episode": "sunnybank",
       "skidmarks-episode": "skidmarks",
+      "shorts-episode": "adult-shorts",
       "adult-short": "adult-shorts",
     });
   });
@@ -78,6 +80,22 @@ describe("prepareDeckItemData", () => {
     const out = prepareDeckItemData("skidmarks-episode", card.id, card);
     expect(out).toMatchObject({ ok: true, folder: "skidmarks", data: { id: card.id, label: "Cornish Arsehole", castIds: ["cast_dap"] } });
     expect(prepareDeckItemData("skidmarks-episode", "other", card)).toMatchObject({ ok: false });
+  });
+
+  it("cleans a Shorts script episode card (shorts-episode, 2026-10-04) and files it under adult-shorts", async () => {
+    const { prepareDeckItemData } = await load();
+    const { buildEmptySunnyBanksLive, buildSunnyBanksWorkspaceFromLive } = await import("./sunnyBanksWorkspace");
+    const card = buildSunnyBanksWorkspaceFromLive(
+      { ...buildEmptySunnyBanksLive("shorts"), workspaceTitle: "EP04 Test Night" },
+      1_759_000_000_000,
+      1,
+      "shorts"
+    );
+    const out = prepareDeckItemData("shorts-episode", card.id, { ...card, junk: 1 });
+    expect(out).toMatchObject({ ok: true, folder: "adult-shorts", data: { id: card.id, label: "EP04 Test Night" } });
+    expect((out as { data: Record<string, unknown> }).data.junk).toBeUndefined();
+    expect(prepareDeckItemData("shorts-episode", "other", card)).toMatchObject({ ok: false });
+    expect(prepareDeckItemData("shorts-episode", card.id, { nope: true })).toMatchObject({ ok: false });
   });
 
   it("cleans a saved short and files it under adult-shorts", async () => {

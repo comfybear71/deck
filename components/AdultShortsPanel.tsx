@@ -60,6 +60,7 @@ import { ShotGrid, type ShotTileView } from "./ShotGrid";
 import { EpisodeExtrasRow } from "./EpisodeExtrasRow";
 import { setShortsBusy } from "@/lib/shortsBusy";
 import { runSunnyBanksRenderQueue } from "@/lib/sunnyBanksRenderQueue";
+import { preSendChecks } from "@/lib/preSendChecks";
 import { SHORTS_EDITOR_ID } from "./ShortsEpisodeRow";
 import { deckBuildHeaders } from "@/lib/deckBuild";
 
@@ -468,6 +469,24 @@ export function AdultShortsPanel() {
     }
   };
 
+  /**
+   * The free pre-send check's warnings for one shot (2026-10-04). The
+   * speaker-not-in-shot block is the shot cards' own guard (PR #249), so it
+   * isn't said twice here.
+   */
+  const shortsCastNames = shortsCastList(snapshot).map((c) => c.name);
+  const shotPreSend = (shot: AdultShortsShot, inShotNames: string[]) =>
+    preSendChecks({
+      kind: isAdultShortTalkingShot(shot) ? "speak" : "hold",
+      speakerName: shot.speakerName ?? inShotNames[0] ?? null,
+      inShotNames,
+      castNames: shortsCastNames,
+      promptText: shot.prompt,
+      line: shot.line,
+      // A talking shot is as long as its Line; a silent one has its own length.
+      durationSec: isAdultShortTalkingShot(shot) ? null : shot.durationSec,
+    }).filter((issue) => issue.code !== "speaker_not_in_shot");
+
   /** One shot's editor, opened from its tile: every control the stacked rows had. */
   const renderShotPanel = (shot: AdultShortsShot, index: number) => {
     const isBusy = busy?.shotId === shot.id;
@@ -628,6 +647,13 @@ export function AdultShortsPanel() {
         {noVoice && speaker && (
           <p className="text-xs text-red-300">{speaker.name} has no voice yet. Add their ElevenLabs voice ID on their Cast card.</p>
         )}
+        {/* The free pre-send check (2026-10-04): the same rules as every show (`lib/preSendChecks.ts`). */}
+        {!shot.clipUrl &&
+          shotPreSend(shot, people.map((p) => p.name)).map((issue) => (
+            <p key={issue.code + issue.message} role="status" className="text-xs text-amber-200/80">
+              Check: {issue.message}
+            </p>
+          ))}
 
         {index > 0 && (
           <div className="flex flex-wrap items-center gap-3 text-xs text-white/60">
@@ -817,6 +843,17 @@ export function AdultShortsPanel() {
             )}
           </div>
         )}
+        {/* Next to Render all: which shots the free pre-send check flagged (2026-10-04). */}
+        {(() => {
+          const flagged = shots
+            .map((shot, index) => ({ index, n: shot.clipUrl ? 0 : shotPreSend(shot, shortsShotPeople(starringPeople, shot).map((p) => p.name)).length }))
+            .filter((x) => x.n > 0);
+          return flagged.length > 0 ? (
+            <p role="status" className="text-xs text-amber-200/80">
+              Check before rendering: shot{flagged.length === 1 ? "" : "s"} {flagged.map((x) => x.index + 1).join(", ")} (open the shot to see why).
+            </p>
+          ) : null;
+        })()}
 
         <ShotGrid
           tiles={shots.map((shot, index): ShotTileView => {

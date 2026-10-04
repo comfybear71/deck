@@ -28,6 +28,8 @@
 import { isAllowedTrainingImageUrl, normalizeElevenLabsVoiceId } from "./characterLoras";
 import { normalizeRosterExtrasState } from "./rosterExtras";
 import type { SkidmarksState } from "./skidmarks";
+import { entryForRosterCharacter } from "./characterRoster";
+import { shortsCastList } from "./shortsCast";
 import { openSkidmarksEpisodeScopeIn, skidmarksEpisodeCast } from "./skidmarksEpisodeCast";
 import { normalizeSkidmarksEpisodesState, type SkidmarksCastMember } from "./skidmarksEpisodes";
 import { SUNNY_BANKS_CAST, getSunnyBanksCharacterLock, resolveSunnyBanksStartImage, type SunnyBanksCharacterLock } from "./sunnyBanks";
@@ -55,8 +57,29 @@ function skidmarksCast(state: SkidmarksState): SkidmarksCastMember[] {
   return skidmarksEpisodeCast(cast, openSkidmarksEpisodeScopeIn(state));
 }
 
+/** The open Shorts script episode's own Cast (2026-10-04): the Shorts Cast
+ * row as it shows now (`shortsCastList`, already only this episode's
+ * people, and empty until the 18+ confirm). */
+function shortsStudioCast(state: SkidmarksState): Array<{ name: string; look: string; firstPicture: string | undefined; sourceKey: string }> {
+  return shortsCastList(state).map((c) => ({
+    name: c.name,
+    look: c.look,
+    firstPicture: c.thumbUrl ?? undefined,
+    sourceKey: c.sourceKey,
+  }));
+}
+
 function showCards(state: SkidmarksState, genre: StudioGenre): ShowCard[] {
   const out: ShowCard[] = [];
+  if (genre === "shorts") {
+    const characters = state.characterLoras?.characters ?? [];
+    for (const member of shortsStudioCast(state)) {
+      const card = entryForRosterCharacter(characters, member.sourceKey);
+      if (!card) continue;
+      out.push({ card, added: true, look: member.look, firstPicture: member.firstPicture });
+    }
+    return out;
+  }
   if (genre === "skidmarks") {
     const cast = skidmarksCast(state);
     for (const card of state.characterLoras?.characters ?? []) {
@@ -84,7 +107,7 @@ function showCards(state: SkidmarksState, genre: StudioGenre): ShowCard[] {
 
 /** One cache per show, keyed on the (immutable) session state. */
 function genreCache<T>(): Record<StudioGenre, WeakMap<SkidmarksState, T>> {
-  return { sunnybank: new WeakMap(), skidmarks: new WeakMap() };
+  return { sunnybank: new WeakMap(), skidmarks: new WeakMap(), shorts: new WeakMap() };
 }
 
 /** The look an added character with no written look gets: "as in their
@@ -383,7 +406,9 @@ export function sunnyBanksCastCards(state: SkidmarksState, genre: StudioGenre = 
   const added =
     genre === "skidmarks"
       ? skidmarksCast(state).map((m) => ({ name: m.name, look: m.look, firstPicture: m.pictureUrls?.[0] }))
-      : (normalizeRosterExtrasState(state.rosterExtras)?.["sunny-banks"] ?? []).map((x) => ({
+      : genre === "shorts"
+        ? shortsStudioCast(state)
+        : (normalizeRosterExtrasState(state.rosterExtras)?.["sunny-banks"] ?? []).map((x) => ({
           name: x.name,
           look: x.look,
           firstPicture: x.pictureUrls[0],

@@ -94,6 +94,18 @@ export interface StudioLook {
   idleAmbience: string;
   /** Plating: what the locked background must never turn into. */
   keepPlaceLine: string;
+  /** The style lock on motion prompts (talking, silent hold, cutaway)
+   * when it differs from the plate's (2026-10-04, Shorts: the video
+   * models get only the start image, so no "same face … as their
+   * reference"). Left out: `styleLock`, as always. */
+  motionStyleLock?: string;
+  /** Plating a talking row (2026-10-04, Shorts): how the speaker's face
+   * must sit so LTX can move the mouth. Left out: nothing is added. */
+  talkingPlateLine?: string;
+  /** A location cutaway's motion prompt carries `styleLock` too
+   * (2026-10-04, Shorts: its adult and content locks reach every clip).
+   * Left out: the cutaway prompt is exactly as before. */
+  cutawayCarriesStyleLock?: boolean;
 }
 
 export const SUNNY_BANKS_LOOK: StudioLook = {
@@ -496,11 +508,31 @@ export function buildSunnyBanksSpeakingPrompt(
   look: StudioLook = SUNNY_BANKS_LOOK
 ): string {
   return (
-    `Use the provided start image as the first frame. ${character.name}, ${character.look} is prominent, mouth ` +
-    `and head move naturally while speaking, subtle gesture. Props and background stay exactly as the start ` +
-    `image, nothing new enters frame. ${character.name} says: "${line.trim()}". Camera holds. Same person and ` +
-    `objects as the start image. ${look.styleLock}` +
+    `${buildLtxSpeakingCore(character.name, `${character.name}, ${character.look}`, line)} ${studioMotionStyleLock(look)}` +
     accessoryLockSuffix(character)
+  );
+}
+
+/** The style lock a motion prompt ends with: `motionStyleLock` when the show has one, else `styleLock`. */
+export function studioMotionStyleLock(look: StudioLook): string {
+  return look.motionStyleLock ?? look.styleLock;
+}
+
+/**
+ * The proven LTX talking text (the gold speaking plate above, without
+ * the show's style lock): "Use the provided start image as the first
+ * frame. NAME, LOOK is prominent, mouth and head move naturally while
+ * speaking … NAME says: "…". Camera holds. Same person and objects as
+ * the start image." Shared with Shorts' talking shots (2026-10-04), so
+ * every show tells LTX the same thing. `subject` is "NAME, LOOK", or just
+ * "NAME" when there's no look.
+ */
+export function buildLtxSpeakingCore(name: string, subject: string, line: string): string {
+  return (
+    `Use the provided start image as the first frame. ${subject} is prominent, mouth ` +
+    `and head move naturally while speaking, subtle gesture. Props and background stay exactly as the start ` +
+    `image, nothing new enters frame. ${name} says: "${line.trim()}". Camera holds. Same person and ` +
+    `objects as the start image.`
   );
 }
 
@@ -572,7 +604,7 @@ export function buildSunnyBanksHoldPrompt(
     return (
       `Use the provided start image as the first frame. ${character.name}, ${character.look}. ${look.ambienceSentence}` +
       `Props and background stay exactly as the start image, nothing new enters frame. No dialogue. No cuts. ` +
-      `Same person and objects as the start image. ${look.styleLock}` +
+      `Same person and objects as the start image. ${studioMotionStyleLock(look)}` +
       accessoryLockSuffix(character)
     );
   }
@@ -580,7 +612,7 @@ export function buildSunnyBanksHoldPrompt(
     `Use the provided start image as the first frame. ${character.name}, ${character.look} holds their pose, ` +
     `subtle idle motion, weight shift, breathing${look.idleAmbience}. Props and background stay exactly as the ` +
     `start image, nothing new enters frame. No dialogue. Camera holds, no cuts. Same person and objects as the ` +
-    `start image. ${look.styleLock}` +
+    `start image. ${studioMotionStyleLock(look)}` +
     accessoryLockSuffix(character)
   );
 }

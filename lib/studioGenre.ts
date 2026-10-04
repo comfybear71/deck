@@ -11,19 +11,34 @@
  *   cards `sk:<id>`, filtered by `lib/skidmarksEpisodeCast.ts`), no built-ins, the semi-photoreal lock below, clips
  *   in `deck/skidmarks/episodes/<episode>/…`.
  *
+ * - `shorts` (2026-10-04, Stuart: "rebuild Shorts to work like Skidmarks
+ *   and Sunny Banks"): each episode's own Shorts Cast and Locations
+ *   (`lib/shortsEpisodeCast.ts`), no built-ins, the photoreal look below
+ *   (it carries the Shorts adult and content locks), clips in
+ *   `deck/shorts/episodes/<episode>/…`. Plates on Siray (Seedream,
+ *   uncensored) by default, or Grok; silent shots on Siray by default,
+ *   or Grok / H3. The shot-card episodes (EP01–EP03) keep their own
+ *   editor (`components/AdultShortsPanel.tsx`), untouched.
+ *
  * Anything that doesn't say which show it is means Sunny Banks, so every
  * Sunny Banks request, prompt and saved episode is exactly what it was.
  */
+import { ADULT_SHORTS_CONTENT_LOCK, ADULT_SHORTS_GROUP_ADULT_LOCK, ADULT_SHORTS_MOTION_GROUP_ADULT_LOCK } from "./adultShorts";
 import { SUNNY_BANKS_LOOK, type StudioLook } from "./sunnyBanks";
+import type { SilentShotBackend } from "./videoBackendRouting";
 
-export type StudioGenre = "sunnybank" | "skidmarks";
+export type StudioGenre = "sunnybank" | "skidmarks" | "shorts";
 
-export const STUDIO_GENRES: readonly StudioGenre[] = ["sunnybank", "skidmarks"];
+export const STUDIO_GENRES: readonly StudioGenre[] = ["sunnybank", "skidmarks", "shorts"];
 
-/** `"skidmarks"` is Skidmarks; anything else (missing, junk) is Sunny Banks. */
+/** `"skidmarks"` / `"shorts"` name their show; anything else (missing, junk) is Sunny Banks. */
 export function parseStudioGenre(value: unknown): StudioGenre {
-  return value === "skidmarks" ? "skidmarks" : "sunnybank";
+  return value === "skidmarks" || value === "shorts" ? value : "sunnybank";
 }
+
+/** What makes a row's start picture (2026-10-04): Grok (xAI image edit) or
+ * Siray (Seedream 4.5 reference edit, uncensored). */
+export type PlateEngine = "grok" | "siray";
 
 /**
  * The Skidmarks look for every motion and plating prompt (2026-10-04).
@@ -75,6 +90,47 @@ export const SKIDMARKS_PICTURE_STYLE =
   "semi-photoreal stylised 3D feature film render, about 70 percent photographic, believable skin, hair and " +
   "fabric, soft directional daylight, warm lifted colour, sharp focus, caricature modelled into the anatomy";
 
+/**
+ * The Shorts look (2026-10-04): real live-action footage, never a
+ * cartoon or a render. An episode's own look ("Gritty 16mm film, heavy
+ * film grain…", EP03) goes in its `[Action:]` text and wins. It carries
+ * the Shorts adult lock and content rule, so every Shorts prompt (plate,
+ * talking or silent) has them, and Siray's clip check
+ * (`/\badult\b…, clearly over 25/`) passes.
+ */
+export const SHORTS_STYLE_LOCK =
+  "photorealistic live-action film footage, real people with natural skin texture, real light and real places, " +
+  `looks filmed by a real camera. ${ADULT_SHORTS_GROUP_ADULT_LOCK} ${ADULT_SHORTS_CONTENT_LOCK}`;
+
+/**
+ * A talking row's plate (2026-10-04, EP03 shot 3): LTX only moves a
+ * mouth it can see. Ned's head tilted down at his beer can gave no
+ * lip-sync; facing the camera did. Added to a Shorts talking row's plate.
+ */
+export const SHORTS_TALKING_PLATE_LINE =
+  "The speaker's head is level and their face is turned towards the camera (at most a three-quarter view), " +
+  "mouth fully visible and not covered, not looking down.";
+
+/**
+ * The Shorts look on motion prompts (talking, silent, cutaway; 2026-10-04):
+ * the same, minus "same face, hair and body as their reference", which
+ * only a plate (made from the pictures) can follow. A talking row then
+ * ends the way a shot-card talking shot does (PR 252).
+ */
+export const SHORTS_MOTION_STYLE_LOCK =
+  "photorealistic live-action film footage, real people with natural skin texture, real light and real places, " +
+  `looks filmed by a real camera. ${ADULT_SHORTS_MOTION_GROUP_ADULT_LOCK} ${ADULT_SHORTS_CONTENT_LOCK}`;
+
+export const SHORTS_LOOK: StudioLook = {
+  styleLock: SHORTS_STYLE_LOCK,
+  motionStyleLock: SHORTS_MOTION_STYLE_LOCK,
+  ambienceSentence: "",
+  idleAmbience: "",
+  keepPlaceLine: "Do not swap the location for a different place.",
+  talkingPlateLine: SHORTS_TALKING_PLATE_LINE,
+  cutawayCarriesStyleLock: true,
+};
+
 export interface StudioGenreProfile {
   genre: StudioGenre;
   /** The show's name in messages ("Sunny Banks", "Skidmarks"). */
@@ -84,6 +140,10 @@ export interface StudioGenreProfile {
   legacyBlobPrefix: string;
   /** Has the built-in Sunny Banks cast and locations. */
   builtIns: boolean;
+  /** The engines the silent-shot switch offers, default first. */
+  silentBackends: readonly SilentShotBackend[];
+  /** The engines a plate can be made on, default first. */
+  plateEngines: readonly PlateEngine[];
 }
 
 export const STUDIO_GENRE_PROFILES: Record<StudioGenre, StudioGenreProfile> = {
@@ -93,6 +153,8 @@ export const STUDIO_GENRE_PROFILES: Record<StudioGenre, StudioGenreProfile> = {
     look: SUNNY_BANKS_LOOK,
     legacyBlobPrefix: "sunnybanks",
     builtIns: true,
+    silentBackends: ["grok", "h3"],
+    plateEngines: ["grok"],
   },
   skidmarks: {
     genre: "skidmarks",
@@ -100,6 +162,17 @@ export const STUDIO_GENRE_PROFILES: Record<StudioGenre, StudioGenreProfile> = {
     look: SKIDMARKS_LOOK,
     legacyBlobPrefix: "skidmarks/studio",
     builtIns: false,
+    silentBackends: ["grok", "h3"],
+    plateEngines: ["grok"],
+  },
+  shorts: {
+    genre: "shorts",
+    showName: "Shorts",
+    look: SHORTS_LOOK,
+    legacyBlobPrefix: "shorts/studio",
+    builtIns: false,
+    silentBackends: ["siray", "grok", "h3"],
+    plateEngines: ["siray", "grok"],
   },
 };
 
@@ -108,6 +181,18 @@ export function studioGenreProfile(genre: StudioGenre | undefined): StudioGenreP
 }
 
 /** Which roster group a show's Cast cards are in. */
-export function studioCastGroup(genre: StudioGenre): "sunny-banks" | "skidmarks" {
-  return genre === "skidmarks" ? "skidmarks" : "sunny-banks";
+export function studioCastGroup(genre: StudioGenre): "sunny-banks" | "skidmarks" | "adult-shorts" {
+  return genre === "skidmarks" ? "skidmarks" : genre === "shorts" ? "adult-shorts" : "sunny-banks";
+}
+
+/** The show's silent-shot engine: the saved switch when the show offers it, else its default. */
+export function studioSilentBackend(genre: StudioGenre, saved: unknown): SilentShotBackend {
+  const offered = studioGenreProfile(genre).silentBackends;
+  return offered.includes(saved as SilentShotBackend) ? (saved as SilentShotBackend) : offered[0];
+}
+
+/** The show's plate engine: the saved switch when the show offers it, else its default. */
+export function studioPlateEngine(genre: StudioGenre, saved: unknown): PlateEngine {
+  const offered = studioGenreProfile(genre).plateEngines;
+  return offered.includes(saved as PlateEngine) ? (saved as PlateEngine) : offered[0];
 }

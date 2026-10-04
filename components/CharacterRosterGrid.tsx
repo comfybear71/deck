@@ -55,6 +55,7 @@ import {
   type SkidmarksState,
 } from "@/lib/skidmarks";
 import { episodeNameFirstMessage, isEpisodeCastGenre, isInEpisode } from "@/lib/episodeCast";
+import { shortsScriptEditorOpen } from "@/lib/shortsEpisodeCast";
 import { openEpisodeScopeIn } from "@/lib/episodeScopes";
 import { getOpenEpisodeFolder, pinOpenEpisodeFolder } from "@/lib/episodeFolders";
 import { normalizeAdultShortsState } from "@/lib/adultShorts";
@@ -1385,7 +1386,7 @@ export function CharacterRosterGrid({
     // Skidmarks and Shorts (2026-10-04): a new card belongs to the open
     // episode, so the episode needs a name (its folder is pinned here).
     if (isEpisodeCastGenre(addGroup) && !pinOpenEpisodeFolder(addGroup)) {
-      setMessage((m) => ({ ...m, "add-cast": episodeNameFirstMessage(addGroup, "characters") }));
+      setMessage((m) => ({ ...m, "add-cast": episodeNameFirstMessage(addGroup, "characters", shortsScriptEditorOpen(getSkidmarksSnapshot())) }));
       return;
     }
     if (!hasUploads) {

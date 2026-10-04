@@ -18,9 +18,12 @@
 
 import { isSafeDeckMediaSlug } from "./deckMediaPaths";
 import { buildSpeakerListenerText, resolveShotCastPositions } from "./shotCast";
+import { buildLtxSpeakingCore } from "./sunnyBanks";
+import { shortsSpokenWords } from "./adultShortsTalking";
 
 export const ADULT_SHORTS_MAX_REFERENCES = 3;
-export const ADULT_SHORTS_MAX_SHOTS = 10;
+/** Shots one Short can hold (raised from 10 to 100 on 2026-10-04). */
+export const ADULT_SHORTS_MAX_SHOTS = 100;
 export const ADULT_SHORTS_MIN_SHOT_SEC = 2;
 export const ADULT_SHORTS_MAX_SHOT_SEC = 10;
 export const ADULT_SHORTS_DEFAULT_SHOT_SEC = 5;
@@ -44,6 +47,9 @@ export const ADULT_SHORTS_GENERAL_CONTENT_LOCK = "Everyone fully clothed. No nud
 /** Two or more people in one shot: every one of them is a made-up adult. */
 export const ADULT_SHORTS_GROUP_ADULT_LOCK =
   "Everyone shown is an adult, clearly over 25, a fictional AI-created character, photorealistic, each with the same face, hair and body as their reference.";
+/** The group adult lock on a video prompt (2026-10-04): the video model gets only the start image, no reference. */
+export const ADULT_SHORTS_MOTION_GROUP_ADULT_LOCK =
+  "Everyone shown is an adult, clearly over 25, a fictional AI-created character, photorealistic.";
 /** How many people can star in one episode. */
 export const ADULT_SHORTS_MAX_STARRING = 6;
 /** How many people's pictures one plate can be made from (Siray still route cap). */
@@ -154,6 +160,16 @@ export interface AdultShortsState {
   adult?: boolean;
   /** The name typed on "+ New" for an episode that has no card yet; its card takes it. */
   title?: string;
+  /**
+   * Which Shorts editor is open (2026-10-04). `"script"`: the script
+   * studio (`SkidmarksState.shortsStudio`), the same one as Sunny Banks
+   * and Skidmarks. `"cards"`: the shot cards (EP01–EP03). Absent (never
+   * picked): the shot cards while a shot-card episode is open, so a
+   * session with EP03 open opens exactly as before; otherwise the script
+   * studio, the default for every new episode
+   * (`shortsOpenEditor` in `lib/shortsEpisodeCast.ts`).
+   */
+  editor?: "script" | "cards";
 }
 
 const EMPTY_CHARACTER: AdultShortsCharacter = { name: "", look: "", referenceUrls: [] };
@@ -350,6 +366,7 @@ export function normalizeAdultShortsState(value: unknown): AdultShortsState | nu
     ...normalizeStarring(v.starring),
     ...normalizeAdultFlag(v.adult),
     ...(str(v.title).trim() ? { title: str(v.title).trim().slice(0, ADULT_SHORTS_TITLE_MAX) } : {}),
+    ...(v.editor === "script" || v.editor === "cards" ? { editor: v.editor } : {}),
   };
 }
 
@@ -733,34 +750,51 @@ export function adultShortSpeaker<T extends { name: string }>(people: readonly T
 }
 
 /**
- * Talking-shot motion prompt for LTX (2026-09-30): the same locks as the
- * Siray motion prompt (the adult line, "keep the same person" and the
- * episode's content rule), plus who's speaking. The route adds the
- * spoken words themselves, without the ElevenLabs tags.
+ * Talking-shot motion prompt for LTX (2026-10-04, Stuart: "behave exactly
+ * like the proven Sunny Banks path"). It opens with the same speaking
+ * text Sunny Banks and Skidmarks send (`buildLtxSpeakingCore`: start
+ * image as the first frame, NAME[, LOOK] is prominent, mouth and head
+ * move naturally while speaking, NAME says: "…", Camera holds), then who
+ * listens when there's more than one person, then the shot's own prompt
+ * as extra context (the way Sunny Banks adds [Action:]), then the adult
+ * lock and the episode's content rule. Before this, Shorts never told
+ * LTX to move the mouth, and its plate wording ("Character: X.", "same
+ * face, hair and body as the reference") went to a video model that has
+ * no reference. The words are the Line without its ElevenLabs tags.
  */
 export function buildAdultShortsTalkingPrompt(
   who: readonly AdultShortsPerson[],
-  shot: Pick<AdultShortsShot, "prompt">,
+  shot: Pick<AdultShortsShot, "prompt" | "line">,
   speakerName: string,
   opts?: AdultShortsPromptOptions,
 ): string {
   const people = peopleOf(who);
-  const speaker = speakerName.trim();
+  // Spaces folded the way the route folds the speaker's name, so its
+  // `NAME says: "` check finds this prompt's line.
+  const speaker = speakerName.replace(/\s+/g, " ").trim();
   const speakerPerson = people.find((p) => sameAdultShortPerson(p.name, speaker));
+  const look = speakerPerson?.look.replace(/\s+/g, " ").trim() ?? "";
+  const words = shortsSpokenWords(shot.line ?? "");
+  const core = speaker ? buildLtxSpeakingCore(speaker, look ? `${speaker}, ${look}` : speaker, words) : "";
   // More than one person (2026-10-03): the shared speaker/listener text
-  // every genre uses (lib/shotCast.ts): the speaker is the only one
-  // talking, everyone else keeps their mouth closed. Looks are already in
-  // the Characters line, so only names and places go here. One person:
-  // unchanged.
-  const speaking = !speaker
-    ? ""
-    : people.length > 1 && speakerPerson
-      ? `${speaker} speaks to camera. ${shortsSpeakerListenerText(people, speakerPerson, shot.prompt)}`
-      : `${speaker} speaks to camera, lips in sync with the audio.${people.length > 1 ? " Everyone else listens." : ""}`;
-  const locks = [characterLine(people), speaking, adultShortsAdultLock(people), identityLine(people), contentLock(opts)]
-    .filter(Boolean)
-    .join(" ");
-  return withLocks(shot, locks);
+  // every genre uses (lib/shotCast.ts), after the speaking text, the way
+  // Sunny Banks adds it.
+  const listeners =
+    people.length > 1 && speakerPerson
+      ? shortsSpeakerListenerText(people, speakerPerson, shot.prompt)
+      : people.length > 1
+        ? "Everyone else listens."
+        : "";
+  const head = [core, listeners].filter(Boolean).join(" ");
+  const tail = [talkingAdultLock(people), contentLock(opts)].filter(Boolean).join(" ");
+  const room = MAX_PROMPT_CHARS - head.length - tail.length - 2;
+  const shotText = shot.prompt.trim().slice(0, Math.max(0, room));
+  return capPrompt([head, shotText, tail].filter(Boolean).join(" "));
+}
+
+/** The adult lock without the plate's "same face, hair and body as the reference" (LTX gets only the start image). */
+function talkingAdultLock(people: readonly Pick<AdultShortsPerson, "subjectWord">[]): string {
+  return adultShortsAdultLock(people).replace(/,? (?:each with )?(?:the )?same face, hair and body as (?:the|their) reference\.$/, ".");
 }
 
 function shortsSpeakerListenerText(people: readonly AdultShortsPerson[], speaker: AdultShortsPerson, shotPrompt: string): string {
