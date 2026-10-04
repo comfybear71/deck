@@ -49,21 +49,21 @@ const PILOT_LIVE = liveFromSunnyBanksWorkspace(pilotCard);
 describe("which episode is open", () => {
   it("the pilot by its pinned folder; a new unnamed episode is no episode", () => {
     expect(pilotCard.mediaSlug).toBe(SKIDMARKS_PILOT_MEDIA_SLUG);
-    expect(skidmarksEpisodeScopeOf(PILOT_LIVE)).toEqual({ episode: SKIDMARKS_PILOT_MEDIA_SLUG, pilot: true, tickedCastIds: [] });
+    expect(skidmarksEpisodeScopeOf(PILOT_LIVE)).toEqual({ episode: SKIDMARKS_PILOT_MEDIA_SLUG, legacy: true, tickedIds: [] });
     expect(openSkidmarksEpisodeScope(stateWithLive(BLANK_LIVE).skidmarksStudio)).toEqual(NO_SKIDMARKS_EPISODE);
     expect(openSkidmarksEpisodeScope(null)).toEqual(NO_SKIDMARKS_EPISODE);
   });
 
   it("an unpinned card is the pilot by its name; a second one pinned -2 is not", () => {
-    expect(skidmarksEpisodeScopeOf({ label: "EP00 — Cornish Arsehole" }).pilot).toBe(true);
-    expect(skidmarksEpisodeScopeOf({ workspaceTitle: "EP00 — Cornish Arsehole", mediaSlug: "ep00-cornish-arsehole-2" }).pilot).toBe(false);
+    expect(skidmarksEpisodeScopeOf({ label: "EP00 — Cornish Arsehole" }).legacy).toBe(true);
+    expect(skidmarksEpisodeScopeOf({ workspaceTitle: "EP00 — Cornish Arsehole", mediaSlug: "ep00-cornish-arsehole-2" }).legacy).toBe(false);
     expect(skidmarksEpisodeScopeOf({ workspaceTitle: "EP01 — Container Drop", mediaSlug: "ep01-container-drop" })).toEqual({
       episode: "ep01-container-drop",
-      pilot: false,
-      tickedCastIds: [],
+      legacy: false,
+      tickedIds: [],
     });
     // The live copy finds its pin on its card.
-    expect(skidmarksEpisodeScopeOf({ episodeId: pilotCard.id }, [pilotCard]).pilot).toBe(true);
+    expect(skidmarksEpisodeScopeOf({ episodeId: pilotCard.id }, [pilotCard]).legacy).toBe(true);
   });
 });
 

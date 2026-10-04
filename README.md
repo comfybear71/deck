@@ -2700,6 +2700,19 @@ now (see "Explicitly out of scope" below).
   the episode's Cast is in the episode. New Skidmarks Cast cards are still
   semi-photoreal. Sunny Banks is unchanged (one shared Cast).
 
+- **Each Shorts episode has its own Cast and Locations too (2026-10-04)**
+  — Shorts works exactly like Skidmarks now (one shared rule,
+  `lib/episodeCast.ts`). "+ New" on the Shorts Episodes row gives empty
+  Cast and Locations rows, an empty shot, no extras and nobody starring
+  (Starring can stay empty). EP01 (BLONDE GIRL _1) and EP02 still show
+  Skye and SKYLAR with their shots, plates and clips exactly as before:
+  everything saved before 4 October belongs to them, worked out on read
+  with nothing moved, rewritten or deleted (`lib/shortsEpisodeCast.ts`).
+  New Shorts people and places are saved under the episode
+  (`deck/shorts/episodes/<episode>/characters/…` and `…/locations/…`) and
+  stay photoreal. The episode needs a name first. Sunny Banks (shared
+  Cast) and Music video are unchanged.
+
 ### Ask Grok + action chips (v0 stub)
 
 The Propfolio detail sheet also ships an **action chips row** and an

@@ -1307,9 +1307,9 @@ character data into a band row. Every band/song edit must go through
 
 ## Each Skidmarks episode has its own Cast and Locations (2026-10-04)
 
-- **Skidmarks only.** Sunny Banks keeps one shared Cast across episodes
-  (plus guests) and is never read through this. Shorts and Music video
-  are untouched.
+- **Skidmarks and Shorts** (Shorts since the same day, see below). Sunny
+  Banks keeps one shared Cast across episodes (plus guests) and is never
+  read through this. Music video is untouched.
 - **One helper decides:** `lib/skidmarksEpisodeCast.ts`. The open
   episode is `skidmarksStudio.live` (its pinned `mediaSlug`).
   `sunnyBanksVoices` (`skidmarksCast`), `buildCharacterRoster`,
@@ -1336,6 +1336,38 @@ character data into a band row. Every band/song edit must go through
   can say `[Location: park]`, which matches by name.
 - **Don't** add "import a character from an earlier episode" (Stuart: not
   needed, he retrains).
+
+## Each Shorts episode has its own Cast and Locations too (2026-10-04)
+
+- **Same structure as Skidmarks, one shared rule:** `lib/episodeCast.ts`
+  (`EpisodeScope`, `isInEpisode`, `episodeOwnLocations`,
+  `episodeNameFirstMessage`). Each genre only says which episode is open
+  and which are "older": `lib/skidmarksEpisodeCast.ts`,
+  `lib/shortsEpisodeCast.ts`; `lib/episodeScopes.ts` picks between them,
+  `lib/episodeFolders.ts` (`getOpenEpisodeFolder` / `pinOpenEpisodeFolder`)
+  pins the folder. `CharacterRosterGrid`, `LocationsRow`, `buildCharacterRoster`
+  and `deckLocations` use these for both genres; don't add a per-genre
+  special case, extend the shared module.
+- **Shorts episode = the open card's pinned `mediaSlug`** (the editor's,
+  else its card's). The editor with no card yet is always a new episode.
+- **Older Shorts episodes:** cards whose id (`short_<base36 ms>_…`) is from
+  before 2026-10-04 00:00 UTC (`SHORTS_OWN_CAST_SINCE_MS`), i.e. EP01
+  (BLONDE GIRL _1) and EP02. They show everything saved before (the `as:`
+  people of older cards, every Shorts character card like Skye, added
+  characters with no `episode`) exactly as before. Worked out on read:
+  nothing written, moved or deleted.
+- **New Shorts people:** `RosterExtraCharacter.episode` (Shorts only),
+  files in `deck/shorts/episodes/<episode>/characters/<name>/…`
+  (`asx:` source keys with an episode, `characterMediaOwner`). New places:
+  `DeckLocation.episode`, `deck/shorts/episodes/<episode>/locations/`.
+  Adding needs the episode named first (same message as Skidmarks).
+  Style stays photo (Shorts' own style).
+- **Starring:** in a new episode only people on its own Cast row count
+  (`shortsEpisodeStarringList`); anything stale saved on the editor is
+  ignored on screen and dropped by the next Starring tap. Starring can be
+  empty. "In this shot" still needs one person per shot.
+- A rename of a new Shorts person follows them into that episode's
+  Starring and shots only (`renameShortsPersonInEpisode`).
 
 ## PR process
 

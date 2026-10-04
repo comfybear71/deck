@@ -35,10 +35,12 @@ import {
   type DeckMediaTarget,
 } from "./deckMediaPaths";
 import { isRosterExtraGroup, rosterExtraSourceKey } from "./rosterExtras";
+import { openShortsEpisodeScopeIn } from "./shortsEpisodeCast";
 import {
   getAdultShortsState,
   getCharacterLorasState,
   getOpenSkidmarksEpisodeFolder,
+  getRosterExtrasState,
   getSkidmarksSnapshot,
   patchAdultShorts,
   pinSkidmarksBandMediaSlugs,
@@ -53,18 +55,23 @@ function memberSlugById(memberId: string): string | null {
   return pinSkidmarksBandMediaSlugs(band.id, memberId)?.member ?? null;
 }
 
-/** A Skidmarks Cast card's episode (2026-10-04), by cast id; `"new"` is
- * a card about to be made in the open episode. */
-function skidmarksEpisodeByCastId(castId: string): string | null {
+/** A Skidmarks or Shorts Cast card's episode (2026-10-04, each episode
+ * has its own Cast), by its id; `"new"` is a card about to be made in the
+ * open episode. */
+function episodeByCastId(castId: string, genre: "skidmarks" | "shorts"): string | null {
   const state = getSkidmarksSnapshot();
-  if (castId === "new") return getOpenSkidmarksEpisodeFolder(state);
-  return state.skidmarksEpisodes?.cast.find((m) => m.id === castId)?.episode ?? null;
+  if (genre === "skidmarks") {
+    if (castId === "new") return getOpenSkidmarksEpisodeFolder(state);
+    return state.skidmarksEpisodes?.cast.find((m) => m.id === castId)?.episode ?? null;
+  }
+  if (castId === "new") return openShortsEpisodeScopeIn(state).episode;
+  return getRosterExtrasState(state)["adult-shorts"].find((x) => x.id === castId)?.episode ?? null;
 }
 
 /** A character card's folder, `deck/<genre>/characters/<char>` for every
- * genre (a Skidmarks card made in an episode: inside that episode). */
+ * genre (a Skidmarks or Shorts card made in an episode: inside that episode). */
 export function characterMediaOwnerFor(card: CardLike): DeckMediaOwner {
-  return characterMediaOwner(card, memberSlugById, skidmarksEpisodeByCastId);
+  return characterMediaOwner(card, memberSlugById, episodeByCastId);
 }
 
 /** Training plate number `n` (1-based) for this card. */
@@ -119,7 +126,7 @@ export function rosterPictureTargetFor(
   }
   const card = getCharacterLorasState().characters.find((c) => c.sourceKey === sourceKey);
   const slug = card?.slug ?? deckMediaSlug(name, "character");
-  return characterPictureTarget(characterMediaOwner({ slug, name, sourceKey }, memberSlugById, skidmarksEpisodeByCastId), n);
+  return characterPictureTarget(characterMediaOwner({ slug, name, sourceKey }, memberSlugById, episodeByCastId), n);
 }
 
 // ---- Music video ------------------------------------------------------------

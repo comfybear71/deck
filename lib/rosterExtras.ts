@@ -15,6 +15,7 @@
  * Pictures are Blob URLs, never bytes.
  */
 
+import { isSafeDeckMediaSlug } from "./deckMediaPaths";
 import { SKIDMARKS_CAST_MAX_PICTURES, cleanPictureUrls, mintSkidmarksId } from "./skidmarksEpisodes";
 
 export type RosterExtraGroup = "music-video" | "sunny-banks" | "adult-shorts";
@@ -38,6 +39,13 @@ export interface RosterExtraCharacter {
   /** Ticked when added: made up, clearly adult (over 25), not a real person. */
   fictionalAdultConfirmed: true;
   createdAt: number;
+  /**
+   * Shorts only (2026-10-04, each Shorts episode has its own Cast, see
+   * `lib/episodeCast.ts`): the episode this character was added to, by
+   * its pinned media folder name (`ep03-backpackers`). Characters added
+   * before then have none and belong to the older episodes (EP01, EP02).
+   */
+  episode?: string;
 }
 
 export type RosterExtrasState = Record<RosterExtraGroup, RosterExtraCharacter[]>;
@@ -65,7 +73,7 @@ export function emptyRosterExtrasState(): RosterExtrasState {
 export function buildRosterExtraCharacter(
   name: string,
   look: string,
-  extra: { pictureUrls?: readonly string[]; isAnimal?: boolean } = {},
+  extra: { pictureUrls?: readonly string[]; isAnimal?: boolean; episode?: string | null } = {},
   now: number = Date.now(),
   id = mintSkidmarksId("chr"),
 ): RosterExtraCharacter {
@@ -78,6 +86,7 @@ export function buildRosterExtraCharacter(
     createdAt: now,
   };
   if (extra.isAnimal) c.isAnimal = true;
+  if (isSafeDeckMediaSlug(extra.episode)) c.episode = extra.episode;
   return c;
 }
 
@@ -109,6 +118,7 @@ function normalizeExtra(value: unknown): RosterExtraCharacter | null {
     ...(v.isAnimal === true ? { isAnimal: true } : {}),
     fictionalAdultConfirmed: true,
     createdAt: typeof v.createdAt === "number" ? v.createdAt : Date.now(),
+    ...(isSafeDeckMediaSlug(v.episode) ? { episode: v.episode } : {}),
   };
 }
 
