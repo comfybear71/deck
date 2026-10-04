@@ -29,14 +29,30 @@ import {
   setDeckLocationPicture,
 } from "@/lib/locationEdits";
 import { uploadLocationPicture } from "@/lib/locationPicture";
-import { getDeckLocationsState, getSkidmarksSnapshot, subscribeSkidmarks } from "@/lib/skidmarks";
+import {
+  getDeckLocationsState,
+  getSkidmarksSnapshot,
+  pinSkidmarksEpisodeFolder,
+  subscribeSkidmarks,
+  type SkidmarksState,
+} from "@/lib/skidmarks";
+import { openSkidmarksEpisodeScopeIn, skidmarksEpisodeLocations } from "@/lib/skidmarksEpisodeCast";
 import { TILE_CORNER_BUTTON_SHAPE_CLASS, TrashGlyph } from "./TileCornerGlyphs";
 
 type Notice = { text: string; tone: "error" | "warn" | "busy" } | null;
 
+/** The places on a genre's row: its saved list (or built-ins), or for
+ * Skidmarks only the open episode's own (2026-10-04). */
+export function locationsOnRow(genre: DeckLocationGenre, snapshot: SkidmarksState): DeckLocation[] {
+  if (genre === "skidmarks") return skidmarksEpisodeLocations(getDeckLocationsState(snapshot), openSkidmarksEpisodeScopeIn(snapshot));
+  return effectiveDeckLocations(getDeckLocationsState(snapshot), genre);
+}
+
 export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
   const snapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
-  const list = effectiveDeckLocations(getDeckLocationsState(snapshot), genre);
+  // Skidmarks (2026-10-04): each episode has its own Locations, so the
+  // row shows only the open episode's (`lib/skidmarksEpisodeCast.ts`).
+  const list = locationsOnRow(genre, snapshot);
   const [openId, setOpenId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -73,9 +89,20 @@ export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
   };
 
   const add = async () => {
+    // A Skidmarks place belongs to the open episode: its folder is pinned
+    // first (the episode needs a name), then names only clash within it.
+    let scope: { episode?: string | null; nameScope?: readonly DeckLocation[] } = {};
+    if (genre === "skidmarks") {
+      const episode = pinSkidmarksEpisodeFolder();
+      if (!episode) {
+        setNotice({ text: "Give the episode a name first (the # EPISODE: line), then add its locations.", tone: "error" });
+        return;
+      }
+      scope = { episode, nameScope: locationsOnRow(genre, getSkidmarksSnapshot()) };
+    }
     // Checked up front, so a bad name never uploads a picture.
     const listNow = savedDeckLocations(withBuiltInsSaved(getDeckLocationsState(), genre), genre);
-    const check = buildDeckLocation(genre, listNow, newName, null);
+    const check = buildDeckLocation(genre, listNow, newName, null, Date.now(), scope);
     if (!check.ok) {
       setNotice({ text: check.error, tone: "error" });
       return;
@@ -84,7 +111,7 @@ export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
     if (newFile) {
       setBusy(true);
       setNotice({ text: "Saving the picture…", tone: "busy" });
-      const up = await uploadLocationPicture(newFile, genre, check.value.key);
+      const up = await uploadLocationPicture(newFile, genre, check.value.key, check.value.episode);
       setBusy(false);
       if (!up.ok) {
         setNotice({ text: up.error, tone: "error" });
@@ -92,7 +119,7 @@ export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
       }
       pictureUrl = up.url;
     }
-    const result = addDeckLocation(genre, newName, pictureUrl);
+    const result = addDeckLocation(genre, newName, pictureUrl, scope);
     if (!result.ok) {
       setNotice({ text: result.error, tone: "error" });
       return;
@@ -106,7 +133,7 @@ export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
   const replacePicture = async (loc: DeckLocation, file: File) => {
     setBusy(true);
     setNotice({ text: "Saving the picture…", tone: "busy" });
-    const up = await uploadLocationPicture(file, genre, loc.key);
+    const up = await uploadLocationPicture(file, genre, loc.key, loc.episode);
     setBusy(false);
     if (!up.ok) {
       setNotice({ text: up.error, tone: "error" });
@@ -124,7 +151,7 @@ export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
     cancelRename.current = false;
     setNameDraft(null);
     if (draft === null || draft.trim() === loc.name) return;
-    const result = renameDeckLocation(genre, loc.id, draft);
+    const result = renameDeckLocation(genre, loc.id, draft, genre === "skidmarks" ? list : undefined);
     if (!result.ok) setNotice({ text: result.error, tone: "error" });
     else {
         setNotice(null);

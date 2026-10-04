@@ -36,7 +36,7 @@ import {
   type SunnyBanksLocationLock,
 } from "@/lib/sunnyBanks";
 import { deckLocationKeyFromName } from "@/lib/deckLocations";
-import { findSunnyBanksLocation, sunnyBanksLocationList, sunnyBanksLocationProblem } from "@/lib/sunnyBanksLocations";
+import { findSunnyBanksLocation, studioLocationList, sunnyBanksLocationProblem } from "@/lib/sunnyBanksLocations";
 import { runSunnyBanksRenderQueue, sunnyBanksStoppedText } from "@/lib/sunnyBanksRenderQueue";
 import { downloadSunnyBanksActZip } from "@/lib/sunnyBanksClipsZip";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
@@ -64,7 +64,6 @@ import {
 } from "@/lib/sunnyBanksGodScriptGuide";
 import {
   ensureSunnyBanksEpisodeMediaSlug,
-  getSkidmarksEpisodesState,
   getSkidmarksSnapshot,
   getStudioState,
   getSunnyBanksLiveOrDefault,
@@ -640,7 +639,7 @@ function guideCast() {
 /** Sunnybank's locations: the Locations row's saved list, or the
  *  built-ins until it has one (`lib/sunnyBanksLocations.ts`). */
 function locationList(): SunnyBanksLocationLock[] {
-  return sunnyBanksLocationList(getSkidmarksSnapshot().locations, helperGenre());
+  return studioLocationList(getSkidmarksSnapshot(), helperGenre());
 }
 
 /** Where a script starts before its first `[Location: …]`: Sunny Banks'
@@ -2266,32 +2265,14 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   };
 
   // The Locations row's list (or the built-ins until it has one).
-  const locations = sunnyBanksLocationList(studioState.locations, genre);
+  // Skidmarks (2026-10-04): only the open episode's own places.
+  const locations = studioLocationList(studioState, genre);
+  // Skidmarks (2026-10-04): the open episode's own Cast; everyone in it
+  // is in the episode (the episode tick row from PR 242 is gone).
   const castCardList = sunnyBanksCastCards(studioState, genre);
-  /** Who's ticked as in this episode (2026-10-04, Skidmarks): ids from
-   * the shared Skidmarks Cast. Nobody ticked = everyone is offered. */
-  const showCast = genre === "skidmarks" ? getSkidmarksEpisodesState(studioState).cast : [];
-  const tickedCastIds = (live.castIds ?? []).filter((id) => showCast.some((c) => c.id === id));
-  const tickedNames = new Set(
-    showCast.filter((c) => tickedCastIds.includes(c.id)).map((c) => c.name.trim().toLowerCase())
-  );
-  /** A row's character picker: the show's cast, voiced first (only those ticked
-   * as in this episode, when any are), always with the row's own. */
-  const rowSpeakerChoices = (current: string) =>
-    sunnyBanksSpeakerList(studioState, genre).filter(
-      (c) =>
-        tickedNames.size === 0 ||
-        tickedNames.has(c.name.trim().toLowerCase()) ||
-        c.name.trim().toLowerCase() === current.trim().toLowerCase()
-    );
-  const toggleEpisodeCast = (castId: string) => {
-    if (running) return;
-    patchLive((prev) => {
-      const ids = (prev.castIds ?? []).filter((id) => showCast.some((c) => c.id === id));
-      const next = ids.includes(castId) ? ids.filter((id) => id !== castId) : [...ids, castId];
-      return { ...prev, castIds: next.length > 0 ? next : undefined };
-    });
-  };
+  /** A row's character picker: the show's cast, voiced first
+   * (Skidmarks: the open episode's own Cast). */
+  const rowSpeakerChoices = sunnyBanksSpeakerList(studioState, genre);
   const queue = sunnyBanksQueueChunks(parsed).map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
     const locationId = resolveSunnyBanksRowLocationId(chunk, locationOverrides[index], locationPickTags[index], defaultLocationId);
@@ -2935,41 +2916,6 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       <div className="flex touch-pan-y flex-col gap-2.5 overscroll-y-contain rounded-2xl border border-amber-300/25 bg-amber-300/[0.03] p-3">
         {/* Every character always shows; one with no Cast card picture gets a red note on its rows (2026-10-01). */}
           <>
-            {genre === "skidmarks" && (
-              <div className="flex min-w-0 flex-col gap-1.5">
-                <p className="text-[11px] font-semibold text-white/70">In this episode</p>
-                {showCast.length === 0 ? (
-                  <p className="text-[11px] leading-snug text-white/45">
-                    No Skidmarks Cast yet. Add characters on the Characters row above.
-                  </p>
-                ) : (
-                  <div className="flex min-w-0 flex-row flex-wrap gap-1.5">
-                    {showCast.map((member) => {
-                      const ticked = tickedCastIds.includes(member.id);
-                      return (
-                        <button
-                          key={member.id}
-                          type="button"
-                          role="checkbox"
-                          aria-checked={ticked}
-                          onClick={() => toggleEpisodeCast(member.id)}
-                          disabled={running}
-                          className={[
-                            "min-h-[36px] rounded-full px-3 text-[12px] font-medium transition-colors disabled:opacity-60",
-                            ticked
-                              ? "bg-amber-300 text-zinc-950"
-                              : "bg-white/[0.04] text-white/70 ring-1 ring-inset ring-white/10",
-                          ].join(" ")}
-                        >
-                          {ticked ? "✓ " : ""}
-                          {member.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
             {/* Acts scroll sideways; the script tools sit on their own
               * row below. Two separate rows is the fix (2026-09-18):
               * acts and tools used to share one strip, so adding the
@@ -3202,7 +3148,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                     aria-label={`Character for line ${row.index + 1}`}
                                     className="h-10 min-h-[40px] w-[4.75rem] max-w-[4.75rem] shrink-0 truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
                                   >
-                                    {rowSpeakerChoices(row.characterName).map((c) => (
+                                    {rowSpeakerChoices.map((c) => (
                                       <option key={c.name} value={c.name} className="bg-zinc-900">
                                         {c.name}
                                         {!resolveSunnyBanksStartImage(c)
