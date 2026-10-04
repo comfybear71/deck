@@ -55,6 +55,7 @@ import {
   shortsShotPeople,
 } from "@/lib/shortsCast";
 import { ShotGrid, type ShotTileView } from "./ShotGrid";
+import { EpisodeExtrasRow } from "./EpisodeExtrasRow";
 import { setShortsBusy } from "@/lib/shortsBusy";
 import { runSunnyBanksRenderQueue } from "@/lib/sunnyBanksRenderQueue";
 import { SHORTS_EDITOR_ID } from "./ShortsEpisodeRow";
@@ -814,6 +815,9 @@ export function AdultShortsPanel() {
         />
         {queueNote && <p className="text-xs text-white/60">{queueNote}</p>}
       </section>
+
+      {/* Extras (2026-10-04): the same row in every genre, below the shots. */}
+      <EpisodeExtrasRow genre="shorts" />
 
       <section className="rounded-2xl border border-white/10 bg-white/[0.02] p-4" aria-label="Save or start new">
         <div className="flex flex-wrap items-center justify-between gap-2">

@@ -417,6 +417,37 @@ describe("buildArchiveZip", () => {
     }
   });
 
+  it("Episode Extras (2026-10-04): the song's extras go in extras/ with their placement in the name", async () => {
+    const mp3 = createMp3Attachment("song.mp3", 40);
+    const song: SkidmarksArchivedSong = {
+      id: "song-1",
+      bandId: "jack-ash",
+      bandName: "Jack Ash",
+      fileName: "song.mp3",
+      archivedAt: Date.now(),
+      durationSec: 40,
+      clipCount: mp3.segments.length,
+      renderedPlateCount: 0,
+      snapshotUrl: "https://x/snapshot.json",
+    };
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { configured: true, renders: [] }))
+      .mockResolvedValueOnce(new Response(new TextEncoder().encode("drone shot bytes")));
+    const outcome = await buildArchiveZip(song, { band: BAND, mp3 }, [
+      { name: "extras/chorus-2 - drone-shot.mp4", url: "https://abc.public.blob.vercel-storage.com/deck/music-video/songs/song/extras/drone-shot.mp4" },
+    ]);
+    if (!outcome.ok) throw new Error("expected ok");
+    const dir = mkdtempSync(join(tmpdir(), "skidmarks-archive-extras-"));
+    const zipPath = join(dir, "project.zip");
+    writeFileSync(zipPath, outcome.zipBytes);
+    try {
+      execFileSync("unzip", ["-t", zipPath], { stdio: "pipe" });
+      expect(execFileSync("unzip", ["-Z1", zipPath], { encoding: "utf8" })).toContain("extras/chorus-2 - drone-shot.mp4");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("never throws, and still produces a valid manifest-only zip when audio/renders aren't available", async () => {
     const mp3 = createMp3Attachment("song.mp3", 40);
     const song: SkidmarksArchivedSong = {

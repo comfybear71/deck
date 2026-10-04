@@ -1,6 +1,7 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 import { isDeckMediaPathname } from "@/lib/deckMediaPaths";
+import { EPISODE_EXTRA_ALLOWED_CONTENT_TYPES, EPISODE_EXTRA_MAX_BYTES, isEpisodeExtraPathname } from "@/lib/episodeExtras";
 
 /**
  * POST /api/skidmarks/blob-upload — the one shared token-issuing route
@@ -57,6 +58,13 @@ import { isDeckMediaPathname } from "@/lib/deckMediaPaths";
  * `allowOverwrite: false`, so a taken name fails and the browser tries
  * `-v2` instead of replacing anyone's file. The old `skidmarks/...`
  * prefixes keep their old behaviour exactly.
+ *
+ * **Episode Extras (2026-10-04, `lib/episodeExtras.ts`):** also issues
+ * tokens for an episode's `deck/…/<episode>/extras/<name>.<mp4|mov|webm|mp3|wav>`
+ * (`isEpisodeExtraPathname`), video and audio types only, never
+ * overwriting, up to `EPISODE_EXTRA_MAX_BYTES`. The file goes straight
+ * from the phone or PC to Blob, so a big video never hits the 4.5MB
+ * Function body cap.
  */
 export const runtime = "nodejs";
 
@@ -86,6 +94,14 @@ export async function POST(request: Request): Promise<NextResponse> {
       body,
       request,
       onBeforeGenerateToken: async (pathname) => {
+        if (isEpisodeExtraPathname(pathname)) {
+          return {
+            allowedContentTypes: [...EPISODE_EXTRA_ALLOWED_CONTENT_TYPES],
+            maximumSizeInBytes: EPISODE_EXTRA_MAX_BYTES,
+            addRandomSuffix: false,
+            allowOverwrite: false,
+          };
+        }
         if (!isAllowedPathname(pathname)) {
           throw new Error(
             `Rejected upload target "${pathname}" \u2014 this route only issues tokens for this feature's own ` +

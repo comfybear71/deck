@@ -154,7 +154,7 @@ export function songPlateTargetFor(segmentId: string, plateId: string): DeckMedi
  * then its title or else its character's name, with `-2`, `-3`… if
  * another saved short already uses it. A short pinned before keeps its
  * old folder name. */
-function pinAdultShortMediaSlug(): string {
+export function pinAdultShortMediaSlug(): string {
   const state = getAdultShortsState();
   if (isSafeDeckMediaSlug(state.mediaSlug)) return state.mediaSlug;
   const card = state.saved.find((x) => x.id === state.currentSavedId);

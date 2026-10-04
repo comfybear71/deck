@@ -47,6 +47,10 @@ export interface SunnyBanksEpisodeBundleInput {
    * whose video actually arrived, so the caller can say honestly how
    * much of the episode made it in rather than implying all of it did. */
   onProgress?: (progress: { done: number; total: number; fetched: number }) => void;
+  /** Episode Extras (2026-10-04): already named for the zip
+   * (`episodeExtrasZipEntries`, `extras/act-3-between-8-and-9 - container-drop.mp4`).
+   * Fetched after the clips; one that can't be fetched is left out and counted. */
+  extras?: readonly { name: string; url: string }[];
 }
 
 export interface SunnyBanksEpisodeBundleResult {
@@ -57,6 +61,9 @@ export interface SunnyBanksEpisodeBundleResult {
    * these can differ — and the caller must be able to say so. */
   clipCount: number;
   fetchedClipCount: number;
+  /** Extras asked for, and how many came down. */
+  extraCount: number;
+  fetchedExtraCount: number;
 }
 
 export function slugifySunnyBanksEpisodeFilename(title: string): string {
@@ -206,11 +213,19 @@ export async function buildSunnyBanksEpisodeBundle(
     });
   }
 
-  const zipBytes = buildStoreZip([...dataEntries, ...videoEntries, ...audioEntries]);
+  const extraEntries: { name: string; data: Uint8Array }[] = [];
+  for (const extra of input.extras ?? []) {
+    const bytes = await fetchSunnyBanksBinaryAsset(extra.url);
+    if (bytes) extraEntries.push({ name: extra.name, data: bytes });
+  }
+
+  const zipBytes = buildStoreZip([...dataEntries, ...videoEntries, ...audioEntries, ...extraEntries]);
   return {
     zipBytes,
     filename: slugifySunnyBanksEpisodeFilename(title),
     clipCount: input.clips.length,
     fetchedClipCount: videoEntries.length,
+    extraCount: input.extras?.length ?? 0,
+    fetchedExtraCount: extraEntries.length,
   };
 }

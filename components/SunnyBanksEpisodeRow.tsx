@@ -2,6 +2,7 @@
 
 import { useState, useSyncExternalStore } from "react";
 import {
+  getEpisodeExtrasState,
   getSkidmarksSnapshot,
   getStudioState,
   getSunnyBanksLiveOrDefault,
@@ -15,6 +16,7 @@ import { getSunnyBanksBusy, setSunnyBanksBusy, subscribeSunnyBanksBusy } from "@
 import { EpisodeCardsRow, type EpisodeRowNotice } from "@/components/EpisodeCardsRow";
 import { downloadSunnyBanksEpisodeZip, inStudioGenre, SUNNY_BANKS_EDITOR_ID } from "@/components/SkidmarksSunnyBanksPanel";
 import type { StudioGenre } from "@/lib/studioGenre";
+import { episodeExtrasFor, episodeFolderFor } from "@/lib/episodeExtras";
 import {
   buildEmptySunnyBanksLive,
   defaultSunnyBanksLiveFingerprint,
@@ -160,16 +162,28 @@ export function SunnyBanksEpisodeRow({ genre = "sunnybank" }: { genre?: StudioGe
           locationOverrides: workspace.locationOverrides,
           locationPickTags: workspace.locationPickTags,
           runtimeMap: workspace.runtimeMap,
+          extras: episodeExtrasFor(
+            getEpisodeExtrasState(studioState),
+            episodeFolderFor(genre, workspace.mediaSlug ?? (workspace.id === activeId ? live.mediaSlug : undefined)),
+          ),
         },
         ({ done, total }) => say(`Getting clip ${done} of ${total}…`)
         )
       );
+      const allIn = result.fetchedClipCount === result.clipCount && result.fetchedExtraCount === result.extraCount;
+      const extrasText =
+        result.extraCount === 0
+          ? ""
+          : result.fetchedExtraCount === result.extraCount
+            ? ` and ${result.extraCount} extra${result.extraCount === 1 ? "" : "s"}`
+            : ` and ${result.fetchedExtraCount} of ${result.extraCount} extras`;
       say(
         result.fetchedClipCount === result.clipCount
-          ? `Downloaded "${workspace.label}" — ${result.clipCount} clip${result.clipCount === 1 ? "" : "s"}.`
-          : `Downloaded "${workspace.label}" — ${result.fetchedClipCount} of ${result.clipCount} clips. ` +
+          ? `Downloaded "${workspace.label}" — ${result.clipCount} clip${result.clipCount === 1 ? "" : "s"}${extrasText}.` +
+              (allIn ? "" : " The rest could not be fetched; try again on a better connection.")
+          : `Downloaded "${workspace.label}" — ${result.fetchedClipCount} of ${result.clipCount} clips${extrasText}. ` +
               "The rest could not be fetched; try again on a better connection.",
-        result.fetchedClipCount === result.clipCount ? "ok" : "warn"
+        allIn ? "ok" : "warn"
       );
     } catch (err) {
       say(err instanceof Error ? err.message : "Could not build the episode zip.", "error");

@@ -33,6 +33,18 @@ describe("POST /api/skidmarks/blob-upload", () => {
     expect(await tokenOptionsFor("skidmarks/mp3-audio/abc.mp3")).toMatchObject({ allowOverwrite: true });
   });
 
+  it("Episode Extras (2026-10-04): an episode's extras folder gets video/audio types, never overwriting", async () => {
+    const opts = await tokenOptionsFor("deck/skidmarks/episodes/cornish-arsehole/extras/container-drop.mov");
+    expect(opts).toMatchObject({ allowOverwrite: false, addRandomSuffix: false });
+    expect((opts as { allowedContentTypes: string[] }).allowedContentTypes).toEqual(
+      expect.arrayContaining(["video/mp4", "video/quicktime", "video/webm", "audio/mpeg", "audio/wav"]),
+    );
+    expect(await tokenOptionsFor("deck/shorts/episodes/ep01-x/extras/scream.wav")).toMatchObject({ allowOverwrite: false });
+    // Only the extras folder takes .mov/.wav; nothing else changes.
+    expect(await tokenOptionsFor("deck/skidmarks/episodes/cornish-arsehole/act-i/x.mov")).toBeInstanceOf(Error);
+    expect(await tokenOptionsFor("deck/skidmarks/episodes/cornish-arsehole/extras/x.exe")).toBeInstanceOf(Error);
+  });
+
   it("refuses anything else", async () => {
     expect(await tokenOptionsFor("deck/../skidmarks/x.jpg")).toBeInstanceOf(Error);
     expect(await tokenOptionsFor("deck/Sunnybank/X.jpg")).toBeInstanceOf(Error);
