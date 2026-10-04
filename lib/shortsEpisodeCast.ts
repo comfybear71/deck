@@ -54,8 +54,31 @@ export function shortsEpisodeScopeOf(adult: AdultShortsState | null | undefined)
   return { episode, legacy: card ? isOlderShortsEpisode(card) : false, tickedIds: [] };
 }
 
-/** The open Shorts episode, from the whole session. */
-export function openShortsEpisodeScopeIn(state: Pick<SkidmarksState, "adultShorts">): EpisodeScope {
+/** Is Shorts' script studio the open editor (2026-10-04)? Absent = the shot cards. */
+export function shortsScriptEditorOpen(state: Pick<SkidmarksState, "adultShorts">): boolean {
+  return state.adultShorts?.editor === "script";
+}
+
+/**
+ * The open Shorts script episode as a scope (2026-10-04): its pinned
+ * folder, or its card's. Script episodes are all new (standalone), never
+ * one of the older ones.
+ */
+export function shortsStudioEpisodeScopeOf(studio: SkidmarksState["shortsStudio"]): EpisodeScope {
+  if (!studio) return { episode: null, legacy: false, tickedIds: [] };
+  const live = studio.live;
+  const card = live?.episodeId ? studio.workspaces.find((w) => w.id === live.episodeId) : undefined;
+  const episode = isSafeDeckMediaSlug(live?.mediaSlug)
+    ? live.mediaSlug
+    : card && isSafeDeckMediaSlug(card.mediaSlug)
+      ? card.mediaSlug
+      : null;
+  return { episode, legacy: false, tickedIds: [] };
+}
+
+/** The open Shorts episode (shot cards or script, whichever is open), from the whole session. */
+export function openShortsEpisodeScopeIn(state: Pick<SkidmarksState, "adultShorts"> & Partial<Pick<SkidmarksState, "shortsStudio">>): EpisodeScope {
+  if (shortsScriptEditorOpen(state)) return shortsStudioEpisodeScopeOf(state.shortsStudio ?? null);
   return shortsEpisodeScopeOf(normalizeAdultShortsState(state.adultShorts));
 }
 

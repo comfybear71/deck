@@ -218,6 +218,16 @@ export const SKIDMARKS_GOD_SCRIPT_NOTE =
   "Put only the characters in the shot on screen, and describe caricature as their body and face, never as a drawing. " +
   "The examples below use Sunny Banks names: write with the Skidmarks Cast and location ids listed here instead.";
 
+/** Shorts (2026-10-04): the same script box, photoreal, with the lessons
+ * from EP03 Backpackers (a talking face must be level and visible). */
+export const SHORTS_GOD_SCRIPT_NOTE =
+  "SHORTS: same tags and rules, with this episode's own Shorts Cast and Locations rows. It is live action and " +
+  "photoreal: put the film look (for example \"Gritty 16mm film, heavy film grain, dim, underexposed\") and the " +
+  "camera angle in each [Action: …]. On a talking line keep the speaker's head level and their mouth visible " +
+  "(face the camera or a three-quarter view, never looking down): the lip-sync can't move a mouth it can't see. " +
+  "Put looking down at a drink or a phone in a silent line instead. " +
+  "The examples below use Sunny Banks names: write with this episode's Cast and location ids listed here instead.";
+
 /** The worked example carried by both the cheat sheet and the prompt.
  * `lib/sunnyBanksGodScriptGuide.test.ts` runs this through the real
  * `parseSunnyBanksScriptBlock`, so it cannot drift into teaching a
@@ -252,7 +262,7 @@ export function buildSunnyBanksGodScriptPrompt(
   characters?: readonly GuideCharacter[],
   /** Which show (2026-10-04). Skidmarks gets its name and its one note;
    * Sunny Banks' prompt is exactly what it was. */
-  genre: "sunnybank" | "skidmarks" = "sunnybank",
+  genre: "sunnybank" | "skidmarks" | "shorts" = "sunnybank",
 ): string {
   const cast = listSunnyBanksSpeakingCast(characters).join(", ");
   const nonSpeaking = listSunnyBanksNonSpeakingCast(characters);
@@ -264,10 +274,11 @@ export function buildSunnyBanksGodScriptPrompt(
     .map(({ id, label }) => `   ${id.padEnd(20)} — ${label}`)
     .join("\n");
 
-  const show = genre === "skidmarks" ? "Skidmarks" : "Sunny Banks";
-  const showNote = genre === "skidmarks" ? `\n\n${SKIDMARKS_GOD_SCRIPT_NOTE}` : "";
-  return `You are writing scripts in a strict format called a "God Script" for an
-animated show called ${show}. The script is pasted into a tool that
+  const show = genre === "skidmarks" ? "Skidmarks" : genre === "shorts" ? "Shorts" : "Sunny Banks";
+  const showNote =
+    genre === "skidmarks" ? `\n\n${SKIDMARKS_GOD_SCRIPT_NOTE}` : genre === "shorts" ? `\n\n${SHORTS_GOD_SCRIPT_NOTE}` : "";
+  const showKind = genre === "shorts" ? "a live-action, photoreal series of short films" : "an\nanimated show";
+  return `You are writing scripts in a strict format called a "God Script" for ${showKind} called ${show}. The script is pasted into a tool that
 parses it line by line and turns each line into a rendered video clip.
 Every clip costs real money, so a malformed line wastes a paid render.
 

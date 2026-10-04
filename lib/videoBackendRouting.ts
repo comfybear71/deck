@@ -16,11 +16,12 @@
  * from a route and from the browser.
  */
 
-/** An engine a Sunnybank row can render on. */
-export type RowVideoBackend = "ltx" | "grok" | "h3";
+/** An engine a studio row can render on. Siray (2026-10-04) is Shorts'
+ * silent engine; Sunny Banks and Skidmarks don't offer it. */
+export type RowVideoBackend = "ltx" | "grok" | "h3" | "siray";
 
-/** The Grok/H3 switch for silent rows. */
-export type SilentShotBackend = "grok" | "h3";
+/** The silent-shot switch: Grok/H3, and Siray on Shorts. */
+export type SilentShotBackend = "grok" | "h3" | "siray";
 
 /** Everything a row chip can say, including Siray (Shorts, and Music
  * video Instrumental parts on the Siray engine). */
@@ -35,18 +36,19 @@ export const DEFAULT_SILENT_SHOT_BACKEND: SilentShotBackend = "grok";
 export const SILENT_SHOT_GROK_RESOLUTION = "720p";
 
 /** `[GROK]` / `[LTX]` / `[H3]`, any case, spaces allowed inside. */
-export const VIDEO_BACKEND_OVERRIDE_TAG_SOURCE = String.raw`\[\s*(?:GROK|LTX|H3)\s*\]`;
+export const VIDEO_BACKEND_OVERRIDE_TAG_SOURCE = String.raw`\[\s*(?:GROK|LTX|H3|SIRAY)\s*\]`;
 
 function overrideTagRe(): RegExp {
-  return /\[\s*(GROK|LTX|H3)\s*\]/gi;
+  return /\[\s*(GROK|LTX|H3|SIRAY)\s*\]/gi;
 }
 
 export function parseRowVideoBackend(value: unknown): RowVideoBackend | undefined {
   if (typeof value !== "string") return undefined;
   const v = value.trim().toLowerCase();
-  return v === "ltx" || v === "grok" || v === "h3" ? v : undefined;
+  return v === "ltx" || v === "grok" || v === "h3" || v === "siray" ? v : undefined;
 }
 
+/** Grok/H3 (Sunny Banks, Skidmarks). Shorts reads its switch with `studioSilentBackend`. */
 export function normalizeSilentShotBackend(value: unknown): SilentShotBackend {
   return value === "h3" ? "h3" : DEFAULT_SILENT_SHOT_BACKEND;
 }
@@ -86,13 +88,20 @@ export function pickRowVideoBackend(args: {
   kind: "speak" | "hold";
   override?: RowVideoBackend;
   silentDefault?: SilentShotBackend;
+  /** The silent engines this show offers (2026-10-04). A `[SIRAY]` tag
+   * on a show without Siray is ignored, and says so. Left out: Grok/H3. */
+  silentOffered?: readonly SilentShotBackend[];
 }): RowVideoBackendChoice {
   if (args.kind === "speak") {
     if (args.override && args.override !== "ltx") return { backend: "ltx", ignoredOverride: args.override };
     return { backend: "ltx" };
   }
+  const offered: readonly SilentShotBackend[] = args.silentOffered ?? ["grok", "h3"];
+  const silentDefault: SilentShotBackend =
+    args.silentDefault && offered.includes(args.silentDefault) ? args.silentDefault : normalizeSilentShotBackend(args.silentDefault);
+  if (args.override === "siray" && !offered.includes("siray")) return { backend: silentDefault, ignoredOverride: "siray" };
   if (args.override) return { backend: args.override };
-  return { backend: normalizeSilentShotBackend(args.silentDefault) };
+  return { backend: silentDefault };
 }
 
 /** `[GROK]`, `[LTX]`, `[H3]`, `[SIRAY]`. */
@@ -107,8 +116,10 @@ export function videoBackendName(backend: VideoBackendTag): string {
   return "LTX";
 }
 
-/** The note a talking row shows when a Grok/H3 tag was typed on it. */
-export function ignoredVideoBackendWarning(ignored: RowVideoBackend): string {
+/** The note a row shows when its tag was ignored: a Grok/H3/Siray tag on a
+ * talking line, or `[SIRAY]` on a show that doesn't render on Siray. */
+export function ignoredVideoBackendWarning(ignored: RowVideoBackend, kind: "speak" | "hold" = "speak"): string {
+  if (kind === "hold") return `${videoBackendTagLabel(ignored)} ignored: this show's silent shots are on Grok or H3.`;
   return `${videoBackendTagLabel(ignored)} ignored: talking lines stay on LTX so lips match the voice.`;
 }
 

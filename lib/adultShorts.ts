@@ -155,6 +155,13 @@ export interface AdultShortsState {
   adult?: boolean;
   /** The name typed on "+ New" for an episode that has no card yet; its card takes it. */
   title?: string;
+  /**
+   * Which Shorts editor is open (2026-10-04). Absent: the shot cards, as
+   * every Shorts episode until now (EP01–EP03 always open there).
+   * `"script"`: the script studio (`SkidmarksState.shortsStudio`), the same
+   * one as Sunny Banks and Skidmarks.
+   */
+  editor?: "script";
 }
 
 const EMPTY_CHARACTER: AdultShortsCharacter = { name: "", look: "", referenceUrls: [] };
@@ -351,6 +358,7 @@ export function normalizeAdultShortsState(value: unknown): AdultShortsState | nu
     ...normalizeStarring(v.starring),
     ...normalizeAdultFlag(v.adult),
     ...(str(v.title).trim() ? { title: str(v.title).trim().slice(0, ADULT_SHORTS_TITLE_MAX) } : {}),
+    ...(v.editor === "script" ? { editor: "script" as const } : {}),
   };
 }
 

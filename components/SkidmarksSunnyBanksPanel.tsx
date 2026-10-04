@@ -3,7 +3,8 @@
 import { useScriptFormatFeedback } from "@/hooks/useScriptFormatFeedback";
 import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
-import { ESTIMATED_STILL_COST_USD } from "@/lib/autoPlate";
+import { ESTIMATED_STILL_COST_USD, SIRAY_STILL_COST_USD } from "@/lib/autoPlate";
+import { preSendBlocks, preSendChecks, type PreSendIssue } from "@/lib/preSendChecks";
 import { triggerBlobDownload } from "@/lib/clipRenders";
 import { SkidmarksConfirmDialog } from "@/components/SkidmarksConfirmDialog";
 import { TrashIcon } from "@/components/SkidmarksRenderedClipsShelf";
@@ -14,7 +15,6 @@ import { estimateRowVideoCostUsd } from "@/lib/clipGeneration";
 import {
   extractVideoBackendOverride,
   ignoredVideoBackendWarning,
-  normalizeSilentShotBackend,
   pickRowVideoBackend,
   rowVideoBackendChip,
   VIDEO_BACKEND_OVERRIDE_TAG_SOURCE,
@@ -52,12 +52,13 @@ import { sunnybankBeatTarget, sunnybankPlateTarget, type DeckMediaTarget } from 
 import { resolveSunnyBanksRowCast, sunnyBanksMultiCastRequest, type SunnyBanksRowCast } from "@/lib/sunnyBanksShotCast";
 import { CastChips } from "@/components/CastChips";
 import { setSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
-import { studioGenreProfile, type StudioGenre } from "@/lib/studioGenre";
+import { studioGenreProfile, studioPlateEngine, studioSilentBackend, type PlateEngine, type StudioGenre } from "@/lib/studioGenre";
 import {
   buildSunnyBanksGodScriptPrompt,
   listSunnyBanksLocationIds,
   listSunnyBanksNonSpeakingCast,
   listSunnyBanksSpeakingCast,
+  SHORTS_GOD_SCRIPT_NOTE,
   SKIDMARKS_GOD_SCRIPT_NOTE,
   SUNNY_BANKS_GOD_SCRIPT_EXAMPLE,
   SUNNY_BANKS_GOD_SCRIPT_RULES,
@@ -68,6 +69,7 @@ import {
   getStudioState,
   getSunnyBanksLiveOrDefault,
   patchSunnyBanksLive,
+  setStudioPlateEngine,
   setSunnyBanksSilentShotBackend,
   subscribeSkidmarks,
 } from "@/lib/skidmarks";
@@ -226,7 +228,9 @@ let genreOverride: StudioGenre | null = null;
 
 function helperGenre(): StudioGenre {
   if (genreOverride) return genreOverride;
-  return getSkidmarksSnapshot().session?.projectKind === "skidmarks" ? "skidmarks" : "sunnybank";
+  const kind = getSkidmarksSnapshot().session?.projectKind;
+  // Shorts' script studio (2026-10-04) is on the Shorts project.
+  return kind === "skidmarks" ? "skidmarks" : kind === "adult-shorts" ? "shorts" : "sunnybank";
 }
 
 /** Runs `fn` with the script helpers reading `genre`'s cast and locations. */
@@ -377,6 +381,10 @@ export interface SunnyBanksBeatArgs {
   /** Which show (2026-10-04). Only Skidmarks says so; a Sunny Banks
    * request is exactly what it was before. */
   genre?: StudioGenre;
+  /** Make plate first (2026-10-04): `plateOnly`, the row's own `plateUrl`,
+   * `plateEngine`, a Siray `sirayTaskId`. Empty for a plain one-click
+   * render, so its request is exactly what it was before. */
+  ownPlate?: Record<string, unknown>;
 }
 
 /**
@@ -407,6 +415,7 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
           ...speaker,
           ...(args.multiCast ?? {}),
           ...genre,
+          ...(args.ownPlate ?? {}),
         }
       : {
           characterName: args.characterName,
@@ -421,6 +430,7 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
           ...speaker,
           ...(args.multiCast ?? {}),
           ...genre,
+          ...(args.ownPlate ?? {}),
         }
   );
 }
@@ -446,11 +456,37 @@ export function sunnyBanksRowBeatArgs(args: {
   scenePlateUrl?: string;
   /** Which show (Sunny Banks when left out): its clip folders and look. */
   genre?: StudioGenre;
+  /** A one-person row's own plate, made with "Make plate" (2026-10-04). */
+  rowPlateUrl?: string;
+  /** Make and save only the plate (2026-10-04). */
+  plateOnly?: boolean;
+  /** The plate switch, for a show that has one (Shorts). Left out: Grok. */
+  plateEngine?: PlateEngine;
+  /** A Siray silent shot to check back on. */
+  sirayTaskId?: string;
 }): SunnyBanksBeatArgs {
   const { chunk, rowCast } = args;
   const genre = args.genre ?? "sunnybank";
   // Only Skidmarks names its show on the paths and the request.
   const genreField = genre !== "sunnybank" ? { genre } : {};
+  const ownPlate: Record<string, unknown> = {};
+  if (args.plateOnly) {
+    ownPlate.plateOnly = true;
+    // A one-person plate is named like a shared one (`…-beat-03-dap-plate`).
+    if (!rowCast.cast.isMulti) {
+      const target = sunnybankPlateTarget({
+        episodeSlug: args.episodeSlug,
+        actId: args.act,
+        beatNumber: args.rowNumber,
+        castNames: [args.characterName],
+        ...genreField,
+      });
+      if (target) ownPlate.plateTarget = target;
+    }
+  }
+  if (args.rowPlateUrl && !rowCast.cast.isMulti && !args.plateOnly) ownPlate.plateUrl = args.rowPlateUrl;
+  if (args.plateEngine) ownPlate.plateEngine = args.plateEngine;
+  if (args.sirayTaskId) ownPlate.sirayTaskId = args.sirayTaskId;
   return {
     kind: chunk.kind,
     characterName: args.characterName,
@@ -490,7 +526,14 @@ export function sunnyBanksRowBeatArgs(args: {
       ...genreField,
     }),
     ...genreField,
+    ...(Object.keys(ownPlate).length > 0 ? { ownPlate } : {}),
   };
+}
+
+/** A refused or failed plate, said plainly (2026-10-04): no clip is made from it. */
+export function plateFailedMessage(reason: string): string {
+  const why = reason.replace(/\s+/g, " ").trim().replace(/[.]+$/, "");
+  return `Plate not made${why ? `: ${why}` : ""}. No clip was rendered or billed. Change the shot and make the plate again.`;
 }
 
 export interface SunnyBanksGodDocument {
@@ -511,6 +554,11 @@ interface GenerateBeatResponseBody {
   /** Multi-cast shots (2026-10-03): the shared picture and who's in it. */
   plateUrl?: unknown;
   castNames?: unknown;
+  /** Siray silent shots (2026-10-04): 202 while it renders. */
+  pending?: unknown;
+  sirayTaskId?: unknown;
+  /** The plate step failed or was refused: nothing past it ran. */
+  plateFailed?: unknown;
 }
 
 type RowRuntime = SunnyBanksRowRuntime;
@@ -2093,6 +2141,9 @@ function SunnyBanksGodScriptCheatSheet({ genre = "sunnybank" }: { genre?: Studio
           {genre === "skidmarks" && (
             <p className="text-[11px] leading-snug text-white/60">{SKIDMARKS_GOD_SCRIPT_NOTE}</p>
           )}
+          {genre === "shorts" && (
+            <p className="text-[11px] leading-snug text-white/60">{SHORTS_GOD_SCRIPT_NOTE}</p>
+          )}
 
           <div className="flex flex-col gap-2.5">
             {SUNNY_BANKS_GOD_SCRIPT_RULES.map((rule) => (
@@ -2222,8 +2273,16 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   const locationPickTagsByAct = live.locationPickTags ?? {};
   const runtimeMapByAct = live.runtimeMap;
   const workspaceTitle = live.workspaceTitle;
-  /** The Grok/H3 switch for silent rows (saved with the session). */
-  const silentShotBackend = normalizeSilentShotBackend(studio?.silentShotBackend);
+  /** The show's engines (2026-10-04): Shorts adds Siray for silent rows and plates. */
+  const profile = studioGenreProfile(genre);
+  /** The silent-row switch (saved with the session): Grok/H3, or Siray/Grok/H3 on Shorts. */
+  const silentShotBackend = studioSilentBackend(genre, studio?.silentShotBackend);
+  /** The plate switch (Shorts: Siray or Grok); every other show plates on Grok. */
+  const plateEngine = studioPlateEngine(genre, studio?.plateEngine);
+  const offersPlateSwitch = profile.plateEngines.length > 1;
+  const plateCostUsd = plateEngine === "siray" ? SIRAY_STILL_COST_USD : ESTIMATED_STILL_COST_USD;
+  /** The row whose "Make plate" is running (2026-10-04). */
+  const [platingIndex, setPlatingIndex] = useState<number | null>(null);
   /** The free H3 key check's last answer, shown next to the switch. */
   const [h3KeyCheck, setH3KeyCheck] = useState<string | null>(null);
   const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
@@ -2292,6 +2351,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       kind: chunk.kind,
       override: chunk.videoBackend,
       silentDefault: silentShotBackend,
+      silentOffered: profile.silentBackends,
     });
     // Who's in the shot (2026-10-03): the shared helper, same as every genre.
     const rowCast = resolveSunnyBanksRowCast(
@@ -2332,6 +2392,20 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     }
     return undefined;
   };
+  /** A one-person row's own plate (made with "Make plate", 2026-10-04), for this same person only. */
+  const rowOwnPlate = (row: QueueRow): string | undefined => {
+    if (row.rowCast.cast.isMulti || row.location.peopleInPicture || !row.character) return undefined;
+    if (isSunnyBanksLocationCutaway(row.chunk)) return undefined;
+    const runtime = runtimeFor(row.index, row.chunk.raw);
+    const names = runtime.castNames ?? [];
+    return names.length === 1 && sameShotCastName(names[0], row.character.name) ? runtime.plateUrl : undefined;
+  };
+  /** The plate this row would render from: its own, or its scene's shared one. */
+  const rowPlate = (row: QueueRow): string | undefined =>
+    row.rowCast.cast.isMulti ? savedScenePlate(row) : rowOwnPlate(row);
+  /** A row that gets a plate made at all (not a cutaway, not a location with the people already in it). */
+  const rowTakesPlate = (row: QueueRow): boolean =>
+    Boolean(row.character) && !row.location.peopleInPicture && !isSunnyBanksLocationCutaway(row.chunk);
   /** Pictures this row still needs before it can render (one person or several). */
   const rowMissingPictures = (row: QueueRow): string[] => {
     if (row.location.peopleInPicture) return [];
@@ -2340,7 +2414,22 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       return row.rowCast.cast.missingPicture;
     }
     if (!row.character || isSunnyBanksLocationCutaway(row.chunk)) return [];
+    if (rowOwnPlate(row)) return [];
     return resolveSunnyBanksStartImage(row.character) ? [] : [row.character.name];
+  };
+  /** The free pre-send check (2026-10-04, `lib/preSendChecks.ts`): the same rules every show uses. */
+  const castNameList = castCardList.map((c) => c.name);
+  const rowPreSend = (row: QueueRow): PreSendIssue[] => {
+    if (!row.character || isSunnyBanksLocationCutaway(row.chunk)) return [];
+    const inShot = row.rowCast.cast.names.length > 0 ? row.rowCast.cast.names : [row.character.name];
+    return preSendChecks({
+      kind: row.kind,
+      speakerName: row.kind === "speak" ? row.character.name : null,
+      inShotNames: inShot,
+      castNames: castNameList,
+      promptText: [row.chunk.action, row.chunk.sceneAction, row.chunk.appearanceModifier].filter(Boolean).join(" "),
+      line: row.kind === "speak" ? row.line : undefined,
+    });
   };
 
   const renderedClips = collectRenderedClips({
@@ -2383,7 +2472,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         (row) => row.index === runningIndex || runtimeFor(row.index, row.chunk.raw).status !== "done"
       );
 
-  const overlayCostUsd = pendingRows.length * ESTIMATED_STILL_COST_USD;
+  const overlayCostUsd = pendingRows.length * plateCostUsd;
   // Per row, on the engine each row will use (estimates; LTX's is Deck's stand-in rate).
   const holdVideoCostUsd = pendingRows
     .filter((row) => row.kind === "hold")
@@ -2393,8 +2482,11 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   const canRenderAll =
     pendingRows.length > 0 &&
     !running &&
+    platingIndex === null &&
     pendingRows.every((row) => {
       if (row.locationProblem || !row.location.image) return false;
+      // The free pre-send check's blocks (the speaker isn't in the shot).
+      if (preSendBlocks(rowPreSend(row))) return false;
       if (isSunnyBanksLocationCutaway(row.chunk)) return true;
       if (!row.character) return false;
       // No Cast card picture (anyone in the shot): never rendered (red note on the row).
@@ -2421,7 +2513,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         plateUrl?: string;
         castNames?: string[];
       }
-    | { ok: false; message: string; plateUrl?: string; castNames?: string[] }
+    | { ok: false; message: string; plateUrl?: string; castNames?: string[]; pending?: true; sirayTaskId?: string }
   > => {
     const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
       method: "POST",
@@ -2436,12 +2528,13 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         ? { castNames: body.castNames as string[] }
         : {}),
     };
+    // Siray still rendering (2026-10-04): the panel checks back with the task id.
+    if (res.status === 202 && body.pending === true && typeof body.sirayTaskId === "string" && body.sirayTaskId) {
+      return { ok: false, pending: true, sirayTaskId: body.sirayTaskId, message: "Siray is still rendering.", ...plate };
+    }
     if (!res.ok || !videoUrl) {
-      return {
-        ok: false,
-        message: typeof body.error === "string" ? body.error : `Render failed (HTTP ${res.status}).`,
-        ...plate,
-      };
+      const error = typeof body.error === "string" ? body.error : `Render failed (HTTP ${res.status}).`;
+      return { ok: false, message: body.plateFailed === true ? plateFailedMessage(error) : error, ...plate };
     }
     return {
       ...plate,
@@ -2450,10 +2543,114 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       durationSec: typeof body.durationSec === "number" ? body.durationSec : 0,
       audioMuxed: typeof body.audioMuxed === "boolean" ? body.audioMuxed : undefined,
       videoBackend:
-        body.videoBackend === "ltx" || body.videoBackend === "grok" || body.videoBackend === "h3"
+        body.videoBackend === "ltx" || body.videoBackend === "grok" || body.videoBackend === "h3" || body.videoBackend === "siray"
           ? body.videoBackend
           : args.videoBackend ?? "ltx",
     };
+  };
+
+  /** Make plate first (2026-10-04): the row's plate only, saved; no voice, no video. */
+  const postPlateOnly = async (
+    args: SunnyBanksBeatArgs
+  ): Promise<{ ok: true; plateUrl: string; castNames?: string[] } | { ok: false; message: string }> => {
+    try {
+      const res = await fetch("/api/skidmarks/sunnybank/generate-speak-beat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...deckBuildHeaders() },
+        body: JSON.stringify(sunnyBanksBeatRequestBody(args)),
+      });
+      const body = (await res.json()) as GenerateBeatResponseBody;
+      if (res.ok && typeof body.plateUrl === "string" && /^https:\/\//i.test(body.plateUrl)) {
+        const castNames =
+          Array.isArray(body.castNames) && body.castNames.every((n) => typeof n === "string") ? (body.castNames as string[]) : undefined;
+        return { ok: true, plateUrl: body.plateUrl, ...(castNames ? { castNames } : {}) };
+      }
+      return { ok: false, message: plateFailedMessage(typeof body.error === "string" ? body.error : `HTTP ${res.status}`) };
+    } catch (err) {
+      return { ok: false, message: plateFailedMessage(err instanceof Error ? err.message : "network error") };
+    }
+  };
+
+  /** Everything one row sends, for a render or a plate. */
+  const rowBeatArgs = async (
+    row: QueueRow,
+    act: SunnyBanksActId,
+    opts: { scenePlateUrl?: string; rowPlateUrl?: string; plateOnly?: boolean; sirayTaskId?: string; videoBackend?: RowVideoBackend; sceneFirstRowNumber: number }
+  ): Promise<SunnyBanksBeatArgs> => {
+    const lock = inStudioGenre(genre, () => speakerLock(row.characterName));
+    const startImageDataUrl = await resolveLocationDataUrl(row.location.image);
+    return sunnyBanksRowBeatArgs({
+      chunk: row.chunk,
+      characterName: lock?.name ?? row.characterName,
+      speaker: sunnyBanksSpeakerRequestExtras(lock, genre),
+      location: row.location,
+      startImageDataUrl,
+      rowCast: row.rowCast,
+      videoBackend: opts.videoBackend ?? row.backendChoice.backend,
+      act,
+      episodeSlug: ensureSunnyBanksEpisodeMediaSlug(genre),
+      rowNumber: row.index + 1,
+      sceneFirstRowNumber: opts.sceneFirstRowNumber,
+      scenePlateUrl: opts.scenePlateUrl,
+      genre,
+      rowPlateUrl: opts.rowPlateUrl,
+      plateOnly: opts.plateOnly,
+      // Only a show with a plate switch says which engine (Sunny Banks' request is unchanged).
+      plateEngine: offersPlateSwitch ? plateEngine : undefined,
+      sirayTaskId: opts.sirayTaskId,
+    });
+  };
+
+  /** One row's runtime, written onto the live episode (auto-saved onto its card). */
+  const writeRowRuntime = (act: SunnyBanksActId, index: number, next: RowRuntime) => {
+    const row = queue[index];
+    const stamped: RowRuntime = {
+      ...next,
+      characterName: next.characterName ?? row?.characterName,
+      line: next.line ?? row?.line ?? "",
+    };
+    patchLive((prev) => ({
+      ...prev,
+      runtimeMap: {
+        ...prev.runtimeMap,
+        [act]: writeSunnyBanksRowRuntime(prev.actScripts[act] ?? "", prev.runtimeMap[act] ?? {}, index, stamped),
+      },
+    }));
+  };
+
+  /** The row number a scene's shared picture is named after (its first line). */
+  const firstSceneRowNumber = (row: QueueRow): number => {
+    const first = row.chunk.sceneKey ? queue.find((q) => q.chunk.sceneKey === row.chunk.sceneKey) : undefined;
+    return (first ?? row).index + 1;
+  };
+
+  /** "Make plate" / "Remake plate" on one row (2026-10-04): ~$0.02–0.04, and the cheap check for a refusal before the paid clip. */
+  /** A refused or failed "Make plate" (its act and row). Cleared when that row is plated or rendered again. */
+  const [plateNotice, setPlateNotice] = useState<{ act: SunnyBanksActId; index: number; text: string } | null>(null);
+  const handleMakePlate = async (row: QueueRow) => {
+    if (runningRef.current || !rowTakesPlate(row) || !row.location.image || row.locationProblem) return;
+    const act = activeAct;
+    const lock = inStudioGenre(genre, () => speakerLock(row.characterName));
+    if (!lock) return;
+    runningRef.current = true;
+    setPlatingIndex(row.index);
+    setPlateNotice(null);
+    try {
+      const made = await postPlateOnly(
+        await rowBeatArgs(row, act, { plateOnly: true, sceneFirstRowNumber: firstSceneRowNumber(row) })
+      );
+      if (!made.ok) {
+        setPlateNotice({ act, index: row.index, text: made.message });
+        return;
+      }
+      const castNames = made.castNames && made.castNames.length > 1 ? made.castNames : [lock.name];
+      writeRowRuntime(act, row.index, { lineKey: row.chunk.raw, status: "idle", plateUrl: made.plateUrl, castNames });
+    } catch (err) {
+      setPlateNotice({ act, index: row.index, text: plateFailedMessage(err instanceof Error ? err.message : "network error") });
+    } finally {
+      runningRef.current = false;
+      setPlatingIndex(null);
+    }
   };
 
   /** Free check that MiniMax accepts the server's key (lists one task,
@@ -2490,135 +2687,200 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     }));
   };
 
+  /** How many times a Siray silent shot is checked on (each check waits up to ~30 s on the server). */
+  const SIRAY_CHECKS = 20;
+
+  /**
+   * One row: its plate first when it needs one on Siray (a slow engine
+   * never shares a call with the video), then the clip. Shared by Render
+   * all and "Try with Grok". `false` stops the queue.
+   */
+  const renderRow = async (
+    row: QueueRow,
+    i: number,
+    act: SunnyBanksActId,
+    ctx: { scenePlatesThisRun: Record<string, string>; videoBackend?: RowVideoBackend }
+  ): Promise<boolean> => {
+    const writeRuntime = (index: number, next: RowRuntime) => writeRowRuntime(act, index, next);
+    // An old "Plate not made" note goes: this render says what happens now.
+    setPlateNotice((n) => (n && n.act === act && n.index === i ? null : n));
+    const lock = inStudioGenre(genre, () => speakerLock(row.characterName));
+    const cutaway = inStudioGenre(genre, () => isSunnyBanksLocationCutaway(row.chunk));
+    if ((!lock && !cutaway) || !row.location.image || row.locationProblem) {
+      writeRuntime(i, {
+        lineKey: row.chunk.raw,
+        status: "failed",
+        error: row.locationProblem ?? "Character or location is missing.",
+      });
+      return false;
+    }
+    const before = runtimeFor(row.index, row.chunk.raw);
+    const backend = ctx.videoBackend ?? row.backendChoice.backend;
+    // Shared picture for a scene: one made earlier this run, or kept on a row.
+    let scenePlateUrl = row.rowCast.cast.isMulti
+      ? ((row.chunk.sceneKey ? ctx.scenePlatesThisRun[row.chunk.sceneKey] : undefined) ?? savedScenePlate(row))
+      : undefined;
+    let rowPlateUrl = rowOwnPlate(row);
+    const missing = row.rowCast.cast.isMulti && scenePlateUrl ? [] : rowMissingPictures(row);
+    if (lock && !cutaway && missing.length > 0) {
+      writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: missingCastPictureMessage(missing[0]) });
+      return false;
+    }
+    setRunningKind(row.kind);
+    setRunningIndex(i);
+    /** The plate this row keeps while it renders (and after, if the clip fails). */
+    let keptPlate: Pick<RowRuntime, "plateUrl" | "castNames"> =
+      rowPlateUrl && before.castNames ? { plateUrl: rowPlateUrl, castNames: before.castNames } : {};
+    writeRuntime(i, { lineKey: row.chunk.raw, status: "rendering", ...keptPlate });
+    const engine = videoBackendName(backend);
+    setProgressText(
+      cutaway
+        ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} on ${engine} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+        : row.kind === "hold"
+          ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} on ${engine} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+          : `Line ${i + 1} of ${queue.length} — rendering ${lock!.name}'s line…`
+    );
+    try {
+      // A Siray plate is its own call first (2026-10-04): it is slow, and a
+      // refused or failed plate stops here, before the paid clip.
+      const needsPlate =
+        lock && !cutaway && rowTakesPlate(row) && (row.rowCast.cast.isMulti ? !scenePlateUrl : !rowPlateUrl);
+      if (needsPlate && plateEngine === "siray") {
+        setProgressText(`Line ${i + 1} of ${queue.length} — making the plate on Siray (~$${plateCostUsd.toFixed(2)})…`);
+        const made = await postPlateOnly(
+          await rowBeatArgs(row, act, { plateOnly: true, sceneFirstRowNumber: firstSceneRowNumber(row) })
+        );
+        if (!made.ok) {
+          writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: made.message });
+          return false;
+        }
+        if (row.rowCast.cast.isMulti) {
+          scenePlateUrl = made.plateUrl;
+          if (row.chunk.sceneKey) ctx.scenePlatesThisRun[row.chunk.sceneKey] = made.plateUrl;
+        } else {
+          rowPlateUrl = made.plateUrl;
+        }
+        keptPlate = {
+          plateUrl: made.plateUrl,
+          castNames: made.castNames && made.castNames.length > 1 ? made.castNames : [lock.name],
+        };
+        writeRuntime(i, { lineKey: row.chunk.raw, status: "rendering", ...keptPlate });
+        setProgressText(`Line ${i + 1} of ${queue.length} — plate made, now the clip on ${engine}…`);
+      }
+      const argsFor = (sirayTaskId?: string) =>
+        rowBeatArgs(row, act, {
+          scenePlateUrl,
+          rowPlateUrl,
+          sirayTaskId,
+          videoBackend: backend,
+          sceneFirstRowNumber: firstSceneRowNumber(row),
+        });
+      // A Siray shot still rendering from before is checked on, never paid for twice.
+      let result = await postBeat(await argsFor(backend === "siray" ? before.sirayTaskId : undefined));
+      for (let check = 1; !result.ok && result.pending && result.sirayTaskId && check <= SIRAY_CHECKS; check++) {
+        writeRuntime(i, { lineKey: row.chunk.raw, status: "rendering", sirayTaskId: result.sirayTaskId, ...keptPlate });
+        setProgressText(`Line ${i + 1} of ${queue.length} — Siray is rendering (check ${check} of ${SIRAY_CHECKS})…`);
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        result = await postBeat(await argsFor(result.sirayTaskId));
+      }
+      if (row.rowCast.cast.isMulti && result.plateUrl && row.chunk.sceneKey) ctx.scenePlatesThisRun[row.chunk.sceneKey] = result.plateUrl;
+      const plateFields: Pick<RowRuntime, "plateUrl" | "castNames"> = result.plateUrl
+        ? {
+            plateUrl: result.plateUrl,
+            ...(result.castNames && result.castNames.length > 1
+              ? { castNames: result.castNames }
+              : !row.rowCast.cast.isMulti && lock
+                ? { castNames: [lock.name] }
+                : {}),
+          }
+        : keptPlate;
+      if (!result.ok) {
+        writeRuntime(i, {
+          lineKey: row.chunk.raw,
+          status: "failed",
+          error: result.pending
+            ? "Siray is still rendering. Tap Render again to check on it (it won't be paid for twice)."
+            : result.message,
+          ...(result.pending && result.sirayTaskId ? { sirayTaskId: result.sirayTaskId } : {}),
+          ...(backend === "siray" && !result.pending ? { videoBackend: "siray" as const } : {}),
+          ...plateFields,
+        });
+        return false;
+      }
+      writeRuntime(i, {
+        ...plateFields,
+        lineKey: row.chunk.raw,
+        status: "done",
+        videoUrl: result.videoUrl,
+        durationSec: result.durationSec,
+        audioMuxed: result.audioMuxed,
+        videoBackend: result.videoBackend,
+        error:
+          result.audioMuxed === false
+            ? result.videoBackend && result.videoBackend !== "ltx"
+              ? `Clip finished on ${videoBackendName(result.videoBackend)}, but its own sound could not be swapped for silence.`
+              : "Clip finished, but the driving audio did not land in the file. Lips may move with no sound."
+            : undefined,
+      });
+      return true;
+    } catch (err) {
+      writeRuntime(i, {
+        lineKey: row.chunk.raw,
+        status: "failed",
+        error: err instanceof Error ? err.message : "Could not render this line.",
+        ...keptPlate,
+        ...(backend === "siray" ? { videoBackend: "siray" as const } : {}),
+      });
+      return false;
+    }
+  };
+
+  const finishRun = () => {
+    runningRef.current = false;
+    stopRequestedRef.current = false;
+    setStopRequested(false);
+    setRunningKind(null);
+    setRunningIndex(null);
+    setProgressText((current) => (current?.startsWith("Stopped") ? current : null));
+  };
+
   const handleRenderAll = async () => {
     if (!canRenderAll || runningRef.current) return;
     const act = activeAct;
     runningRef.current = true;
     stopRequestedRef.current = false;
     setStopRequested(false);
-    const writeRuntime = (index: number, next: RowRuntime) => {
-      const row = queue[index];
-      const stamped: RowRuntime = {
-        ...next,
-        characterName: next.characterName ?? row?.characterName,
-        line: next.line ?? row?.line ?? "",
-      };
-      patchLive((prev) => ({
-        ...prev,
-        runtimeMap: {
-          ...prev.runtimeMap,
-          [act]: writeSunnyBanksRowRuntime(prev.actScripts[act] ?? "", prev.runtimeMap[act] ?? {}, index, stamped),
-        },
-      }));
-    };
     /** Shared pictures made during this run, by scene, so a two-hander's
      * second line uses the first line's picture (2026-10-03). */
     const scenePlatesThisRun: Record<string, string> = {};
-    /** The row number the scene's picture is named after (its first line). */
-    const firstSceneRowNumber = (row: QueueRow): number => {
-      const first = row.chunk.sceneKey ? queue.find((q) => q.chunk.sceneKey === row.chunk.sceneKey) : undefined;
-      return (first ?? row).index + 1;
-    };
     try {
       const run = await runSunnyBanksRenderQueue(queue, {
         skip: (row) => runtimeFor(row.index, row.chunk.raw).status === "done",
         // Stop (2026-09-30): read before each new line starts, so the
         // line that's rendering finishes and saves.
         shouldStop: () => stopRequestedRef.current,
-        render: async (row, i) => {
-          const lock = inStudioGenre(genre, () => speakerLock(row.characterName));
-          const cutaway = inStudioGenre(genre, () => isSunnyBanksLocationCutaway(row.chunk));
-          if ((!lock && !cutaway) || !row.location.image || row.locationProblem) {
-            writeRuntime(i, {
-              lineKey: row.chunk.raw,
-              status: "failed",
-              error: row.locationProblem ?? "Character or location is missing.",
-            });
-            return false;
-          }
-          // Shared picture for a scene: one made earlier this run, or kept on a row.
-          const scenePlateUrl = row.rowCast.cast.isMulti
-            ? ((row.chunk.sceneKey ? scenePlatesThisRun[row.chunk.sceneKey] : undefined) ?? savedScenePlate(row))
-            : undefined;
-          const missing = row.rowCast.cast.isMulti && scenePlateUrl ? [] : rowMissingPictures(row);
-          if (lock && !cutaway && missing.length > 0) {
-            writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: missingCastPictureMessage(missing[0]) });
-            return false;
-          }
-          setRunningKind(row.kind);
-          setRunningIndex(i);
-          writeRuntime(i, { lineKey: row.chunk.raw, status: "rendering" });
-          const engine = videoBackendName(row.backendChoice.backend);
-          setProgressText(
-            cutaway
-              ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} on ${engine} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
-              : row.kind === "hold"
-                ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} on ${engine} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
-                : `Line ${i + 1} of ${queue.length} — rendering ${lock!.name}'s line…`
-          );
-          try {
-            const startImageDataUrl = await resolveLocationDataUrl(row.location.image);
-            const result = await postBeat(
-              sunnyBanksRowBeatArgs({
-                chunk: row.chunk,
-                characterName: lock?.name ?? row.characterName,
-                speaker: sunnyBanksSpeakerRequestExtras(lock, genre),
-                location: row.location,
-                startImageDataUrl,
-                rowCast: row.rowCast,
-                videoBackend: row.backendChoice.backend,
-                act,
-                episodeSlug: ensureSunnyBanksEpisodeMediaSlug(genre),
-                rowNumber: row.index + 1,
-                sceneFirstRowNumber: firstSceneRowNumber(row),
-                scenePlateUrl,
-                genre,
-              })
-            );
-            if (result.plateUrl && row.chunk.sceneKey) scenePlatesThisRun[row.chunk.sceneKey] = result.plateUrl;
-            const plateFields = {
-              ...(result.plateUrl ? { plateUrl: result.plateUrl } : {}),
-              ...(result.castNames && result.castNames.length > 1 ? { castNames: result.castNames } : {}),
-            };
-            if (!result.ok) {
-              writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: result.message, ...plateFields });
-              return false;
-            }
-            writeRuntime(i, {
-              ...plateFields,
-              lineKey: row.chunk.raw,
-              status: "done",
-              videoUrl: result.videoUrl,
-              durationSec: result.durationSec,
-              audioMuxed: result.audioMuxed,
-              videoBackend: result.videoBackend,
-              error:
-                result.audioMuxed === false
-                  ? result.videoBackend && result.videoBackend !== "ltx"
-                    ? `Clip finished on ${videoBackendName(result.videoBackend)}, but its own sound could not be swapped for silence.`
-                    : "Clip finished, but the driving audio did not land in the file. Lips may move with no sound."
-                  : undefined,
-            });
-            return true;
-          } catch (err) {
-            writeRuntime(i, {
-              lineKey: row.chunk.raw,
-              status: "failed",
-              error: err instanceof Error ? err.message : "Could not render this line.",
-            });
-            return false;
-          }
-        },
+        render: (row, i) => renderRow(row, i, act, { scenePlatesThisRun }),
       });
       if (run.outcome === "stopped") setProgressText(sunnyBanksStoppedText(run.index));
       else if (run.outcome === "halted") setProgressText(`Stopped at line ${run.index + 1} — later lines were not billed.`);
     } finally {
-      runningRef.current = false;
-      stopRequestedRef.current = false;
-      setStopRequested(false);
-      setRunningKind(null);
-      setRunningIndex(null);
-      setProgressText((current) => (current?.startsWith("Stopped") ? current : null));
+      finishRun();
+    }
+  };
+
+  /**
+   * "Try with Grok" on a silent row that failed on Siray (2026-10-04,
+   * Stuart: Grok is the backup). One tap renders just that row on Grok;
+   * nothing is ever retried on a paid engine without the tap.
+   */
+  const handleRetrySilentOnGrok = async (row: QueueRow) => {
+    if (runningRef.current || row.kind !== "hold" || platingIndex !== null) return;
+    const act = activeAct;
+    runningRef.current = true;
+    try {
+      await renderRow(row, row.index, act, { scenePlatesThisRun: {}, videoBackend: "grok" });
+    } finally {
+      finishRun();
     }
   };
 
@@ -3036,7 +3298,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                     }}
                     disabled={running}
                     placeholder={
-                      genre === "skidmarks"
+                      genre === "skidmarks" || genre === "shorts"
                         ? "[Location: Town street]\n[Action: walks along the pavement, side on]\nDap:"
                         : "Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"
                     }
@@ -3066,7 +3328,9 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
-                      <span className="text-red-400/90">[GROK] / [LTX] / [H3] video</span>
+                      <span className="text-red-400/90">
+                        {profile.silentBackends.includes("siray") ? "[SIRAY] / [GROK] / [LTX] / [H3] video" : "[GROK] / [LTX] / [H3] video"}
+                      </span>
                     </span>
                   </span>
                 </p>
@@ -3248,19 +3512,61 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                         {missingVoiceMessage(row.character.name)}
                                       </p>
                                     )}
-                                    {runtime?.plateUrl && (
-                                      <details className="min-w-0 pt-0.5">
-                                        <summary className="cursor-pointer text-[10px] text-cyan-200/80 [-webkit-tap-highlight-color:transparent]">
-                                          Shared plate
-                                        </summary>
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img
-                                          src={runtime.plateUrl}
-                                          alt={`Shared plate: ${chipNames.join(" + ")}`}
-                                          className="mt-1 aspect-video w-full max-w-[320px] rounded-lg object-cover"
-                                        />
-                                      </details>
-                                    )}
+                                    {(() => {
+                                      const plateShown = runtime?.plateUrl ?? (isStatic ? undefined : rowPlate(row));
+                                      const plateLabel = row.rowCast.cast.isMulti ? "Shared plate" : "Plate";
+                                      const canPlate = !isStatic && rowTakesPlate(row) && !row.locationProblem && !!row.location.image;
+                                      return (
+                                        <>
+                                          {plateShown && (
+                                            <details className="min-w-0 pt-0.5">
+                                              <summary className="cursor-pointer text-[10px] text-cyan-200/80 [-webkit-tap-highlight-color:transparent]">
+                                                {plateLabel}
+                                              </summary>
+                                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                                              <img
+                                                src={plateShown}
+                                                alt={`${plateLabel}: ${chipNames.length > 0 ? chipNames.join(" + ") : row.characterName}`}
+                                                className="mt-1 aspect-video w-full max-w-[320px] rounded-lg object-cover"
+                                              />
+                                            </details>
+                                          )}
+                                          {/* Make plate first (2026-10-04): optional, and the cheap check for a refusal. */}
+                                          {canPlate && (
+                                            <button
+                                              type="button"
+                                              onClick={() => void handleMakePlate(row)}
+                                              disabled={running || platingIndex !== null || missingNow.length > 0}
+                                              aria-label={`${plateShown ? "Remake" : "Make"} plate for line ${row.index + 1}`}
+                                              className="mt-0.5 min-h-[32px] self-start rounded-md border border-cyan-300/25 px-2 text-[10px] font-semibold text-cyan-200/90 disabled:opacity-50"
+                                            >
+                                              {platingIndex === row.index
+                                                ? `Making plate on ${videoBackendName(plateEngine === "siray" ? "siray" : "grok")}…`
+                                                : `${plateShown ? "Remake plate" : "Make plate"} (~$${plateCostUsd.toFixed(2)})`}
+                                            </button>
+                                          )}
+                                          {plateNotice?.act === activeAct && plateNotice.index === row.index && (
+                                            <p role="alert" className="pt-0.5 text-[10px] leading-snug text-rose-300/90">
+                                              {plateNotice.text}
+                                            </p>
+                                          )}
+                                        </>
+                                      );
+                                    })()}
+                                    {!isStatic &&
+                                      rowPreSend(row).map((issue) => (
+                                        <p
+                                          key={issue.code + issue.message}
+                                          role={issue.level === "block" ? "alert" : "status"}
+                                          className={[
+                                            "pt-0.5 text-[10px] leading-snug",
+                                            issue.level === "block" ? "text-red-300" : "text-amber-200/80",
+                                          ].join(" ")}
+                                        >
+                                          {issue.level === "block" ? "" : "Check: "}
+                                          {issue.message}
+                                        </p>
+                                      ))}
                                   </>
                                 );
                               })()}
@@ -3271,7 +3577,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                               )}
                               {!isStatic && row.backendChoice.ignoredOverride && (
                                 <p className="pt-0.5 text-[10px] leading-snug text-amber-200/80">
-                                  {ignoredVideoBackendWarning(row.backendChoice.ignoredOverride)}
+                                  {ignoredVideoBackendWarning(row.backendChoice.ignoredOverride, row.kind)}
                                 </p>
                               )}
                               {isStatic ? (
@@ -3322,6 +3628,24 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                               {runtime.error}
                             </p>
                           )}
+                          {/* Grok is Siray's backup for a silent row (2026-10-04): one tap, never automatic. */}
+                          {runtime?.status === "failed" &&
+                            row.kind === "hold" &&
+                            runtime.videoBackend === "siray" &&
+                            !runtime.sirayTaskId &&
+                            profile.silentBackends.includes("grok") && (
+                              <div className="pb-1.5 pl-5">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleRetrySilentOnGrok(row)}
+                                  disabled={running || platingIndex !== null}
+                                  aria-label={`Try line ${row.index + 1} with Grok`}
+                                  className="min-h-[36px] rounded-md border border-red-300/30 px-2.5 text-[11px] font-semibold text-red-200 disabled:opacity-50"
+                                >
+                                  Try with Grok (~${estimateRowVideoCostUsd("grok", SUNNY_BANKS_HOLD_DURATION_SEC).toFixed(2)})
+                                </button>
+                              </div>
+                            )}
                           {runtime?.status === "done" && runtime.error && (
                             <p role="status" className="pb-1.5 pl-5 text-[11px] leading-snug text-amber-200/80">
                               {runtime.error}
@@ -3349,16 +3673,28 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
               <p className="text-[10px] leading-snug text-white/40">
                 {pendingRows.some((row) => row.locationProblem)
                   ? "A line's location isn't on the Locations row (see the red note on it). Add that location, or fix the [Location: …] tag."
+                  : pendingRows.some((row) => preSendBlocks(rowPreSend(row)))
+                    ? "A line's speaker isn't in the shot (see the red note on it). Add them to the shot first."
                   : "Every line needs a character with a Cast card picture (see any red note). Speak also needs a voice. Change the dropdown or the script."}
               </p>
             )}
+
+            {/* The free pre-send check, next to Render (2026-10-04): which lines it flagged. */}
+            {(() => {
+              const flagged = pendingRows.filter((row) => rowPreSend(row).length > 0).map((row) => row.index + 1);
+              return flagged.length > 0 && !running ? (
+                <p role="status" className="text-[10px] leading-snug text-amber-200/80">
+                  Check before rendering: line{flagged.length === 1 ? "" : "s"} {flagged.join(", ")} (see the note on each).
+                </p>
+              ) : null;
+            })()}
 
             {/* Grok/H3 switch for silent rows (2026-09-30). Talking rows
               * are always LTX; a [GROK] / [LTX] / [H3] tag beats this. */}
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] leading-snug text-white/40">
               <span>Silent shots on</span>
               <span role="group" aria-label="Video engine for silent shots" className="inline-flex overflow-hidden rounded-full border border-white/10">
-                {(["grok", "h3"] as const).map((option) => (
+                {profile.silentBackends.map((option) => (
                   <button
                     key={option}
                     type="button"
@@ -3391,6 +3727,30 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
               )}
               {h3KeyCheck && <span role="status" className="text-white/60">{h3KeyCheck}</span>}
             </div>
+            {/* Plate switch (2026-10-04, Shorts): Siray by default, Grok when wanted. */}
+            {offersPlateSwitch && (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] leading-snug text-white/40">
+                <span>Plates on</span>
+                <span role="group" aria-label="Engine for plates" className="inline-flex overflow-hidden rounded-full border border-white/10">
+                  {profile.plateEngines.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      aria-pressed={plateEngine === option}
+                      onClick={() => setStudioPlateEngine(option, genre)}
+                      disabled={running || platingIndex !== null}
+                      className={[
+                        "min-h-[32px] px-2.5 font-semibold disabled:opacity-60",
+                        plateEngine === option ? "bg-cyan-400/15 text-cyan-200" : "text-white/45",
+                      ].join(" ")}
+                    >
+                      {videoBackendName(option)}
+                    </button>
+                  ))}
+                </span>
+                <span>~${plateCostUsd.toFixed(2)} a plate · made first, so a refusal costs only the plate</span>
+              </div>
+            )}
             <div className="flex items-stretch gap-2">
               <button
                 type="button"

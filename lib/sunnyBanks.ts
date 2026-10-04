@@ -94,6 +94,13 @@ export interface StudioLook {
   idleAmbience: string;
   /** Plating: what the locked background must never turn into. */
   keepPlaceLine: string;
+  /** Plating a talking row (2026-10-04, Shorts): how the speaker's face
+   * must sit so LTX can move the mouth. Left out: nothing is added. */
+  talkingPlateLine?: string;
+  /** A location cutaway's motion prompt carries `styleLock` too
+   * (2026-10-04, Shorts: its adult and content locks reach every clip).
+   * Left out: the cutaway prompt is exactly as before. */
+  cutawayCarriesStyleLock?: boolean;
 }
 
 export const SUNNY_BANKS_LOOK: StudioLook = {

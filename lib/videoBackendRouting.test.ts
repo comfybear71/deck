@@ -53,7 +53,8 @@ describe("the override tag", () => {
 describe("small helpers", () => {
   it("parses and normalises", () => {
     expect(parseRowVideoBackend("GROK")).toBe("grok");
-    expect(parseRowVideoBackend("siray")).toBeUndefined();
+    expect(parseRowVideoBackend("siray")).toBe("siray");
+    expect(parseRowVideoBackend("kling")).toBeUndefined();
     expect(parseRowVideoBackend(3)).toBeUndefined();
     expect(normalizeSilentShotBackend("h3")).toBe("h3");
     expect(normalizeSilentShotBackend("ltx")).toBe("grok");

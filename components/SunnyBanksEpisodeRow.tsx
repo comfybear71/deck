@@ -1,5 +1,6 @@
 "use client";
 
+import { isSafeDeckMediaSlug, studioEpisodeFolder } from "@/lib/deckMediaPaths";
 import { useState, useSyncExternalStore } from "react";
 import {
   getEpisodeExtrasState,
@@ -65,6 +66,12 @@ function firstClipUrl(workspace: SunnyBanksWorkspaceSnapshot): string | null {
  * Skidmarks has the same row (2026-10-04, `genre="skidmarks"`), on its
  * own episode cards.
  */
+/** An episode's Extras folder; Shorts' script episodes are in `deck/shorts/episodes/` (2026-10-04). */
+function studioExtrasFolder(genre: StudioGenre, slug: string | undefined): string | null {
+  if (genre !== "shorts") return episodeFolderFor(genre, slug);
+  return isSafeDeckMediaSlug(slug) ? studioEpisodeFolder("shorts", slug) : null;
+}
+
 export function SunnyBanksEpisodeRow({ genre = "sunnybank" }: { genre?: StudioGenre } = {}) {
   const studioState = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const busy = useSyncExternalStore(subscribeSunnyBanksBusy, getSunnyBanksBusy, () => false);
@@ -164,7 +171,7 @@ export function SunnyBanksEpisodeRow({ genre = "sunnybank" }: { genre?: StudioGe
           runtimeMap: workspace.runtimeMap,
           extras: episodeExtrasFor(
             getEpisodeExtrasState(studioState),
-            episodeFolderFor(genre, workspace.mediaSlug ?? (workspace.id === activeId ? live.mediaSlug : undefined)),
+            studioExtrasFolder(genre, workspace.mediaSlug ?? (workspace.id === activeId ? live.mediaSlug : undefined)),
           ),
         },
         ({ done, total }) => say(`Getting clip ${done} of ${total}…`)

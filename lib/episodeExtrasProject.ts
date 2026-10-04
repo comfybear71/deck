@@ -8,7 +8,8 @@
  * - Sunnybank / Skidmarks: the open episode's pinned `mediaSlug`
  *   (`deck/<genre>/episodes/<episode>`), pinned from its name when first
  *   needed, the same as its first clip.
- * - Shorts: the open short's pinned folder (`deck/shorts/episodes/ep01-…`).
+ * - Shorts: the open short's pinned folder (`deck/shorts/episodes/ep01-…`),
+ *   or, with the script studio open, its episode's (pinned like Sunny Banks').
  * - Music video: the attached song's folder (`deck/music-video/songs/<song>`).
  */
 
@@ -20,8 +21,9 @@ import {
   type SkidmarksState,
 } from "./skidmarks";
 import { pinAdultShortMediaSlug } from "./deckMediaTargets";
-import type { DeckGenre } from "./deckMediaPaths";
+import { isSafeDeckMediaSlug, studioEpisodeFolder, type DeckGenre } from "./deckMediaPaths";
 import { episodeFolderFor, songEpisodeFolder } from "./episodeExtras";
+import { shortsScriptEditorOpen } from "./shortsEpisodeCast";
 
 export interface EpisodeExtrasProject {
   /** The episode's Blob folder; `null` until it has one (no extras can exist yet). */
@@ -34,11 +36,16 @@ export interface EpisodeExtrasProject {
 
 /** Read-only: what the row shows. Never writes. */
 export function episodeExtrasProjectFor(state: SkidmarksState, genre: DeckGenre): EpisodeExtrasProject {
-  if (genre === "sunnybank" || genre === "skidmarks") {
-    const studio = getStudioState(genre, state);
-    const live = getSunnyBanksLiveOrDefault(state, genre);
+  // Shorts' script studio (2026-10-04) keeps its folder like the other two shows.
+  const studioGenre =
+    genre === "sunnybank" || genre === "skidmarks" ? genre : genre === "shorts" && shortsScriptEditorOpen(state) ? "shorts" : null;
+  if (studioGenre) {
+    const studio = getStudioState(studioGenre, state);
+    const live = getSunnyBanksLiveOrDefault(state, studioGenre);
     const card = live.episodeId ? studio?.workspaces.find((w) => w.id === live.episodeId) : undefined;
-    const folder = episodeFolderFor(genre, live.mediaSlug ?? card?.mediaSlug);
+    const slug = live.mediaSlug ?? card?.mediaSlug;
+    const folder =
+      studioGenre === "shorts" ? (isSafeDeckMediaSlug(slug) ? studioEpisodeFolder("shorts", slug) : null) : episodeFolderFor(genre, slug);
     const named = Boolean(folder || live.workspaceTitle.trim());
     return {
       folder,
@@ -66,6 +73,10 @@ export function pinEpisodeExtrasFolder(state: SkidmarksState, genre: DeckGenre):
   const shown = episodeExtrasProjectFor(state, genre);
   if (shown.folder || !shown.canAdd) return shown.folder;
   if (genre === "sunnybank" || genre === "skidmarks") return episodeFolderFor(genre, ensureSunnyBanksEpisodeMediaSlug(genre));
+  if (genre === "shorts" && shortsScriptEditorOpen(state)) {
+    const slug = ensureSunnyBanksEpisodeMediaSlug("shorts");
+    return isSafeDeckMediaSlug(slug) ? studioEpisodeFolder("shorts", slug) : null;
+  }
   if (genre === "shorts") return episodeFolderFor("shorts", pinAdultShortMediaSlug());
   return null;
 }

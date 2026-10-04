@@ -29,6 +29,7 @@ import {
   setDeckLocationPicture,
 } from "@/lib/locationEdits";
 import { uploadLocationPicture } from "@/lib/locationPicture";
+import { shortsScriptEditorOpen } from "@/lib/shortsEpisodeCast";
 import { getDeckLocationsState, getSkidmarksSnapshot, subscribeSkidmarks, type SkidmarksState } from "@/lib/skidmarks";
 import { episodeLocationGenre, episodeNameFirstMessage, episodeOwnLocations } from "@/lib/episodeCast";
 import { openEpisodeScopeIn } from "@/lib/episodeScopes";
@@ -95,7 +96,7 @@ export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
     if (perEpisode) {
       const episode = pinOpenEpisodeFolder(perEpisode);
       if (!episode) {
-        setNotice({ text: episodeNameFirstMessage(perEpisode, "locations"), tone: "error" });
+        setNotice({ text: episodeNameFirstMessage(perEpisode, "locations", shortsScriptEditorOpen(getSkidmarksSnapshot())), tone: "error" });
         return;
       }
       scope = { episode, nameScope: locationsOnRow(genre, getSkidmarksSnapshot()) };

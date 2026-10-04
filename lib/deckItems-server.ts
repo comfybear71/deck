@@ -44,6 +44,7 @@ import {
 } from "./deckItems";
 import { normalizeDeckLocation } from "./deckLocations";
 import { normalizeSkidmarksEpisodeCard } from "./skidmarksStudio";
+import { normalizeShortsEpisodeCard } from "./skidmarksEpisodeItems";
 import { MUSIC_VIDEO_ITEM_FOLDER, cleanBandRowData, cleanSongItem } from "./musicVideoItemData";
 import { SKIDMARKS_STUDIO_OWNER_ID } from "./skidmarksSession-server";
 
@@ -156,6 +157,13 @@ export function prepareDeckItemData(
       if (entry.id !== itemId) return { ok: false, error: "The episode's id doesn't match the item id." };
       if (JSON.stringify(entry).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That episode is too big to save." };
       return { ok: true, data: entry as unknown as Record<string, unknown>, folder: DECK_ITEM_KIND_FOLDERS[kind] ?? "skidmarks" };
+    }
+    case "shorts-episode": {
+      const entry = normalizeShortsEpisodeCard(data);
+      if (!entry) return { ok: false, error: "That isn't a Shorts episode." };
+      if (entry.id !== itemId) return { ok: false, error: "The episode's id doesn't match the item id." };
+      if (JSON.stringify(entry).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That episode is too big to save." };
+      return { ok: true, data: entry as unknown as Record<string, unknown>, folder: DECK_ITEM_KIND_FOLDERS[kind] ?? "adult-shorts" };
     }
     case "adult-short": {
       const entry = normalizeAdultShortsSavedEntry(data);

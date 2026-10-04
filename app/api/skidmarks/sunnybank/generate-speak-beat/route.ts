@@ -36,7 +36,9 @@ import {
 } from "@/lib/sunnyBanksShotCast";
 import { normalizeElevenLabsVoiceId } from "@/lib/characterLoras";
 import { parseSunnyBanksCharacterCard, resolveSpeakBeatCharacter } from "@/lib/sunnyBanksVoices";
-import { parseStudioGenre, studioGenreProfile, type StudioGenreProfile } from "@/lib/studioGenre";
+import { parseStudioGenre, studioGenreProfile, studioPlateEngine, type PlateEngine, type StudioGenreProfile } from "@/lib/studioGenre";
+import type { SunnyBanksShotCastMember } from "@/lib/sunnyBanksShotCast";
+import type { SunnyBanksCharacterLock } from "@/lib/sunnyBanks";
 import {
   buildLtx23Ia2vWorkflow,
   downloadComfyCloudOutput,
@@ -154,6 +156,16 @@ import {
  * silent MP3 is muxed over it and the saved clip is silent. A Speak
  * beat always uses LTX, whatever `videoBackend` says. Omitted means
  * LTX, so an older caller keeps the old behaviour.
+ *
+ * **Make plate first, and Shorts (2026-10-04)** — `plateOnly: true` makes
+ * just the row's start picture (the same plate a render would make, on
+ * the same engine), saves it and answers `{ plateUrl }`: no voice, no
+ * video. A later render sends it back as `plateUrl` and uses it as it is,
+ * so what you looked at is what gets animated. A row that never had a
+ * plate made renders exactly as before. Shorts plates on Siray Seedream
+ * by default (`plateEngine`, or Grok), and its silent rows may render on
+ * Siray: submit answers 202 `{ pending, sirayTaskId }` straight away and
+ * the panel checks back with `sirayTaskId` (never one long call).
  */
 
 export const runtime = "nodejs";
@@ -265,7 +277,17 @@ interface GenerateSpeakBeatRequestBody {
    * look and folders (`lib/studioGenre.ts`). Missing or anything else is
    * Sunny Banks, exactly as before. */
   genre?: unknown;
+  /** `true` = make and save only the row's plate (2026-10-04). */
+  plateOnly?: unknown;
+  /** The row's own plate made earlier (Deck Blob only): used as it is. */
+  plateUrl?: unknown;
+  /** `"siray"` | `"grok"`: Shorts' plate switch. Other shows: Grok. */
+  plateEngine?: unknown;
+  /** A Siray silent shot submitted by an earlier call, to check back on. */
+  sirayTaskId?: unknown;
 }
+
+const SIRAY_TASK_ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 /** `kind: "voice-test"` — the ▶ on a character's panel: speak one short
  * line with a voice id and hand back the audio. ElevenLabs only: no
@@ -349,6 +371,12 @@ export async function POST(request: Request) {
   const sceneAction = typeof body.sceneAction === "string" ? body.sceneAction.replace(/\s+/g, " ").trim().slice(0, 1200) : "";
   const sceneSpeakers = parseSunnyBanksSceneSpeakers(body.sceneSpeakers);
   const scenePlateUrl = cast ? parseSunnyBanksPlateUrl(body.scenePlateUrl) : null;
+  const plateOnly = body.plateOnly === true;
+  /** The row's own plate (2026-10-04); a "Remake plate" makes a new one. */
+  const ownPlateUrl = plateOnly ? null : parseSunnyBanksPlateUrl(body.plateUrl);
+  const plateEngine = studioPlateEngine(profile.genre, body.plateEngine);
+  const sirayTaskId =
+    typeof body.sirayTaskId === "string" && SIRAY_TASK_ID_RE.test(body.sirayTaskId.trim()) ? body.sirayTaskId.trim() : "";
   /** Sent back with every answer once a shared picture exists, so the row keeps it even when the video fails. */
   const responseExtras: Record<string, unknown> = cast ? { castNames: cast.map((m) => m.name) } : {};
   const cutawayLabel = characterName || "Crowd";
@@ -360,7 +388,7 @@ export async function POST(request: Request) {
   }
   // The card's voice wins over the built-in one (Hans has only a card voice).
   const voiceId = cardVoiceId ?? character?.voiceId;
-  if (kind === "speak" && !voiceId) {
+  if (kind === "speak" && !voiceId && !plateOnly) {
     return NextResponse.json(
       { error: missingVoiceMessage(character!.name), code: "missing_voice" },
       { status: 400 }
@@ -371,13 +399,14 @@ export async function POST(request: Request) {
   // that already has the people in it needs none (2026-10-03). A
   // multi-cast shot needs everyone's, unless it reuses its scene's
   // shared picture.
-  if (character && !locationHasPeople && !cast && !resolveSunnyBanksStartImage(character)) {
+  if (character && !locationHasPeople && !cast && !ownPlateUrl && !resolveSunnyBanksStartImage(character)) {
     return NextResponse.json(
       { error: missingCastPictureMessage(character.name), code: "missing_cast_picture" },
       { status: 400 }
     );
   }
-  const castMissing = cast && !locationHasPeople && !scenePlateUrl ? cast.find((m) => !m.pictureUrl) : undefined;
+  const castMissing =
+    cast && !locationHasPeople && !scenePlateUrl && !ownPlateUrl ? cast.find((m) => !m.pictureUrl) : undefined;
   if (castMissing) {
     return NextResponse.json(
       { error: missingCastPictureMessage(castMissing.name), code: "missing_cast_picture", ...responseExtras },
@@ -385,10 +414,64 @@ export async function POST(request: Request) {
     );
   }
 
+  // Make plate first (2026-10-04): the same plate a render would make, saved, nothing else.
+  if (plateOnly) {
+    if (isLocationCutaway || locationHasPeople) {
+      return NextResponse.json(
+        {
+          error: isLocationCutaway
+            ? "Nobody from the Cast is in this shot, so it uses the location's picture: there's no plate to make."
+            : "This location's picture already has the people in it, so there's no plate to make.",
+          code: "no_plate_needed",
+        },
+        { status: 400 }
+      );
+    }
+    const plated = await makeRowPlate({
+      kind,
+      character: character!,
+      cast,
+      startImageDataUrl,
+      locationId,
+      locationLabel,
+      action,
+      appearanceModifier,
+      sceneAction,
+      sceneSpeakers,
+      profile,
+      engine: plateEngine,
+    });
+    if (!plated.ok) {
+      // `plateFailed`: the panel says plainly no clip was made or billed (2026-10-04).
+      return NextResponse.json({ error: plated.error, code: plated.code, plateFailed: true, ...responseExtras }, { status: plated.status });
+    }
+    const savedUrl = await saveSharedPlate(
+      plated.dataUrl,
+      cast ? cast.map((m) => m.name) : [character!.name],
+      parseDeckMediaTarget(body.plateTarget),
+      profile
+    );
+    if (!savedUrl) {
+      return NextResponse.json(
+        { error: "The plate was made but couldn't be saved, so it can't be used yet. Try again.", code: "plate_not_saved", ...responseExtras },
+        { status: 502 }
+      );
+    }
+    return NextResponse.json({ plateUrl: savedUrl, plateEngine, ...responseExtras });
+  }
+
   // Talking beats stay on LTX; a hold uses the engine the panel chose.
+  // Siray is offered by Shorts only (`profile.silentBackends`).
+  const requestedBackend = parseRowVideoBackend(body.videoBackend);
+  if (kind === "hold" && requestedBackend === "siray" && !profile.silentBackends.includes("siray")) {
+    return NextResponse.json(
+      { error: `${profile.showName}'s silent shots render on Grok, H3 or LTX, not Siray.`, code: "invalid_request" },
+      { status: 400 }
+    );
+  }
   const videoBackend: RowVideoBackend =
     kind === "hold"
-      ? pickRowVideoBackend({ kind, override: parseRowVideoBackend(body.videoBackend) ?? "ltx" }).backend
+      ? pickRowVideoBackend({ kind, override: requestedBackend ?? "ltx", silentOffered: profile.silentBackends }).backend
       : "ltx";
 
   const creds = videoBackend === "ltx" ? resolveComfyCloudCredentials() : null;
@@ -427,7 +510,7 @@ export async function POST(request: Request) {
     }
     durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, silentDurationSec);
     prompt = isLocationCutaway
-      ? buildLocationCutawayPrompt(action)
+      ? buildLocationCutawayPrompt(action, profile)
       : // With an [Action:], the action sets framing and movement (2026-10-01).
         buildSunnyBanksHoldPrompt(character!, action, profile.look);
     // Others in frame (2026-10-03): everyone animates, every mouth closed.
@@ -507,37 +590,55 @@ export async function POST(request: Request) {
     prompt = `${prompt} ${motionExtras}`;
   }
 
+  // Checking back on a Siray silent shot (2026-10-04): it was submitted
+  // with its plate already, so nothing is made or billed again.
+  if (videoBackend === "siray" && sirayTaskId) {
+    return runSilentShotAndPersist({
+      responseExtras,
+      backend: "siray",
+      characterName: character?.name ?? cutawayLabel,
+      prompt: "",
+      durationSec,
+      silentAudioBytes: audioBytes,
+      startImageDataUrl: "",
+      mediaTarget: parseDeckMediaTarget(body.mediaTarget),
+      profile,
+      deadlineMs: SILENT_SHOT_MIN_DEADLINE_MS,
+      sirayTaskId,
+    });
+  }
+
   let plateDataUrl = startImageDataUrl;
+  // A plate made earlier (the row's own, 2026-10-04, or the scene's shared one): used as it is.
+  const reuseUrl = isLocationCutaway || locationHasPeople ? null : (ownPlateUrl ?? scenePlateUrl);
+  const reused = reuseUrl ? await readSunnyBanksBlobPictureDataUrl(reuseUrl) : null;
   if (!isLocationCutaway && locationHasPeople) {
     // The location picture already has the people in it: used as it is.
-  } else if (!isLocationCutaway && cast) {
-    // One shared picture for the scene: reuse it when an earlier line made it.
-    const reused = scenePlateUrl ? await readSunnyBanksBlobPictureDataUrl(scenePlateUrl) : null;
-    if (reused) {
-      plateDataUrl = reused;
-      responseExtras.plateUrl = scenePlateUrl;
-    } else {
-      const lateMissing = cast.find((m) => !m.pictureUrl);
-      if (lateMissing) {
-        return NextResponse.json(
-          { error: missingCastPictureMessage(lateMissing.name), code: "missing_cast_picture", ...responseExtras },
-          { status: 400 }
-        );
-      }
-      const plated = await compositeSunnyBanksCastOntoLocation({
-        locationDataUrl: startImageDataUrl,
-        people: cast,
-        locationId,
-        locationLabel: locationLabel || undefined,
-        speaker: kind === "speak" ? character!.name : null,
-        sceneSpeakers,
-        shotAction: action || sceneAction || undefined,
-        genre: profile.genre,
-      });
-      if (!plated.ok) {
-        return NextResponse.json({ error: plated.error, code: plated.code, ...responseExtras }, { status: plated.status });
-      }
-      plateDataUrl = plated.dataUrl;
+  } else if (reused) {
+    plateDataUrl = reused;
+    responseExtras.plateUrl = reuseUrl;
+  } else if (!isLocationCutaway) {
+    const plated = await makeRowPlate({
+      kind,
+      character: character!,
+      cast,
+      startImageDataUrl,
+      locationId,
+      locationLabel,
+      action,
+      appearanceModifier,
+      sceneAction,
+      sceneSpeakers,
+      profile,
+      engine: plateEngine,
+    });
+    if (!plated.ok) {
+      // `plateFailed`: the panel says plainly no clip was made or billed (2026-10-04).
+      return NextResponse.json({ error: plated.error, code: plated.code, plateFailed: true, ...responseExtras }, { status: plated.status });
+    }
+    plateDataUrl = plated.dataUrl;
+    // A multi-cast scene's shared picture is saved so its next line reuses it.
+    if (cast) {
       const savedUrl = await saveSharedPlate(
         plated.dataUrl,
         cast.map((m) => m.name),
@@ -546,21 +647,6 @@ export async function POST(request: Request) {
       );
       if (savedUrl) responseExtras.plateUrl = savedUrl;
     }
-  } else if (!isLocationCutaway) {
-    const plated = await compositeSunnyBanksCharacterOntoLocation({
-      locationDataUrl: startImageDataUrl,
-      character: character!,
-      locationId,
-      locationLabel: locationLabel || undefined,
-      appearanceOverride: appearanceModifier || undefined,
-      // A silent hold's [Action:] shapes its start still too (2026-10-01).
-      shotAction: kind === "hold" ? action || undefined : undefined,
-      genre: profile.genre,
-    });
-    if (!plated.ok) {
-      return NextResponse.json({ error: plated.error, code: plated.code }, { status: plated.status });
-    }
-    plateDataUrl = plated.dataUrl;
   }
 
   if (videoBackend !== "ltx") {
@@ -597,7 +683,56 @@ export async function POST(request: Request) {
   });
 }
 
-/** A hold on Grok or H3: render, replace the engine's own sound with the
+/**
+ * The row's start picture (one person or a multi-cast scene) on the
+ * show's plate engine: the one place both a render and "Make plate"
+ * make it, so the two can never differ.
+ */
+async function makeRowPlate(args: {
+  kind: BeatKind;
+  character: SunnyBanksCharacterLock;
+  cast: SunnyBanksShotCastMember[] | null;
+  startImageDataUrl: string;
+  locationId: string;
+  locationLabel: string;
+  action: string;
+  appearanceModifier: string;
+  sceneAction: string;
+  sceneSpeakers: string[];
+  profile: StudioGenreProfile;
+  engine: PlateEngine;
+}): Promise<{ ok: true; dataUrl: string } | { ok: false; status: number; code: string; error: string }> {
+  if (args.cast) {
+    const lateMissing = args.cast.find((m) => !m.pictureUrl);
+    if (lateMissing) return { ok: false, status: 400, code: "missing_cast_picture", error: missingCastPictureMessage(lateMissing.name) };
+    return compositeSunnyBanksCastOntoLocation({
+      locationDataUrl: args.startImageDataUrl,
+      people: args.cast,
+      locationId: args.locationId,
+      locationLabel: args.locationLabel || undefined,
+      speaker: args.kind === "speak" ? args.character.name : null,
+      sceneSpeakers: args.sceneSpeakers,
+      shotAction: args.action || args.sceneAction || undefined,
+      genre: args.profile.genre,
+      engine: args.engine,
+      talking: args.kind === "speak" || args.sceneSpeakers.length > 0,
+    });
+  }
+  return compositeSunnyBanksCharacterOntoLocation({
+    locationDataUrl: args.startImageDataUrl,
+    character: args.character,
+    locationId: args.locationId,
+    locationLabel: args.locationLabel || undefined,
+    appearanceOverride: args.appearanceModifier || undefined,
+    // A silent hold's [Action:] shapes its start still too (2026-10-01).
+    shotAction: args.kind === "hold" ? args.action || undefined : undefined,
+    genre: args.profile.genre,
+    engine: args.engine,
+    talking: args.kind === "speak",
+  });
+}
+
+/** A hold on Grok, H3 or Siray: render, replace the engine's own sound with the
  * 5s silent track, save under the same name an LTX hold would get. */
 async function runSilentShotAndPersist(args: {
   responseExtras: Record<string, unknown>;
@@ -610,6 +745,8 @@ async function runSilentShotAndPersist(args: {
   mediaTarget: DeckMediaTarget | null;
   profile: StudioGenreProfile;
   deadlineMs: number;
+  /** Siray: the task an earlier call submitted. */
+  sirayTaskId?: string;
 }) {
   const rendered = await renderSilentShotVideo({
     backend: args.backend,
@@ -617,7 +754,14 @@ async function runSilentShotAndPersist(args: {
     startImageDataUrl: args.startImageDataUrl,
     durationSec: args.durationSec,
     deadlineMs: args.deadlineMs,
+    sirayTaskId: args.sirayTaskId,
   });
+  if (!rendered.ok && rendered.code === "siray_pending" && rendered.sirayTaskId) {
+    return NextResponse.json(
+      { pending: true, sirayTaskId: rendered.sirayTaskId, code: "siray_pending", videoBackend: "siray", ...args.responseExtras },
+      { status: 202 }
+    );
+  }
   if (!rendered.ok) {
     return NextResponse.json(
       { error: rendered.error, code: rendered.code, videoBackend: args.backend, ...args.responseExtras },
@@ -638,9 +782,11 @@ async function runSilentShotAndPersist(args: {
   });
 }
 
-function buildLocationCutawayPrompt(action: string): string {
+function buildLocationCutawayPrompt(action: string, profile: StudioGenreProfile): string {
   const motion = action.replace(/\s+/g, " ").trim() || "Subtle ambient motion. Camera holds, no cuts.";
-  return `Use the provided start image as the first frame. ${motion} No dialogue.`;
+  const base = `Use the provided start image as the first frame. ${motion} No dialogue.`;
+  // Shorts (2026-10-04): its adult and content locks reach every clip.
+  return profile.look.cutawayCarriesStyleLock ? `${base} ${profile.look.styleLock}` : base;
 }
 
 async function runLtxAndPersist(args: {

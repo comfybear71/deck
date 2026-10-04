@@ -1,15 +1,18 @@
 "use client";
 
 import { SkidmarksConfirmDialog } from "./SkidmarksConfirmDialog";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useSkidmarksStudio } from "@/hooks/useSkidmarksStudio";
 import { useSkidmarksClipRenders } from "@/hooks/useSkidmarksClipRenders";
 import {
   buildGeneratedLook,
   computeSkidmarksArchiveFingerprint,
   flushSkidmarksSessionNow,
+  getAdultShortsState,
+  getSkidmarksSnapshot,
   isSkidmarksSessionAlreadyArchived,
   resolveChainedPlateTarget,
+  subscribeSkidmarks,
 } from "@/lib/skidmarks";
 import type { PersistedClipRender } from "@/lib/clipRenders";
 import {
@@ -29,6 +32,7 @@ import { EpisodeExtrasRow } from "@/components/EpisodeExtrasRow";
 import { SunnyBanksEpisodeRow } from "./SunnyBanksEpisodeRow";
 import { ShortsEpisodeRow } from "./ShortsEpisodeRow";
 import { AdultShortsPanel } from "./AdultShortsPanel";
+import { ShortsEditorSwitch } from "./ShortsEditorSwitch";
 import { CharacterLorasPanel } from "./CharacterLorasPanel";
 import LocationsRow from "./LocationsRow";
 import { useIsPcShell } from "@/hooks/useIsPcShell";
@@ -115,6 +119,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
   const { playlists, playlistError, mutatePlaylists } = useSkidmarksPlaylists();
+  /** The whole store, for which Shorts editor is open (2026-10-04). */
+  const storeSnapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
 
   const bandSectionRef = useRef<HTMLDivElement | null>(null);
   const membersSectionRef = useRef<HTMLDivElement | null>(null);
@@ -601,6 +607,10 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     ) : null;
 
   /** Phone: single-column stack + link to Library. PC: 2-col desk. Finished Songs live in Library on both. */
+  // Which Shorts editor is open (2026-10-04); absent = the shot cards, as before.
+  const shortsState = getAdultShortsState(storeSnapshot);
+  const shortsScript = shortsState.editor === "script";
+  const shortsAgeConfirmed = shortsState.ageConfirmed;
   const renderDeskBody = (layout: "phone" | "pc") => (
     <div className="flex flex-col gap-8 pt-2">
       <SkidmarksLandingTiles activeKind={session.projectKind} onSelect={selectProjectKind} />
@@ -620,8 +630,12 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {session.projectKind === "sunnybank" && <SunnyBanksEpisodeRow />}
       {session.projectKind === "sunnybank" && <LocationsRow genre="sunnybank" />}
       {session.projectKind === "sunnybank" && <CharacterLorasPanel group="sunny-banks" />}
-      {/* Shorts matches Sunnybank (2026-09-30): EPISODES, then LOCATIONS, then the cast row. */}
-      {session.projectKind === "adult-shorts" && <ShortsEpisodeRow />}
+      {/* Shorts matches Sunnybank (2026-09-30): EPISODES, then LOCATIONS, then the cast row.
+          Since 2026-10-04 it has two editors: script episodes (the same studio as
+          Sunny Banks and Skidmarks) and the shot cards (EP01–EP03, untouched). */}
+      {session.projectKind === "adult-shorts" && <ShortsEditorSwitch />}
+      {session.projectKind === "adult-shorts" && shortsScript && <SunnyBanksEpisodeRow genre="shorts" />}
+      {session.projectKind === "adult-shorts" && !shortsScript && <ShortsEpisodeRow />}
       {session.projectKind === "adult-shorts" && <LocationsRow genre="adult-shorts" />}
       {session.projectKind === "adult-shorts" && <CharacterLorasPanel group="adult-shorts" />}
 
@@ -629,7 +643,9 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
       {session.projectKind === "skidmarks" && <SkidmarksSunnyBanksPanel genre="skidmarks" />}
 
-      {session.projectKind === "adult-shorts" && <AdultShortsPanel />}
+      {/* The 18+ confirm is the shot cards' gate; the script studio opens once it's done. */}
+      {session.projectKind === "adult-shorts" && shortsScript && shortsAgeConfirmed && <SkidmarksSunnyBanksPanel genre="shorts" />}
+      {session.projectKind === "adult-shorts" && !(shortsScript && shortsAgeConfirmed) && <AdultShortsPanel />}
 
       {session.projectKind === "music-video" &&
         (layout === "pc" ? (

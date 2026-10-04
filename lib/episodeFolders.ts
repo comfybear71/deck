@@ -16,8 +16,14 @@
 import type { EpisodeCastGenre } from "./episodeCast";
 import { openEpisodeScopeIn } from "./episodeScopes";
 import { pinAdultShortMediaSlug } from "./deckMediaTargets";
-import { shortsEpisodeHasName } from "./shortsEpisodeCast";
-import { getAdultShortsState, getSkidmarksSnapshot, pinSkidmarksEpisodeFolder, type SkidmarksState } from "./skidmarks";
+import { shortsEpisodeHasName, shortsScriptEditorOpen } from "./shortsEpisodeCast";
+import {
+  ensureSunnyBanksEpisodeMediaSlug,
+  getAdultShortsState,
+  getSkidmarksSnapshot,
+  pinSkidmarksEpisodeFolder,
+  type SkidmarksState,
+} from "./skidmarks";
 
 export function getOpenEpisodeFolder(genre: EpisodeCastGenre, state: SkidmarksState = getSkidmarksSnapshot()): string | null {
   return openEpisodeScopeIn(state, genre).episode;
@@ -27,6 +33,9 @@ export function pinOpenEpisodeFolder(genre: EpisodeCastGenre): string | null {
   if (genre === "skidmarks") return pinSkidmarksEpisodeFolder();
   const existing = getOpenEpisodeFolder(genre);
   if (existing) return existing;
+  // Shorts' script studio (2026-10-04): pinned the way Sunny Banks and
+  // Skidmarks pin theirs, from the # EPISODE: line.
+  if (shortsScriptEditorOpen(getSkidmarksSnapshot())) return ensureSunnyBanksEpisodeMediaSlug("shorts");
   if (!shortsEpisodeHasName(getAdultShortsState())) return null;
   return pinAdultShortMediaSlug();
 }
