@@ -121,6 +121,15 @@ export const DECK_ITEM_HISTORY_KEEP = 20;
 /** Biggest `data` one item may carry (URLs only, never image bytes). */
 export const DECK_ITEM_MAX_DATA_BYTES = 256 * 1024;
 
+/**
+ * A saved Short gets more room (2026-10-04): it can hold up to 100 shots
+ * (`ADULT_SHORTS_MAX_SHOTS`). Stuart's real shots are about 0.7–1.1 KB
+ * each, so 100 of them is ~110 KB, but a short where every shot has a
+ * full 1900-character prompt and a full Line is ~310 KB, over the shared
+ * 256 KB. Still a small JSONB row and far under Vercel's 4.5 MB body.
+ */
+export const ADULT_SHORT_MAX_DATA_BYTES = 512 * 1024;
+
 /** One row as the API hands it out. */
 export interface DeckItemRecord<T = unknown> {
   itemId: string;

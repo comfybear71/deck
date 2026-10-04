@@ -20,7 +20,8 @@ import { isSafeDeckMediaSlug } from "./deckMediaPaths";
 import { buildSpeakerListenerText, resolveShotCastPositions } from "./shotCast";
 
 export const ADULT_SHORTS_MAX_REFERENCES = 3;
-export const ADULT_SHORTS_MAX_SHOTS = 10;
+/** Shots one Short can hold (raised from 10 to 100 on 2026-10-04). */
+export const ADULT_SHORTS_MAX_SHOTS = 100;
 export const ADULT_SHORTS_MIN_SHOT_SEC = 2;
 export const ADULT_SHORTS_MAX_SHOT_SEC = 10;
 export const ADULT_SHORTS_DEFAULT_SHOT_SEC = 5;

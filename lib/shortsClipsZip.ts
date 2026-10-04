@@ -54,10 +54,13 @@ export function planShortsClipsZip(input: unknown): ShortsClipsZipPlan {
     clips.push({ url, shot, character: typeof c.character === "string" ? c.character : "" });
   }
   clips.sort((a, b) => a.shot - b.shot);
+  // Shorts can have 100 shots: pad to three digits then, so shot-100
+  // sorts after shot-099 in any file list. Two digits otherwise, as before.
+  const pad = clips.some((c) => c.shot > 99) ? 3 : 2;
   const used = new Set<string>();
   const entries = clips.map((c) => {
     const who = c.character.trim() ? `-${deckMediaSlug(c.character, "clip")}` : "";
-    const base = `${episode}-shot-${String(c.shot).padStart(2, "0")}${who}`;
+    const base = `${episode}-shot-${String(c.shot).padStart(pad, "0")}${who}`;
     let name = `${base}.mp4`;
     for (let n = 2; used.has(name); n++) name = `${base}-${n}.mp4`;
     used.add(name);
