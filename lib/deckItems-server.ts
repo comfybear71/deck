@@ -30,6 +30,7 @@ import { normalizeSunnyBanksWorkspace } from "./sunnyBanksWorkspace";
 import { DATABASE_UNCONFIGURED_MESSAGE, getSkidmarksSql } from "./db";
 import {
   DECK_ITEM_HISTORY_KEEP,
+  ADULT_SHORT_MAX_DATA_BYTES,
   DECK_ITEM_MAX_DATA_BYTES,
   DECK_ITEM_NEW_REVISION,
   DECK_ITEMS_TABLE_MISSING_MESSAGE,
@@ -160,7 +161,7 @@ export function prepareDeckItemData(
       const entry = normalizeAdultShortsSavedEntry(data);
       if (!entry) return { ok: false, error: "That isn't a saved short." };
       if (entry.id !== itemId) return { ok: false, error: "The short's id doesn't match the item id." };
-      if (JSON.stringify(entry).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That short is too big to save." };
+      if (JSON.stringify(entry).length > ADULT_SHORT_MAX_DATA_BYTES) return { ok: false, error: "That short is too big to save." };
       return { ok: true, data: entry as unknown as Record<string, unknown>, folder: DECK_ITEM_KIND_FOLDERS[kind] ?? "adult-shorts" };
     }
     case "music-video-band": {
