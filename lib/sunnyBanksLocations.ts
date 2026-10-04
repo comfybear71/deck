@@ -8,6 +8,8 @@
  * Pure: pass the session state in.
  */
 import { effectiveDeckLocations, findDeckLocation, type DeckLocation, type DeckLocationsState } from "./deckLocations";
+import type { SkidmarksState } from "./skidmarks";
+import { openSkidmarksEpisodeScopeIn, skidmarksEpisodeLocations } from "./skidmarksEpisodeCast";
 import type { SunnyBanksLocationLock } from "./sunnyBanks";
 
 function toLock(l: DeckLocation): SunnyBanksLocationLock {
@@ -23,6 +25,19 @@ export function sunnyBanksLocationList(
   genre: "sunnybank" | "skidmarks" = "sunnybank",
 ): SunnyBanksLocationLock[] {
   return effectiveDeckLocations(state, genre).map(toLock);
+}
+
+/**
+ * What the studio renders with: Sunny Banks' one shared list, exactly as
+ * before; Skidmarks (2026-10-04) only the open episode's own places
+ * (`lib/skidmarksEpisodeCast.ts`), so a new episode starts with none.
+ */
+export function studioLocationList(
+  state: Pick<SkidmarksState, "locations" | "skidmarksStudio">,
+  genre: "sunnybank" | "skidmarks" = "sunnybank",
+): SunnyBanksLocationLock[] {
+  if (genre !== "skidmarks") return sunnyBanksLocationList(state.locations, genre);
+  return skidmarksEpisodeLocations(state.locations, openSkidmarksEpisodeScopeIn(state)).map(toLock);
 }
 
 /** A location by its key, its key spelled loosely, or its name. */
