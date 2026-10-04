@@ -246,6 +246,13 @@ export function resolveSunnyBanksStartImage(character: SunnyBanksCharacterLock):
 }
 
 /** The red note on a row (and the route's refusal) when a character has no Cast card picture. */
+/** A talking line for a Cast card with no voice (2026-10-04): the row's
+ * red note and the speak-beat route's `missing_voice` error. A silent
+ * shot (`Name:` with nothing after it) needs no voice. */
+export function missingVoiceMessage(name: string): string {
+  return `${name} has no voice yet, so they can't say a line. Add a voice ID on their Cast card, or leave nothing after "${name}:" for a silent shot.`;
+}
+
 export function missingCastPictureMessage(name: string): string {
   return `${name} has no Cast card picture yet. Add one on their Cast card; this shot won't render until then.`;
 }

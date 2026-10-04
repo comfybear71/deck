@@ -2648,6 +2648,12 @@ now (see "Explicitly out of scope" below).
   - **Music video:** plates send the other members after the vocalist
     (`extraCast`), `MAX_REFERENCE_IMAGES` is 5, and Vocal clips get the
     listener text.
+  - **Silent Cast characters (2026-10-04):** a Cast card with no voice
+    ID (an animal, an extra) still gets its own silent row in Sunnybank
+    and Skidmarks: `Sparrow:` with nothing after the colon sends the
+    Sparrow Cast card picture with the location. Only talking needs a
+    voice (a clear red note / `missing_voice`, nothing billed).
+    `Crowd:` still never sends Cast pictures.
   - **Shorts:** the shot picker feeds the same helper; talking shots
     with several people use the same speaker/listener text.
   - **Locations:** "People already in this picture — don't add Cast"

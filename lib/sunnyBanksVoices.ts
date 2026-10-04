@@ -8,9 +8,12 @@
  * - A built-in cast member (`SUNNY_BANKS_CAST`) whose card has a voice
  *   speaks with the card's voice instead of the hard-coded one. Hans has
  *   no built-in voice, so his card's voice is what makes `Hans:` speak.
- * - A character added with "+" on the Sunnybank bar becomes a speaker
- *   once their card has a voice: their name is matched on `Name:` lines,
- *   and they're in the row dropdown.
+ * - A character added with "+" on the Sunnybank bar (or, on Skidmarks,
+ *   any card in the shared Skidmarks Cast) is matched on `Name:` lines and
+ *   is in the row dropdown. With a voice they can talk; without one
+ *   (2026-10-04, the Skidmarks sparrow) `Name:` with nothing after the
+ *   colon is still their own silent shot with their Cast card picture,
+ *   the same as Hans before he had a voice. Only talking needs a voice.
  *
  * Pictures (2026-10-01, Stuart: "only our new character images plus 15
  * LoRA trained images, nothing else"): every Sunnybank character, built-in
@@ -176,11 +179,23 @@ function builtInFor(name: string, genre: StudioGenre = "sunnybank"): SunnyBanksC
 }
 
 /**
+ * Cast cards with no voice yet (2026-10-04): every added card (Sunnybank
+ * "+" characters, the shared Skidmarks Cast) that `cardVoices` leaves
+ * out, by lower-case name. They can be in a shot silently, never talk.
+ */
+function silentCastCard(name: string, state: SkidmarksState, genre: StudioGenre): SunnyBanksCastCard | undefined {
+  const lower = name.trim().toLowerCase();
+  if (!lower || builtInFor(name, genre) || cardVoices(state, genre).has(lower)) return undefined;
+  return sunnyBanksCastCards(state, genre).find((c) => !c.speaks && c.name.toLowerCase() === lower);
+}
+
+/**
  * The character a `Name:` line means, with the voice it speaks in and
- * their Cast card main picture: a built-in (their card's voice wins), or
- * an added character with a voice. `undefined` = not a speaker (a
- * `Crowd:`-style cutaway). `castPicture` is unset when their Cast card
- * has no picture.
+ * their Cast card main picture: a built-in (their card's voice wins), an
+ * added character with a voice, or (2026-10-04) an added character with
+ * no voice yet: no `voiceId`, so silent shots only, like Hans before his
+ * voice. `undefined` = not a Cast character (a `Crowd:`-style cutaway).
+ * `castPicture` is unset when their Cast card has no picture.
  */
 export function resolveSunnyBanksSpeaker(
   name: string,
@@ -195,36 +210,62 @@ export function resolveSunnyBanksSpeaker(
   if (builtIn) {
     return { ...builtIn, ...(card ? { voiceId: card.voiceId } : {}), ...withPicture };
   }
-  if (!card || !card.added) return undefined;
+  if (card && card.added) {
+    return {
+      name: card.name,
+      look: card.look.trim() || SUNNY_BANKS_PICTURE_LOOK,
+      voiceId: card.voiceId,
+      ...withPicture,
+    };
+  }
+  const silent = silentCastCard(name, state, genre);
+  if (!silent) return undefined;
   return {
-    name: card.name,
-    look: card.look.trim() || SUNNY_BANKS_PICTURE_LOOK,
-    voiceId: card.voiceId,
-    ...withPicture,
+    name: silent.name,
+    look: silent.look,
+    ...(silent.picture ? { castPicture: silent.picture } : {}),
   };
 }
 
-/** Every name the line reader matches: the built-in cast, then added characters with a voice. Longest first. */
+/** Added Cast cards with no voice yet, in Cast order (2026-10-04). */
+function silentCastNames(state: SkidmarksState, genre: StudioGenre): string[] {
+  return sunnyBanksCastCards(state, genre)
+    .filter((c) => !c.speaks && !builtInFor(c.name, genre))
+    .map((c) => c.name);
+}
+
+/** Every name the line reader matches: the built-in cast, then added
+ * characters with a voice, then (2026-10-04) added Cast cards with no
+ * voice, whose `Name:` rows are silent shots. Longest first. */
 export function sunnyBanksSpeakerNames(state: SkidmarksState, genre: StudioGenre = "sunnybank"): string[] {
   const names = genre === "sunnybank" ? Object.keys(SUNNY_BANKS_CAST) : [];
   const seen = new Set(names.map((n) => n.toLowerCase()));
-  for (const v of cardVoices(state, genre).values()) {
-    if (!v.added || seen.has(v.name.toLowerCase())) continue;
-    seen.add(v.name.toLowerCase());
-    names.push(v.name);
+  const added = [
+    ...[...cardVoices(state, genre).values()].filter((v) => v.added).map((v) => v.name),
+    ...silentCastNames(state, genre),
+  ];
+  for (const name of added) {
+    if (seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    names.push(name);
   }
   return names.sort((a, b) => b.length - a.length);
 }
 
-/** The built-in cast plus added characters with a voice, for the row dropdown (built-ins first). */
+/** The built-in cast, then added characters with a voice, then added
+ * Cast cards with no voice (silent shots only), for the row dropdown. */
 export function sunnyBanksSpeakerList(state: SkidmarksState, genre: StudioGenre = "sunnybank"): SunnyBanksCharacterLock[] {
   const list =
     genre === "sunnybank"
       ? Object.keys(SUNNY_BANKS_CAST).map((k) => resolveSunnyBanksSpeaker(k, state) ?? SUNNY_BANKS_CAST[k])
       : [];
-  for (const v of cardVoices(state, genre).values()) {
-    if (!v.added || builtInFor(v.name, genre)) continue;
-    const lock = resolveSunnyBanksSpeaker(v.name, state, genre);
+  const added = [
+    ...[...cardVoices(state, genre).values()].filter((v) => v.added).map((v) => v.name),
+    ...silentCastNames(state, genre),
+  ];
+  for (const name of added) {
+    if (builtInFor(name, genre)) continue;
+    const lock = resolveSunnyBanksSpeaker(name, state, genre);
     if (lock && !list.some((c) => c.name.toLowerCase() === lock.name.toLowerCase())) list.push(lock);
   }
   return list;
@@ -272,10 +313,13 @@ export function parseSunnyBanksCharacterCard(value: unknown): SunnyBanksCharacte
 }
 
 /**
- * Who is speaking: the built-in lock with their Cast card picture, or a
- * card-described character added on the Sunnybank bar, who needs a voice
- * to count as a speaker. The picture is only ever the one the card sent;
- * with none, `castPicture` is unset and the route refuses to render.
+ * Who is in the shot: the built-in lock with their Cast card picture, or
+ * a card-described added character. Since 2026-10-04 an added character
+ * with no voice still counts (no `voiceId`): a silent shot renders with
+ * their Cast card picture, and the route refuses a talking one with
+ * `missing_voice` before anything is billed. The picture is only ever the
+ * one the card sent; with none, `castPicture` is unset and the route
+ * refuses to render.
  */
 export function resolveSpeakBeatCharacter(
   characterName: string,
@@ -289,11 +333,11 @@ export function resolveSpeakBeatCharacter(
   const sameCard = card && card.name.toLowerCase() === characterName.toLowerCase() ? card : null;
   const withPicture = sameCard?.pictureUrl ? { castPicture: sameCard.pictureUrl } : {};
   if (builtIn) return { ...builtIn, ...withPicture };
-  if (!sameCard || !voiceId) return undefined;
+  if (!sameCard) return undefined;
   return {
     name: sameCard.name,
     look: sameCard.look || SUNNY_BANKS_PICTURE_LOOK,
-    voiceId,
+    ...(voiceId ? { voiceId } : {}),
     ...withPicture,
   };
 }
