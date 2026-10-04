@@ -2687,6 +2687,19 @@ now (see "Explicitly out of scope" below).
   skips any single file over 200 MB (listed in `missing.txt`), and the
   Music video zip is the Library archive zip of an archived song.
 
+- **Each Skidmarks episode has its own Cast and Locations (2026-10-04)**
+  — Skidmarks episodes are standalone shows. Tapping "+ New" on the
+  Skidmarks Episodes row gives empty Cast and Locations rows (dotted + at
+  the right end), an empty script, no clips and no extras; reopening
+  EP00 — Cornish Arsehole shows Dap, Sparrow, town_street and park and
+  its 10 clips exactly as before. Everything made before this belongs to
+  the pilot; nothing was moved or deleted (`lib/skidmarksEpisodeCast.ts`).
+  New cards and places are saved under the episode
+  (`deck/skidmarks/episodes/<episode>/characters/…` and
+  `…/locations/…`). The "In this episode" tick row is gone: everyone in
+  the episode's Cast is in the episode. New Skidmarks Cast cards are still
+  semi-photoreal. Sunny Banks is unchanged (one shared Cast).
+
 ### Ask Grok + action chips (v0 stub)
 
 The Propfolio detail sheet also ships an **action chips row** and an

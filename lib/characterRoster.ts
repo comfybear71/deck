@@ -27,6 +27,7 @@ import { ROSTER_EXTRA_GROUPS, normalizeRosterExtrasState, rosterExtraSourceKey, 
 import { resolveMemberStillSleeve } from "./memberStillSleeve";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
 import type { SkidmarksState } from "./skidmarks";
+import { openSkidmarksEpisodeScopeIn, skidmarksEpisodeCast } from "./skidmarksEpisodeCast";
 import { normalizeSkidmarksEpisodesState } from "./skidmarksEpisodes";
 import { SUNNY_BANKS_CAST, resolveSunnyBanksStartImage, type SunnyBanksCharacterLock } from "./sunnyBanks";
 import { resolveSunnyBanksSpeaker } from "./sunnyBanksVoices";
@@ -78,7 +79,10 @@ export function minorBlockReason(text: string): string | null {
 /** Characters Stuart has taken off the LoRA cast grid. They stay everywhere else in the app. */
 export const ROSTER_HIDDEN_NAMES: ReadonlySet<string> = new Set(["hans"]);
 
-export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup, RosterCharacter[]> {
+export function buildCharacterRoster(
+  state: SkidmarksState,
+  opts: { everySkidmarksEpisode?: boolean } = {},
+): Record<RosterGroup, RosterCharacter[]> {
   const out: Record<RosterGroup, RosterCharacter[]> = { "music-video": [], "sunny-banks": [], skidmarks: [], "adult-shorts": [] };
 
   const seenMembers = new Set<string>();
@@ -125,7 +129,14 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
   }
 
   const episodes = normalizeSkidmarksEpisodesState(state.skidmarksEpisodes);
-  for (const c of episodes?.cast ?? []) {
+  // Each Skidmarks episode has its own Cast (2026-10-04): the Cast row
+  // shows only the open episode's (`lib/skidmarksEpisodeCast.ts`), so a
+  // new episode starts empty. `everySkidmarksEpisode` is for code that
+  // must still find a card from another episode (a training already running).
+  const skidmarksCast = opts.everySkidmarksEpisode
+    ? (episodes?.cast ?? [])
+    : skidmarksEpisodeCast(episodes?.cast ?? [], openSkidmarksEpisodeScopeIn(state));
+  for (const c of skidmarksCast) {
     out.skidmarks.push({
       sourceKey: `sk:${c.id}`,
       group: "skidmarks",

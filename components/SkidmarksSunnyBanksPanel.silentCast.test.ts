@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { pilotOpenSkidmarksStudio } from "@/lib/skidmarksEpisodeCast.fixtures";
 import type { SkidmarksState } from "@/lib/skidmarks";
 import { SUNNY_BANKS_CAST } from "@/lib/sunnyBanks";
 import { shortsShotCast } from "@/lib/shortsCast";
@@ -50,6 +51,8 @@ const STATE = {
     "sunny-banks": [{ id: "chr_kev", name: "Kev", look: "", pictureUrls: [KEV_PIC], fictionalAdultConfirmed: true, createdAt: 1 }],
     "adult-shorts": [],
   },
+  // The pilot is open: its Cast is every card from before episodes had their own (2026-10-04).
+  skidmarksStudio: pilotOpenSkidmarksStudio(),
   skidmarksEpisodes: {
     episodes: [],
     cast: [

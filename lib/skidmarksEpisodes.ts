@@ -13,6 +13,7 @@
  * person's likeness or name. Adding a character requires ticking that.
  */
 import { effectiveDeckLocations, type DeckLocationsState } from "./deckLocations";
+import { isSafeDeckMediaSlug } from "./deckMediaPaths";
 
 export type SkidmarksBeatId =
   | "intro"
@@ -70,6 +71,13 @@ export interface SkidmarksCastMember {
   pictureUrls?: string[];
   /** An animal character (owl, pig cop, street cat): prompts say "animal", not "person". */
   isAnimal?: boolean;
+  /**
+   * The episode this Cast card belongs to (2026-10-04, Stuart: each
+   * Skidmarks episode has its own Cast): that episode's pinned media
+   * folder name (`ep01-the-big-wet`). Cards made before then have none
+   * and belong to the pilot (`lib/skidmarksEpisodeCast.ts`).
+   */
+  episode?: string;
 }
 
 export interface SkidmarksEpisodeBeat {
@@ -147,12 +155,13 @@ export function buildSkidmarksCastMember(
   role: SkidmarksCastRole = "supporting",
   now: number = Date.now(),
   id = mintSkidmarksId("cast"),
-  extra: { pictureUrls?: readonly string[]; isAnimal?: boolean } = {},
+  extra: { pictureUrls?: readonly string[]; isAnimal?: boolean; episode?: string | null } = {},
 ): SkidmarksCastMember {
   const member: SkidmarksCastMember = { id, name: name.trim(), role, look: look.trim(), fictionalAdultConfirmed: true, createdAt: now };
   const pictures = cleanPictureUrls(extra.pictureUrls);
   if (pictures.length) member.pictureUrls = pictures;
   if (extra.isAnimal) member.isAnimal = true;
+  if (isSafeDeckMediaSlug(extra.episode)) member.episode = extra.episode;
   return member;
 }
 
@@ -333,6 +342,7 @@ function normalizeCast(value: unknown): SkidmarksCastMember | null {
     createdAt: typeof v.createdAt === "number" ? v.createdAt : Date.now(),
     ...(cleanPictureUrls(v.pictureUrls).length ? { pictureUrls: cleanPictureUrls(v.pictureUrls) } : {}),
     ...(v.isAnimal === true ? { isAnimal: true } : {}),
+    ...(isSafeDeckMediaSlug(v.episode) ? { episode: v.episode } : {}),
   };
 }
 

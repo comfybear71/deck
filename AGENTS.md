@@ -1305,6 +1305,38 @@ character data into a band row. Every band/song edit must go through
 - **Never** put extras into acts or any render request. They cost
   nothing and must stay that way.
 
+## Each Skidmarks episode has its own Cast and Locations (2026-10-04)
+
+- **Skidmarks only.** Sunny Banks keeps one shared Cast across episodes
+  (plus guests) and is never read through this. Shorts and Music video
+  are untouched.
+- **One helper decides:** `lib/skidmarksEpisodeCast.ts`. The open
+  episode is `skidmarksStudio.live` (its pinned `mediaSlug`).
+  `sunnyBanksVoices` (`skidmarksCast`), `buildCharacterRoster`,
+  `studioLocationList` and `LocationsRow` (`locationsOnRow`) all filter
+  through it, so name matching, multi-cast shots and silent no-voice rows
+  only ever see the open episode's own Cast and places.
+- **Ownership:** a Cast card (`SkidmarksCastMember.episode`) or place
+  (`DeckLocation.episode`) made in an episode carries that episode's
+  pinned folder name. Items with no `episode` are from before
+  2026-10-04 and belong to the pilot (`SKIDMARKS_PILOT_MEDIA_SLUG`,
+  `ep00-cornish-arsehole`). Other old episodes keep the cards in their
+  old `castIds` (the PR 242 ticks), or none. Worked out on every read:
+  no migration script, nothing written, nothing deleted or moved.
+- **The "In this episode" tick row is gone.** `castIds` is kept on the
+  cards, never edited, only for the rule above.
+- **New files go with the episode:** pictures for a new card go to
+  `deck/skidmarks/episodes/<episode>/characters/<name>/…`, a new place's
+  picture to `deck/skidmarks/episodes/<episode>/locations/<key>.jpg`. Old
+  cards keep `deck/skidmarks/characters/…` and `deck/skidmarks/locations/…`.
+  Adding needs the episode named (folder pinned via
+  `pinSkidmarksEpisodeFolder`), like Extras.
+- **Location keys stay unique across Skidmarks** (a second "park" is key
+  `park_2`, name "park"); names only clash within the episode. Scripts
+  can say `[Location: park]`, which matches by name.
+- **Don't** add "import a character from an earlier episode" (Stuart: not
+  needed, he retrains).
+
 ## PR process
 
 - Branch naming: `cursor/<descriptive-name>-<suffix>` (see `git log

@@ -169,6 +169,15 @@ export function deckCharacterOwner(genre: DeckGenre, characterSlug: string): Dec
   };
 }
 
+/** A Skidmarks Cast card made in an episode (2026-10-04):
+ * `deck/skidmarks/episodes/<episode>/characters/<char>`. */
+export function skidmarksEpisodeCharacterOwner(episodeSlug: string, characterSlug: string): DeckMediaOwner {
+  return {
+    folder: `${DECK_MEDIA_ROOT}/skidmarks/${DECK_GENRE_PROJECTS_FOLDER.skidmarks}/${episodeSlug}/characters/${characterSlug}`,
+    fileSlug: characterSlug,
+  };
+}
+
 export const DECK_GENRES: readonly DeckGenre[] = ["sunnybank", "music-video", "skidmarks", "shorts"];
 
 export function isDeckGenre(value: unknown): value is DeckGenre {
@@ -222,6 +231,12 @@ export function characterMediaSlug(cardSlug: string, name = ""): string {
 export function characterMediaOwner(
   card: { slug: string; name: string; sourceKey: string | null | undefined },
   memberSlug: (memberId: string) => string | null,
+  /** Skidmarks (2026-10-04): the episode a Cast card belongs to, by cast
+   * id (`"new"` = a card about to be made in the open episode). A card
+   * with an episode keeps its files with that episode:
+   * `deck/skidmarks/episodes/<episode>/characters/<char>/…`. Cards from
+   * before then (no episode) keep `deck/skidmarks/characters/<char>/…`. */
+  skidmarksEpisode: (castId: string) => string | null = () => null,
 ): DeckMediaOwner {
   const slug = characterMediaSlug(card.slug, card.name);
   const key = typeof card.sourceKey === "string" ? card.sourceKey : "";
@@ -232,8 +247,10 @@ export function characterMediaOwner(
     case "sb":
     case "sbx":
       return deckCharacterOwner("sunnybank", slug);
-    case "sk":
-      return deckCharacterOwner("skidmarks", slug);
+    case "sk": {
+      const episode = rest ? skidmarksEpisode(rest) : null;
+      return isSafeDeckMediaSlug(episode) ? skidmarksEpisodeCharacterOwner(episode, slug) : deckCharacterOwner("skidmarks", slug);
+    }
     case "mv":
       return deckCharacterOwner("music-video", (rest && memberSlug(rest)) || slug);
     case "mvx":

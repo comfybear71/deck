@@ -7,8 +7,8 @@
  *
  * - `sunnybank`: the built-in cast, the flat 2D cartoon lock, clips in
  *   `deck/sunnybank/episodes/<episode>/…`.
- * - `skidmarks`: the shared Skidmarks Cast (`skidmarksEpisodes.cast`,
- *   cards `sk:<id>`), no built-ins, the semi-photoreal lock below, clips
+ * - `skidmarks`: each episode's own Cast (`skidmarksEpisodes.cast`,
+ *   cards `sk:<id>`, filtered by `lib/skidmarksEpisodeCast.ts`), no built-ins, the semi-photoreal lock below, clips
  *   in `deck/skidmarks/episodes/<episode>/…`.
  *
  * Anything that doesn't say which show it is means Sunny Banks, so every

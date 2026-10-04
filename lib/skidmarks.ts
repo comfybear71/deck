@@ -196,6 +196,7 @@ import {
   type SunnyBanksWorkspaceSnapshot,
 } from "./sunnyBanksWorkspace";
 import { DEFAULT_SILENT_SHOT_BACKEND, type SilentShotBackend } from "./videoBackendRouting";
+import { openSkidmarksEpisodeScopeIn } from "./skidmarksEpisodeCast";
 import {
   emptySkidmarksEpisodesState,
   normalizeSkidmarksEpisodesState,
@@ -3851,6 +3852,25 @@ export function ensureSunnyBanksEpisodeMediaSlug(genre: StudioGenre = "sunnybank
   }
   persist(withStudio(current, genre, { ...studio, live: { ...cloneSunnyBanksLive(live), mediaSlug: slug } }));
   return slug;
+}
+
+/**
+ * The open Skidmarks episode's folder name, for a new Cast card or place
+ * made in it (2026-10-04, each Skidmarks episode has its own Cast and
+ * Locations, `lib/skidmarksEpisodeCast.ts`). `null` = a new episode with
+ * no name yet. Read-only.
+ */
+export function getOpenSkidmarksEpisodeFolder(state: SkidmarksState = getSkidmarksSnapshot()): string | null {
+  return openSkidmarksEpisodeScopeIn(state).episode;
+}
+
+/** The same, pinned first (`ensureSunnyBanksEpisodeMediaSlug`), so the
+ * new card's pictures and its episode tag use the folder the episode's
+ * clips will use. `null` while the episode has no name. */
+export function pinSkidmarksEpisodeFolder(): string | null {
+  const existing = getOpenSkidmarksEpisodeFolder();
+  if (existing) return existing;
+  return ensureSunnyBanksEpisodeMediaSlug("skidmarks");
 }
 
 /** Named save of the whole live episode (every act). Updates the card

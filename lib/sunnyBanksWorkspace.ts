@@ -75,9 +75,12 @@ export interface SunnyBanksLiveState {
   episodeId?: string;
   /** Pinned media folder name, see `lib/deckMediaPaths.ts`. */
   mediaSlug?: string;
-  /** Who's in this episode (2026-10-04, Skidmarks): ids from the shared
-   * Skidmarks Cast, ticked on the episode. Missing = nobody ticked (every
-   * Sunny Banks episode), and then it isn't part of the fingerprint. */
+  /** Skidmarks only: the old Cast cards ticked "In this episode" (PR 242,
+   * 2026-10-04 morning). The ticks are gone (each Skidmarks episode now has
+   * its own Cast, `lib/skidmarksEpisodeCast.ts`); this is kept, never
+   * edited, so an episode saved with ticks keeps those old cards. Missing
+   * = nobody ticked (every Sunny Banks episode), and then it isn't part
+   * of the fingerprint. */
   castIds?: string[];
 }
 

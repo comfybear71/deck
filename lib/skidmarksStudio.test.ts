@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { pilotOpenSkidmarksStudio } from "@/lib/skidmarksEpisodeCast.fixtures";
 import {
   legacySkidmarksBeatToScript,
   legacySkidmarksEpisodeToWorkspace,
@@ -130,6 +131,7 @@ describe("the Skidmarks Cast is Skidmarks' only cast", () => {
   });
   const STATE = {
     bands: [],
+    skidmarksStudio: pilotOpenSkidmarksStudio(),
     skidmarksEpisodes: { episodes: [], cast: CAST },
     rosterExtras: { "music-video": [], "sunny-banks": [], "adult-shorts": [] },
     characterLoras: {

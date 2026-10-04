@@ -22,7 +22,7 @@
  *
  * Pure: no store, no network.
  */
-import { DECK_MEDIA_ROOT, deckMediaSlug, type DeckGenre, type DeckMediaTarget } from "./deckMediaPaths";
+import { DECK_MEDIA_ROOT, deckMediaSlug, isSafeDeckMediaSlug, type DeckGenre, type DeckMediaTarget } from "./deckMediaPaths";
 import { SUNNY_BANKS_LOCATIONS } from "./sunnyBanks";
 
 /** Same four genres and names as the project tiles (`SkidmarksProjectKind`). */
@@ -51,6 +51,13 @@ export interface DeckLocation {
    * start picture as it is: no Cast picture is laid onto it, one person
    * or several, silent or talking. Only ever `true`; unticked = absent. */
   peopleInPicture?: true;
+  /**
+   * Skidmarks only (2026-10-04, Stuart: each episode has its own
+   * Locations): the episode this place belongs to, by its pinned media
+   * folder name (`ep01-the-big-wet`). Places saved before then have none
+   * and belong to the pilot (`lib/skidmarksEpisodeCast.ts`).
+   */
+  episode?: string;
 }
 
 export interface DeckLocationsState {
@@ -84,8 +91,13 @@ export function deckLocationMediaGenre(genre: DeckLocationGenre): DeckGenre {
   return genre === "adult-shorts" ? "shorts" : genre;
 }
 
-/** `deck/<genre>/locations/<location>` — the same for every genre. */
-export function deckLocationPictureTarget(genre: DeckLocationGenre, key: string): DeckMediaTarget {
+/** `deck/<genre>/locations/<location>` — the same for every genre. A
+ * Skidmarks place made in an episode (2026-10-04) goes with that
+ * episode: `deck/skidmarks/episodes/<episode>/locations/<location>`. */
+export function deckLocationPictureTarget(genre: DeckLocationGenre, key: string, episode?: string | null): DeckMediaTarget {
+  if (genre === "skidmarks" && isSafeDeckMediaSlug(episode)) {
+    return { folder: `${DECK_MEDIA_ROOT}/skidmarks/episodes/${episode}/locations`, name: key.replace(/_/g, "-") };
+  }
   return {
     folder: `${DECK_MEDIA_ROOT}/${deckLocationMediaGenre(genre)}/locations`,
     name: key.replace(/_/g, "-"),
@@ -121,6 +133,7 @@ export function normalizeDeckLocation(value: unknown): DeckLocation | null {
     pictureUrl: cleanPictureUrl(v.pictureUrl),
     createdAt: typeof v.createdAt === "number" && Number.isFinite(v.createdAt) ? v.createdAt : 0,
     ...(v.peopleInPicture === true ? { peopleInPicture: true as const } : {}),
+    ...(v.genre === "skidmarks" && isSafeDeckMediaSlug(v.episode) ? { episode: v.episode } : {}),
   };
 }
 
@@ -223,8 +236,13 @@ export function buildDeckLocation(
   name: string,
   pictureUrl: string | null,
   now: number = Date.now(),
+  /** Skidmarks (2026-10-04): the open episode. Names only have to be
+   * different within it (`nameScope`, the episode's own places); keys stay
+   * unique across the whole genre (`list`), so another episode's "park"
+   * gets the key `park_2` and its own row. */
+  scope: { episode?: string | null; nameScope?: readonly DeckLocation[] } = {},
 ): DeckLocationEdit<DeckLocation> {
-  const problem = deckLocationNameProblem(list, name);
+  const problem = deckLocationNameProblem(scope.nameScope ?? list, name);
   if (problem) return { ok: false, error: problem };
   if (list.length >= DECK_LOCATIONS_MAX_PER_GENRE) return { ok: false, error: `Keep it to ${DECK_LOCATIONS_MAX_PER_GENRE} locations.` };
   const clean = cleanDeckLocationName(name);
@@ -232,10 +250,9 @@ export function buildDeckLocation(
   const taken = new Set(list.map((l) => l.key));
   let key = base;
   for (let i = 2; taken.has(key); i++) key = `${base}_${i}`;
-  return {
-    ok: true,
-    value: { id: deckLocationItemId(genre, key), genre, key, name: clean, pictureUrl: cleanPictureUrl(pictureUrl), createdAt: now },
-  };
+  const value: DeckLocation = { id: deckLocationItemId(genre, key), genre, key, name: clean, pictureUrl: cleanPictureUrl(pictureUrl), createdAt: now };
+  if (genre === "skidmarks" && isSafeDeckMediaSlug(scope.episode)) value.episode = scope.episode;
+  return { ok: true, value };
 }
 
 /** Two locations are the same thing for sorting a list. */
