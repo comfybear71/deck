@@ -34,9 +34,11 @@ import { padMp3ToMinimumDurationSec } from "@/lib/silentMp3";
  *
  * - ElevenLabs gets the Line with its square-bracket tags (`[whispers]`,
  *   `[laughs]`) intact; the picture prompt quotes only the words.
- * - The prompt arrives carrying the Shorts adult lock and the episode's
- *   content rule (`buildAdultShortsTalkingPrompt`); this route re-checks
- *   the adult lock, like `render-clip`.
+ * - The prompt arrives carrying the Sunny Banks speaking text, the
+ *   Shorts adult lock and the episode's content rule
+ *   (`buildAdultShortsTalkingPrompt`, 2026-10-04); this route re-checks
+ *   the adult lock, like `render-clip`. An older page's prompt without
+ *   `NAME says: "…"` gets the words put in front.
  * - Files: the clip, its last frame and the spoken line's MP3, all in
  *   the episode's readable folder (`deck/shorts/episodes/<ep>/`).
  * - One call, like Sunnybank's (no resumable task id on Comfy Cloud here).
