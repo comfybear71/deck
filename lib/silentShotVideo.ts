@@ -8,6 +8,14 @@
  * Returns the raw video bytes. The caller replaces the soundtrack with
  * silence (`muxClipAudio`): both engines make their own audio, and xAI's
  * API has no switch to turn it off.
+ *
+ * Siray (2026-10-04, Shorts only: Wan 3.0 i2v spicy, the engine Shorts'
+ * shot cards already use) is two short calls, never one long one (the
+ * 2026-09-28 lesson in `adult-shorts/render-clip`): a call with no
+ * `sirayTaskId` only submits and answers `siray_pending` with the task id,
+ * so the panel saves it before waiting; each call with the id waits at
+ * most `SIRAY_SILENT_POLL_MS` and answers `siray_pending` again while
+ * Siray is still going.
  */
 import { decodeDataUrl } from "./dataUrl";
 import {
@@ -19,6 +27,13 @@ import {
   submitMinimaxH3Video,
   type MinimaxKeyCheckOutcome,
 } from "./minimaxH3";
+import {
+  clampSirayI2vDurationSec,
+  resolveSirayCredentials,
+  sirayDownloadVideo,
+  sirayPollVideoAsync,
+  siraySubmitVideoAsync,
+} from "./sirayClient";
 import { FORCED_VIDEO_ASPECT_RATIO, padFrameTo16x9 } from "./videoFrame16x9";
 import { SILENT_SHOT_GROK_RESOLUTION, type SilentShotBackend } from "./videoBackendRouting";
 import { missingXaiApiKeyMessage, resolveXaiApiKey } from "./xaiApiKey";
@@ -33,7 +48,21 @@ export const SILENT_SHOT_H3_POLL_INTERVAL_MS = 8_000;
  * the silent track, so it never needed saying. */
 export const SILENT_SHOT_PROMPT_SUFFIX = "Silent shot: nobody talks, mouths stay closed.";
 
-export type SilentShotFailure = { ok: false; status: number; code: string; error: string };
+export type SilentShotFailure = {
+  ok: false;
+  status: number;
+  code: string;
+  error: string;
+  /** `code: "siray_pending"`: the Siray task to check back on. */
+  sirayTaskId?: string;
+};
+
+/** The longest one Siray check waits (the same 40 s Shorts' shot cards use). */
+export const SIRAY_SILENT_POLL_MS = 40_000;
+
+function sirayPending(taskId: string): SilentShotFailure {
+  return { ok: false, status: 202, code: "siray_pending", error: "Siray is still rendering.", sirayTaskId: taskId };
+}
 export type SilentShotOutcome = { ok: true; bytes: Uint8Array; durationSec: number } | SilentShotFailure;
 
 async function frame16x9DataUrl(dataUrl: string): Promise<string | null> {
@@ -52,7 +81,10 @@ export async function renderSilentShotVideo(args: {
   durationSec: number;
   /** How long to wait for the engine before giving up honestly. */
   deadlineMs: number;
+  /** Siray only: the task an earlier call submitted. */
+  sirayTaskId?: string;
 }): Promise<SilentShotOutcome> {
+  if (args.backend === "siray") return renderSilentShotOnSiray(args);
   const startImage = await frame16x9DataUrl(args.startImageDataUrl);
   if (!startImage) {
     return { ok: false, status: 400, code: "invalid_request", error: "Could not decode the start image." };
@@ -110,6 +142,43 @@ export async function renderSilentShotVideo(args: {
   const downloaded = await downloadXaiVideo(done.videoUrl);
   if (!downloaded.ok) return downloaded;
   return { ok: true, bytes: downloaded.bytes, durationSec: done.durationSec };
+}
+
+async function renderSilentShotOnSiray(args: {
+  prompt: string;
+  startImageDataUrl: string;
+  durationSec: number;
+  deadlineMs: number;
+  sirayTaskId?: string;
+}): Promise<SilentShotOutcome> {
+  const creds = resolveSirayCredentials();
+  if (!creds) {
+    return {
+      ok: false,
+      status: 501,
+      code: "missing_api_key",
+      error:
+        "SIRAY_API_KEY is not set on the server, so silent shots can't render on Siray here. Flip the switch " +
+        "to Grok, or set the key in Vercel and redeploy.",
+    };
+  }
+  const durationSec = clampSirayI2vDurationSec(args.durationSec);
+  const taskId = args.sirayTaskId?.trim();
+  if (!taskId) {
+    const startImage = await frame16x9DataUrl(args.startImageDataUrl);
+    if (!startImage) {
+      return { ok: false, status: 400, code: "invalid_request", error: "Could not decode the start image." };
+    }
+    const submitted = await siraySubmitVideoAsync({ prompt: args.prompt, image: startImage, durationSec }, creds);
+    if (!submitted.ok) return submitted;
+    return sirayPending(submitted.taskId);
+  }
+  const done = await sirayPollVideoAsync(taskId, creds, Math.min(args.deadlineMs, SIRAY_SILENT_POLL_MS));
+  if (!done.ok && done.code === "timeout") return sirayPending(taskId);
+  if (!done.ok) return done;
+  const downloaded = await sirayDownloadVideo(done.outputUrl);
+  if (!downloaded.ok) return downloaded;
+  return { ok: true, bytes: downloaded.bytes, durationSec };
 }
 
 /** The free H3 key check (`checkMinimaxApiKey`), with the server's own key. */

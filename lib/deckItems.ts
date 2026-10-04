@@ -23,6 +23,7 @@
  * `character`: one character card (`SkidmarksState.characterLoras.characters[]`).
  * `sunnybank-episode`: one saved Sunnybank episode card.
  * `skidmarks-episode`: one Skidmarks episode card (`SkidmarksState.skidmarksStudio.workspaces[]`, 2026-10-04; the old nine-beat shape still reads).
+ * `shorts-episode`: one Shorts script episode card (`SkidmarksState.shortsStudio.workspaces[]`, 2026-10-04).
  * `adult-short`: one saved short from the Shorts Library (`SkidmarksState.adultShorts.saved[]`).
  * `music-video-band` / `music-video-song`: one Music video band, and the
  * song on the desk (see `lib/musicVideoItemData.ts`).
@@ -32,6 +33,7 @@ export const DECK_ITEM_KINDS = [
   "character",
   "sunnybank-episode",
   "skidmarks-episode",
+  "shorts-episode",
   "adult-short",
   "music-video-band",
   "music-video-song",
@@ -109,6 +111,7 @@ export function characterFolder(sourceKey: string | null | undefined): DeckFolde
 export const DECK_ITEM_KIND_FOLDERS: Partial<Record<DeckItemKind, DeckFolder>> = {
   "sunnybank-episode": "sunnybank",
   "skidmarks-episode": "skidmarks",
+  "shorts-episode": "adult-shorts",
   "adult-short": "adult-shorts",
 };
 

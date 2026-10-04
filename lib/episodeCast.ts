@@ -87,8 +87,14 @@ const NAME_HINT: Record<EpisodeCastGenre, string> = {
 };
 
 /** The one message when "+" on the Cast or Locations row can't add yet. */
-export function episodeNameFirstMessage(genre: EpisodeCastGenre, what: "characters" | "locations"): string {
-  return `Give the episode a name first (${NAME_HINT[genre]}), then add its ${what}.`;
+export function episodeNameFirstMessage(
+  genre: EpisodeCastGenre,
+  what: "characters" | "locations",
+  /** Shorts' script studio is open (2026-10-04): named on the # EPISODE: line, as Skidmarks. */
+  scriptEditor = false,
+): string {
+  const hint = genre === "adult-shorts" && scriptEditor ? NAME_HINT.skidmarks : NAME_HINT[genre];
+  return `Give the episode a name first (${hint}), then add its ${what}.`;
 }
 
 /** A location genre whose places are per episode, as an `EpisodeCastGenre`. */

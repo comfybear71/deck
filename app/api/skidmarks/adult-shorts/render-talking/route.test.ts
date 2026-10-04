@@ -48,7 +48,12 @@ function encodeTestMp3(durationSec: number): Uint8Array {
 
 const TINY = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const BROTHER = { name: "Brother", look: "short dark hair", referenceUrls: [], subjectWord: "man" };
-const PROMPT = buildAdultShortsTalkingPrompt([BROTHER], { prompt: "Leaning on the caravan" }, "Brother", { adult: false });
+const PROMPT = buildAdultShortsTalkingPrompt(
+  [BROTHER],
+  { prompt: "Leaning on the caravan", line: "[whispers] Nobody move." },
+  "Brother",
+  { adult: false },
+);
 
 function req(over: Record<string, unknown> = {}): Request {
   return new Request("http://localhost/api/skidmarks/adult-shorts/render-talking", {
@@ -88,7 +93,10 @@ describe("POST /api/skidmarks/adult-shorts/render-talking", () => {
     expect(res.status).toBe(200);
     expect(synthMock).toHaveBeenCalledWith("AbCdEfGh12345678IjKl", "[whispers] Nobody move.");
     const prompt = workflowMock.mock.calls[0][0].prompt as string;
-    expect(prompt.startsWith('Brother says: "Nobody move."')).toBe(true);
+    // The page's prompt goes as it is (2026-10-04): the Sunny Banks speaking text first.
+    expect(prompt).toBe(PROMPT);
+    expect(prompt.startsWith("Use the provided start image as the first frame. Brother, short dark hair is prominent, mouth and head move naturally while speaking")).toBe(true);
+    expect(prompt).toContain('Brother says: "Nobody move.". Camera holds.');
     expect(prompt).not.toContain("[whispers]");
     expect(prompt).toContain("Adult man, clearly over 25");
     expect(prompt).toContain(ADULT_SHORTS_GENERAL_CONTENT_LOCK);
@@ -97,6 +105,13 @@ describe("POST /api/skidmarks/adult-shorts/render-talking", () => {
     expect(json.lastFrameUrl).toContain("ep02-brother-vs-rambo-clip-01-last-frame.jpg");
     expect(json.voiceUrl).toContain("deck/shorts/episodes/ep02-brother-vs-rambo/ep02-brother-vs-rambo-voice-01.mp3");
     expect(json.durationSec).toBeGreaterThanOrEqual(2);
+  });
+
+  it("an older page's prompt without the words still gets who says what in front", async () => {
+    const older = "Leaning on the caravan Adult man, clearly over 25, fictional AI-created character, photorealistic.";
+    const res = await POST(req({ prompt: older }));
+    expect(res.status).toBe(200);
+    expect(workflowMock.mock.calls[0][0].prompt).toBe(`Brother says: "Nobody move." ${older}`);
   });
 
   it("refuses without a voice ID and never calls ElevenLabs", async () => {
