@@ -503,11 +503,26 @@ export function buildSunnyBanksSpeakingPrompt(
   look: StudioLook = SUNNY_BANKS_LOOK
 ): string {
   return (
-    `Use the provided start image as the first frame. ${character.name}, ${character.look} is prominent, mouth ` +
-    `and head move naturally while speaking, subtle gesture. Props and background stay exactly as the start ` +
-    `image, nothing new enters frame. ${character.name} says: "${line.trim()}". Camera holds. Same person and ` +
-    `objects as the start image. ${look.styleLock}` +
+    `${buildLtxSpeakingCore(character.name, `${character.name}, ${character.look}`, line)} ${look.styleLock}` +
     accessoryLockSuffix(character)
+  );
+}
+
+/**
+ * The proven LTX talking text (the gold speaking plate above, without
+ * the show's style lock): "Use the provided start image as the first
+ * frame. NAME, LOOK is prominent, mouth and head move naturally while
+ * speaking … NAME says: "…". Camera holds. Same person and objects as
+ * the start image." Shared with Shorts' talking shots (2026-10-04), so
+ * every show tells LTX the same thing. `subject` is "NAME, LOOK", or just
+ * "NAME" when there's no look.
+ */
+export function buildLtxSpeakingCore(name: string, subject: string, line: string): string {
+  return (
+    `Use the provided start image as the first frame. ${subject} is prominent, mouth ` +
+    `and head move naturally while speaking, subtle gesture. Props and background stay exactly as the start ` +
+    `image, nothing new enters frame. ${name} says: "${line.trim()}". Camera holds. Same person and ` +
+    `objects as the start image.`
   );
 }
 
