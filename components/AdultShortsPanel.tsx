@@ -18,6 +18,8 @@ import {
   adultShortEpisodeNumbers,
   adultShortIsAdult,
   adultShortShotPeople,
+  adultShortTalkingWithNobody,
+  withAdultShortShotPeople,
   sameAdultShortPerson,
   setAdultShortStarring,
   ADULT_SHORTS_MAX_STARRING,
@@ -207,22 +209,22 @@ export function AdultShortsPanel() {
     flushSkidmarksSessionNow();
   };
 
-  /** "In this shot": who's in one shot, from the people starring. All of them = no picks saved. */
+  /**
+   * "In this shot": who's in one shot, from the people starring. All of
+   * them = no picks saved. Unticking the last one (or tapping Nobody,
+   * 2026-10-04) = nobody in this shot: no Cast picture, name or person
+   * wording goes with its plate or clip.
+   */
+  const setShotPeople = (shot: AdultShortsShot, names: readonly string[]) => {
+    patchAdultShorts((st) => ({
+      ...st,
+      shots: st.shots.map((x) => (x.id === shot.id ? withAdultShortShotPeople(x, starringList, names) : x)),
+    }));
+  };
   const toggleShotPerson = (shot: AdultShortsShot, name: string) => {
     const inShot = adultShortShotPeople(starringList, shot).map((p) => p.name);
     const on = inShot.some((n) => sameAdultShortPerson(n, name));
-    const next = on ? inShot.filter((n) => !sameAdultShortPerson(n, name)) : [...inShot, name];
-    if (next.length === 0) return; // Someone has to be in the shot; untick everyone else instead.
-    const all = starringList.every((p) => next.some((n) => sameAdultShortPerson(n, p.name)));
-    patchAdultShorts((st) => ({
-      ...st,
-      shots: st.shots.map((x) => {
-        if (x.id !== shot.id) return x;
-        const rest = { ...x };
-        delete rest.castNames;
-        return all ? rest : { ...rest, castNames: next };
-      }),
-    }));
+    setShotPeople(shot, on ? inShot.filter((n) => !sameAdultShortPerson(n, name)) : [...inShot, name]);
   };
 
   const makePlate = async (shot: AdultShortsShot) => {
@@ -413,6 +415,10 @@ export function AdultShortsPanel() {
 
   const unfinished = shots.filter((s) => !s.clipUrl);
   const unfinishedTalking = unfinished.filter((s) => isAdultShortTalkingShot(s));
+  // A talking shot with nobody in it: nobody can say the Line. Render all waits until it's fixed.
+  const talkingNobody = unfinishedTalking
+    .filter((s) => adultShortTalkingWithNobody(s))
+    .map((s) => shots.findIndex((x) => x.id === s.id) + 1);
   // Like Sunnybank's Render all: not while a talking shot's speaker has no voice.
   const voiceless = unfinishedTalking
     .map((s) => adultShortSpeaker(shortsShotPeople(starringPeople, s), s))
@@ -531,8 +537,8 @@ export function AdultShortsPanel() {
           className="w-full resize-y rounded-md border border-white/10 bg-black/30 px-3 py-2 text-base text-white placeholder:text-white/30 sm:text-sm"
         />
 
-        {/* Who's in this shot: everyone starring unless some are unticked. */}
-        {starringList.length > 1 && (
+        {/* Who's in this shot: everyone starring unless some are unticked, or Nobody (2026-10-04). */}
+        {starringList.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-white/60">
             <span className="mr-0.5">In this shot</span>
             {starringList.map((p) => {
@@ -552,7 +558,25 @@ export function AdultShortsPanel() {
                 </button>
               );
             })}
+            <button
+              type="button"
+              aria-pressed={shot.nobodyInShot === true}
+              aria-label={`Nobody in shot ${index + 1}`}
+              title="Nobody in this shot: scenery only. No Cast picture or name is sent."
+              onClick={() => setShotPeople(shot, shot.nobodyInShot === true ? starringList.map((p) => p.name) : [])}
+              className={[
+                "min-h-[28px] rounded-full border px-2.5 py-0.5",
+                shot.nobodyInShot === true ? "border-emerald-400/70 bg-emerald-500/15 text-white" : "border-white/15 text-white/50",
+              ].join(" ")}
+            >
+              Nobody
+            </button>
           </div>
+        )}
+        {adultShortTalkingWithNobody(shot) && (
+          <p role="alert" className="text-xs text-red-300">
+            Nobody is in this shot, but it has a Line. Tick who says it, or clear the Line for a silent shot. Nothing is billed until then.
+          </p>
         )}
 
         {/* Who says the Line, when more than one person is in the shot (default: the first). */}
@@ -637,7 +661,7 @@ export function AdultShortsPanel() {
             <div className="flex gap-1.5">
               <button
                 type="button"
-                disabled={Boolean(busy) || queueRunning || (noVoice && !shot.sirayTaskId)}
+                disabled={Boolean(busy) || queueRunning || (noVoice && !shot.sirayTaskId) || adultShortTalkingWithNobody(shot)}
                 onClick={() => (armed || shot.sirayTaskId ? void renderClip(shot.id) : setArmedRenderId(shot.id))}
                 className={[
                   "flex-1 rounded-md px-2 py-1 text-xs font-medium disabled:opacity-40",
@@ -742,8 +766,14 @@ export function AdultShortsPanel() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={Boolean(busy) || queueRunning || voiceless.length > 0}
-              title={voiceless.length ? `${voiceless.join(" and ")} ${voiceless.length === 1 ? "has" : "have"} no voice yet.` : undefined}
+              disabled={Boolean(busy) || queueRunning || voiceless.length > 0 || talkingNobody.length > 0}
+              title={
+                voiceless.length
+                  ? `${voiceless.join(" and ")} ${voiceless.length === 1 ? "has" : "have"} no voice yet.`
+                  : talkingNobody.length
+                    ? `Shot ${talkingNobody.join(", ")} has a Line but nobody in it.`
+                    : undefined
+              }
               onClick={() => (queueArmed ? void renderAll() : setQueueArmed(true))}
               onBlur={() => setQueueArmed(false)}
               className={[
@@ -773,6 +803,11 @@ export function AdultShortsPanel() {
               </button>
             )}
           </div>
+        )}
+        {talkingNobody.length > 0 && !queueRunning && (
+          <p role="alert" className="text-xs text-red-300">
+            {talkingNobody.length === 1 ? "Shot" : "Shots"} {talkingNobody.join(", ")} {talkingNobody.length === 1 ? "has" : "have"} a Line but nobody in it. Tick who says it, or clear the Line.
+          </p>
         )}
 
         <ShotGrid

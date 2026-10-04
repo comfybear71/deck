@@ -107,6 +107,15 @@ export interface AdultShortsShot {
    */
   castNames?: string[];
   /**
+   * Nobody in this shot (2026-10-04, Stuart: an empty highway with crows
+   * came back with a man in it). Only ever `true`, and then `castNames`
+   * is absent: the plate and clip send no Cast picture, no name and no
+   * person wording (`ADULT_SHORTS_NOBODY_LOCK`), even with people
+   * starring. Absent = as before (no picks = everyone starring), so every
+   * shot saved before this reads exactly the same.
+   */
+  nobodyInShot?: true;
+  /**
    * What's said in this shot (2026-09-30), ElevenLabs tags like
    * `[whispers]` kept. Present and not blank = a talking shot: voiced
    * with the speaker's Cast card voice and rendered on LTX. Absent or
@@ -218,10 +227,40 @@ function dedupeStarring(list: readonly AdultShortsCharacter[]): AdultShortsChara
 }
 
 /** The people in one shot: its own picks, or everyone starring when it has none (or none of them still star). */
-export function adultShortShotPeople<T extends { name: string }>(starring: readonly T[], shot: Pick<AdultShortsShot, "castNames">): T[] {
+export function adultShortShotPeople<T extends { name: string }>(
+  starring: readonly T[],
+  shot: Pick<AdultShortsShot, "castNames" | "nobodyInShot">,
+): T[] {
+  if (shot.nobodyInShot === true) return [];
   if (!shot.castNames) return starring.slice();
   const picked = starring.filter((p) => shot.castNames!.some((n) => sameAdultShortPerson(n, p.name)));
   return picked.length ? picked : starring.slice();
+}
+
+/**
+ * "In this shot" set to exactly these people (2026-10-04). Everyone
+ * starring = no picks saved (as before); nobody = `nobodyInShot`, and the
+ * Speaker pick goes with them. Pure: returns a new shot.
+ */
+export function withAdultShortShotPeople(
+  shot: AdultShortsShot,
+  starring: readonly { name: string }[],
+  names: readonly string[],
+): AdultShortsShot {
+  const rest = { ...shot };
+  delete rest.castNames;
+  delete rest.nobodyInShot;
+  const next = starring.filter((p) => names.some((n) => sameAdultShortPerson(n, p.name))).map((p) => p.name);
+  if (next.length === 0) {
+    delete rest.speakerName;
+    return { ...rest, nobodyInShot: true };
+  }
+  return next.length === starring.length ? rest : { ...rest, castNames: next };
+}
+
+/** A talking shot (it has a Line) with nobody in it: nobody can say it, so it never renders (nothing billed). */
+export function adultShortTalkingWithNobody(shot: Pick<AdultShortsShot, "line" | "nobodyInShot">): boolean {
+  return shot.nobodyInShot === true && isAdultShortTalkingShot(shot);
 }
 
 export function mintAdultShortsId(prefix = "shot"): string {
@@ -307,7 +346,9 @@ function normalizeShots(value: unknown): AdultShortsShot[] {
       lastFrameUrl: urlOrNull(s.lastFrameUrl),
       sirayTaskId: str(s.sirayTaskId) || null,
       chainFromPrevious: s.chainFromPrevious === true,
-      ...(Array.isArray(s.castNames)
+      ...(s.nobodyInShot === true
+        ? { nobodyInShot: true as const }
+        : Array.isArray(s.castNames)
         ? { castNames: s.castNames.filter((n): n is string => typeof n === "string" && n.trim().length > 0).map((n) => n.trim()).slice(0, ADULT_SHORTS_MAX_STARRING) }
         : {}),
       ...(typeof s.line === "string" && s.line.trim() ? { line: s.line.slice(0, ADULT_SHORTS_LINE_MAX) } : {}),
