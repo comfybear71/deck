@@ -151,6 +151,7 @@ export const SKIDMARKS_PROTECTED_STATE_KEYS = [
   "skidmarksEpisodes",
   "skidmarksStudio",
   "locations",
+  "episodeExtras",
 ] as const;
 const PROTECTED_KEYS: string[] = [...SKIDMARKS_PROTECTED_STATE_KEYS];
 

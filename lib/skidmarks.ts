@@ -221,6 +221,16 @@ import {
   type RosterExtrasState,
 } from "./rosterExtras";
 import {
+  emptyEpisodeExtrasState,
+  episodeExtrasHaveUserContent,
+  normalizeEpisodeExtrasState,
+  withEpisodeExtraAdded,
+  withEpisodeExtraEdited,
+  withEpisodeExtraRemoved,
+  type EpisodeExtra,
+  type EpisodeExtrasState,
+} from "./episodeExtras";
+import {
   characterLorasHaveUserContent,
   emptyCharacterLorasState,
   normalizeCharacterLorasState,
@@ -1454,6 +1464,12 @@ export interface SkidmarksState {
    * `null` = none saved yet (Sunnybank then shows its built-ins).
    */
   locations?: DeckLocationsState | null;
+  /**
+   * Episode Extras (2026-10-04): outside video/audio files kept with an
+   * episode in any genre, keyed by the episode's Blob folder, see
+   * `lib/episodeExtras.ts`. URLs only. `null` = none yet.
+   */
+  episodeExtras?: EpisodeExtrasState | null;
 }
 
 function isBrowser(): boolean {
@@ -1523,6 +1539,7 @@ function emptyState(): SkidmarksState {
     characterLoras: null,
     rosterExtras: null,
     locations: null,
+    episodeExtras: null,
   };
 }
 
@@ -1759,6 +1776,11 @@ export function renameLegacySeedBand(band: SkidmarksBand): SkidmarksBand {
   return band;
 }
 
+/** The saved session as the app reads it (exported for tests, 2026-10-04). */
+export function normalizeSkidmarksState(parsed: unknown): SkidmarksState {
+  return normalizeState(parsed);
+}
+
 function normalizeState(parsed: unknown): SkidmarksState {
   const p = (parsed ?? {}) as Partial<SkidmarksState>;
   const removedSeedBandIds = Array.isArray(p.removedSeedBandIds)
@@ -1932,6 +1954,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
     characterLoras: normalizeCharacterLorasState(p.characterLoras),
     rosterExtras: normalizeRosterExtrasState(p.rosterExtras),
     locations: normalizeDeckLocationsState(p.locations),
+    episodeExtras: normalizeEpisodeExtrasState(p.episodeExtras),
   };
 }
 
@@ -2156,6 +2179,7 @@ export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
   const hasCharacterLoras = characterLorasHaveUserContent(state.characterLoras);
   const hasRosterExtras = rosterExtrasHaveUserContent(state.rosterExtras);
   const hasLocations = deckLocationsHaveUserContent(state.locations);
+  const hasEpisodeExtras = episodeExtrasHaveUserContent(state.episodeExtras);
   return (
     hasRealBand ||
     hasMp3 ||
@@ -2165,7 +2189,8 @@ export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
     hasAdultShorts ||
     hasCharacterLoras ||
     hasRosterExtras ||
-    hasLocations
+    hasLocations ||
+    hasEpisodeExtras
   );
 }
 
@@ -3572,6 +3597,7 @@ function keepPerItemListsOnScreen(migrated: SkidmarksState): SkidmarksState {
     skidmarksEpisodes: onScreen?.skidmarksEpisodes ?? migrated.skidmarksEpisodes,
     adultShorts: onScreen?.adultShorts ?? migrated.adultShorts,
     locations: onScreen?.locations ?? migrated.locations,
+    episodeExtras: onScreen?.episodeExtras ?? migrated.episodeExtras,
   };
   if (onScreen?.sunnyBanks) {
     next.sunnyBanks = migrated.sunnyBanks
@@ -5514,6 +5540,29 @@ export function skidmarksGlance(state: SkidmarksState): {
     return { status: "in-progress", label: "Choosing a band\u2026" };
   }
   return { status: "idle", label: "No project yet" };
+}
+
+/** Episode Extras (2026-10-04, `lib/episodeExtras.ts`): every genre's, by episode folder. */
+export function getEpisodeExtrasState(state: SkidmarksState = getSkidmarksSnapshot()): EpisodeExtrasState {
+  return state.episodeExtras ?? emptyEpisodeExtrasState();
+}
+
+/** Saves a newly uploaded extra onto its episode (same Neon session row as the clips). */
+export function addEpisodeExtra(episodeFolder: string, extra: EpisodeExtra): void {
+  const current = getSkidmarksSnapshot();
+  persist({ ...current, episodeExtras: withEpisodeExtraAdded(current.episodeExtras, episodeFolder, extra) });
+}
+
+/** Renames an extra or changes its placement note. The file never moves. */
+export function editEpisodeExtra(episodeFolder: string, id: string, patch: { name?: string; placement?: string }): void {
+  const current = getSkidmarksSnapshot();
+  persist({ ...current, episodeExtras: withEpisodeExtraEdited(current.episodeExtras, episodeFolder, id, patch) });
+}
+
+/** Takes an extra off its episode. Its file stays in storage, like a deleted episode's clips. */
+export function removeEpisodeExtra(episodeFolder: string, id: string): void {
+  const current = getSkidmarksSnapshot();
+  persist({ ...current, episodeExtras: withEpisodeExtraRemoved(current.episodeExtras, episodeFolder, id) });
 }
 
 /** Added characters (Music video, Sunnybank, Adult shorts) — empty until the first add. */
