@@ -28,6 +28,7 @@
 import { isAllowedTrainingImageUrl, normalizeElevenLabsVoiceId } from "./characterLoras";
 import { normalizeRosterExtrasState } from "./rosterExtras";
 import type { SkidmarksState } from "./skidmarks";
+import { openSkidmarksEpisodeScopeIn, skidmarksEpisodeCast } from "./skidmarksEpisodeCast";
 import { normalizeSkidmarksEpisodesState, type SkidmarksCastMember } from "./skidmarksEpisodes";
 import { SUNNY_BANKS_CAST, getSunnyBanksCharacterLock, resolveSunnyBanksStartImage, type SunnyBanksCharacterLock } from "./sunnyBanks";
 import type { StudioGenre } from "./studioGenre";
@@ -35,8 +36,9 @@ import type { StudioGenre } from "./studioGenre";
 /**
  * Which cards belong to a show (2026-10-04). Sunny Banks: built-in `sb:`
  * cards and `sbx:` characters added with "+". Skidmarks: `sk:` cards of
- * the shared Skidmarks Cast (`skidmarksEpisodes.cast`); it has no
- * built-ins, so every one of them counts as "added".
+ * the open episode's own Skidmarks Cast (`skidmarksEpisodes.cast`, each
+ * card in one episode since 2026-10-04); it has no built-ins, so every
+ * one of them counts as "added".
  */
 interface ShowCard {
   card: NonNullable<SkidmarksState["characterLoras"]>["characters"][number];
@@ -45,8 +47,12 @@ interface ShowCard {
   firstPicture: string | undefined;
 }
 
+/** The open Skidmarks episode's own Cast (2026-10-04: each episode has
+ * its own, `lib/skidmarksEpisodeCast.ts`). Every Skidmarks name match,
+ * picture, voice and multi-cast shot reads only these. */
 function skidmarksCast(state: SkidmarksState): SkidmarksCastMember[] {
-  return normalizeSkidmarksEpisodesState(state.skidmarksEpisodes)?.cast ?? [];
+  const cast = normalizeSkidmarksEpisodesState(state.skidmarksEpisodes)?.cast ?? [];
+  return skidmarksEpisodeCast(cast, openSkidmarksEpisodeScopeIn(state));
 }
 
 function showCards(state: SkidmarksState, genre: StudioGenre): ShowCard[] {

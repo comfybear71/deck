@@ -58,6 +58,9 @@ export async function uploadLocationPicture(
   file: File | Blob,
   genre: DeckLocationGenre,
   key: string,
+  /** Skidmarks (2026-10-04): the episode the place belongs to, so its
+   * picture goes in `deck/skidmarks/episodes/<episode>/locations/`. */
+  episode?: string | null,
 ): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
   let dataUrl: string;
   try {
@@ -65,6 +68,6 @@ export async function uploadLocationPicture(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Could not read that picture." };
   }
-  const up = await uploadSkidmarksMemberPhoto(dataUrl, deckLocationPictureTarget(genre, key));
+  const up = await uploadSkidmarksMemberPhoto(dataUrl, deckLocationPictureTarget(genre, key, episode));
   return up.ok ? { ok: true, url: up.url } : { ok: false, error: up.message };
 }

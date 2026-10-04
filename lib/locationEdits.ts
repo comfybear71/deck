@@ -36,10 +36,16 @@ function materialised(genre: DeckLocationGenre): DeckLocationsState {
   return next;
 }
 
-export function addDeckLocation(genre: DeckLocationGenre, name: string, pictureUrl: string | null): DeckLocationEdit<DeckLocation> {
+export function addDeckLocation(
+  genre: DeckLocationGenre,
+  name: string,
+  pictureUrl: string | null,
+  /** Skidmarks (2026-10-04): the open episode and its own places. */
+  scope: { episode?: string | null; nameScope?: readonly DeckLocation[] } = {},
+): DeckLocationEdit<DeckLocation> {
   const state = getDeckLocationsState();
   const list = savedDeckLocations(withBuiltInsSaved(state, genre), genre);
-  const built = buildDeckLocation(genre, list, name, pictureUrl);
+  const built = buildDeckLocation(genre, list, name, pictureUrl, Date.now(), scope);
   if (!built.ok) return built;
   materialised(genre);
   patchDeckLocations((s) => ({ locations: [...s.locations, built.value] }));
@@ -47,10 +53,16 @@ export function addDeckLocation(genre: DeckLocationGenre, name: string, pictureU
   return built;
 }
 
-export function renameDeckLocation(genre: DeckLocationGenre, id: string, name: string): DeckLocationEdit<string> {
+export function renameDeckLocation(
+  genre: DeckLocationGenre,
+  id: string,
+  name: string,
+  /** Skidmarks (2026-10-04): names only clash within the open episode. */
+  nameScope?: readonly DeckLocation[],
+): DeckLocationEdit<string> {
   const list = savedDeckLocations(withBuiltInsSaved(getDeckLocationsState(), genre), genre);
   if (!list.some((l) => l.id === id)) return { ok: false, error: "That location isn't on the row any more." };
-  const problem = deckLocationNameProblem(list, name, id);
+  const problem = deckLocationNameProblem(nameScope ?? list, name, id);
   if (problem) return { ok: false, error: problem };
   const clean = cleanDeckLocationName(name);
   materialised(genre);

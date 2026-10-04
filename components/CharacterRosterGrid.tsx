@@ -52,6 +52,8 @@ import {
   patchSkidmarksEpisodes,
   MAX_MEMBERS_PER_BAND,
   type SkidmarksState,
+  getOpenSkidmarksEpisodeFolder,
+  pinSkidmarksEpisodeFolder,
 } from "@/lib/skidmarks";
 import { normalizeAdultShortsState } from "@/lib/adultShorts";
 import { CharacterProfileFields } from "./CharacterProfileFields";
@@ -338,7 +340,10 @@ export function CharacterRosterGrid({
   const voiceAudio = useRef<HTMLAudioElement | null>(null);
 
   const adultConfirmed = Boolean(normalizeAdultShortsState(snapshot.adultShorts)?.ageConfirmed);
-  const allChars = useMemo(() => ROSTER_GROUPS.flatMap((g) => roster[g.id]), [roster]);
+  // Every Skidmarks episode's Cast, so a training that's already running
+  // keeps finding its character after another episode is opened (2026-10-04).
+  const everyRoster = useMemo(() => buildCharacterRoster(snapshot, { everySkidmarksEpisode: true }), [snapshot]);
+  const allChars = useMemo(() => ROSTER_GROUPS.flatMap((g) => everyRoster[g.id]), [everyRoster]);
   const charByKey = useMemo(() => new Map(allChars.map((c) => [c.sourceKey, c])), [allChars]);
 
   const fail = (id: string, msg: string) => {
@@ -726,7 +731,10 @@ export function CharacterRosterGrid({
     );
   };
 
-  const selected = selectedKey ? charByKey.get(selectedKey) ?? null : null;
+  // Only a character on the row (a Skidmarks card from another episode
+  // isn't, 2026-10-04) can be open.
+  const onRow = new Set(ROSTER_GROUPS.flatMap((g) => roster[g.id]).map((c) => c.sourceKey));
+  const selected = selectedKey && onRow.has(selectedKey) ? charByKey.get(selectedKey) ?? null : null;
   const selectedEntry = selected ? entryForRosterCharacter(characters, selected.sourceKey) : null;
 
   const openCharacter = (key: string) => {
@@ -1341,7 +1349,10 @@ export function CharacterRosterGrid({
         }));
         return existingKey as string;
       }
-      const member = buildSkidmarksCastMember(name, look, "supporting", Date.now(), undefined, { pictureUrls: urls, isAnimal });
+      // A new card belongs to the open episode (2026-10-04, each Skidmarks
+      // episode has its own Cast); `addCharacters` pinned its folder first.
+      const episode = getOpenSkidmarksEpisodeFolder();
+      const member = buildSkidmarksCastMember(name, look, "supporting", Date.now(), undefined, { pictureUrls: urls, isAnimal, episode });
       patchSkidmarksEpisodes((st) => ({ ...st, cast: [...st.cast, member] }));
       return `sk:${member.id}`;
     }
@@ -1362,6 +1373,10 @@ export function CharacterRosterGrid({
 
   const addCharacters = async () => {
     if (!canAddCast || !addGroup) return;
+    if (addGroup === "skidmarks" && !pinSkidmarksEpisodeFolder()) {
+      setMessage((m) => ({ ...m, "add-cast": "Give the episode a name first (the # EPISODE: line), then add its characters." }));
+      return;
+    }
     if (!hasUploads) {
       const key = saveCharacter(addGroup, newCast.name, newCast.look, [], false);
       flushSkidmarksSessionNow();

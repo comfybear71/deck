@@ -142,7 +142,7 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
   {
     title: "A silent character shot needs no voice",
     body: [
-      "Any Cast character can have their own silent shot, with a voice ID or not (an animal, an extra): their name with nothing after the colon. Their Cast card picture goes into the shot with the location, so it's them, not a random lookalike. Tick them In this episode and give their card a picture.",
+      "Any Cast character can have their own silent shot, with a voice ID or not (an animal, an extra): their name with nothing after the colon. Their Cast card picture goes into the shot with the location, so it's them, not a random lookalike. Give their card a picture.",
       "Only talking needs a voice. Words after the colon for someone with no voice turn the row red.",
       "Crowd: is a shot of the place with nobody from the Cast, and never adds Cast pictures, even with [Cast: …]. To show a Cast character, use their own name.",
     ],
