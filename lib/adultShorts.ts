@@ -42,6 +42,20 @@ export const ADULT_SHORTS_ADULT_LOCK =
 export const ADULT_SHORTS_CONTENT_LOCK = "No sexual acts shown.";
 /** An episode with its 18+ switch off (2026-09-30): nothing spicy at all. */
 export const ADULT_SHORTS_GENERAL_CONTENT_LOCK = "Everyone fully clothed. No nudity and nothing sexual.";
+/**
+ * A shot with nobody in it (2026-10-04, EP03 shot 13: an empty highway
+ * with crows came back with a man in the road, twice). The person locks
+ * ("Adult person … same face, hair and body as the reference", "Keep
+ * their identity …", "Everyone fully clothed") asked for someone who
+ * isn't there, so a nobody shot gets only these: the look, and the
+ * episode's content rule without any person wording.
+ */
+export const ADULT_SHORTS_NOBODY_LOCK = "Photorealistic.";
+/** The 18+ switch off, nobody in the shot. */
+export const ADULT_SHORTS_NOBODY_GENERAL_CONTENT_LOCK = "No nudity and nothing sexual.";
+/** The 18+ switch on, nobody in the shot: the age rule stays, in case the
+ * prompt describes someone who isn't on the Cast row. */
+export const ADULT_SHORTS_NOBODY_ADULT_LOCK = "Anyone shown is a fictional adult, clearly over 25.";
 /** Two or more people in one shot: every one of them is a made-up adult. */
 export const ADULT_SHORTS_GROUP_ADULT_LOCK =
   "Everyone shown is an adult, clearly over 25, a fictional AI-created character, photorealistic, each with the same face, hair and body as their reference.";
@@ -683,12 +697,19 @@ function withLocks(shot: Pick<AdultShortsShot, "prompt">, locks: string): string
  * the cap). `who` is the one person (older callers) or everyone in the
  * shot, in the same order as the reference pictures.
  */
+/** The locks for a shot with nobody in it: no person, no reference, no identity line (see `ADULT_SHORTS_NOBODY_LOCK`). */
+function nobodyLocks(opts: AdultShortsPromptOptions | undefined): string {
+  if (opts?.adult === false) return `${ADULT_SHORTS_NOBODY_LOCK} ${ADULT_SHORTS_NOBODY_GENERAL_CONTENT_LOCK}`;
+  return `${ADULT_SHORTS_NOBODY_LOCK} ${ADULT_SHORTS_NOBODY_ADULT_LOCK} ${ADULT_SHORTS_CONTENT_LOCK}`;
+}
+
 export function buildAdultShortsStillPrompt(
   who: AdultShortsCharacter | readonly AdultShortsPerson[],
   shot: Pick<AdultShortsShot, "prompt">,
   opts?: AdultShortsPromptOptions,
 ): string {
   const people = peopleOf(who);
+  if (people.length === 0) return withLocks(shot, nobodyLocks(opts));
   const locks = [characterLine(people), referenceLine(people), adultShortsAdultLock(people), contentLock(opts)].filter(Boolean).join(" ");
   return withLocks(shot, locks);
 }
@@ -700,6 +721,7 @@ export function buildAdultShortsMotionPrompt(
   opts?: AdultShortsPromptOptions,
 ): string {
   const people = peopleOf(who);
+  if (people.length === 0) return withLocks(shot, nobodyLocks(opts));
   const locks = [characterLine(people), adultShortsAdultLock(people), identityLine(people), contentLock(opts)].filter(Boolean).join(" ");
   return withLocks(shot, locks);
 }
