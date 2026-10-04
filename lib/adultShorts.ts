@@ -788,6 +788,24 @@ export function isAdultShortTalkingShot(shot: Pick<AdultShortsShot, "line">): bo
   return Boolean(shot.line?.trim());
 }
 
+/**
+ * The speaker picked for a shot's Line when that person isn't in the shot
+ * any more (2026-10-04), else `null`. EP03 shot 4: "Liam" was picked, then
+ * Liam left Starring, so the Line quietly went to Jack (Jack's voice, and
+ * "Jack speaks" on a plate where Jack is the back of a head) and nobody's
+ * lips moved. A talking shot with a missing speaker doesn't render.
+ */
+export function adultShortMissingSpeaker(people: readonly { name: string }[], shot: Pick<AdultShortsShot, "speakerName">): string | null {
+  const picked = shot.speakerName?.trim();
+  if (!picked) return null;
+  return people.some((p) => sameAdultShortPerson(p.name, picked)) ? null : picked;
+}
+
+/** What the shot says when its picked speaker isn't in it. */
+export function adultShortMissingSpeakerMessage(name: string): string {
+  return `${name} is picked to say this Line but isn't in this shot. Add ${name} to Starring (and to this shot), or let someone in the shot say it.`;
+}
+
 /** Who says a shot's Line: its picked speaker if they're in the shot, else the first person in it. */
 export function adultShortSpeaker<T extends { name: string }>(people: readonly T[], shot: Pick<AdultShortsShot, "speakerName">): T | null {
   const picked = shot.speakerName?.trim();

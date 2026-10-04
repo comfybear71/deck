@@ -8,6 +8,8 @@ import {
   ADULT_SHORTS_MIN_SHOT_SEC,
   ADULT_SHORTS_STILL_COST_USD,
   ADULT_SHORTS_LINE_MAX,
+  adultShortMissingSpeaker,
+  adultShortMissingSpeakerMessage,
   adultShortSpeaker,
   buildAdultShortsMotionPrompt,
   buildAdultShortsShot,
@@ -369,6 +371,11 @@ export function AdultShortsPanel() {
     adultNow: boolean,
     startImageUrl: string | null,
   ): Promise<boolean> => {
+    const missing = adultShortMissingSpeaker(people, shot);
+    if (missing) {
+      setShotError(shot.id, adultShortMissingSpeakerMessage(missing));
+      return false;
+    }
     const speaker = adultShortSpeaker(people, shot);
     if (!speaker) {
       setShotError(shot.id, "Pick who's in this shot first.");
@@ -425,6 +432,11 @@ export function AdultShortsPanel() {
     .map((s) => adultShortSpeaker(shortsShotPeople(starringPeople, s), s))
     .filter((p): p is NonNullable<typeof p> => Boolean(p && !p.voiceId))
     .map((p) => p.name)
+    .filter((n, i, all) => all.indexOf(n) === i);
+  // Nor while a talking shot's picked speaker has left the shot.
+  const missingSpeakers = unfinishedTalking
+    .map((s) => adultShortMissingSpeaker(shortsShotPeople(starringPeople, s), s))
+    .filter((n): n is string => Boolean(n))
     .filter((n, i, all) => all.indexOf(n) === i);
   const sirayQueueCost = formatUsd(
     unfinished.filter((s) => !isAdultShortTalkingShot(s)).reduce((sum, s) => sum + estimateAdultShortsClipCostUsd(s.durationSec), 0)
@@ -487,6 +499,7 @@ export function AdultShortsPanel() {
     const armed = armedRenderId === shot.id;
     const people = shortsShotPeople(starringPeople, shot);
     const talking = isAdultShortTalkingShot(shot);
+    const missingSpeaker = talking ? adultShortMissingSpeaker(people, shot) : null;
     const speaker = talking ? adultShortSpeaker(people, shot) : null;
     const noVoice = Boolean(talking && speaker && !speaker.voiceId);
     const clipCost = talking ? formatAdultShortsTalkingCost() : formatUsd(estimateAdultShortsClipCostUsd(shot.durationSec));
@@ -631,6 +644,30 @@ export function AdultShortsPanel() {
             })}
           </div>
         )}
+        {missingSpeaker && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-red-300">
+            <p className="min-w-0 flex-1">{adultShortMissingSpeakerMessage(missingSpeaker)}</p>
+            {speaker && (
+              <button
+                type="button"
+                onClick={() =>
+                  patchAdultShorts((st) => ({
+                    ...st,
+                    shots: st.shots.map((x) => {
+                      if (x.id !== shot.id) return x;
+                      const rest = { ...x };
+                      delete rest.speakerName;
+                      return rest;
+                    }),
+                  }))
+                }
+                className="min-h-[28px] rounded-full border border-white/20 px-2.5 py-0.5 text-white/80 hover:border-white/40"
+              >
+                {speaker.name} says it
+              </button>
+            )}
+          </div>
+        )}
         {noVoice && speaker && (
           <p className="text-xs text-red-300">{speaker.name} has no voice yet. Add their ElevenLabs voice ID on their Cast card.</p>
         )}
@@ -687,7 +724,12 @@ export function AdultShortsPanel() {
             <div className="flex gap-1.5">
               <button
                 type="button"
-                disabled={Boolean(busy) || queueRunning || (noVoice && !shot.sirayTaskId) || adultShortTalkingWithNobody(shot)}
+                disabled={
+                  Boolean(busy) ||
+                  queueRunning ||
+                  (Boolean(missingSpeaker || noVoice) && !shot.sirayTaskId) ||
+                  adultShortTalkingWithNobody(shot)
+                }
                 onClick={() => (armed || shot.sirayTaskId ? void renderClip(shot.id) : setArmedRenderId(shot.id))}
                 className={[
                   "flex-1 rounded-md px-2 py-1 text-xs font-medium disabled:opacity-40",
@@ -792,13 +834,15 @@ export function AdultShortsPanel() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={Boolean(busy) || queueRunning || voiceless.length > 0 || talkingNobody.length > 0}
+              disabled={Boolean(busy) || queueRunning || voiceless.length > 0 || missingSpeakers.length > 0 || talkingNobody.length > 0}
               title={
-                voiceless.length
-                  ? `${voiceless.join(" and ")} ${voiceless.length === 1 ? "has" : "have"} no voice yet.`
-                  : talkingNobody.length
-                    ? `Shot ${talkingNobody.join(", ")} has a Line but nobody in it.`
-                    : undefined
+                missingSpeakers.length
+                  ? `${missingSpeakers.join(" and ")} ${missingSpeakers.length === 1 ? "is" : "are"} picked to say a Line but not in that shot.`
+                  : voiceless.length
+                    ? `${voiceless.join(" and ")} ${voiceless.length === 1 ? "has" : "have"} no voice yet.`
+                    : talkingNobody.length
+                      ? `Shot ${talkingNobody.join(", ")} has a Line but nobody in it.`
+                      : undefined
               }
               onClick={() => (queueArmed ? void renderAll() : setQueueArmed(true))}
               onBlur={() => setQueueArmed(false)}
