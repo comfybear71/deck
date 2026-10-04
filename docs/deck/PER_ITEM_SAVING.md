@@ -164,7 +164,10 @@ is at least one and the seed is run.
 - `lib/skidmarksEpisodeItems.ts`, `lib/adultShortItems.ts`: which kind,
   which cleaner (`normalizeSkidmarksEpisode`, `normalizeAdultShortsSavedEntry`).
 - `lib/deckItems.ts`, `lib/deckItems-server.ts`: the two new kinds and their folders.
-- `lib/skidmarks.ts`: wiring (`patchSkidmarksEpisodes`, `removeSkidmarksEpisode`,
+- `lib/skidmarks.ts`: wiring (the Skidmarks studio's `patchSunnyBanksLive(…, "skidmarks")`
+  and `deleteSunnyBanksWorkspace(id, "skidmarks")` since 2026-10-04,
   `patchAdultShorts`, `removeSavedAdultShort`, after each session load).
+  A Skidmarks row is an episode card; an old nine-beat row is turned into
+  one in code (`normalizeSkidmarksEpisodeCard`, `lib/skidmarksStudio.ts`).
 - `lib/deckItemSeedPlan.ts`, `scripts/seedDeckItemsKind.ts`,
   `scripts/seed-deck-items-skidmarks-episodes.ts`, `scripts/seed-deck-items-adult-shorts.ts`: the one-time seeds.

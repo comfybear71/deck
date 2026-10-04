@@ -27,7 +27,6 @@ import { SkidmarksRenderedClipsShelf } from "./SkidmarksRenderedClipsShelf";
 import { SkidmarksSunnyBanksPanel } from "./SkidmarksSunnyBanksPanel";
 import { SunnyBanksEpisodeRow } from "./SunnyBanksEpisodeRow";
 import { ShortsEpisodeRow } from "./ShortsEpisodeRow";
-import { SkidmarksEpisodesPanel } from "./SkidmarksEpisodesPanel";
 import { AdultShortsPanel } from "./AdultShortsPanel";
 import { CharacterLorasPanel } from "./CharacterLorasPanel";
 import LocationsRow from "./LocationsRow";
@@ -605,6 +604,11 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       {/* Each project's own Characters bar (folded by default): that
           group's cast, tap a face to train their LoRA. */}
       {/* LOCATIONS, directly above each project's Characters row (2026-09-30). */}
+      {/* Skidmarks has exactly Sunnybank's structure (2026-10-04, Stuart):
+          EPISODES, then LOCATIONS, then the Skidmarks Cast row, then the
+          same script and render panel, on Skidmarks' own cast, look and
+          folders (`lib/studioGenre.ts`). */}
+      {session.projectKind === "skidmarks" && <SunnyBanksEpisodeRow genre="skidmarks" />}
       {session.projectKind === "skidmarks" && <LocationsRow genre="skidmarks" />}
       {session.projectKind === "skidmarks" && <CharacterLorasPanel group="skidmarks" />}
       {/* Sunny Banks episodes as a sideways row, straight under the
@@ -619,7 +623,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
       {session.projectKind === "sunnybank" && <SkidmarksSunnyBanksPanel />}
 
-      {session.projectKind === "skidmarks" && <SkidmarksEpisodesPanel onOpenLibrary={() => setPcRail("library")} />}
+      {session.projectKind === "skidmarks" && <SkidmarksSunnyBanksPanel genre="skidmarks" />}
 
       {session.projectKind === "adult-shorts" && <AdultShortsPanel />}
 

@@ -267,7 +267,7 @@ describe("saveSkidmarksSession never blanks out saved work (2026-09-29)", () => 
   it("protects exactly the parts that were wiped, plus bands, episodes and locations", async () => {
     const { SKIDMARKS_PROTECTED_STATE_KEYS } = await importModule();
     expect([...SKIDMARKS_PROTECTED_STATE_KEYS].sort()).toEqual(
-      ["adultShorts", "bands", "characterLoras", "locations", "rosterExtras", "skidmarksEpisodes", "sunnyBanks"].sort()
+      ["adultShorts", "bands", "characterLoras", "locations", "rosterExtras", "skidmarksEpisodes", "skidmarksStudio", "sunnyBanks"].sort()
     );
   });
 });

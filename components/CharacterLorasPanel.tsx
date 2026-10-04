@@ -52,6 +52,7 @@ const STYLE_OPTIONS: { value: CharacterTrainingStyle; label: string }[] = [
   { value: "cartoon", label: "Cartoon" },
   { value: "faceless", label: "Face hidden" },
   { value: "render3d", label: "3D cartoon" },
+  { value: "semireal", label: "Semi-photoreal" },
 ];
 
 type Busy = { id: string; kind: "upload" | "train" | "check" } | null;

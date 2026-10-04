@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { buildStarterEpisode } from "./skidmarksEpisodes";
+import { buildEmptySunnyBanksLive, buildSunnyBanksWorkspaceFromLive } from "./sunnyBanksWorkspace";
 import { buildAdultShortsShot } from "./adultShorts";
 import { DECK_FOLDER_LABELS } from "./deckItems";
 import { formatDeckItemSeedTree, planDeckItemSeed } from "./deckItemSeedPlan";
 import { SKIDMARKS_EPISODE_ITEMS } from "./skidmarksEpisodeItems";
 import { ADULT_SHORT_ITEMS } from "./adultShortItems";
 
-const ep = (id: string, title: string) => buildStarterEpisode(title, 1_759_000_000_000, id);
+// A Skidmarks episode card (2026-10-04: the Sunny Banks structure).
+const ep = (id: string, title: string) => ({
+  ...buildSunnyBanksWorkspaceFromLive({ ...buildEmptySunnyBanksLive("skidmarks"), workspaceTitle: title }, 1_759_000_000_000, 1, "skidmarks"),
+  id,
+});
 const short = (id: string, title: string) => ({
   id,
   title,
@@ -15,7 +19,7 @@ const short = (id: string, title: string) => ({
   shots: [{ ...buildAdultShortsShot("shot_1"), prompt: "x" }],
 });
 
-const planEpisodes = (list: unknown) => planDeckItemSeed(SKIDMARKS_EPISODE_ITEMS, "skidmarks", (e) => e.title, list);
+const planEpisodes = (list: unknown) => planDeckItemSeed(SKIDMARKS_EPISODE_ITEMS, "skidmarks", (e) => e.label, list);
 const planShorts = (list: unknown) => planDeckItemSeed(ADULT_SHORT_ITEMS, "adult-shorts", (s) => s.title, list);
 
 describe("planDeckItemSeed: Skidmarks episodes", () => {
@@ -30,7 +34,7 @@ describe("planDeckItemSeed: Skidmarks episodes", () => {
   });
 
   it("skips duplicates and junk, and says why", () => {
-    const plan = planEpisodes([ep("ep_a", "A"), ep("ep_a", "A again"), { title: "no id" }, 7, { ...ep("x", "bad"), id: "bad id" }]);
+    const plan = planEpisodes([ep("ep_a", "A"), ep("ep_a", "A again"), { label: "no id" }, 7, { ...ep("x", "bad"), id: "bad id" }]);
     expect(plan.rows).toHaveLength(1);
     expect(plan.skipped.map((s) => s.index)).toEqual([1, 2, 3, 4]);
   });

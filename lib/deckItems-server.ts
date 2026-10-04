@@ -42,7 +42,7 @@ import {
   type DeckItemTombstone,
 } from "./deckItems";
 import { normalizeDeckLocation } from "./deckLocations";
-import { normalizeSkidmarksEpisode } from "./skidmarksEpisodes";
+import { normalizeSkidmarksEpisodeCard } from "./skidmarksStudio";
 import { MUSIC_VIDEO_ITEM_FOLDER, cleanBandRowData, cleanSongItem } from "./musicVideoItemData";
 import { SKIDMARKS_STUDIO_OWNER_ID } from "./skidmarksSession-server";
 
@@ -150,7 +150,7 @@ export function prepareDeckItemData(
       return { ok: true, data: episode as unknown as Record<string, unknown>, folder: DECK_ITEM_KIND_FOLDERS[kind] ?? "sunnybank" };
     }
     case "skidmarks-episode": {
-      const entry = normalizeSkidmarksEpisode(data);
+      const entry = normalizeSkidmarksEpisodeCard(data);
       if (!entry) return { ok: false, error: "That isn't a Skidmarks episode." };
       if (entry.id !== itemId) return { ok: false, error: "The episode's id doesn't match the item id." };
       if (JSON.stringify(entry).length > DECK_ITEM_MAX_DATA_BYTES) return { ok: false, error: "That episode is too big to save." };

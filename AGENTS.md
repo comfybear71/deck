@@ -994,8 +994,13 @@ either from the live episode name.
 
 Skidmarks episodes (kind `skidmarks-episode`) and saved shorts (kind
 `adult-short`, folder `adult-shorts`) follow exactly the same rules through
-the same engine (`lib/deckItemSync.ts`). Their only deletes are
-`removeSkidmarksEpisode` and `removeSavedAdultShort` (the delete taps);
+the same engine (`lib/deckItemSync.ts`). Since 2026-10-04 a Skidmarks
+episode is the same episode card as a Sunny Banks one (state key
+`skidmarksStudio`, same studio code with `genre: "skidmarks"`, see
+`lib/studioGenre.ts`); old nine-beat rows are turned into cards in code
+by `normalizeSkidmarksEpisodeCard` (`lib/skidmarksStudio.ts`). Their only
+deletes are `deleteSunnyBanksWorkspace(id, "skidmarks")` and
+`removeSavedAdultShort` (the delete taps);
 their only seeders are `scripts/seed-deck-items-skidmarks-episodes.ts` and
 `scripts/seed-deck-items-adult-shorts.ts`, run by hand with
 `DECK_DATABASE_URL` (never `DATABASE_URL`).

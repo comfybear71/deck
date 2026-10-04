@@ -25,6 +25,7 @@ import {
 import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
 import { isAllowedTrainingImageUrl } from "@/lib/characterLoras";
 import { XAI_EDIT_MAX_IMAGES } from "@/lib/shotCast";
+import { studioGenreProfile, type StudioGenre } from "@/lib/studioGenre";
 import { buildSunnyBanksMultiCastPlatePrompt, type SunnyBanksShotCastMember } from "@/lib/sunnyBanksShotCast";
 
 const XAI_IMAGE_MODEL_ENV_VAR = "XAI_IMAGE_MODEL";
@@ -124,9 +125,14 @@ async function readSunnyBanksLocationImageDataUrl(src: string): Promise<string |
  * storefront: EP01's Park Site 4 beats were told they were at the
  * Office Storefront because `park_site_4` wasn't a built-in.
  */
-export function resolveLocationLock(locationId: string, locationLabel?: string): SunnyBanksLocationLock {
+export function resolveLocationLock(
+  locationId: string,
+  locationLabel?: string,
+  /** Skidmarks (2026-10-04) has no built-in locations. */
+  genre: StudioGenre = "sunnybank"
+): SunnyBanksLocationLock {
   const label = locationLabel?.replace(/\s+/g, " ").trim().slice(0, 80) ?? "";
-  const builtIn = getSunnyBanksLocation(locationId);
+  const builtIn = studioGenreProfile(genre).builtIns ? getSunnyBanksLocation(locationId) : undefined;
   if (builtIn) return label ? { ...builtIn, label } : builtIn;
   const fromId = locationId.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   return { id: locationId, label: label || fromId || "the location in image 1", image: "" };
@@ -160,7 +166,10 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   /** The shot's `[Action: …]` text (2026-10-01, silent holds), so the
    * start still shows the pose and what's held that the shot describes. */
   shotAction?: string;
+  /** Which show's look and locations (Sunny Banks when left out). */
+  genre?: StudioGenre;
 }): Promise<SunnyBanksCompositeOutcome> {
+  const profile = studioGenreProfile(opts.genre);
   const picture = resolveSunnyBanksStartImage(opts.character);
   if (!picture) {
     return {
@@ -177,7 +186,7 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
       ok: false,
       status: 501,
       code: "missing_api_key",
-      error: missingXaiApiKeyMessage("Sunny Banks plating (xAI Grok Imagine)"),
+      error: missingXaiApiKeyMessage(`${profile.showName} plating (xAI Grok Imagine)`),
     };
   }
   const apiKey = resolvedKey.key;
@@ -192,8 +201,8 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
     };
   }
 
-  const location = resolveLocationLock(opts.locationId ?? "", opts.locationLabel);
-  const prompt = buildSunnyBanksCompositePlatePrompt(opts.character, location, opts.appearanceOverride, opts.shotAction);
+  const location = resolveLocationLock(opts.locationId ?? "", opts.locationLabel, profile.genre);
+  const prompt = buildSunnyBanksCompositePlatePrompt(opts.character, location, opts.appearanceOverride, opts.shotAction, profile.look);
 
   // Same two-image edits payload Studio's generateFaceImage sends
   // (`images: [{ url, type: "image_url" }, …]` — location then person).
@@ -285,7 +294,9 @@ export async function compositeSunnyBanksCastOntoLocation(opts: {
   /** Everyone who talks on this shared picture. */
   sceneSpeakers?: readonly string[];
   shotAction?: string;
+  genre?: StudioGenre;
 }): Promise<SunnyBanksCompositeOutcome> {
+  const profile = studioGenreProfile(opts.genre);
   const people = opts.people.slice(0, XAI_EDIT_MAX_IMAGES - 1);
   const missing = people.find((p) => !p.pictureUrl);
   if (missing) {
@@ -297,7 +308,7 @@ export async function compositeSunnyBanksCastOntoLocation(opts: {
       ok: false,
       status: 501,
       code: "missing_api_key",
-      error: missingXaiApiKeyMessage("Sunny Banks plating (xAI Grok Imagine)"),
+      error: missingXaiApiKeyMessage(`${profile.showName} plating (xAI Grok Imagine)`),
     };
   }
   const pictures: string[] = [];
@@ -313,13 +324,14 @@ export async function compositeSunnyBanksCastOntoLocation(opts: {
     }
     pictures.push(dataUrl);
   }
-  const location = resolveLocationLock(opts.locationId ?? "", opts.locationLabel);
+  const location = resolveLocationLock(opts.locationId ?? "", opts.locationLabel, profile.genre);
   const prompt = buildSunnyBanksMultiCastPlatePrompt({
     people,
     location,
     speaker: opts.speaker,
     sceneSpeakers: opts.sceneSpeakers,
     shotAction: opts.shotAction,
+    look: profile.look,
   });
   return postXaiEdit(resolvedKey.key, prompt, [opts.locationDataUrl, ...pictures]);
 }

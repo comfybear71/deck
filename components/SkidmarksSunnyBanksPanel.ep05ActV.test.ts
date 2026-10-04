@@ -192,6 +192,8 @@ describe("EP05 Act V, Stuart's exact text: who is in each row", () => {
       ["BLOOM", BLOOM_PIC, "front left"],
     ]);
     expect(body.scenePlateUrl).toBeUndefined();
+    // Sunny Banks requests never name a show (2026-10-04): the route reads them exactly as before.
+    expect("genre" in body).toBe(false);
   });
 });
 

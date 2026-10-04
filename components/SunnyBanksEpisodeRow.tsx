@@ -3,6 +3,7 @@
 import { useState, useSyncExternalStore } from "react";
 import {
   getSkidmarksSnapshot,
+  getStudioState,
   getSunnyBanksLiveOrDefault,
   deleteSunnyBanksWorkspace,
   openSunnyBanksWorkspace,
@@ -12,7 +13,8 @@ import {
 } from "@/lib/skidmarks";
 import { getSunnyBanksBusy, setSunnyBanksBusy, subscribeSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
 import { EpisodeCardsRow, type EpisodeRowNotice } from "@/components/EpisodeCardsRow";
-import { downloadSunnyBanksEpisodeZip, SUNNY_BANKS_EDITOR_ID } from "@/components/SkidmarksSunnyBanksPanel";
+import { downloadSunnyBanksEpisodeZip, inStudioGenre, SUNNY_BANKS_EDITOR_ID } from "@/components/SkidmarksSunnyBanksPanel";
+import type { StudioGenre } from "@/lib/studioGenre";
 import {
   buildEmptySunnyBanksLive,
   defaultSunnyBanksLiveFingerprint,
@@ -21,7 +23,6 @@ import {
   type SunnyBanksWorkspaceSnapshot,
 } from "@/lib/sunnyBanksWorkspace";
 
-const EMPTY_LIVE_FINGERPRINT = fingerprintWorkspace(buildEmptySunnyBanksLive());
 
 /** The first finished clip in the episode, used as its thumbnail. */
 function firstClipUrl(workspace: SunnyBanksWorkspaceSnapshot): string | null {
@@ -58,15 +59,19 @@ function firstClipUrl(workspace: SunnyBanksWorkspaceSnapshot): string | null {
  * Nothing on screen is ever thrown away: if the episode being worked on
  * has changes no saved card holds, it is saved first, then the other
  * episode (or a blank one) opens.
+ *
+ * Skidmarks has the same row (2026-10-04, `genre="skidmarks"`), on its
+ * own episode cards.
  */
-export function SunnyBanksEpisodeRow() {
+export function SunnyBanksEpisodeRow({ genre = "sunnybank" }: { genre?: StudioGenre } = {}) {
   const studioState = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const busy = useSyncExternalStore(subscribeSunnyBanksBusy, getSunnyBanksBusy, () => false);
   const [notice, setNotice] = useState<EpisodeRowNotice>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const live = studioState.sunnyBanks?.live ?? getSunnyBanksLiveOrDefault(studioState);
-  const workspaces = studioState.sunnyBanks?.workspaces ?? [];
+  const studio = getStudioState(genre, studioState);
+  const live = studio?.live ?? getSunnyBanksLiveOrDefault(studioState, genre);
+  const workspaces = studio?.workspaces ?? [];
   const liveFingerprint = fingerprintWorkspace(live);
   const activeId =
     (live.episodeId && workspaces.some((workspace) => workspace.id === live.episodeId) ? live.episodeId : null) ??
@@ -78,17 +83,20 @@ export function SunnyBanksEpisodeRow() {
   /** Save what's on screen first when no saved card already holds it. */
   const keepLiveWork = (): string | null => {
     if (activeId) return null;
-    if (liveFingerprint === EMPTY_LIVE_FINGERPRINT || liveFingerprint === defaultSunnyBanksLiveFingerprint()) {
+    if (
+      liveFingerprint === fingerprintWorkspace(buildEmptySunnyBanksLive(genre)) ||
+      (genre === "sunnybank" && liveFingerprint === defaultSunnyBanksLiveFingerprint())
+    ) {
       return null;
     }
-    return saveSunnyBanksProjectWorkspace().label;
+    return saveSunnyBanksProjectWorkspace(genre).label;
   };
 
   const handleOpen = (workspace: SunnyBanksWorkspaceSnapshot) => {
     setConfirmDeleteId(null);
     if (busy || workspace.id === activeId) return;
     const saved = keepLiveWork();
-    openSunnyBanksWorkspace(workspace.id);
+    openSunnyBanksWorkspace(workspace.id, genre);
     say(saved ? `Saved "${saved}", then opened "${workspace.label}".` : `Opened "${workspace.label}".`);
   };
 
@@ -107,7 +115,7 @@ export function SunnyBanksEpisodeRow() {
     setConfirmDeleteId(null);
     if (busy) return;
     const saved = keepLiveWork();
-    startNewSunnyBanksEpisode();
+    startNewSunnyBanksEpisode(genre);
     say(saved ? `Saved "${saved}", then started a new episode.` : "Started a new episode.");
   };
 
@@ -128,8 +136,8 @@ export function SunnyBanksEpisodeRow() {
       return;
     }
     setConfirmDeleteId(null);
-    deleteSunnyBanksWorkspace(workspace.id);
-    if (isOpen) startNewSunnyBanksEpisode();
+    deleteSunnyBanksWorkspace(workspace.id, genre);
+    if (isOpen) startNewSunnyBanksEpisode(genre);
     say(`Deleted "${workspace.label}".`);
   };
 
@@ -140,7 +148,9 @@ export function SunnyBanksEpisodeRow() {
     setSunnyBanksBusy(true, "zip");
     say(`Preparing "${workspace.label}"…`);
     try {
-      const result = await downloadSunnyBanksEpisodeZip(
+      // The zip reads the script with this show's cast and locations.
+      const result = await inStudioGenre(genre, () =>
+        downloadSunnyBanksEpisodeZip(
         {
           title: workspace.label,
           defaultLocationId: workspace.defaultLocationId,
@@ -152,6 +162,7 @@ export function SunnyBanksEpisodeRow() {
           runtimeMap: workspace.runtimeMap,
         },
         ({ done, total }) => say(`Getting clip ${done} of ${total}…`)
+        )
       );
       say(
         result.fetchedClipCount === result.clipCount

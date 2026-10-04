@@ -11,7 +11,11 @@ import {
   type DeckItemKindConfig,
   type DeckItemSync,
 } from "./deckItemSync";
-import { buildStarterEpisode, type SkidmarksEpisode } from "./skidmarksEpisodes";
+import {
+  buildEmptySunnyBanksLive,
+  buildSunnyBanksWorkspaceFromLive,
+  type SunnyBanksWorkspaceSnapshot,
+} from "./sunnyBanksWorkspace";
 import { SKIDMARKS_EPISODE_ITEMS } from "./skidmarksEpisodeItems";
 
 /**
@@ -32,13 +36,22 @@ interface KindFixture<T extends DeckItemEntry> {
   otherEdit: (entry: T) => T;
 }
 
-const episodes: KindFixture<SkidmarksEpisode> = {
+// Skidmarks episode cards (2026-10-04: the Sunny Banks structure).
+const episodes: KindFixture<SunnyBanksWorkspaceSnapshot> = {
   name: "Skidmarks episodes",
   config: SKIDMARKS_EPISODE_ITEMS,
-  make: (id, label) => buildStarterEpisode(label, 1_759_000_000_000, id),
-  label: (e) => e.title,
-  relabel: (e, title) => ({ ...e, title }),
-  otherEdit: (e) => ({ ...e, beats: { ...e.beats, b2: { script: "[Action: he kicks the bin]", durationSec: 60 } } }),
+  make: (id, label) => ({
+    ...buildSunnyBanksWorkspaceFromLive(
+      { ...buildEmptySunnyBanksLive("skidmarks"), workspaceTitle: label },
+      1_759_000_000_000,
+      1,
+      "skidmarks"
+    ),
+    id,
+  }),
+  label: (e) => e.label,
+  relabel: (e, label) => ({ ...e, label }),
+  otherEdit: (e) => ({ ...e, actScripts: { ...e.actScripts, I: "[Action: he kicks the bin]\nDap:" } }),
 };
 
 const shorts: KindFixture<AdultShortsSaved> = {
@@ -431,7 +444,7 @@ describe("orderMissing: shorts this device didn't have go in newest first, after
   it("a kind with no orderMissing keeps the server's order (Skidmarks episodes)", () => {
     const a = episodes.make("ep_a", "A");
     const b = episodes.make("ep_b", "B");
-    const rec = (e: SkidmarksEpisode): DeckItemRecord => ({ itemId: e.id, folder: "skidmarks", data: e, revision: 1, updatedAt: null, deletedAt: null });
+    const rec = (e: SunnyBanksWorkspaceSnapshot): DeckItemRecord => ({ itemId: e.id, folder: "skidmarks", data: e, revision: 1, updatedAt: null, deletedAt: null });
     expect(overlayDeckItems(SKIDMARKS_EPISODE_ITEMS, [], [rec(b), rec(a)], []).entries.map((e) => e.id)).toEqual(["ep_b", "ep_a"]);
   });
 });

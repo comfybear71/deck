@@ -377,13 +377,15 @@ export function sunnybankBeatTarget(args: {
   beatNumber: number;
   characterName: string;
   kind: "speak" | "hold";
+  /** Which show (2026-10-04): Skidmarks clips go under `deck/skidmarks/episodes/…`. Sunny Banks when left out. */
+  genre?: "sunnybank" | "skidmarks";
 }): DeckMediaTarget | null {
   if (!isSafeDeckMediaSlug(args.episodeSlug)) return null;
   const episode = args.episodeSlug;
   const act = `act-${deckMediaSlug(args.actId, "1")}`;
   const who = deckMediaSlug(args.characterName, "crowd");
   const target = {
-    folder: `${deckProjectFolder("sunnybank", episode)}/${act}`,
+    folder: `${deckProjectFolder(args.genre ?? "sunnybank", episode)}/${act}`,
     name: `${episode}-${act}-beat-${twoDigits(args.beatNumber)}-${who}-${args.kind}`,
   };
   return isDeckMediaTarget(target) ? target : null;
@@ -398,13 +400,15 @@ export function sunnybankPlateTarget(args: {
   actId: string;
   beatNumber: number;
   castNames: readonly string[];
+  /** Which show (2026-10-04): Skidmarks clips go under `deck/skidmarks/episodes/…`. Sunny Banks when left out. */
+  genre?: "sunnybank" | "skidmarks";
 }): DeckMediaTarget | null {
   if (!isSafeDeckMediaSlug(args.episodeSlug)) return null;
   const episode = args.episodeSlug;
   const act = `act-${deckMediaSlug(args.actId, "1")}`;
   const who = args.castNames.map((n) => deckMediaSlug(n, "")).filter(Boolean).join("-") || "cast";
   const target = {
-    folder: `${deckProjectFolder("sunnybank", episode)}/${act}`,
+    folder: `${deckProjectFolder(args.genre ?? "sunnybank", episode)}/${act}`,
     name: `${episode}-${act}-beat-${twoDigits(args.beatNumber)}-${who}-plate`.slice(0, 120).replace(/-+$/g, ""),
   };
   return isDeckMediaTarget(target) ? target : null;

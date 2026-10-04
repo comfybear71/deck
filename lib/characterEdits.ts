@@ -131,8 +131,12 @@ function listTitles(titles: string[]): string {
 }
 
 /** Sunny Banks scripts (the open one and every saved card) that still say `Name:`. */
-function sunnyBanksUses(state: SkidmarksState, name: string): { lines: number; titles: string[] } {
-  const sb = state.sunnyBanks;
+function sunnyBanksUses(
+  state: SkidmarksState,
+  name: string,
+  /** Skidmarks' episode cards (2026-10-04) are scanned the same way. */
+  sb: SkidmarksState["sunnyBanks"] | undefined = state.sunnyBanks
+): { lines: number; titles: string[] } {
   if (!sb) return { lines: 0, titles: [] };
   let lines = 0;
   const titles: string[] = [];
@@ -175,9 +179,23 @@ export function characterDeleteBlocker(char: RosterCharacter, state: SkidmarksSt
     }
   }
   if (source.kind === "cast") {
-    const eps = getSkidmarksEpisodesState(state).episodes.filter((e) => e.antiheroId === source.id || e.castIds.includes(source.id));
-    if (eps.length > 0) {
-      return `${name} is in ${plural(eps.length, "Skidmarks episode")} (${listTitles(eps.map((e) => e.title))}). Take them out of those episodes first.`;
+    // Skidmarks episode cards (2026-10-04): ticked as in the episode, or
+    // a line in its script. (An old nine-beat episode not yet moved onto
+    // the cards counts too.)
+    const studio = state.skidmarksStudio;
+    const ticked = (studio?.workspaces ?? []).filter((w) => w.castIds?.includes(source.id)).map((w) => w.label);
+    for (const e of getSkidmarksEpisodesState(state).episodes) {
+      if (e.antiheroId === source.id || e.castIds.includes(source.id)) ticked.push(e.title);
+    }
+    if (studio?.live.castIds?.includes(source.id) && !studio.workspaces.some((w) => w.id === studio.live.episodeId)) {
+      ticked.push(studio.live.workspaceTitle.trim() || "the open episode");
+    }
+    if (ticked.length > 0) {
+      return `${name} is in ${plural(ticked.length, "Skidmarks episode")} (${listTitles(ticked)}). Take them out of those episodes first.`;
+    }
+    const uses = sunnyBanksUses(state, name, studio);
+    if (uses.lines > 0) {
+      return `${name} is still on ${plural(uses.lines, "script line")} in ${listTitles(uses.titles)}. Change or remove those lines first.`;
     }
   }
   if (source.kind === "member") {

@@ -55,8 +55,29 @@ describe("prepareDeckItemData", () => {
   it("cleans an episode and files it under skidmarks", async () => {
     const { prepareDeckItemData } = await load();
     const out = prepareDeckItemData("skidmarks-episode", episode.id, { ...episode, junk: 1 });
-    expect(out).toMatchObject({ ok: true, folder: "skidmarks", data: { id: episode.id, title: "EP01 · The Bin Chicken" } });
+    // An episode saved by the old nine-beat editor (PR 216) still saves:
+    // it becomes an episode card with the same id (2026-10-04).
+    expect(out).toMatchObject({
+      ok: true,
+      folder: "skidmarks",
+      data: { id: episode.id, label: "EP01 · The Bin Chicken", actIds: ["I"] },
+    });
     expect((out as { data: Record<string, unknown> }).data.junk).toBeUndefined();
+    expect((out as { data: Record<string, unknown> }).data.beats).toBeUndefined();
+  });
+
+  it("cleans a Skidmarks episode card (the Sunny Banks structure) as it is", async () => {
+    const { prepareDeckItemData } = await load();
+    const { buildEmptySunnyBanksLive, buildSunnyBanksWorkspaceFromLive } = await import("./sunnyBanksWorkspace");
+    const card = buildSunnyBanksWorkspaceFromLive(
+      { ...buildEmptySunnyBanksLive("skidmarks"), workspaceTitle: "Cornish Arsehole", castIds: ["cast_dap"] },
+      1_759_000_000_000,
+      1,
+      "skidmarks"
+    );
+    const out = prepareDeckItemData("skidmarks-episode", card.id, card);
+    expect(out).toMatchObject({ ok: true, folder: "skidmarks", data: { id: card.id, label: "Cornish Arsehole", castIds: ["cast_dap"] } });
+    expect(prepareDeckItemData("skidmarks-episode", "other", card)).toMatchObject({ ok: false });
   });
 
   it("cleans a saved short and files it under adult-shorts", async () => {
