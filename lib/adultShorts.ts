@@ -44,6 +44,20 @@ export const ADULT_SHORTS_ADULT_LOCK =
 export const ADULT_SHORTS_CONTENT_LOCK = "No sexual acts shown.";
 /** An episode with its 18+ switch off (2026-09-30): nothing spicy at all. */
 export const ADULT_SHORTS_GENERAL_CONTENT_LOCK = "Everyone fully clothed. No nudity and nothing sexual.";
+/**
+ * A shot with nobody in it (2026-10-04, EP03 shot 13: an empty highway
+ * with crows came back with a man in the road, twice). The person locks
+ * ("Adult person … same face, hair and body as the reference", "Keep
+ * their identity …", "Everyone fully clothed") asked for someone who
+ * isn't there, so a nobody shot gets only these: the look, and the
+ * episode's content rule without any person wording.
+ */
+export const ADULT_SHORTS_NOBODY_LOCK = "Photorealistic.";
+/** The 18+ switch off, nobody in the shot. */
+export const ADULT_SHORTS_NOBODY_GENERAL_CONTENT_LOCK = "No nudity and nothing sexual.";
+/** The 18+ switch on, nobody in the shot: the age rule stays, in case the
+ * prompt describes someone who isn't on the Cast row. */
+export const ADULT_SHORTS_NOBODY_ADULT_LOCK = "Anyone shown is a fictional adult, clearly over 25.";
 /** Two or more people in one shot: every one of them is a made-up adult. */
 export const ADULT_SHORTS_GROUP_ADULT_LOCK =
   "Everyone shown is an adult, clearly over 25, a fictional AI-created character, photorealistic, each with the same face, hair and body as their reference.";
@@ -97,6 +111,15 @@ export interface AdultShortsShot {
    * one-person episodes need nothing.
    */
   castNames?: string[];
+  /**
+   * Nobody in this shot (2026-10-04, Stuart: an empty highway with crows
+   * came back with a man in it). Only ever `true`, and then `castNames`
+   * is absent: the plate and clip send no Cast picture, no name and no
+   * person wording (`ADULT_SHORTS_NOBODY_LOCK`), even with people
+   * starring. Absent = as before (no picks = everyone starring), so every
+   * shot saved before this reads exactly the same.
+   */
+  nobodyInShot?: true;
   /**
    * What's said in this shot (2026-09-30), ElevenLabs tags like
    * `[whispers]` kept. Present and not blank = a talking shot: voiced
@@ -219,10 +242,40 @@ function dedupeStarring(list: readonly AdultShortsCharacter[]): AdultShortsChara
 }
 
 /** The people in one shot: its own picks, or everyone starring when it has none (or none of them still star). */
-export function adultShortShotPeople<T extends { name: string }>(starring: readonly T[], shot: Pick<AdultShortsShot, "castNames">): T[] {
+export function adultShortShotPeople<T extends { name: string }>(
+  starring: readonly T[],
+  shot: Pick<AdultShortsShot, "castNames" | "nobodyInShot">,
+): T[] {
+  if (shot.nobodyInShot === true) return [];
   if (!shot.castNames) return starring.slice();
   const picked = starring.filter((p) => shot.castNames!.some((n) => sameAdultShortPerson(n, p.name)));
   return picked.length ? picked : starring.slice();
+}
+
+/**
+ * "In this shot" set to exactly these people (2026-10-04). Everyone
+ * starring = no picks saved (as before); nobody = `nobodyInShot`, and the
+ * Speaker pick goes with them. Pure: returns a new shot.
+ */
+export function withAdultShortShotPeople(
+  shot: AdultShortsShot,
+  starring: readonly { name: string }[],
+  names: readonly string[],
+): AdultShortsShot {
+  const rest = { ...shot };
+  delete rest.castNames;
+  delete rest.nobodyInShot;
+  const next = starring.filter((p) => names.some((n) => sameAdultShortPerson(n, p.name))).map((p) => p.name);
+  if (next.length === 0) {
+    delete rest.speakerName;
+    return { ...rest, nobodyInShot: true };
+  }
+  return next.length === starring.length ? rest : { ...rest, castNames: next };
+}
+
+/** A talking shot (it has a Line) with nobody in it: nobody can say it, so it never renders (nothing billed). */
+export function adultShortTalkingWithNobody(shot: Pick<AdultShortsShot, "line" | "nobodyInShot">): boolean {
+  return shot.nobodyInShot === true && isAdultShortTalkingShot(shot);
 }
 
 export function mintAdultShortsId(prefix = "shot"): string {
@@ -308,7 +361,9 @@ function normalizeShots(value: unknown): AdultShortsShot[] {
       lastFrameUrl: urlOrNull(s.lastFrameUrl),
       sirayTaskId: str(s.sirayTaskId) || null,
       chainFromPrevious: s.chainFromPrevious === true,
-      ...(Array.isArray(s.castNames)
+      ...(s.nobodyInShot === true
+        ? { nobodyInShot: true as const }
+        : Array.isArray(s.castNames)
         ? { castNames: s.castNames.filter((n): n is string => typeof n === "string" && n.trim().length > 0).map((n) => n.trim()).slice(0, ADULT_SHORTS_MAX_STARRING) }
         : {}),
       ...(typeof s.line === "string" && s.line.trim() ? { line: s.line.slice(0, ADULT_SHORTS_LINE_MAX) } : {}),
@@ -699,12 +754,19 @@ function withLocks(shot: Pick<AdultShortsShot, "prompt">, locks: string): string
  * the cap). `who` is the one person (older callers) or everyone in the
  * shot, in the same order as the reference pictures.
  */
+/** The locks for a shot with nobody in it: no person, no reference, no identity line (see `ADULT_SHORTS_NOBODY_LOCK`). */
+function nobodyLocks(opts: AdultShortsPromptOptions | undefined): string {
+  if (opts?.adult === false) return `${ADULT_SHORTS_NOBODY_LOCK} ${ADULT_SHORTS_NOBODY_GENERAL_CONTENT_LOCK}`;
+  return `${ADULT_SHORTS_NOBODY_LOCK} ${ADULT_SHORTS_NOBODY_ADULT_LOCK} ${ADULT_SHORTS_CONTENT_LOCK}`;
+}
+
 export function buildAdultShortsStillPrompt(
   who: AdultShortsCharacter | readonly AdultShortsPerson[],
   shot: Pick<AdultShortsShot, "prompt">,
   opts?: AdultShortsPromptOptions,
 ): string {
   const people = peopleOf(who);
+  if (people.length === 0) return withLocks(shot, nobodyLocks(opts));
   const locks = [characterLine(people), referenceLine(people), adultShortsAdultLock(people), contentLock(opts)].filter(Boolean).join(" ");
   return withLocks(shot, locks);
 }
@@ -716,6 +778,7 @@ export function buildAdultShortsMotionPrompt(
   opts?: AdultShortsPromptOptions,
 ): string {
   const people = peopleOf(who);
+  if (people.length === 0) return withLocks(shot, nobodyLocks(opts));
   const locks = [characterLine(people), adultShortsAdultLock(people), identityLine(people), contentLock(opts)].filter(Boolean).join(" ");
   return withLocks(shot, locks);
 }

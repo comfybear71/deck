@@ -134,8 +134,9 @@ export function shortsEpisodeStarringList(state: SkidmarksState): AdultShortsCha
  * starring order, capped at four. Each person's picture is their main
  * Cast card face; a person with none is in `missingPicture`.
  */
-export function shortsShotCast(starring: readonly AdultShortsPerson[], shot: Pick<AdultShortsShot, "castNames">): ShotCast {
-  const cards = starring.map((p) => ({ name: p.name, picture: p.referenceUrls[0] ?? null }));
+export function shortsShotCast(starring: readonly AdultShortsPerson[], shot: Pick<AdultShortsShot, "castNames" | "nobodyInShot">): ShotCast {
+  // Nobody in this shot: no cards at all, so nothing can be matched in.
+  const cards = shot.nobodyInShot === true ? [] : starring.map((p) => ({ name: p.name, picture: p.referenceUrls[0] ?? null }));
   return resolveShotCast({
     cards,
     explicit: adultShortShotPeople(starring, shot).map((p) => p.name),
@@ -144,7 +145,7 @@ export function shortsShotCast(starring: readonly AdultShortsPerson[], shot: Pic
 }
 
 /** The people in one shot (its own picks, else everyone starring), at most the four one plate can use. */
-export function shortsShotPeople(starring: readonly AdultShortsPerson[], shot: Pick<AdultShortsShot, "castNames">): AdultShortsPerson[] {
+export function shortsShotPeople(starring: readonly AdultShortsPerson[], shot: Pick<AdultShortsShot, "castNames" | "nobodyInShot">): AdultShortsPerson[] {
   const cast = shortsShotCast(starring, shot);
   return cast.members
     .map((m) => starring.find((p) => sameShotCastName(p.name, m.name)))
