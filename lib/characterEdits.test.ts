@@ -284,7 +284,14 @@ describe("rename and delete, saved per item", () => {
         bands: [],
         removedSeedBandIds: [],
         session: { projectKind: "adult-shorts", bandId: null, mp3: null, scriptSequenceDraft: null },
-        adultShorts: { ageConfirmed: true, character: { name: "Mia", look: "30s, red hair", referenceUrls: [] }, shots: [], saved: [], currentSavedId: null },
+        // An older episode (saved before 2026-10-04) open: the shared Cast from before.
+        adultShorts: {
+          ageConfirmed: true,
+          character: { name: "Mia", look: "30s, red hair", referenceUrls: [] },
+          shots: [],
+          saved: [{ id: "short_old_ep01", title: "EP01", savedAt: "2026-09-29T00:00:00Z", character: { name: "", look: "", referenceUrls: [] }, shots: [{ id: "sh0", action: "walks in" }] }],
+          currentSavedId: "short_old_ep01",
+        },
       },
       rows: [skye],
     });

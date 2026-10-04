@@ -95,7 +95,15 @@ describe("Shorts talking shots (a shot with a Line)", () => {
   it("each starring person's voice comes from their own Cast card", () => {
     const card = { ...buildCharacterLoraEntry("SKYLAR", [], new Date(), { sourceKey: "as:skylar", trainingStyle: "photo" }), voiceId: "Yre4AbCdEfGh12345678" };
     const state = {
-      adultShorts: { ageConfirmed: true, character: SKYLAR, starring: [SKYLAR, BROTHER], shots: [buildAdultShortsShot("a")], saved: [], currentSavedId: null },
+      // EP01-style older episode open (its Cast is the shared one from before 2026-10-04).
+      adultShorts: {
+        ageConfirmed: true,
+        character: SKYLAR,
+        starring: [SKYLAR, BROTHER],
+        shots: [buildAdultShortsShot("a")],
+        saved: [{ id: "short_old_ep01", title: "EP01", savedAt: "2026-09-29T00:00:00Z", character: SKYLAR, shots: [buildAdultShortsShot("a")] }],
+        currentSavedId: "short_old_ep01",
+      },
       characterLoras: { characters: [card] },
     } as unknown as SkidmarksState;
     const people = resolveShortsStarring(state);

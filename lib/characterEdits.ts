@@ -39,6 +39,7 @@ import {
 import { buildCharacterRoster, minorBlockReason, type RosterCharacter } from "./characterRoster";
 import { adultShortStarring, normalizeAdultShortsState, sameAdultShortPerson } from "./adultShorts";
 import type { RosterExtraGroup } from "./rosterExtras";
+import { shortsEpisodeScopeOf } from "./shortsEpisodeCast";
 import { SUNNY_BANKS_CAST } from "./sunnyBanks";
 import {
   flushSkidmarksSessionNow,
@@ -207,11 +208,16 @@ export function characterDeleteBlocker(char: RosterCharacter, state: SkidmarksSt
     const slug = slugifyCharacterName(name);
     const inEpisode = (x: Parameters<typeof adultShortStarring>[0]) =>
       slugifyCharacterName(x.character.name) === slug || adultShortStarring(x).some((p) => slugifyCharacterName(p.name) === slug);
-    const saved = (adult?.saved ?? []).filter(inEpisode);
+    // A card made in one episode (2026-10-04, each Shorts episode has its
+    // own Cast) is only ever in that episode: someone with the same name
+    // in another episode is a different card.
+    const own =
+      source.kind === "extra" ? getRosterExtrasState(state)["adult-shorts"].find((x) => x.id === source.id)?.episode ?? null : null;
+    const saved = (adult?.saved ?? []).filter((x) => inEpisode(x) && (!own || x.mediaSlug === own));
     if (saved.length > 0) {
       return `${name} stars in ${plural(saved.length, "Shorts episode")} (${listTitles(saved.map((s) => s.title))}). Delete those episodes first.`;
     }
-    if (adult && inEpisode(adult)) {
+    if (adult && inEpisode(adult) && (!own || shortsEpisodeScopeOf(adult).episode === own)) {
       return `${name} is starring in the open Shorts episode. Pick someone else under Starring first.`;
     }
   }
@@ -239,6 +245,28 @@ export function characterRenameProblem(char: RosterCharacter, nextName: string, 
   return null;
 }
 
+/** Renames someone in one Shorts episode only (the open editor when it is
+ * that episode, and that episode's saved card): Starring, the lead, each
+ * shot's "In this shot" picks and a talking shot's speaker. */
+function renameShortsPersonInEpisode(episode: string, oldName: string, name: string): void {
+  const rename = <T extends { character: { name: string }; starring?: { name: string }[]; shots: { castNames?: string[]; speakerName?: string }[] }>(
+    x: T,
+  ): T => ({
+    ...x,
+    character: sameAdultShortPerson(x.character.name, oldName) ? { ...x.character, name } : x.character,
+    ...(x.starring ? { starring: x.starring.map((p) => (sameAdultShortPerson(p.name, oldName) ? { ...p, name } : p)) } : {}),
+    shots: x.shots.map((sh) => ({
+      ...sh,
+      ...(sh.castNames ? { castNames: sh.castNames.map((n) => (sameAdultShortPerson(n, oldName) ? name : n)) } : {}),
+      ...(sh.speakerName && sameAdultShortPerson(sh.speakerName, oldName) ? { speakerName: name } : {}),
+    })),
+  });
+  patchAdultShorts((st) => {
+    const open = shortsEpisodeScopeOf(st).episode === episode;
+    return { ...(open ? rename(st) : st), saved: st.saved.map((sv) => (sv.mediaSlug === episode ? rename(sv) : sv)) };
+  });
+}
+
 /**
  * Renames one character everywhere its name is kept, and saves it on
  * its own `deck_items` row. Keeps its id, pictures, plates and LoRA.
@@ -253,9 +281,15 @@ export function renameRosterCharacter(char: RosterCharacter, nextName: string): 
   let nextKey = char.sourceKey;
 
   switch (source.kind) {
-    case "extra":
+    case "extra": {
       patchRosterExtras((st) => ({ ...st, [source.group]: st[source.group].map((x) => (x.id === source.id ? { ...x, name } : x)) }));
+      // A Shorts card made in an episode (2026-10-04): the rename follows
+      // it into that episode's Starring and shots, and nowhere else.
+      const episode =
+        source.group === "adult-shorts" ? getRosterExtrasState(state)["adult-shorts"].find((x) => x.id === source.id)?.episode : undefined;
+      if (episode) renameShortsPersonInEpisode(episode, char.name, name);
       break;
+    }
     case "member":
       renameSkidmarksMember(source.bandId, source.memberId, name);
       break;

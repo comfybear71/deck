@@ -29,29 +29,27 @@ import {
   setDeckLocationPicture,
 } from "@/lib/locationEdits";
 import { uploadLocationPicture } from "@/lib/locationPicture";
-import {
-  getDeckLocationsState,
-  getSkidmarksSnapshot,
-  pinSkidmarksEpisodeFolder,
-  subscribeSkidmarks,
-  type SkidmarksState,
-} from "@/lib/skidmarks";
-import { openSkidmarksEpisodeScopeIn, skidmarksEpisodeLocations } from "@/lib/skidmarksEpisodeCast";
+import { getDeckLocationsState, getSkidmarksSnapshot, subscribeSkidmarks, type SkidmarksState } from "@/lib/skidmarks";
+import { episodeLocationGenre, episodeNameFirstMessage, episodeOwnLocations } from "@/lib/episodeCast";
+import { openEpisodeScopeIn } from "@/lib/episodeScopes";
+import { pinOpenEpisodeFolder } from "@/lib/episodeFolders";
 import { TILE_CORNER_BUTTON_SHAPE_CLASS, TrashGlyph } from "./TileCornerGlyphs";
 
 type Notice = { text: string; tone: "error" | "warn" | "busy" } | null;
 
 /** The places on a genre's row: its saved list (or built-ins), or for
- * Skidmarks only the open episode's own (2026-10-04). */
+ * Skidmarks and Shorts only the open episode's own (2026-10-04,
+ * `lib/episodeCast.ts`). */
 export function locationsOnRow(genre: DeckLocationGenre, snapshot: SkidmarksState): DeckLocation[] {
-  if (genre === "skidmarks") return skidmarksEpisodeLocations(getDeckLocationsState(snapshot), openSkidmarksEpisodeScopeIn(snapshot));
+  const perEpisode = episodeLocationGenre(genre);
+  if (perEpisode) return episodeOwnLocations(getDeckLocationsState(snapshot), perEpisode, openEpisodeScopeIn(snapshot, perEpisode));
   return effectiveDeckLocations(getDeckLocationsState(snapshot), genre);
 }
 
 export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
   const snapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
-  // Skidmarks (2026-10-04): each episode has its own Locations, so the
-  // row shows only the open episode's (`lib/skidmarksEpisodeCast.ts`).
+  // Skidmarks and Shorts (2026-10-04): each episode has its own
+  // Locations, so the row shows only the open episode's (`lib/episodeCast.ts`).
   const list = locationsOnRow(genre, snapshot);
   const [openId, setOpenId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -89,13 +87,15 @@ export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
   };
 
   const add = async () => {
-    // A Skidmarks place belongs to the open episode: its folder is pinned
-    // first (the episode needs a name), then names only clash within it.
+    // A Skidmarks or Shorts place belongs to the open episode: its folder
+    // is pinned first (the episode needs a name), then names only clash
+    // within it.
     let scope: { episode?: string | null; nameScope?: readonly DeckLocation[] } = {};
-    if (genre === "skidmarks") {
-      const episode = pinSkidmarksEpisodeFolder();
+    const perEpisode = episodeLocationGenre(genre);
+    if (perEpisode) {
+      const episode = pinOpenEpisodeFolder(perEpisode);
       if (!episode) {
-        setNotice({ text: "Give the episode a name first (the # EPISODE: line), then add its locations.", tone: "error" });
+        setNotice({ text: episodeNameFirstMessage(perEpisode, "locations"), tone: "error" });
         return;
       }
       scope = { episode, nameScope: locationsOnRow(genre, getSkidmarksSnapshot()) };
@@ -151,7 +151,7 @@ export default function LocationsRow({ genre }: { genre: DeckLocationGenre }) {
     cancelRename.current = false;
     setNameDraft(null);
     if (draft === null || draft.trim() === loc.name) return;
-    const result = renameDeckLocation(genre, loc.id, draft, genre === "skidmarks" ? list : undefined);
+    const result = renameDeckLocation(genre, loc.id, draft, episodeLocationGenre(genre) ? list : undefined);
     if (!result.ok) setNotice({ text: result.error, tone: "error" });
     else {
         setNotice(null);

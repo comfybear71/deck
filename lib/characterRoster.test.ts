@@ -34,6 +34,10 @@ function stateWith(extra: Partial<SkidmarksState> = {}): SkidmarksState {
   return { ...getSkidmarksSnapshot(), skidmarksStudio: pilotOpenSkidmarksStudio(), ...extra };
 }
 
+
+/** One of the older Shorts episodes (saved before 2026-10-04, `lib/shortsEpisodeCast.ts`). */
+const OLDER_SHORT = { id: "short_old_ep01", title: "EP01", savedAt: "2026-09-29T00:00:00Z", character: { name: "", look: "", referenceUrls: [] }, shots: [{ id: "sh0", action: "walks in" }] };
+
 describe("buildCharacterRoster", () => {
   it("groups the seeded cast: Jack and Nova in music video, the Sunny Banks locks, no Skidmarks cast yet", () => {
     const r = buildCharacterRoster(stateWith());
@@ -372,6 +376,8 @@ describe("Adult shorts group", () => {
         character: current,
         shots: [],
         saved: saved.map((c, i) => ({ id: `s${i}`, title: `Short ${i}`, savedAt: "2026-09-29T00:00:00Z", character: c, shots: [{ id: `sh${i}`, action: "walks in" }] })),
+        // One of the older episodes is open (2026-10-04: a new episode has its own, empty Cast).
+        currentSavedId: saved.length ? "s0" : null,
       } as unknown as SkidmarksState["adultShorts"],
     });
 
@@ -390,7 +396,8 @@ describe("Adult shorts group", () => {
   });
 
   it("still refuses under-18 wording", () => {
-    const r = buildCharacterRoster(adultState(true, { name: "Kid", look: "a teen girl", referenceUrls: [] }))["adult-shorts"];
+    const kid = { name: "Kid", look: "a teen girl", referenceUrls: [] };
+    const r = buildCharacterRoster(adultState(true, kid, [kid]))["adult-shorts"];
     expect(r[0].blockedReason).toMatch(/under 18/);
   });
 });
@@ -433,7 +440,8 @@ describe("Added characters (+ Add a character in every group)", () => {
 
   it("Adult shorts added characters stay hidden until the 18+ confirm, then show as photo", () => {
     const extras = { "music-video": [], "sunny-banks": [], "adult-shorts": [extra("c", "Vera", ["https://x.com/v.jpg"])] };
-    const base = { character: { name: "", look: "", referenceUrls: [] }, shots: [], saved: [] };
+    // An older episode open: everyone added before 2026-10-04 is on its Cast row.
+    const base = { character: { name: "", look: "", referenceUrls: [] }, shots: [], saved: [OLDER_SHORT], currentSavedId: OLDER_SHORT.id };
     const hidden = buildCharacterRoster(
       stateWith({ rosterExtras: extras, adultShorts: { ...base, ageConfirmed: false } as unknown as SkidmarksState["adultShorts"] }),
     );
@@ -524,7 +532,7 @@ describe("Sunny Banks not ready", () => {
 
 describe("Skye is a Shorts character", () => {
   it("shows in Shorts (once 18+ is ticked), linked to her card, and nowhere else", () => {
-    const base = { character: { name: "", look: "", referenceUrls: [] }, shots: [], saved: [] };
+    const base = { character: { name: "", look: "", referenceUrls: [] }, shots: [], saved: [OLDER_SHORT], currentSavedId: OLDER_SHORT.id };
     const hidden = buildCharacterRoster(stateWith({ adultShorts: { ...base, ageConfirmed: false } as unknown as SkidmarksState["adultShorts"] }));
     expect(Object.values(hidden).flat().some((c) => c.name === "Skye")).toBe(false);
     const shown = buildCharacterRoster(stateWith({ adultShorts: { ...base, ageConfirmed: true } as unknown as SkidmarksState["adultShorts"] }));

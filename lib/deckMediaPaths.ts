@@ -178,6 +178,12 @@ export function skidmarksEpisodeCharacterOwner(episodeSlug: string, characterSlu
   };
 }
 
+/** A Shorts Cast card made in an episode (2026-10-04): with that
+ * episode's clips, `deck/shorts/episodes/<episode>/characters/<char>`. */
+export function shortsEpisodeCharacterOwner(episodeSlug: string, characterSlug: string): DeckMediaOwner {
+  return { folder: `${adultShortFolder(episodeSlug)}/characters/${characterSlug}`, fileSlug: characterSlug };
+}
+
 export const DECK_GENRES: readonly DeckGenre[] = ["sunnybank", "music-video", "skidmarks", "shorts"];
 
 export function isDeckGenre(value: unknown): value is DeckGenre {
@@ -231,12 +237,13 @@ export function characterMediaSlug(cardSlug: string, name = ""): string {
 export function characterMediaOwner(
   card: { slug: string; name: string; sourceKey: string | null | undefined },
   memberSlug: (memberId: string) => string | null,
-  /** Skidmarks (2026-10-04): the episode a Cast card belongs to, by cast
-   * id (`"new"` = a card about to be made in the open episode). A card
-   * with an episode keeps its files with that episode:
-   * `deck/skidmarks/episodes/<episode>/characters/<char>/…`. Cards from
-   * before then (no episode) keep `deck/skidmarks/characters/<char>/…`. */
-  skidmarksEpisode: (castId: string) => string | null = () => null,
+  /** Skidmarks and Shorts (2026-10-04, each episode has its own Cast):
+   * the episode a Cast card belongs to, by its id in that genre (`"new"`
+   * = a card about to be made in the open episode). A card with an
+   * episode keeps its files with that episode:
+   * `deck/<genre>/episodes/<episode>/characters/<char>/…`. Cards from
+   * before then (no episode) keep `deck/<genre>/characters/<char>/…`. */
+  episodeOf: (castId: string, genre: "skidmarks" | "shorts") => string | null = () => null,
 ): DeckMediaOwner {
   const slug = characterMediaSlug(card.slug, card.name);
   const key = typeof card.sourceKey === "string" ? card.sourceKey : "";
@@ -248,8 +255,12 @@ export function characterMediaOwner(
     case "sbx":
       return deckCharacterOwner("sunnybank", slug);
     case "sk": {
-      const episode = rest ? skidmarksEpisode(rest) : null;
+      const episode = rest ? episodeOf(rest, "skidmarks") : null;
       return isSafeDeckMediaSlug(episode) ? skidmarksEpisodeCharacterOwner(episode, slug) : deckCharacterOwner("skidmarks", slug);
+    }
+    case "asx": {
+      const episode = rest ? episodeOf(rest, "shorts") : null;
+      return isSafeDeckMediaSlug(episode) ? shortsEpisodeCharacterOwner(episode, slug) : deckCharacterOwner("shorts", slug);
     }
     case "mv":
       return deckCharacterOwner("music-video", (rest && memberSlug(rest)) || slug);

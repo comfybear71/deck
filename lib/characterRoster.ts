@@ -27,6 +27,8 @@ import { ROSTER_EXTRA_GROUPS, normalizeRosterExtrasState, rosterExtraSourceKey, 
 import { resolveMemberStillSleeve } from "./memberStillSleeve";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
 import type { SkidmarksState } from "./skidmarks";
+import { isInEpisode, type EpisodeScope } from "./episodeCast";
+import { openShortsEpisodeScopeIn, isOlderShortsEpisode } from "./shortsEpisodeCast";
 import { openSkidmarksEpisodeScopeIn, skidmarksEpisodeCast } from "./skidmarksEpisodeCast";
 import { normalizeSkidmarksEpisodesState } from "./skidmarksEpisodes";
 import { SUNNY_BANKS_CAST, resolveSunnyBanksStartImage, type SunnyBanksCharacterLock } from "./sunnyBanks";
@@ -81,7 +83,10 @@ export const ROSTER_HIDDEN_NAMES: ReadonlySet<string> = new Set(["hans"]);
 
 export function buildCharacterRoster(
   state: SkidmarksState,
-  opts: { everySkidmarksEpisode?: boolean } = {},
+  /** `everyEpisode`: every Skidmarks and Shorts episode's Cast at once, for
+   * code that must still find a card from another episode (a training
+   * already running). The rows themselves show only the open episode's. */
+  opts: { everyEpisode?: boolean } = {},
 ): Record<RosterGroup, RosterCharacter[]> {
   const out: Record<RosterGroup, RosterCharacter[]> = { "music-video": [], "sunny-banks": [], skidmarks: [], "adult-shorts": [] };
 
@@ -131,9 +136,9 @@ export function buildCharacterRoster(
   const episodes = normalizeSkidmarksEpisodesState(state.skidmarksEpisodes);
   // Each Skidmarks episode has its own Cast (2026-10-04): the Cast row
   // shows only the open episode's (`lib/skidmarksEpisodeCast.ts`), so a
-  // new episode starts empty. `everySkidmarksEpisode` is for code that
-  // must still find a card from another episode (a training already running).
-  const skidmarksCast = opts.everySkidmarksEpisode
+  // new episode starts empty. `everyEpisode` is for code that must still
+  // find a card from another episode (a training already running).
+  const skidmarksCast = opts.everyEpisode
     ? (episodes?.cast ?? [])
     : skidmarksEpisodeCast(episodes?.cast ?? [], openSkidmarksEpisodeScopeIn(state));
   for (const c of skidmarksCast) {
@@ -154,14 +159,24 @@ export function buildCharacterRoster(
     });
   }
 
-  // Adult shorts: the character currently in the editor, once the 18+
+  // Adult shorts: the people starring in its episodes, once the 18+
   // confirm is ticked. Trained like any real-looking character, and the
   // training pictures stay fully clothed (see the prompt builders).
-  // Every character from the saved shorts too (newest first), one tile per name.
+  // Each Shorts episode has its own Cast (2026-10-04, `lib/episodeCast.ts`):
+  // these tiles come from the older episodes (EP01, EP02) and show only on
+  // them; a new episode's Cast is only what was added to it.
   const adult = normalizeAdultShortsState(state.adultShorts);
-  // Everyone starring, in the open episode and every saved one (2026-09-30: more than one can star).
+  const openShorts = openShortsEpisodeScopeIn(state);
+  const shortsScope: EpisodeScope | null = opts.everyEpisode ? null : openShorts;
+  const inShorts = (item: { id?: string; episode?: string | null }) => !shortsScope || isInEpisode(item, shortsScope);
+  // The older episodes' people: on the older episodes' Cast row only.
+  const olderCards = adult && inShorts({}) ? adult.saved.filter((sv) => isOlderShortsEpisode(sv)) : [];
+  // The editor is the open card's live copy: its people count when that
+  // card is one of the older episodes.
+  const editorPeople = adult && openShorts.legacy ? [adult.character, ...adultShortStarring(adult)] : [];
+  // Everyone starring, in the open episode and every older one (2026-09-30: more than one can star).
   const adultChars = adult?.ageConfirmed
-    ? [adult.character, ...adultShortStarring(adult), ...adult.saved.flatMap((sv) => [sv.character, ...adultShortStarring(sv)])]
+    ? [...editorPeople, ...olderCards.flatMap((sv) => [sv.character, ...adultShortStarring(sv)])]
     : [];
   const seenAdult = new Set<string>();
   for (const ac of adultChars) {
@@ -210,7 +225,8 @@ export function buildCharacterRoster(
   for (const g of ROSTER_EXTRA_GROUPS) {
     // Adult shorts stay hidden until the 18+ confirm is ticked, like the editor character.
     if (g === "adult-shorts" && !adult?.ageConfirmed) continue;
-    for (const extra of extras?.[g] ?? []) {
+    const groupExtras = extras?.[g] ?? [];
+    for (const extra of g === "adult-shorts" ? groupExtras.filter(inShorts) : groupExtras) {
       const cardName = cardNameByKey.get(rosterExtraSourceKey(g, extra.id));
       const x = cardName ? { ...extra, name: cardName } : extra;
       const slug = slugifyCharacterName(x.name);
@@ -239,11 +255,15 @@ export function buildCharacterRoster(
   // Shorts characters that live only as a LoRA card (Skye, `asx:skye`):
   // one tile each, the same as any other genre's characters, once the
   // 18+ confirm is ticked. Anyone already shown above is skipped.
-  if (adult?.ageConfirmed) {
+  // A card from before 2026-10-04 belongs to the older episodes; a card
+  // for a character added to an episode shows with that character above.
+  const addedShortsKeys = new Set((extras?.["adult-shorts"] ?? []).map((x) => rosterExtraSourceKey("adult-shorts", x.id)));
+  if (adult?.ageConfirmed && inShorts({})) {
     const cards = (state.characterLoras ?? emptyCharacterLorasState()).characters;
     for (const card of cards) {
       const key = card.sourceKey ?? "";
       if (!/^asx?:/.test(key) || out["adult-shorts"].some((c) => c.sourceKey === key)) continue;
+      if (addedShortsKeys.has(key) && shortsScope) continue;
       const slug = slugifyCharacterName(card.name);
       if (out["adult-shorts"].some((c) => slugifyCharacterName(c.name) === slug)) continue;
       const pictures = [card.referenceUrl, ...card.trainingImageUrls].filter((u): u is string => Boolean(u));

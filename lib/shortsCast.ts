@@ -14,6 +14,10 @@
  * her Cast card's pictures first, main face first (2026-09-30, the
  * "From 1/2/3" picker is gone), then any of the episode's own she
  * doesn't have there. Nothing here writes anything.
+ *
+ * Each Shorts episode has its own Cast (2026-10-04, `lib/episodeCast.ts`):
+ * the Cast row and "Starring" show only the open episode's people. The
+ * older episodes (EP01, EP02) read exactly as before.
  */
 
 import {
@@ -28,6 +32,7 @@ import {
 } from "./adultShorts";
 import { emptyCharacterLorasState, normalizeElevenLabsVoiceId, slugifyCharacterName } from "./characterLoras";
 import { buildCharacterRoster, entryForRosterCharacter, type RosterCharacter } from "./characterRoster";
+import { openShortsEpisodeScopeIn } from "./shortsEpisodeCast";
 import type { SkidmarksState } from "./skidmarks";
 import { resolveShotCast, sameShotCastName, type ShotCast } from "./shotCast";
 
@@ -37,7 +42,8 @@ function usablePicture(u: unknown): u is string {
   return typeof u === "string" && /^(https:|data:image\/)/.test(u);
 }
 
-/** The Shorts Cast row, in the same order it's shown (empty until the 18+ confirm). */
+/** The Shorts Cast row, in the same order it's shown (empty until the 18+
+ * confirm): only the open episode's own people (2026-10-04). */
 export function shortsCastList(state: SkidmarksState): RosterCharacter[] {
   return buildCharacterRoster(state)["adult-shorts"];
 }
@@ -68,7 +74,8 @@ export function shortsCharacterFromCast(c: Pick<RosterCharacter, "name" | "look"
  */
 export function resolveShortsRenderCharacter(state: SkidmarksState): AdultShortsCharacter {
   const adult = normalizeAdultShortsState(state.adultShorts);
-  const lead = resolvePerson(state, adult?.character ?? EMPTY, Boolean(adult?.ageConfirmed));
+  const own = adult && adult.ageConfirmed && !openShortsEpisodeScopeIn(state).legacy ? (shortsEpisodeStarringList(state)[0] ?? EMPTY) : (adult?.character ?? EMPTY);
+  const lead = resolvePerson(state, own, Boolean(adult?.ageConfirmed));
   return { name: lead.name, look: lead.look, referenceUrls: lead.referenceUrls };
 }
 
@@ -101,7 +108,23 @@ function resolvePerson(state: SkidmarksState, own: AdultShortsCharacter, confirm
 export function resolveShortsStarring(state: SkidmarksState): AdultShortsPerson[] {
   const adult = normalizeAdultShortsState(state.adultShorts);
   if (!adult) return [];
-  return adultShortStarring(adult).map((p) => resolvePerson(state, p, adult.ageConfirmed));
+  return shortsEpisodeStarringList(state).map((p) => resolvePerson(state, p, adult.ageConfirmed));
+}
+
+/**
+ * Who's starring in the open episode, as saved on it (2026-10-04). An
+ * older episode (EP01, EP02) reads exactly as before. In any other episode
+ * only people on its own Cast row count, so someone from another episode's
+ * Cast never stars here (and "Starring" can be empty: no one is forced).
+ * Nothing is written; the next tap on "Starring" saves the shorter list.
+ */
+export function shortsEpisodeStarringList(state: SkidmarksState): AdultShortsCharacter[] {
+  const adult = normalizeAdultShortsState(state.adultShorts);
+  if (!adult) return [];
+  const list = adultShortStarring(adult);
+  if (!adult.ageConfirmed || openShortsEpisodeScopeIn(state).legacy) return list;
+  const cast = shortsCastList(state).map((c) => slugifyCharacterName(c.name));
+  return list.filter((p) => cast.includes(slugifyCharacterName(p.name)));
 }
 
 /**

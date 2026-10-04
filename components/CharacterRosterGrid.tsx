@@ -51,10 +51,12 @@ import {
   patchRosterExtras,
   patchSkidmarksEpisodes,
   MAX_MEMBERS_PER_BAND,
+  getSkidmarksSnapshot,
   type SkidmarksState,
-  getOpenSkidmarksEpisodeFolder,
-  pinSkidmarksEpisodeFolder,
 } from "@/lib/skidmarks";
+import { episodeNameFirstMessage, isEpisodeCastGenre, isInEpisode } from "@/lib/episodeCast";
+import { openEpisodeScopeIn } from "@/lib/episodeScopes";
+import { getOpenEpisodeFolder, pinOpenEpisodeFolder } from "@/lib/episodeFolders";
 import { normalizeAdultShortsState } from "@/lib/adultShorts";
 import { CharacterProfileFields } from "./CharacterProfileFields";
 import {
@@ -340,9 +342,9 @@ export function CharacterRosterGrid({
   const voiceAudio = useRef<HTMLAudioElement | null>(null);
 
   const adultConfirmed = Boolean(normalizeAdultShortsState(snapshot.adultShorts)?.ageConfirmed);
-  // Every Skidmarks episode's Cast, so a training that's already running
+  // Every Skidmarks and Shorts episode's Cast, so a training that's already running
   // keeps finding its character after another episode is opened (2026-10-04).
-  const everyRoster = useMemo(() => buildCharacterRoster(snapshot, { everySkidmarksEpisode: true }), [snapshot]);
+  const everyRoster = useMemo(() => buildCharacterRoster(snapshot, { everyEpisode: true }), [snapshot]);
   const allChars = useMemo(() => ROSTER_GROUPS.flatMap((g) => everyRoster[g.id]), [everyRoster]);
   const charByKey = useMemo(() => new Map(allChars.map((c) => [c.sourceKey, c])), [allChars]);
 
@@ -1351,18 +1353,25 @@ export function CharacterRosterGrid({
       }
       // A new card belongs to the open episode (2026-10-04, each Skidmarks
       // episode has its own Cast); `addCharacters` pinned its folder first.
-      const episode = getOpenSkidmarksEpisodeFolder();
+      const episode = getOpenEpisodeFolder("skidmarks");
       const member = buildSkidmarksCastMember(name, look, "supporting", Date.now(), undefined, { pictureUrls: urls, isAnimal, episode });
       patchSkidmarksEpisodes((st) => ({ ...st, cast: [...st.cast, member] }));
       return `sk:${member.id}`;
     }
     if (!isRosterExtraGroup(group)) return "";
     const g: RosterExtraGroup = group;
-    const already = getRosterExtrasState()[g].find((x) => slugifyCharacterName(x.name) === slug);
+    // Shorts (2026-10-04, each episode has its own Cast): only the open
+    // episode's people are matched by name, and a new one is tagged with
+    // the episode (`addCharacters` pinned its folder first).
+    const shortsScope = g === "adult-shorts" ? openEpisodeScopeIn(getSkidmarksSnapshot(), "adult-shorts") : null;
+    const already = getRosterExtrasState()[g].find(
+      (x) => slugifyCharacterName(x.name) === slug && (!shortsScope || isInEpisode(x, shortsScope)),
+    );
     if (already) {
       patchRosterExtras((st) => ({ ...st, [g]: st[g].map((x) => (x.id === already.id ? addPicturesToRosterExtra(x, urls, isAnimal) : x)) }));
     } else {
-      const c = buildRosterExtraCharacter(name, look, { pictureUrls: urls, isAnimal });
+      const episode = g === "adult-shorts" ? getOpenEpisodeFolder("adult-shorts") : null;
+      const c = buildRosterExtraCharacter(name, look, { pictureUrls: urls, isAnimal, episode });
       patchRosterExtras((st) => ({ ...st, [g]: [...st[g], c] }));
       // A built-in character with this name (a band member, a Sunnybank
       // regular) keeps their own tile; the pictures just join them.
@@ -1373,8 +1382,10 @@ export function CharacterRosterGrid({
 
   const addCharacters = async () => {
     if (!canAddCast || !addGroup) return;
-    if (addGroup === "skidmarks" && !pinSkidmarksEpisodeFolder()) {
-      setMessage((m) => ({ ...m, "add-cast": "Give the episode a name first (the # EPISODE: line), then add its characters." }));
+    // Skidmarks and Shorts (2026-10-04): a new card belongs to the open
+    // episode, so the episode needs a name (its folder is pinned here).
+    if (isEpisodeCastGenre(addGroup) && !pinOpenEpisodeFolder(addGroup)) {
+      setMessage((m) => ({ ...m, "add-cast": episodeNameFirstMessage(addGroup, "characters") }));
       return;
     }
     if (!hasUploads) {

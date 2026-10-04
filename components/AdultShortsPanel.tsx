@@ -18,7 +18,6 @@ import {
   adultShortEpisodeNumbers,
   adultShortIsAdult,
   adultShortShotPeople,
-  adultShortStarring,
   sameAdultShortPerson,
   setAdultShortStarring,
   ADULT_SHORTS_MAX_STARRING,
@@ -48,6 +47,7 @@ import {
 import {
   resolveShortsStarring,
   shortsCastList,
+  shortsEpisodeStarringList,
   shortsCastPictures,
   shortsCharacterFromCast,
   shortsPlateReferences,
@@ -117,7 +117,9 @@ export function AdultShortsPanel() {
   const { shots } = state;
   // Everyone starring, each read through their own Cast card (main face first).
   const starringPeople = resolveShortsStarring(snapshot);
-  const starringList = adultShortStarring(state);
+  // Only the open episode's own Cast can star (2026-10-04, each Shorts
+  // episode has its own Cast); EP01 and EP02 read exactly as before.
+  const starringList = shortsEpisodeStarringList(snapshot);
   const cast = shortsCastList(snapshot);
   const isAdult = adultShortIsAdult(state);
   const [openShotId, setOpenShotId] = useState<string | null>(null);
@@ -197,7 +199,7 @@ export function AdultShortsPanel() {
     const c = cast.find((x) => x.sourceKey === key);
     if (!c || c.blockedReason) return;
     patchAdultShorts((st) => {
-      const now = adultShortStarring(st);
+      const now = shortsEpisodeStarringList({ ...getSkidmarksSnapshot(), adultShorts: st });
       const on = now.some((p) => sameAdultShortPerson(p.name, c.name));
       const next = on ? now.filter((p) => !sameAdultShortPerson(p.name, c.name)) : [...now, shortsCharacterFromCast(c)];
       return setAdultShortStarring(st, next);
