@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   getSkidmarksEpisodesState,
   getSkidmarksSnapshot,
@@ -26,6 +26,12 @@ import {
   type SkidmarksCastRole,
   type SkidmarksEpisode,
 } from "@/lib/skidmarksEpisodes";
+import {
+  importLegacyEpisodes,
+  legacyImportOrder,
+  previewLegacyEpisodes,
+  type LegacyEpisodeSource,
+} from "@/lib/skidmarksLegacyImport";
 
 /**
  * Skidmarks episodes workspace (stage 1, 2026-09-27) — what the Skidmarks
@@ -34,8 +40,9 @@ import {
  * cards, with a one-tap tag bar for `[Character: look]` / `[Location:]`.
  *
  * Stage 1 is scripts + cast names only. Nothing on this screen calls a
- * paid API. Locked faces/voices (stage 2), plates (stage 3) and the old
- * Skidmarks import come in later draft PRs.
+ * paid API. Locked faces/voices (stage 2) and plates (stage 3) come in
+ * later draft PRs. "Import old episodes" copies the old Skidmarks app's
+ * episodes in (read-only GET, see `lib/skidmarksLegacyImport.ts`).
  */
 
 type Tab = "episodes" | "cast" | "plates" | "library";
@@ -127,6 +134,7 @@ function EpisodesTab({ onOpen }: { onOpen: (id: string) => void }) {
   const snapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const state = getSkidmarksEpisodesState(snapshot);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const sorted = useMemo(() => [...state.episodes].sort((a, b) => b.updatedAt - a.updatedAt), [state.episodes]);
 
   const create = () => {
@@ -152,6 +160,17 @@ function EpisodesTab({ onOpen }: { onOpen: (id: string) => void }) {
       <p className="-mt-1 text-center text-[11px] text-white/45">
         Starts from the template: 9 beats, intro and outro, and an opening plate line
       </p>
+      {importing ? (
+        <LegacyImportSheet onClose={() => setImporting(false)} />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setImporting(true)}
+          className="rounded-xl border border-white/15 py-2.5 text-center text-[13px] text-white/75 transition-colors hover:bg-white/[0.05] hover:text-white"
+        >
+          Import old episodes
+        </button>
+      )}
 
       {sorted.length === 0 && (
         <p className="py-6 text-center text-xs text-white/40">No episodes yet.</p>
@@ -212,6 +231,140 @@ function EpisodesTab({ onOpen }: { onOpen: (id: string) => void }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+type ImportLoad =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; sources: LegacyEpisodeSource[] };
+
+/**
+ * Lists the old Skidmarks app's episodes with ticks. Import copies the
+ * ticked ones in as nine-beat episodes plus their cast. Read-only on the
+ * old app; nothing here spends money.
+ */
+function LegacyImportSheet({ onClose }: { onClose: () => void }) {
+  const snapshot = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
+  const state = getSkidmarksEpisodesState(snapshot);
+  const [load, setLoad] = useState<ImportLoad>({ status: "loading" });
+  const [picked, setPicked] = useState<Set<string> | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/skidmarks/legacy-episodes", { cache: "no-store" })
+      .then(async (res) => {
+        const body = (await res.json().catch(() => ({}))) as { episodes?: LegacyEpisodeSource[]; error?: string };
+        if (!res.ok) throw new Error(body.error || `Error ${res.status}`);
+        return legacyImportOrder(body.episodes ?? []);
+      })
+      .then((sources) => {
+        if (!cancelled) setLoad({ status: "ready", sources });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoad({ status: "error", message: err instanceof Error ? err.message : String(err) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const previews = useMemo(
+    () => (load.status === "ready" ? previewLegacyEpisodes(load.sources, state) : []),
+    [load, state]
+  );
+  // Default ticks: everything with shots that isn't already in Deck.
+  const ticks = picked ?? new Set(previews.filter((p) => !p.alreadyImported && !p.isEmpty).map((p) => p.folderName));
+  const tickCount = previews.filter((p) => ticks.has(p.folderName) && !p.alreadyImported).length;
+
+  const toggle = (folder: string) => {
+    const next = new Set(ticks);
+    if (next.has(folder)) next.delete(folder);
+    else next.add(folder);
+    setPicked(next);
+  };
+
+  const runImport = () => {
+    if (load.status !== "ready") return;
+    let result = { imported: 0, skipped: 0 };
+    patchSkidmarksEpisodes((s) => {
+      const r = importLegacyEpisodes(load.sources, ticks, s);
+      result = { imported: r.imported, skipped: r.skipped };
+      return r.state;
+    });
+    setPicked(new Set());
+    setDone(`Imported ${result.imported} episode${result.imported === 1 ? "" : "s"}.`);
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3" aria-label="Import old episodes">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold text-white">Old Skidmarks episodes</p>
+        <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-xs text-white/60 hover:text-white">
+          Hide
+        </button>
+      </div>
+      <p className="text-[11px] leading-relaxed text-white/50">
+        Copies them in from the old Skidmarks app, which stays untouched. Shots are spread across beats 1 to 9 in their
+        original order, with their plates and lines. Nothing is spent.
+      </p>
+
+      {load.status === "loading" && <p className="py-4 text-center text-xs text-white/50">Reading the old app…</p>}
+      {load.status === "error" && <p className="py-3 text-center text-xs text-red-300">{load.message}</p>}
+
+      {previews.map((p) => {
+        const checked = ticks.has(p.folderName) && !p.alreadyImported;
+        return (
+          <label
+            key={p.folderName}
+            className={[
+              "flex items-start gap-3 rounded-xl px-2.5 py-2",
+              p.alreadyImported ? "opacity-50" : "hover:bg-white/[0.04]",
+            ].join(" ")}
+          >
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 flex-none accent-amber-400"
+              checked={checked}
+              disabled={p.alreadyImported}
+              onChange={() => toggle(p.folderName)}
+              aria-label={`Import ${p.title}`}
+            />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate text-[13px] font-semibold text-white">{p.title}</span>
+              <span className="text-[11px] text-white/50">
+                {p.alreadyImported
+                  ? "Already in Deck"
+                  : p.isEmpty
+                    ? "Empty in the old app"
+                    : `${p.shotCount} shots · ${p.plateCount} plates · ${p.lineCount} lines`}
+              </span>
+              {!p.alreadyImported && !p.isEmpty && (
+                <span className="mt-1 text-[10px] text-white/45">
+                  {p.antiheroName ? `Antihero: ${p.antiheroName}` : "No antihero (pick one after import)"}
+                  {p.castNames.length > 0 ? ` · ${p.castNames.length} cast` : ""}
+                </span>
+              )}
+            </span>
+          </label>
+        );
+      })}
+
+      {load.status === "ready" && (
+        <button
+          type="button"
+          onClick={runImport}
+          disabled={tickCount === 0}
+          className="mt-1 rounded-xl bg-amber-400 py-2.5 text-center text-sm font-bold text-black transition-colors hover:bg-amber-300 disabled:bg-white/10 disabled:text-white/40"
+        >
+          {tickCount === 0 ? "Nothing ticked" : `Import ${tickCount} episode${tickCount === 1 ? "" : "s"}`}
+        </button>
+      )}
+      {done && <p className="text-center text-[11px] text-emerald-300">{done}</p>}
     </div>
   );
 }
