@@ -1277,6 +1277,34 @@ character data into a band row. Every band/song edit must go through
 - Follow-up (not built): speaker crop → LTX → feathered paste-back, as a
   new workflow file, for when LTX moves the wrong mouth.
 
+## Episode Extras (2026-10-04, every genre)
+
+- **One shared row:** `components/EpisodeExtrasRow.tsx`
+  (`<EpisodeExtrasRow genre=… />`), mounted in
+  `SkidmarksSunnyBanksPanel` (Sunnybank + Skidmarks), `AdultShortsPanel`
+  (Shorts) and `SkidmarksDetailSheet` (Music video). Never add a
+  genre-only copy; the only per-genre logic is which episode folder it
+  uses (`lib/episodeExtrasProject.ts`).
+- **Files:** uploaded from the browser with `@vercel/blob/client`
+  `upload()` via `/api/skidmarks/blob-upload` (`lib/episodeExtrasUpload.ts`)
+  to `deck/<genre>/episodes/<episode>/extras/<readable-slug>.<ext>`
+  (Music video `deck/music-video/songs/<song>/extras/…`). Name clash →
+  `-2`, `-3`; `allowOverwrite: false`, no random suffix. The token only
+  allows mp4/mov/webm/mp3/wav for paths under an `extras/` folder
+  (`isEpisodeExtraPathname`).
+- **Metadata:** `SkidmarksState.episodeExtras.byEpisode[<episode folder>]`
+  in the same session row as clips (DECK_DATABASE_URL), listed in
+  `SKIDMARKS_PROTECTED_STATE_KEYS`. Pure helpers in `lib/episodeExtras.ts`.
+  The extra's id is its file slug. Renaming never moves the file; delete
+  removes metadata only (the Blob file stays).
+- **Zips:** `extras/<placement-slug> - <name-slug>.<ext>`
+  (`episodeExtrasZipEntries`; "Act III" → `act-3`). Sunnybank/Skidmarks
+  via `buildSunnyBanksEpisodeBundle`, Shorts via `/api/shorts/clips-zip`
+  (`extras` in the request, URLs must be Deck Blob URLs), Music video via
+  `buildArchiveZip(song, snapshot, extras)`.
+- **Never** put extras into acts or any render request. They cost
+  nothing and must stay that way.
+
 ## PR process
 
 - Branch naming: `cursor/<descriptive-name>-<suffix>` (see `git log

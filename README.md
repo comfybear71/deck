@@ -2662,6 +2662,31 @@ now (see "Explicitly out of scope" below).
     on Sunnybank rows, Music video clips and Shorts tiles. The Cheat
     Sheet (`lib/sunnyBanksGodScriptGuide.ts`) teaches the tags.
 
+- **Episode Extras (2026-10-04, every genre)** — an "Extras" card row
+  under each episode's acts/script (Sunnybank, Skidmarks, Shorts and the
+  Music video song sheet all mount the one `components/EpisodeExtrasRow.tsx`
+  with only their genre passed in). Tap the dotted + at the end of the row
+  to pick an outside mp4 / mov / webm / mp3 / wav (a real file input, so
+  the iPhone Safari picker and the Windows file dialog both work), type a
+  readable name ("container drop") and where it goes ("Act III between 8
+  and 9"), and it uploads straight from the browser to Blob with the
+  existing client-upload route (`/api/skidmarks/blob-upload`, multipart
+  over 20 MB, up to 2 GB) to
+  `deck/<genre>/episodes/<episode>/extras/container-drop.mp4`
+  (Music video: `deck/music-video/songs/<song>/extras/…`). A name clash
+  becomes `container-drop-2`, `-3`, never a random suffix; the token
+  refuses to overwrite. The name and placement are saved in the same
+  Neon session row as the episode's clips (`episodeExtras` in the
+  session state, a protected key), so they survive reloads on every
+  device. Tap a card to play it (portal lightbox), the pencil to edit
+  the name/placement (the file is never moved), the bin twice to remove
+  it from the episode (the Blob file is kept, like deleted clips).
+  Episode zips get an `extras/` folder named
+  `extras/act-3-between-8-and-9 - container-drop.mp4`. Extras are never
+  added to acts, never rendered, and cost nothing. Limits: the Shorts zip
+  skips any single file over 200 MB (listed in `missing.txt`), and the
+  Music video zip is the Library archive zip of an archived song.
+
 ### Ask Grok + action chips (v0 stub)
 
 The Propfolio detail sheet also ships an **action chips row** and an
