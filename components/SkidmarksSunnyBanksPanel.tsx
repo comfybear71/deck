@@ -25,6 +25,7 @@ import {
   buildSunnyBanksHoldPrompt,
   buildSunnyBanksSpeakingPrompt,
   missingCastPictureMessage,
+  missingVoiceMessage,
   resolveSunnyBanksStartImage,
   SUNNY_BANKS_CAST,
   SUNNY_BANKS_DEFAULT_LOCATION_ID,
@@ -247,8 +248,9 @@ function speakerLock(name: string) {
 /** Longest name first so "Ranger Bazza" / "Unit 4S" win over a
  * shorter prefix. Keys of `SUNNY_BANKS_CAST`, not a parallel array. */
 function speakerNames(): string[] {
-  // Built-in cast plus characters added with "+" once they have a voice
-  // (Skidmarks: the Skidmarks Cast, once they have a voice).
+  // Built-in cast plus characters added with "+" (Skidmarks: the
+  // Skidmarks Cast). Since 2026-10-04 a card with no voice counts too:
+  // its `Name:` row with nothing after the colon is its silent shot.
   return sunnyBanksSpeakerNames(getSkidmarksSnapshot(), helperGenre());
 }
 
@@ -545,7 +547,8 @@ export interface SunnyBanksRenderedClip {
  * Banks' first built-in; Skidmarks' first voiced character, else nobody. */
 function fallbackCharacterName(): string {
   if (helperGenre() === "sunnybank") return CAST_LIST[0]?.name ?? "";
-  return sunnyBanksSpeakerList(getSkidmarksSnapshot(), helperGenre())[0]?.name ?? "";
+  // Voiced only: a Cast card with no voice (silent shots only) is never guessed for a line.
+  return sunnyBanksSpeakerList(getSkidmarksSnapshot(), helperGenre()).find((c) => c.voiceId)?.name ?? "";
 }
 
 function escapeRegExp(value: string): string {
@@ -2262,7 +2265,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   const tickedNames = new Set(
     showCast.filter((c) => tickedCastIds.includes(c.id)).map((c) => c.name.trim().toLowerCase())
   );
-  /** A row's character picker: the show's voiced cast (only those ticked
+  /** A row's character picker: the show's cast, voiced first (only those ticked
    * as in this episode, when any are), always with the row's own. */
   const rowSpeakerChoices = (current: string) =>
     sunnyBanksSpeakerList(studioState, genre).filter(
@@ -3284,6 +3287,11 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                         {missingCastPictureMessage(name)}
                                       </p>
                                     ))}
+                                    {!isStatic && !cutaway && row.kind === "speak" && row.character && !row.character.voiceId && (
+                                      <p role="alert" className="pt-0.5 text-[10px] leading-snug text-red-300">
+                                        {missingVoiceMessage(row.character.name)}
+                                      </p>
+                                    )}
                                     {runtime?.plateUrl && (
                                       <details className="min-w-0 pt-0.5">
                                         <summary className="cursor-pointer text-[10px] text-cyan-200/80 [-webkit-tap-highlight-color:transparent]">
