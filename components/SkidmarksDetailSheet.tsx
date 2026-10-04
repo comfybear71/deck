@@ -703,7 +703,12 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     return (
       <div className="fixed inset-0 z-50 flex bg-zinc-950" role="dialog" aria-modal="true" aria-label="Deck — Skidmarks">
         <DeckPcRail active={pcRail} onSelect={setPcRail} onClose={onClose} />
-        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        {/* overflow-clip, not overflow-hidden (2026-10-04): a hidden column
+            can still be scrolled by the browser when something inside is
+            focused, and it has no scrollbar to scroll back, so the screen
+            looked blank. A clipped one can't be scrolled at all; the
+            content scrolls in its own box below. */}
+        <div className="relative flex min-w-0 flex-1 flex-col overflow-clip">
           <div className="flex items-center justify-between gap-2 border-b border-white/10 px-5 py-3">
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold text-white">
@@ -770,7 +775,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
 
       <div
         className={[
-          "relative z-10 flex h-[92vh] w-full flex-col overflow-hidden rounded-t-3xl border border-white/10 bg-zinc-950 shadow-2xl",
+          "relative z-10 flex h-[92vh] w-full flex-col overflow-clip rounded-t-3xl border border-white/10 bg-zinc-950 shadow-2xl",
           "sm:h-auto sm:max-h-[85vh] sm:max-w-md sm:rounded-3xl",
           "animate-[sheet-in_0.22s_ease-out]",
         ].join(" ")}

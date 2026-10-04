@@ -16,6 +16,7 @@ import {
 } from "@/lib/episodeExtras";
 import { episodeExtrasProjectFor, pinEpisodeExtrasFolder } from "@/lib/episodeExtrasProject";
 import { uploadEpisodeExtra } from "@/lib/episodeExtrasUpload";
+import { EpisodeExtrasBoundary } from "@/components/EpisodeExtrasBoundary";
 import {
   addEpisodeExtra,
   editEpisodeExtra,
@@ -146,10 +147,15 @@ export function EpisodeExtrasCards({
             <span className="text-[10px] text-white/60">{uploading.percentage}%</span>
           </div>
         )}
+        {/* `relative` keeps the hidden file input inside this tile. Without
+            it the input was placed against the page's whole main column, so
+            when the + was clicked Chrome scrolled that column (which has no
+            scrollbar) to show the input, and the screen looked blank
+            (2026-10-04, Stuart on Windows Chrome). */}
         <label
           aria-label="Add an extra"
           aria-disabled={!canAdd || locked}
-          className={`flex h-28 w-28 shrink-0 touch-manipulation flex-col items-center justify-center gap-1.5 rounded-2xl border border-dashed border-white/25 bg-white/[0.02] transition-colors ${
+          className={`relative flex h-28 w-28 shrink-0 touch-manipulation flex-col items-center justify-center gap-1.5 rounded-2xl border border-dashed border-white/25 bg-white/[0.02] transition-colors ${
             !canAdd || locked ? "opacity-50" : "cursor-pointer hover:border-sky-300/40 hover:bg-sky-300/[0.04] active:scale-[0.98]"
           }`}
         >
@@ -303,6 +309,21 @@ function ExtraLightbox({ extra, onClose }: { extra: EpisodeExtra; onClose: () =>
  * `lib/episodeExtras.ts`.
  */
 export function EpisodeExtrasRow({ genre }: { genre: DeckGenre }) {
+  return (
+    <EpisodeExtrasBoundary>
+      <EpisodeExtrasRowInner genre={genre} />
+    </EpisodeExtrasBoundary>
+  );
+}
+
+/** Plain words for anything that goes wrong while adding an extra. */
+export function episodeExtraFailureText(err: unknown): string {
+  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const message = raw.replace(/\s+/g, " ").trim().slice(0, 160);
+  return `Something went wrong adding that file${message ? ` (${message})` : ""}. Nothing else was changed; try again.`;
+}
+
+function EpisodeExtrasRowInner({ genre }: { genre: DeckGenre }) {
   const state = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
   const project = episodeExtrasProjectFor(state, genre);
   const extras = episodeExtrasFor(getEpisodeExtrasState(state), project.folder);
@@ -331,31 +352,40 @@ export function EpisodeExtrasRow({ genre }: { genre: DeckGenre }) {
       setSheet(null);
       return;
     }
-    const folder = pinEpisodeExtrasFolder(getSkidmarksSnapshot(), genre);
-    if (!folder) {
-      setNotice({ text: project.blockedReason ?? "This episode has no folder yet.", tone: "warn" });
+    // Anything that throws from here on lands in the row as one plain
+    // line; it never reaches React or blanks the page (2026-10-04).
+    try {
+      const folder = pinEpisodeExtrasFolder(getSkidmarksSnapshot(), genre);
+      if (!folder) {
+        setNotice({ text: project.blockedReason ?? "This episode has no folder yet.", tone: "warn" });
+        setSheet(null);
+        return;
+      }
+      const { file, name, placement } = sheet;
       setSheet(null);
-      return;
+      setUploading({ name: name.trim(), percentage: 0 });
+      setNotice({ text: `Uploading "${name.trim()}"…`, tone: "ok" });
+      const outcome = await uploadEpisodeExtra({
+        file,
+        name,
+        placement,
+        episodeFolder: folder,
+        takenIds: episodeExtrasFor(getEpisodeExtrasState(), folder).map((x) => x.id),
+        onProgress: (percentage) => setUploading({ name: name.trim(), percentage }),
+      });
+      setUploading(null);
+      if (!outcome.ok) {
+        setNotice({ text: outcome.error, tone: "error" });
+        return;
+      }
+      addEpisodeExtra(folder, outcome.extra);
+      setNotice({ text: `Added "${outcome.extra.name}" (${outcome.extra.id}.${outcome.extra.ext}).`, tone: "ok" });
+    } catch (err) {
+      console.error("Extras upload failed", err);
+      setSheet(null);
+      setUploading(null);
+      setNotice({ text: episodeExtraFailureText(err), tone: "error" });
     }
-    const { file, name, placement } = sheet;
-    setSheet(null);
-    setUploading({ name: name.trim(), percentage: 0 });
-    setNotice({ text: `Uploading "${name.trim()}"…`, tone: "ok" });
-    const outcome = await uploadEpisodeExtra({
-      file,
-      name,
-      placement,
-      episodeFolder: folder,
-      takenIds: episodeExtrasFor(getEpisodeExtrasState(), folder).map((x) => x.id),
-      onProgress: (percentage) => setUploading({ name: name.trim(), percentage }),
-    });
-    setUploading(null);
-    if (!outcome.ok) {
-      setNotice({ text: outcome.error, tone: "error" });
-      return;
-    }
-    addEpisodeExtra(folder, outcome.extra);
-    setNotice({ text: `Added "${outcome.extra.name}" (${outcome.extra.pathname.split("/").pop()}).`, tone: "ok" });
   };
 
   const remove = (id: string) => {

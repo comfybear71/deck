@@ -41,6 +41,12 @@ export type UploadEpisodeExtraOutcome = { ok: true; extra: EpisodeExtra } | { ok
 /** The upload function, swappable in tests. */
 export type BlobClientUpload = typeof upload;
 
+/** A Blob error message, kept short enough for the Extras row. */
+function shortMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return raw.replace(/\s+/g, " ").trim().slice(0, 160);
+}
+
 export async function uploadEpisodeExtra(args: {
   file: File;
   name: string;
@@ -53,7 +59,7 @@ export async function uploadEpisodeExtra(args: {
   now?: number;
   uploadImpl?: BlobClientUpload;
 }): Promise<UploadEpisodeExtraOutcome> {
-  const { file, episodeFolder } = args;
+  const { file } = args;
   const ext = episodeExtraExtensionFor(file.name, file.type);
   if (!ext) return { ok: false, error: "That file isn't a video (mp4, mov, webm) or audio file (mp3, wav)." };
   if (file.size <= 0) return { ok: false, error: "That file is empty." };
@@ -62,6 +68,34 @@ export async function uploadEpisodeExtra(args: {
   if (!name) return { ok: false, error: "Give the extra a name first." };
   const contentType = EPISODE_EXTRA_CONTENT_TYPES[ext];
   const doUpload = args.uploadImpl ?? upload;
+  // Progress can still arrive after the upload has finished (2026-10-04:
+  // the card sat at "100%" and kept the row locked). Only report while
+  // it is running, and only real numbers 0–100.
+  let running = true;
+  const onProgress = (percentage: unknown) => {
+    if (!running || typeof percentage !== "number" || !Number.isFinite(percentage)) return;
+    args.onProgress?.(Math.min(100, Math.max(0, Math.round(percentage))));
+  };
+  try {
+    return await uploadUnderFreeName({ ...args, name, contentType, ext, doUpload, onProgress });
+  } finally {
+    running = false;
+  }
+}
+
+async function uploadUnderFreeName(args: {
+  file: File;
+  name: string;
+  placement: string;
+  episodeFolder: string;
+  takenIds: readonly string[];
+  now?: number;
+  contentType: string;
+  ext: NonNullable<ReturnType<typeof episodeExtraExtensionFor>>;
+  doUpload: BlobClientUpload;
+  onProgress: (percentage: unknown) => void;
+}): Promise<UploadEpisodeExtraOutcome> {
+  const { file, episodeFolder, name, contentType, ext, doUpload } = args;
   const tried: string[] = [];
   let slug = episodeExtraFileSlug(name, args.takenIds);
   for (let attempt = 0; attempt < MAX_NAME_TRIES; attempt++) {
@@ -72,16 +106,21 @@ export async function uploadEpisodeExtra(args: {
         handleUploadUrl: BLOB_HANDLE_UPLOAD_URL,
         contentType,
         multipart: file.size > MULTIPART_FROM_BYTES,
-        onUploadProgress: (p) => args.onProgress?.(Math.round(p.percentage)),
+        onUploadProgress: (p) => args.onProgress(p?.percentage),
       });
+      const url = typeof result?.url === "string" ? result.url : "";
+      if (!/^https:\/\//i.test(url)) {
+        return { ok: false, error: "The upload didn't come back with a file address. Nothing was saved; try again." };
+      }
       return {
         ok: true,
         extra: {
           id: slug,
           name,
           placement: cleanEpisodeExtraText(args.placement, EPISODE_EXTRA_PLACEMENT_MAX),
-          url: result.url,
-          pathname: result.pathname,
+          url,
+          // Blob always sends its pathname back; the one asked for is the same.
+          pathname: typeof result.pathname === "string" && result.pathname ? result.pathname : pathname,
           ext,
           kind: episodeExtraKind(ext),
           originalFileName: file.name.slice(0, 200),
@@ -95,7 +134,7 @@ export async function uploadEpisodeExtra(args: {
         slug = nextEpisodeExtraFileSlug(slug, [...args.takenIds, ...tried]);
         continue;
       }
-      const message = err instanceof Error ? err.message : "";
+      const message = shortMessage(err);
       return {
         ok: false,
         error: /BLOB_READ_WRITE_TOKEN|No token|not configured/i.test(message)
