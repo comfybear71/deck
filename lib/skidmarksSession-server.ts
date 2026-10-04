@@ -150,6 +150,7 @@ export const SKIDMARKS_PROTECTED_STATE_KEYS = [
   "adultShorts",
   "skidmarksEpisodes",
   "skidmarksStudio",
+  "shortsStudio",
   "locations",
   "episodeExtras",
 ] as const;

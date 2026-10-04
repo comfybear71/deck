@@ -9,6 +9,8 @@
  */
 import { effectiveDeckLocations, findDeckLocation, type DeckLocation, type DeckLocationsState } from "./deckLocations";
 import type { SkidmarksState } from "./skidmarks";
+import { episodeOwnLocations } from "./episodeCast";
+import { openShortsEpisodeScopeIn } from "./shortsEpisodeCast";
 import { openSkidmarksEpisodeScopeIn, skidmarksEpisodeLocations } from "./skidmarksEpisodeCast";
 import type { SunnyBanksLocationLock } from "./sunnyBanks";
 
@@ -33,9 +35,11 @@ export function sunnyBanksLocationList(
  * (`lib/skidmarksEpisodeCast.ts`), so a new episode starts with none.
  */
 export function studioLocationList(
-  state: Pick<SkidmarksState, "locations" | "skidmarksStudio">,
-  genre: "sunnybank" | "skidmarks" = "sunnybank",
+  state: Pick<SkidmarksState, "locations" | "skidmarksStudio" | "adultShorts" | "shortsStudio">,
+  genre: "sunnybank" | "skidmarks" | "shorts" = "sunnybank",
 ): SunnyBanksLocationLock[] {
+  // Shorts (2026-10-04): the open script episode's own places, the same rule as Skidmarks.
+  if (genre === "shorts") return episodeOwnLocations(state.locations, "adult-shorts", openShortsEpisodeScopeIn(state)).map(toLock);
   if (genre !== "skidmarks") return sunnyBanksLocationList(state.locations, genre);
   return skidmarksEpisodeLocations(state.locations, openSkidmarksEpisodeScopeIn(state)).map(toLock);
 }

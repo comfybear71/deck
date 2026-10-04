@@ -22,7 +22,7 @@ export type EpisodeRowNotice = { text: string; tone: "ok" | "warn" | "error" } |
  * round corner buttons as a band tile: the bin (top left, two taps), the
  * pencil (top right, open and jump to the editor) and the download icon
  * under it (the episode zip). Shared by Sunnybank
- * (`SunnyBanksEpisodeRow`) and Shorts (`ShortsEpisodeRow`), so both rows
+ * (`SunnyBanksEpisodeRow`) and Shorts (`ShortsEpisodesRow`), so both rows
  * look and work the same; each genre only says what its cards are and
  * what the taps do.
  */

@@ -140,6 +140,7 @@
  */
 
 import type { RowVideoBackend } from "./videoBackendRouting";
+import { ADULT_SHORTS_VIDEO_COST_USD_PER_SEC } from "./adultShorts";
 import { getSkidmarksCharacterLock, shotPromptMentionsLockedCharacter } from "./plateGeneration";
 import { NO_MUSIC_VIDEO_CAST, resolveMusicVideoShotCast } from "./musicVideoShotCast";
 import { buildSpeakerListenerText } from "./shotCast";
@@ -258,6 +259,8 @@ export function estimateGrok720pClipRenderCostUsd(durationSec: number): number {
 export function estimateRowVideoCostUsd(backend: RowVideoBackend, durationSec: number): number {
   if (backend === "grok") return estimateGrok720pClipRenderCostUsd(durationSec);
   if (backend === "h3") return estimateH3ClipRenderCostUsd(durationSec);
+  // Siray Wan 3.0 i2v (Shorts' silent rows, 2026-10-04): the rate Shorts' shot cards quote.
+  if (backend === "siray") return Math.round(ADULT_SHORTS_VIDEO_COST_USD_PER_SEC * Math.max(0, durationSec) * 100) / 100;
   return estimateLtxClipRenderCostUsd(durationSec);
 }
 

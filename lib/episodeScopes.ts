@@ -10,7 +10,7 @@ import type { SkidmarksState } from "./skidmarks";
 import { openSkidmarksEpisodeScopeIn } from "./skidmarksEpisodeCast";
 import { openShortsEpisodeScopeIn } from "./shortsEpisodeCast";
 
-export function openEpisodeScopeIn(state: Pick<SkidmarksState, "skidmarksStudio" | "adultShorts">, genre: EpisodeCastGenre): EpisodeScope {
+export function openEpisodeScopeIn(state: Pick<SkidmarksState, "skidmarksStudio" | "adultShorts"> & Partial<Pick<SkidmarksState, "shortsStudio">>, genre: EpisodeCastGenre): EpisodeScope {
   if (genre === "skidmarks") return openSkidmarksEpisodeScopeIn(state);
   if (genre === "adult-shorts") return openShortsEpisodeScopeIn(state);
   return NO_EPISODE_SCOPE;

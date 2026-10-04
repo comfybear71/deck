@@ -47,6 +47,9 @@ export const ADULT_SHORTS_GENERAL_CONTENT_LOCK = "Everyone fully clothed. No nud
 /** Two or more people in one shot: every one of them is a made-up adult. */
 export const ADULT_SHORTS_GROUP_ADULT_LOCK =
   "Everyone shown is an adult, clearly over 25, a fictional AI-created character, photorealistic, each with the same face, hair and body as their reference.";
+/** The group adult lock on a video prompt (2026-10-04): the video model gets only the start image, no reference. */
+export const ADULT_SHORTS_MOTION_GROUP_ADULT_LOCK =
+  "Everyone shown is an adult, clearly over 25, a fictional AI-created character, photorealistic.";
 /** How many people can star in one episode. */
 export const ADULT_SHORTS_MAX_STARRING = 6;
 /** How many people's pictures one plate can be made from (Siray still route cap). */
@@ -157,6 +160,16 @@ export interface AdultShortsState {
   adult?: boolean;
   /** The name typed on "+ New" for an episode that has no card yet; its card takes it. */
   title?: string;
+  /**
+   * Which Shorts editor is open (2026-10-04). `"script"`: the script
+   * studio (`SkidmarksState.shortsStudio`), the same one as Sunny Banks
+   * and Skidmarks. `"cards"`: the shot cards (EP01–EP03). Absent (never
+   * picked): the shot cards while a shot-card episode is open, so a
+   * session with EP03 open opens exactly as before; otherwise the script
+   * studio, the default for every new episode
+   * (`shortsOpenEditor` in `lib/shortsEpisodeCast.ts`).
+   */
+  editor?: "script" | "cards";
 }
 
 const EMPTY_CHARACTER: AdultShortsCharacter = { name: "", look: "", referenceUrls: [] };
@@ -353,6 +366,7 @@ export function normalizeAdultShortsState(value: unknown): AdultShortsState | nu
     ...normalizeStarring(v.starring),
     ...normalizeAdultFlag(v.adult),
     ...(str(v.title).trim() ? { title: str(v.title).trim().slice(0, ADULT_SHORTS_TITLE_MAX) } : {}),
+    ...(v.editor === "script" || v.editor === "cards" ? { editor: v.editor } : {}),
   };
 }
 

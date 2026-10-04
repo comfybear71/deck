@@ -184,10 +184,11 @@ export function pinAdultShortMediaSlug(): string {
     ? (adultShortEpisodeNumbers(state.saved).get(card.id) ?? nextAdultShortEpisodeNumber(state.saved))
     : nextAdultShortEpisodeNumber(state.saved);
   const base = adultShortEpisodeSlug(episodeNumber, card?.title || state.title || state.character.name);
-  const taken = state.saved
-    .filter((x) => x.id !== state.currentSavedId)
-    .map((x) => x.mediaSlug)
-    .filter((slug): slug is string => isSafeDeckMediaSlug(slug));
+  const taken = [
+    ...state.saved.filter((x) => x.id !== state.currentSavedId).map((x) => x.mediaSlug),
+    // Shorts' script episodes share the folder (2026-10-04).
+    ...(getSkidmarksSnapshot().shortsStudio?.workspaces ?? []).map((w) => w.mediaSlug),
+  ].filter((slug): slug is string => isSafeDeckMediaSlug(slug));
   const slug = uniqueDeckMediaSlug(base, taken);
   patchAdultShorts((s) => (isSafeDeckMediaSlug(s.mediaSlug) ? s : { ...s, mediaSlug: slug }));
   return getAdultShortsState().mediaSlug ?? slug;

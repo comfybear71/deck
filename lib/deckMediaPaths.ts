@@ -209,6 +209,15 @@ export function parseDeckMediaProject(value: unknown): DeckMediaProject | null {
   return isDeckGenre(v.genre) && isSafeDeckMediaSlug(v.slug) && v.slug.length <= 40 ? { genre: v.genre, slug: v.slug } : null;
 }
 
+/**
+ * A script-studio episode's folder (Sunny Banks, Skidmarks, Shorts):
+ * `deck/<genre>/episodes/<episode>`. Shorts' script episodes (2026-10-04)
+ * live next to its shot-card episodes in `deck/shorts/episodes/`.
+ */
+export function studioEpisodeFolder(genre: "sunnybank" | "skidmarks" | "shorts", episodeSlug: string): string {
+  return genre === "shorts" ? `${DECK_MEDIA_ROOT}/shorts/episodes/${episodeSlug}` : deckProjectFolder(genre, episodeSlug);
+}
+
 /** `deck/<genre>/<episodes|songs|shorts>/<project>` — the same for every genre. */
 export function deckProjectFolder(genre: DeckGenre, projectSlug: string): string {
   return `${DECK_MEDIA_ROOT}/${genre}/${DECK_GENRE_PROJECTS_FOLDER[genre]}/${projectSlug}`;
@@ -405,15 +414,15 @@ export function sunnybankBeatTarget(args: {
   beatNumber: number;
   characterName: string;
   kind: "speak" | "hold";
-  /** Which show (2026-10-04): Skidmarks clips go under `deck/skidmarks/episodes/…`. Sunny Banks when left out. */
-  genre?: "sunnybank" | "skidmarks";
+  /** Which show (2026-10-04): Skidmarks clips go under `deck/skidmarks/episodes/…`, Shorts under `deck/shorts/episodes/…`. Sunny Banks when left out. */
+  genre?: "sunnybank" | "skidmarks" | "shorts";
 }): DeckMediaTarget | null {
   if (!isSafeDeckMediaSlug(args.episodeSlug)) return null;
   const episode = args.episodeSlug;
   const act = `act-${deckMediaSlug(args.actId, "1")}`;
   const who = deckMediaSlug(args.characterName, "crowd");
   const target = {
-    folder: `${deckProjectFolder(args.genre ?? "sunnybank", episode)}/${act}`,
+    folder: `${studioEpisodeFolder(args.genre ?? "sunnybank", episode)}/${act}`,
     name: `${episode}-${act}-beat-${twoDigits(args.beatNumber)}-${who}-${args.kind}`,
   };
   return isDeckMediaTarget(target) ? target : null;
@@ -428,15 +437,15 @@ export function sunnybankPlateTarget(args: {
   actId: string;
   beatNumber: number;
   castNames: readonly string[];
-  /** Which show (2026-10-04): Skidmarks clips go under `deck/skidmarks/episodes/…`. Sunny Banks when left out. */
-  genre?: "sunnybank" | "skidmarks";
+  /** Which show (2026-10-04): Skidmarks clips go under `deck/skidmarks/episodes/…`, Shorts under `deck/shorts/episodes/…`. Sunny Banks when left out. */
+  genre?: "sunnybank" | "skidmarks" | "shorts";
 }): DeckMediaTarget | null {
   if (!isSafeDeckMediaSlug(args.episodeSlug)) return null;
   const episode = args.episodeSlug;
   const act = `act-${deckMediaSlug(args.actId, "1")}`;
   const who = args.castNames.map((n) => deckMediaSlug(n, "")).filter(Boolean).join("-") || "cast";
   const target = {
-    folder: `${deckProjectFolder(args.genre ?? "sunnybank", episode)}/${act}`,
+    folder: `${studioEpisodeFolder(args.genre ?? "sunnybank", episode)}/${act}`,
     name: `${episode}-${act}-beat-${twoDigits(args.beatNumber)}-${who}-plate`.slice(0, 120).replace(/-+$/g, ""),
   };
   return isDeckMediaTarget(target) ? target : null;

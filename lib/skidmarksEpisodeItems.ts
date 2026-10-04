@@ -13,10 +13,23 @@
  */
 import type { DeckItemKindConfig } from "./deckItemSync";
 import { normalizeSkidmarksEpisodeCard } from "./skidmarksStudio";
-import type { SunnyBanksWorkspaceSnapshot } from "./sunnyBanksWorkspace";
+import { normalizeSunnyBanksWorkspace, type SunnyBanksWorkspaceSnapshot } from "./sunnyBanksWorkspace";
 
 export const SKIDMARKS_EPISODE_ITEMS: DeckItemKindConfig<SunnyBanksWorkspaceSnapshot> = {
   kind: "skidmarks-episode",
   normalize: normalizeSkidmarksEpisodeCard,
   noun: "Skidmarks episode",
+};
+
+/** One Shorts script episode card (`shorts-episode`, 2026-10-04): the same
+ * episode card as Sunny Banks and Skidmarks. Stays off (whole-session save
+ * only) until a seed puts the first row in, like every kind. */
+export function normalizeShortsEpisodeCard(value: unknown): SunnyBanksWorkspaceSnapshot | null {
+  return normalizeSunnyBanksWorkspace(value, "shorts");
+}
+
+export const SHORTS_EPISODE_ITEMS: DeckItemKindConfig<SunnyBanksWorkspaceSnapshot> = {
+  kind: "shorts-episode",
+  normalize: normalizeShortsEpisodeCard,
+  noun: "Shorts episode",
 };

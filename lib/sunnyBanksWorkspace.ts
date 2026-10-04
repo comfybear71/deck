@@ -26,7 +26,7 @@ import {
   type SunnyBanksLocationId,
 } from "./sunnyBanks";
 import { buildSunnyBanksDropBearsSeed, DROP_BEARS_TITLE } from "./sunnyBanksDropBears";
-import { studioGenreProfile, type StudioGenre } from "./studioGenre";
+import { studioGenreProfile, type PlateEngine, type StudioGenre } from "./studioGenre";
 import { deckMediaSlug, isSafeDeckMediaSlug, uniqueDeckMediaSlug } from "./deckMediaPaths";
 import { parseRowVideoBackend, type RowVideoBackend, type SilentShotBackend } from "./videoBackendRouting";
 
@@ -53,8 +53,13 @@ export interface SunnyBanksRowRuntime {
    * only. Kept even when the video failed, so a retry (and the scene's
    * other lines) reuse it instead of paying xAI again. */
   plateUrl?: string;
-  /** Who was in that shot ("Stuie", "Bloom"), for the row's chips. */
+  /** Who was in that shot ("Stuie", "Bloom"), for the row's chips. A
+   * one-person row's own plate (made with "Make plate", 2026-10-04) keeps
+   * its one name, so a plate is only reused for the same person. */
   castNames?: string[];
+  /** A Siray silent shot still rendering (2026-10-04, Shorts): checked
+   * back on instead of submitted (and paid for) again. */
+  sirayTaskId?: string;
 }
 
 export interface SunnyBanksLiveState {
@@ -113,6 +118,10 @@ export interface SkidmarksSunnyBanksState {
    * session like Music video's per-clip engine. Missing means Grok. Not
    * part of any episode, so flipping it never re-saves a card. */
   silentShotBackend?: SilentShotBackend;
+  /** The plate engine switch (2026-10-04): Shorts offers Siray (its
+   * default) or Grok (`studioPlateEngine`). Missing means the show's
+   * default. Not part of any episode, like `silentShotBackend`. */
+  plateEngine?: PlateEngine;
 }
 
 export function cloneActRecord<T>(value: SunnyBanksActKeyed<T>, actIds?: readonly string[]): SunnyBanksActKeyed<T> {
@@ -398,8 +407,9 @@ function normalizeRowRuntime(value: unknown): SunnyBanksRowRuntime | null {
       .map((n) => n.replace(/\s+/g, " ").trim().slice(0, 60))
       .filter(Boolean)
       .slice(0, 4);
-    if (names.length > 1) row.castNames = names;
+    if (names.length > 1 || (names.length === 1 && row.plateUrl)) row.castNames = names;
   }
+  if (typeof v.sirayTaskId === "string" && /^[A-Za-z0-9_.:-]{1,128}$/.test(v.sirayTaskId)) row.sirayTaskId = v.sirayTaskId;
   return row;
 }
 
@@ -567,7 +577,10 @@ export function normalizeSunnyBanksStudio(
     : [];
   const saveSeq = typeof v.saveSeq === "number" && v.saveSeq >= 0 ? Math.floor(v.saveSeq) : workspaces.length;
   const studio: SkidmarksSunnyBanksState = { live, workspaces, saveSeq };
-  if (v.silentShotBackend === "grok" || v.silentShotBackend === "h3") studio.silentShotBackend = v.silentShotBackend;
+  if (v.silentShotBackend === "grok" || v.silentShotBackend === "h3" || v.silentShotBackend === "siray") {
+    studio.silentShotBackend = v.silentShotBackend;
+  }
+  if (v.plateEngine === "grok" || v.plateEngine === "siray") studio.plateEngine = v.plateEngine;
   return studio;
 }
 

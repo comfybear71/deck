@@ -249,7 +249,7 @@ describe("silent-row engine fields (2026-09-30)", () => {
         runtimeMap: {
           I: {
             0: { lineKey: "Ranger Bazza:", status: "done", videoUrl: "https://b/x.mp4", videoBackend: "h3" },
-            1: { lineKey: "Crowd:", status: "done", videoUrl: "https://b/y.mp4", videoBackend: "siray" },
+            1: { lineKey: "Crowd:", status: "done", videoUrl: "https://b/y.mp4", videoBackend: "kling" },
             2: { lineKey: "Shazza:", status: "done", videoUrl: "https://b/z.mp4" },
           },
         },
@@ -264,5 +264,10 @@ describe("silent-row engine fields (2026-09-30)", () => {
     // An older Done row is untouched: no field invented.
     expect("videoBackend" in studio.live.runtimeMap.I[2]).toBe(false);
     expect(normalizeSunnyBanksStudio({ live, workspaces: [], saveSeq: 0, silentShotBackend: "ltx" })!.silentShotBackend).toBeUndefined();
+    // Shorts' engines (2026-10-04): Siray kept, the plate switch too; junk dropped.
+    const shorts = normalizeSunnyBanksStudio({ live, workspaces: [], saveSeq: 0, silentShotBackend: "siray", plateEngine: "grok" })!;
+    expect(shorts.silentShotBackend).toBe("siray");
+    expect(shorts.plateEngine).toBe("grok");
+    expect(normalizeSunnyBanksStudio({ live, workspaces: [], saveSeq: 0, plateEngine: "flux" })!.plateEngine).toBeUndefined();
   });
 });

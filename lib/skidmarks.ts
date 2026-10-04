@@ -195,7 +195,7 @@ import {
   type SunnyBanksLiveState,
   type SunnyBanksWorkspaceSnapshot,
 } from "./sunnyBanksWorkspace";
-import { DEFAULT_SILENT_SHOT_BACKEND, type SilentShotBackend } from "./videoBackendRouting";
+import type { SilentShotBackend } from "./videoBackendRouting";
 import { openSkidmarksEpisodeScopeIn } from "./skidmarksEpisodeCast";
 import {
   emptySkidmarksEpisodesState,
@@ -241,9 +241,9 @@ import {
 import { createDeckItemSync, type DeckItemEntry, type DeckItemKindConfig, type DeckItemSync } from "./deckItemSync";
 import { CHARACTER_ITEMS } from "./characterItems";
 import { SUNNYBANK_EPISODE_ITEMS } from "./sunnybankEpisodeItems";
-import { SKIDMARKS_EPISODE_ITEMS } from "./skidmarksEpisodeItems";
+import { SHORTS_EPISODE_ITEMS, SKIDMARKS_EPISODE_ITEMS } from "./skidmarksEpisodeItems";
 import { withLegacySkidmarksEpisodes } from "./skidmarksStudio";
-import type { StudioGenre } from "./studioGenre";
+import { studioGenreProfile, studioPlateEngine, studioSilentBackend, type PlateEngine, type StudioGenre } from "./studioGenre";
 import { ADULT_SHORT_ITEMS } from "./adultShortItems";
 import { LOCATION_ITEMS } from "./locationItems";
 import {
@@ -1443,6 +1443,14 @@ export interface SkidmarksState {
    */
   skidmarksStudio?: SkidmarksSunnyBanksState | null;
   /**
+   * Shorts' episode studio (2026-10-04, Stuart: "rebuild Shorts to work
+   * like Skidmarks and Sunny Banks"): the same episode cards, script box
+   * and render rows, on Shorts' own Cast, Locations, look and engines
+   * (`lib/studioGenre.ts`). The shot-card episodes (EP01–EP03) stay in
+   * `adultShorts`, untouched; `adultShorts.editor` says which one is open.
+   */
+  shortsStudio?: SkidmarksSunnyBanksState | null;
+  /**
    * Adult shorts (2026-09-28) — one locked character + shot list, same
    * Neon session row, see `lib/adultShorts.ts`. URLs only, never bytes.
    */
@@ -1536,6 +1544,7 @@ function emptyState(): SkidmarksState {
     sunnyBanks: null,
     skidmarksEpisodes: null,
     skidmarksStudio: null,
+    shortsStudio: null,
     adultShorts: null,
     characterLoras: null,
     rosterExtras: null,
@@ -1951,6 +1960,7 @@ function normalizeState(parsed: unknown): SkidmarksState {
     },
     sunnyBanks: normalizeSunnyBanksStudio(p.sunnyBanks),
     ...normalizeSkidmarksShow(p.skidmarksEpisodes, p.skidmarksStudio),
+    shortsStudio: normalizeSunnyBanksStudio(p.shortsStudio, "shorts"),
     adultShorts: normalizeAdultShortsState(p.adultShorts),
     characterLoras: normalizeCharacterLorasState(p.characterLoras),
     rosterExtras: normalizeRosterExtrasState(p.rosterExtras),
@@ -2175,7 +2185,8 @@ export function sessionHasSubstantiveContent(state: SkidmarksState): boolean {
   const hasSunnyBanks = sunnyBanksStudioHasUserContent(state.sunnyBanks);
   const hasEpisodes =
     skidmarksEpisodesHaveUserContent(state.skidmarksEpisodes) ||
-    sunnyBanksStudioHasUserContent(state.skidmarksStudio, "skidmarks");
+    sunnyBanksStudioHasUserContent(state.skidmarksStudio, "skidmarks") ||
+    sunnyBanksStudioHasUserContent(state.shortsStudio, "shorts");
   const hasAdultShorts = adultShortsHaveUserContent(state.adultShorts);
   const hasCharacterLoras = characterLorasHaveUserContent(state.characterLoras);
   const hasRosterExtras = rosterExtrasHaveUserContent(state.rosterExtras);
@@ -2772,6 +2783,7 @@ async function hydrateSkidmarksSessionOnce(): Promise<void> {
     // shorts): one engine, `lib/deckItemSync.ts`. Read-only too.
     void getSunnybankEpisodeItemSync()?.refreshFromServer();
     void getSkidmarksEpisodeItemSync()?.refreshFromServer();
+    void getShortsEpisodeItemSync()?.refreshFromServer();
     void getAdultShortItemSync()?.refreshFromServer();
     void getLocationItemSync()?.refreshFromServer();
     // Same for Music video bands and songs (`lib/musicVideoItems.ts`).
@@ -3103,6 +3115,7 @@ export async function loadSkidmarksSessionFromServerNow(): Promise<boolean> {
     void getCharacterItemSync()?.refreshFromServer();
     void getSunnybankEpisodeItemSync()?.refreshFromServer();
     void getSkidmarksEpisodeItemSync()?.refreshFromServer();
+    void getShortsEpisodeItemSync()?.refreshFromServer();
     void getAdultShortItemSync()?.refreshFromServer();
     void getLocationItemSync()?.refreshFromServer();
     refreshMusicVideoItems();
@@ -3373,6 +3386,23 @@ export function getAdultShortsState(state: SkidmarksState = getSkidmarksSnapshot
   return state.adultShorts ?? emptyAdultShortsState();
 }
 
+/**
+ * Which Shorts editor is open (2026-10-04): `"script"` (the script
+ * studio, `shortsStudio`), `"cards"` (the shot cards, EP01–EP03) or
+ * `null` (never picked: see `shortsOpenEditor`). Set by the EPISODES
+ * row. Only this flag changes: no card is saved or touched, so it never
+ * re-saves a shot-card episode.
+ */
+export function setShortsEditor(editor: "script" | "cards" | null): void {
+  const current = getSkidmarksSnapshot();
+  const base = getAdultShortsState(current);
+  if ((base.editor ?? null) === editor) return;
+  const next: AdultShortsState = { ...base };
+  if (editor) next.editor = editor;
+  else delete next.editor;
+  persist({ ...current, adultShorts: next });
+}
+
 export function patchAdultShorts(updater: (state: AdultShortsState) => AdultShortsState): void {
   const current = getSkidmarksSnapshot();
   const base = getAdultShortsState(current);
@@ -3509,8 +3539,20 @@ function getSkidmarksEpisodeItemSync(): DeckItemSync<SunnyBanksWorkspaceSnapshot
   return skidmarksEpisodeItemSync;
 }
 
+let shortsEpisodeItemSync: DeckItemSync<SunnyBanksWorkspaceSnapshot> | null = null;
+function getShortsEpisodeItemSync(): DeckItemSync<SunnyBanksWorkspaceSnapshot> | null {
+  if (!isBrowser()) return null;
+  shortsEpisodeItemSync ??= createStoreItemSync(
+    SHORTS_EPISODE_ITEMS,
+    () => getSkidmarksSnapshot().shortsStudio?.workspaces ?? [],
+    applyServerShortsEpisodes,
+  );
+  return shortsEpisodeItemSync;
+}
+
 /** The episode-card sync for a show (2026-10-04). */
 function episodeItemSyncFor(genre: StudioGenre): DeckItemSync<SunnyBanksWorkspaceSnapshot> | null {
+  if (genre === "shorts") return getShortsEpisodeItemSync();
   return genre === "skidmarks" ? getSkidmarksEpisodeItemSync() : getSunnybankEpisodeItemSync();
 }
 
@@ -3558,6 +3600,11 @@ function applyServerSunnyBanksEpisodes(workspaces: SunnyBanksWorkspaceSnapshot[]
 /** Skidmarks' episode cards only; the cast and the live copy are left alone. */
 function applyServerSkidmarksEpisodes(workspaces: SunnyBanksWorkspaceSnapshot[]): void {
   applyServerStudioEpisodes("skidmarks", workspaces);
+}
+
+/** Shorts' script episode cards only (2026-10-04); the shot-card episodes have their own sync. */
+function applyServerShortsEpisodes(workspaces: SunnyBanksWorkspaceSnapshot[]): void {
+  applyServerStudioEpisodes("shorts", workspaces);
 }
 
 /** The Library list only; the open editor is left exactly as it is. */
@@ -3609,6 +3656,11 @@ function keepPerItemListsOnScreen(migrated: SkidmarksState): SkidmarksState {
     next.skidmarksStudio = migrated.skidmarksStudio
       ? { ...migrated.skidmarksStudio, workspaces: onScreen.skidmarksStudio.workspaces }
       : onScreen.skidmarksStudio;
+  }
+  if (onScreen?.shortsStudio) {
+    next.shortsStudio = migrated.shortsStudio
+      ? { ...migrated.shortsStudio, workspaces: onScreen.shortsStudio.workspaces }
+      : onScreen.shortsStudio;
   }
   return next;
 }
@@ -3705,9 +3757,10 @@ function applyServerMusicVideoSongs(songs: MusicVideoSongItem[]): void {
 }
 
 /** Where each show's episode studio lives in the session (2026-10-04). */
-const STUDIO_STATE_KEY: Record<StudioGenre, "sunnyBanks" | "skidmarksStudio"> = {
+const STUDIO_STATE_KEY: Record<StudioGenre, "sunnyBanks" | "skidmarksStudio" | "shortsStudio"> = {
   sunnybank: "sunnyBanks",
   skidmarks: "skidmarksStudio",
+  shorts: "shortsStudio",
 };
 
 /** What a show's studio is before its first edit: Sunny Banks opens on
@@ -3742,8 +3795,19 @@ function withStudio(state: SkidmarksState, genre: StudioGenre, studio: Skidmarks
 export function setSunnyBanksSilentShotBackend(backend: SilentShotBackend, genre: StudioGenre = "sunnybank"): void {
   const current = getSkidmarksSnapshot();
   const studio = resolvedSunnyBanks(current, genre);
-  if ((studio.silentShotBackend ?? DEFAULT_SILENT_SHOT_BACKEND) === backend) return;
+  // Only an engine the show offers (Siray is Shorts only, 2026-10-04).
+  if (!studioGenreProfile(genre).silentBackends.includes(backend)) return;
+  if (studioSilentBackend(genre, studio.silentShotBackend) === backend) return;
   persist(withStudio(current, genre, { ...studio, silentShotBackend: backend }));
+}
+
+/** The "Plates on Siray | Grok" switch (2026-10-04, Shorts only), saved like the silent-row switch. */
+export function setStudioPlateEngine(engine: PlateEngine, genre: StudioGenre): void {
+  const current = getSkidmarksSnapshot();
+  const studio = resolvedSunnyBanks(current, genre);
+  if (!studioGenreProfile(genre).plateEngines.includes(engine)) return;
+  if (studioPlateEngine(genre, studio.plateEngine) === engine) return;
+  persist(withStudio(current, genre, { ...studio, plateEngine: engine }));
 }
 
 /** Current live episode — Sunny Banks: the EP02 seed until the first
@@ -3770,11 +3834,23 @@ export function patchSunnyBanksLive(
   if (!("episodeId" in next) && studio.live.episodeId) live.episodeId = studio.live.episodeId;
   if (!("mediaSlug" in next) && studio.live.mediaSlug) live.mediaSlug = studio.live.mediaSlug;
   if (!("castIds" in next) && studio.live.castIds) live.castIds = [...studio.live.castIds];
-  const autoSaved = autoSaveSunnyBanksLive(studio, live, genre);
+  const autoSaved = autoSaveSunnyBanksLive(studio, live, genre, otherShowFolders(current, genre));
   persist(withStudio(current, genre, autoSaved));
   if (autoSaved.workspaces !== studio.workspaces) {
     episodeItemSyncFor(genre)?.noteLocalChange(studio.workspaces, autoSaved.workspaces);
   }
+}
+
+/**
+ * Folder names another editor of the same show already uses (2026-10-04):
+ * Shorts' script episodes share `deck/shorts/episodes/` with its
+ * shot-card episodes (EP01–EP03), so a new script episode never takes a
+ * shot-card episode's folder. Nothing for Sunny Banks or Skidmarks.
+ */
+function otherShowFolders(state: SkidmarksState, genre: StudioGenre): string[] {
+  if (genre !== "shorts" || !state.adultShorts) return [];
+  const adult = state.adultShorts;
+  return [adult.mediaSlug, ...adult.saved.map((x) => x.mediaSlug)].filter((slug): slug is string => Boolean(slug));
 }
 
 /**
@@ -3790,7 +3866,8 @@ export function patchSunnyBanksLive(
 function autoSaveSunnyBanksLive(
   studio: SkidmarksSunnyBanksState,
   live: SunnyBanksLiveState,
-  genre: StudioGenre = "sunnybank"
+  genre: StudioGenre = "sunnybank",
+  alsoTaken: readonly string[] = []
 ): SkidmarksSunnyBanksState {
   const fingerprint = fingerprintWorkspace(live);
   const card = live.episodeId ? studio.workspaces.find((workspace) => workspace.id === live.episodeId) : undefined;
@@ -3815,10 +3892,10 @@ function autoSaveSunnyBanksLive(
     // A brand-new card, first in the row. Never matched to another card
     // by name (unlike the old Save button): an automatic save must not
     // overwrite a card nobody opened.
-    const mediaSlug = pickSunnyBanksEpisodeMediaSlug(
-      live.mediaSlug || snapshot.label,
-      studio.workspaces.map((workspace) => workspace.mediaSlug),
-    );
+    const mediaSlug = pickSunnyBanksEpisodeMediaSlug(live.mediaSlug || snapshot.label, [
+      ...studio.workspaces.map((workspace) => workspace.mediaSlug),
+      ...alsoTaken,
+    ]);
     saved = { ...snapshot, mediaSlug };
     workspaces = [saved, ...studio.workspaces];
   }
@@ -3845,10 +3922,10 @@ export function ensureSunnyBanksEpisodeMediaSlug(genre: StudioGenre = "sunnybank
   if (!slug) {
     const title = live.workspaceTitle.trim();
     if (!title) return null;
-    slug = pickSunnyBanksEpisodeMediaSlug(
-      title,
-      studio.workspaces.filter((workspace) => workspace.id !== live.episodeId).map((workspace) => workspace.mediaSlug),
-    );
+    slug = pickSunnyBanksEpisodeMediaSlug(title, [
+      ...studio.workspaces.filter((workspace) => workspace.id !== live.episodeId).map((workspace) => workspace.mediaSlug),
+      ...otherShowFolders(current, genre),
+    ]);
   }
   persist(withStudio(current, genre, { ...studio, live: { ...cloneSunnyBanksLive(live), mediaSlug: slug } }));
   return slug;

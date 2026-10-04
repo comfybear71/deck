@@ -25,7 +25,8 @@ import {
 import { missingXaiApiKeyMessage, resolveXaiApiKey } from "@/lib/xaiApiKey";
 import { isAllowedTrainingImageUrl } from "@/lib/characterLoras";
 import { XAI_EDIT_MAX_IMAGES } from "@/lib/shotCast";
-import { studioGenreProfile, type StudioGenre } from "@/lib/studioGenre";
+import { studioGenreProfile, type PlateEngine, type StudioGenre, type StudioGenreProfile } from "@/lib/studioGenre";
+import { resolveSirayCredentials, sirayDownloadStill, sirayPollStillImage, siraySubmitStillImage } from "@/lib/sirayClient";
 import { buildSunnyBanksMultiCastPlatePrompt, type SunnyBanksShotCastMember } from "@/lib/sunnyBanksShotCast";
 
 const XAI_IMAGE_MODEL_ENV_VAR = "XAI_IMAGE_MODEL";
@@ -37,6 +38,70 @@ const SUNNYBANKS_PUBLIC_PREFIX = "/skidmarks/sunnybanks/";
 export type SunnyBanksCompositeOutcome =
   | { ok: true; dataUrl: string }
   | { ok: false; status: number; code: string; error: string };
+
+/** How long one Siray plate may take inside the beat route (its whole budget is 300 s). */
+const SIRAY_PLATE_DEADLINE_MS = 150_000;
+
+/**
+ * The plate prompt with the show's talking-plate line (2026-10-04, Shorts:
+ * "head level, mouth visible", from EP03 where LTX lost a mouth on a head
+ * tilted down). Only on a talking row, only for a show that has the line;
+ * every other prompt is byte-identical to before.
+ */
+export function withTalkingPlateLine(prompt: string, profile: StudioGenreProfile, talking: boolean | undefined): string {
+  const line = profile.look.talkingPlateLine?.trim();
+  return talking && line ? `${prompt} ${line}` : prompt;
+}
+
+/** The plating engine is set up on the server, or the honest reason it isn't. */
+function plateEngineReady(engine: PlateEngine, profile: StudioGenreProfile): { ok: true; xaiKey?: string } | Extract<SunnyBanksCompositeOutcome, { ok: false }> {
+  if (engine === "siray") {
+    if (resolveSirayCredentials()) return { ok: true };
+    return {
+      ok: false,
+      status: 501,
+      code: "missing_api_key",
+      error: `SIRAY_API_KEY is not set on the server, so ${profile.showName} plates can't be made on Siray here. Set it on Vercel and redeploy, or switch Plates to Grok.`,
+    };
+  }
+  const resolvedKey = resolveXaiApiKey();
+  if (resolvedKey) return { ok: true, xaiKey: resolvedKey.key };
+  return {
+    ok: false,
+    status: 501,
+    code: "missing_api_key",
+    error: missingXaiApiKeyMessage(`${profile.showName} plating (xAI Grok Imagine)`),
+  };
+}
+
+/** One plate from the location and the people's pictures, on the chosen engine. */
+async function postPlate(
+  engine: PlateEngine,
+  ready: { xaiKey?: string },
+  prompt: string,
+  imageDataUrls: readonly string[],
+): Promise<SunnyBanksCompositeOutcome> {
+  if (engine === "grok") return postXaiEdit(ready.xaiKey ?? "", prompt, imageDataUrls);
+  return postSirayPlate(prompt, imageDataUrls);
+}
+
+/**
+ * Siray Seedream 4.5 (uncensored, Shorts' plate engine since 2026-10-04):
+ * the same pictures in the same order (location first, then each person),
+ * submit, poll, download, back as a data URL like Grok's.
+ */
+async function postSirayPlate(prompt: string, imageDataUrls: readonly string[]): Promise<SunnyBanksCompositeOutcome> {
+  const creds = resolveSirayCredentials();
+  if (!creds) return { ok: false, status: 501, code: "missing_api_key", error: "SIRAY_API_KEY is not set on the server." };
+  const submit = await siraySubmitStillImage(prompt, [...imageDataUrls], creds);
+  if (!submit.ok) return submit;
+  const poll = await sirayPollStillImage(submit.taskId, creds, SIRAY_PLATE_DEADLINE_MS);
+  if (!poll.ok) return poll;
+  const download = await sirayDownloadStill(poll.outputUrl);
+  if (!download.ok) return download;
+  const type = download.contentType.split(";")[0].trim() || "image/jpeg";
+  return { ok: true, dataUrl: `data:${type};base64,${Buffer.from(download.bytes).toString("base64")}` };
+}
 
 
 function resolveXaiImageModel(): string {
@@ -168,8 +233,13 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   shotAction?: string;
   /** Which show's look and locations (Sunny Banks when left out). */
   genre?: StudioGenre;
+  /** Plate engine (2026-10-04): Grok when left out; Siray on Shorts. */
+  engine?: PlateEngine;
+  /** A talking row: adds the show's talking-plate line (Shorts only). */
+  talking?: boolean;
 }): Promise<SunnyBanksCompositeOutcome> {
   const profile = studioGenreProfile(opts.genre);
+  const engine = opts.engine ?? "grok";
   const picture = resolveSunnyBanksStartImage(opts.character);
   if (!picture) {
     return {
@@ -180,16 +250,8 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
     };
   }
 
-  const resolvedKey = resolveXaiApiKey();
-  if (!resolvedKey) {
-    return {
-      ok: false,
-      status: 501,
-      code: "missing_api_key",
-      error: missingXaiApiKeyMessage(`${profile.showName} plating (xAI Grok Imagine)`),
-    };
-  }
-  const apiKey = resolvedKey.key;
+  const ready = plateEngineReady(engine, profile);
+  if (!ready.ok) return ready;
 
   const pictureDataUrl = await readSunnyBanksBlobPictureDataUrl(picture);
   if (!pictureDataUrl) {
@@ -202,11 +264,15 @@ export async function compositeSunnyBanksCharacterOntoLocation(opts: {
   }
 
   const location = resolveLocationLock(opts.locationId ?? "", opts.locationLabel, profile.genre);
-  const prompt = buildSunnyBanksCompositePlatePrompt(opts.character, location, opts.appearanceOverride, opts.shotAction, profile.look);
+  const prompt = withTalkingPlateLine(
+    buildSunnyBanksCompositePlatePrompt(opts.character, location, opts.appearanceOverride, opts.shotAction, profile.look),
+    profile,
+    opts.talking,
+  );
 
   // Same two-image edits payload Studio's generateFaceImage sends
   // (`images: [{ url, type: "image_url" }, …]` — location then person).
-  return postXaiEdit(apiKey, prompt, [opts.locationDataUrl, pictureDataUrl]);
+  return postPlate(engine, ready, prompt, [opts.locationDataUrl, pictureDataUrl]);
 }
 
 /** One xAI `/v1/images/edits` call: `images` in the order given, one picture back. */
@@ -295,22 +361,20 @@ export async function compositeSunnyBanksCastOntoLocation(opts: {
   sceneSpeakers?: readonly string[];
   shotAction?: string;
   genre?: StudioGenre;
+  /** Plate engine (2026-10-04): Grok when left out; Siray on Shorts. */
+  engine?: PlateEngine;
+  /** A talking row: adds the show's talking-plate line (Shorts only). */
+  talking?: boolean;
 }): Promise<SunnyBanksCompositeOutcome> {
   const profile = studioGenreProfile(opts.genre);
+  const engine = opts.engine ?? "grok";
   const people = opts.people.slice(0, XAI_EDIT_MAX_IMAGES - 1);
   const missing = people.find((p) => !p.pictureUrl);
   if (missing) {
     return { ok: false, status: 400, code: "missing_cast_picture", error: missingCastPictureMessage(missing.name) };
   }
-  const resolvedKey = resolveXaiApiKey();
-  if (!resolvedKey) {
-    return {
-      ok: false,
-      status: 501,
-      code: "missing_api_key",
-      error: missingXaiApiKeyMessage(`${profile.showName} plating (xAI Grok Imagine)`),
-    };
-  }
+  const ready = plateEngineReady(engine, profile);
+  if (!ready.ok) return ready;
   const pictures: string[] = [];
   for (const person of people) {
     const dataUrl = await readSunnyBanksBlobPictureDataUrl(person.pictureUrl!);
@@ -325,15 +389,19 @@ export async function compositeSunnyBanksCastOntoLocation(opts: {
     pictures.push(dataUrl);
   }
   const location = resolveLocationLock(opts.locationId ?? "", opts.locationLabel, profile.genre);
-  const prompt = buildSunnyBanksMultiCastPlatePrompt({
-    people,
-    location,
-    speaker: opts.speaker,
-    sceneSpeakers: opts.sceneSpeakers,
-    shotAction: opts.shotAction,
-    look: profile.look,
-  });
-  return postXaiEdit(resolvedKey.key, prompt, [opts.locationDataUrl, ...pictures]);
+  const prompt = withTalkingPlateLine(
+    buildSunnyBanksMultiCastPlatePrompt({
+      people,
+      location,
+      speaker: opts.speaker,
+      sceneSpeakers: opts.sceneSpeakers,
+      shotAction: opts.shotAction,
+      look: profile.look,
+    }),
+    profile,
+    opts.talking,
+  );
+  return postPlate(engine, ready, prompt, [opts.locationDataUrl, ...pictures]);
 }
 
 /**
