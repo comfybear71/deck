@@ -447,7 +447,10 @@ export type BuildArchiveZipOutcome = { ok: true; zipBytes: Uint8Array } | { ok: 
  */
 export async function buildArchiveZip(
   song: SkidmarksArchivedSong,
-  snapshot: SkidmarksArchiveSnapshot
+  snapshot: SkidmarksArchiveSnapshot,
+  /** The song's Episode Extras (2026-10-04), already named for the zip
+   * (`episodeExtrasZipEntries`: `extras/act-3-between-8-and-9 - container-drop.mp4`). */
+  extras: readonly { name: string; url: string }[] = []
 ): Promise<BuildArchiveZipOutcome> {
   const entries: { name: string; data: Uint8Array }[] = [];
 
@@ -507,6 +510,16 @@ export async function buildArchiveZip(
       } catch {
         // Best-effort, same reasoning as the audio fetch above.
       }
+    }
+  }
+
+  for (const extra of extras) {
+    try {
+      const res = await fetch(extra.url);
+      if (!res.ok) continue;
+      entries.push({ name: extra.name, data: new Uint8Array(await res.arrayBuffer()) });
+    } catch {
+      // Best-effort, same as the renders above.
     }
   }
 

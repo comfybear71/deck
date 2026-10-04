@@ -7,10 +7,14 @@
  *
  * Names are readable and in shot order: `ep01-blonde-girl-1-shot-02-skylar.mp4`
  * inside `ep01-blonde-girl-1.zip`. Pure: the route and the page share it.
+ *
+ * Episode Extras (2026-10-04, `lib/episodeExtras.ts`) go in an `extras/`
+ * folder after the clips: `extras/act-3-between-8-and-9 - container-drop.mp4`.
  */
 import { adultShortEpisodeSlug, deckMediaSlug, isSafeDeckMediaSlug } from "./deckMediaPaths";
 import { isAllowedSunnyBanksClipUrl } from "./sunnyBanksClipProxy";
 import { submitZipDownloadForm } from "./zipFormDownload";
+import { episodeExtrasZipEntries, parseEpisodeExtraZipItems, type EpisodeExtraZipItem } from "./episodeExtras";
 
 export const SHORTS_CLIPS_ZIP_PATH = "/api/skidmarks/adult-shorts/clips-zip";
 export const SHORTS_CLIPS_ZIP_MAX = 100;
@@ -19,6 +23,8 @@ export interface ShortsClipsZipRequest {
   /** The episode's file name part, `ep01-blonde-girl-1` (`shortsZipEpisodeName`). */
   episode: string;
   clips: { url: string; shot: number; character: string }[];
+  /** The episode's extras (`episodeExtraZipItems`), named on the server. */
+  extras?: EpisodeExtraZipItem[];
 }
 
 export type ShortsClipsZipPlan =
@@ -35,10 +41,13 @@ export function planShortsClipsZip(input: unknown): ShortsClipsZipPlan {
   if (!input || typeof input !== "object") return { ok: false, error: "Nothing to zip." };
   const v = input as Partial<ShortsClipsZipRequest>;
   const episode = deckMediaSlug(typeof v.episode === "string" ? v.episode : "", "short").slice(0, 60);
-  if (!Array.isArray(v.clips) || v.clips.length === 0) return { ok: false, error: "This episode has no finished clips yet." };
-  if (v.clips.length > SHORTS_CLIPS_ZIP_MAX) return { ok: false, error: `Keep it to ${SHORTS_CLIPS_ZIP_MAX} clips.` };
+  const extras = parseEpisodeExtraZipItems(v.extras, isAllowedSunnyBanksClipUrl);
+  if (!extras.ok) return extras;
+  const rawClips = Array.isArray(v.clips) ? v.clips : [];
+  if (rawClips.length === 0 && extras.items.length === 0) return { ok: false, error: "This episode has no finished clips yet." };
+  if (rawClips.length > SHORTS_CLIPS_ZIP_MAX) return { ok: false, error: `Keep it to ${SHORTS_CLIPS_ZIP_MAX} clips.` };
   const clips: { url: string; shot: number; character: string }[] = [];
-  for (const c of v.clips) {
+  for (const c of rawClips) {
     const url = typeof c?.url === "string" ? c.url.trim() : "";
     const shot = typeof c?.shot === "number" && Number.isInteger(c.shot) && c.shot >= 1 && c.shot <= 999 ? c.shot : 0;
     if (!shot || !isAllowedSunnyBanksClipUrl(url)) return { ok: false, error: "A clip's link isn't one of Deck's saved clips." };
@@ -54,16 +63,19 @@ export function planShortsClipsZip(input: unknown): ShortsClipsZipPlan {
     used.add(name);
     return { name, url: c.url };
   });
-  return { ok: true, zipName: `${episode}.zip`, entries };
+  return { ok: true, zipName: `${episode}.zip`, entries: [...entries, ...episodeExtrasZipEntries(extras.items)] };
 }
 
 /**
  * Browser only: checks the request first (so a bad one never navigates
  * the page away), then asks the server for the zip with a plain form POST.
  */
-export function downloadShortsEpisodeZip(request: ShortsClipsZipRequest): { ok: true; clipCount: number } | { ok: false; error: string } {
+export function downloadShortsEpisodeZip(
+  request: ShortsClipsZipRequest,
+): { ok: true; clipCount: number; extraCount: number } | { ok: false; error: string } {
   const plan = planShortsClipsZip(request);
   if (!plan.ok) return plan;
   submitZipDownloadForm(SHORTS_CLIPS_ZIP_PATH, request);
-  return { ok: true, clipCount: plan.entries.length };
+  const extraCount = plan.entries.filter((e) => e.name.startsWith("extras/")).length;
+  return { ok: true, clipCount: plan.entries.length - extraCount, extraCount };
 }

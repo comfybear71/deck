@@ -37,4 +37,30 @@ describe("Shorts episode zip", () => {
     });
     expect(planShortsClipsZip(null)).toMatchObject({ ok: false });
   });
+
+  it("Episode Extras (2026-10-04): adds an extras/ folder after the clips, clips unchanged", () => {
+    const extra = {
+      id: "container-drop",
+      name: "container drop",
+      placement: "Act III between 8 and 9",
+      ext: "mp4" as const,
+      url: `${BLOB}/deck/shorts/episodes/ep01-blonde-girl-1/extras/container-drop.mp4`,
+    };
+    const plan = planShortsClipsZip({
+      episode: "ep01-blonde-girl-1",
+      clips: [{ url: `${BLOB}/a/2.mp4`, shot: 2, character: "SKYLAR" }],
+      extras: [extra],
+    });
+    expect(plan).toEqual({
+      ok: true,
+      zipName: "ep01-blonde-girl-1.zip",
+      entries: [
+        { name: "ep01-blonde-girl-1-shot-02-skylar.mp4", url: `${BLOB}/a/2.mp4` },
+        { name: "extras/act-3-between-8-and-9 - container-drop.mp4", url: extra.url },
+      ],
+    });
+    // Extras alone still zip; an outside link is refused.
+    expect(planShortsClipsZip({ episode: "ep01-x", clips: [], extras: [extra] })).toMatchObject({ ok: true });
+    expect(planShortsClipsZip({ episode: "ep01-x", clips: [], extras: [{ ...extra, url: "https://evil.test/a.mp4" }] })).toMatchObject({ ok: false });
+  });
 });

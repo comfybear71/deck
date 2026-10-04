@@ -13,6 +13,7 @@ import {
 } from "@/lib/adultShorts";
 import {
   getAdultShortsState,
+  getEpisodeExtrasState,
   getSkidmarksSnapshot,
   openAdultShortEpisode,
   removeSavedAdultShort,
@@ -22,6 +23,7 @@ import {
 import { getShortsBusy, subscribeShortsBusy } from "@/lib/shortsBusy";
 import { downloadShortsEpisodeZip, shortsZipEpisodeName } from "@/lib/shortsClipsZip";
 import { EpisodeCardsRow, type EpisodeRowNotice } from "@/components/EpisodeCardsRow";
+import { episodeExtraZipItems, episodeExtrasFor, episodeFolderFor } from "@/lib/episodeExtras";
 
 /** The Shorts editor's anchor, for the pencil's "jump to the editor". */
 export const SHORTS_EDITOR_ID = "shorts-editor";
@@ -103,15 +105,20 @@ export function ShortsEpisodeRow() {
     if (!entry || busy) return;
     const view = adultShortEpisodeView(state, entry);
     const who = view.character.name.trim();
+    // The open short's folder may be pinned on the editor before its card.
+    const slug = entry.mediaSlug ?? (entry.id === state.currentSavedId ? state.mediaSlug : undefined);
+    const extras = episodeExtrasFor(getEpisodeExtrasState(snapshot), episodeFolderFor("shorts", slug));
     const result = downloadShortsEpisodeZip({
       episode: shortsZipEpisodeName(numbers.get(entry.id) ?? 1, entry.title, entry.mediaSlug),
       clips: view.shots.flatMap((shot, i) =>
         shot.clipUrl && shot.clipUrl.startsWith("https:") ? [{ url: shot.clipUrl, shot: i + 1, character: who }] : [],
       ),
+      ...(extras.length > 0 ? { extras: episodeExtraZipItems(extras) } : {}),
     });
     say(
       result.ok
-        ? `Downloading ${labelFor(entry)}: ${result.clipCount} clip${result.clipCount === 1 ? "" : "s"}.`
+        ? `Downloading ${labelFor(entry)}: ${result.clipCount} clip${result.clipCount === 1 ? "" : "s"}` +
+            (result.extraCount > 0 ? ` and ${result.extraCount} extra${result.extraCount === 1 ? "" : "s"}.` : ".")
         : result.error,
       result.ok ? "ok" : "warn",
     );

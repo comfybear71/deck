@@ -266,6 +266,30 @@ describe("buildSunnyBanksEpisodeBundle progress + honest clip counts (2026-09-18
     expect(result.zipBytes.byteLength).toBeGreaterThan(0);
   });
 
+  it("Episode Extras (2026-10-04): puts extras in extras/ with readable names, clips unchanged", async () => {
+    mockFetchFromUrl();
+    const videoUrl = crashLabClipUrl(firstBeat.clipFile);
+    const result = await buildSunnyBanksEpisodeBundle({
+      ...baseInput,
+      clips: [clip(0, videoUrl)],
+      extras: [
+        { name: "extras/act-3-between-8-and-9 - container-drop.mp4", url: "https://abc.public.blob.vercel-storage.com/deck/sunnybank/episodes/ep02/extras/container-drop.mp4" },
+        { name: "extras/seagull.mp3", url: "https://abc.public.blob.vercel-storage.com/deck/sunnybank/episodes/ep02/extras/seagull.mp3" },
+      ],
+    });
+    expect(result.clipCount).toBe(1);
+    expect(result.fetchedClipCount).toBe(1);
+    expect(result.extraCount).toBe(2);
+    expect(result.fetchedExtraCount).toBe(2);
+    const dir = mkdtempSync(join(tmpdir(), "sunnybank-extras-"));
+    const zipPath = join(dir, "ep.zip");
+    writeFileSync(zipPath, result.zipBytes);
+    const names = execFileSync("unzip", ["-Z1", zipPath], { encoding: "utf8" });
+    expect(names).toContain("extras/act-3-between-8-and-9 - container-drop.mp4");
+    expect(names).toContain("extras/seagull.mp3");
+    expect(names).toMatch(/^video\//m);
+  });
+
   it("still builds a zip, and reports zero fetched, for an episode with no clips yet", async () => {
     mockFetchFromUrl();
     const result = await buildSunnyBanksEpisodeBundle({ ...baseInput, clips: [] });

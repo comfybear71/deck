@@ -1,5 +1,6 @@
 "use client";
 
+import { episodeExtrasFor, episodeExtrasZipEntries, songEpisodeFolder } from "@/lib/episodeExtras";
 import { SkidmarksConfirmDialog } from "./SkidmarksConfirmDialog";
 import { useEffect, useState } from "react";
 import {
@@ -10,7 +11,7 @@ import {
   type SkidmarksArchivedSong,
 } from "@/lib/skidmarksArchive";
 import { triggerBlobDownload } from "@/lib/clipRenders";
-import { formatDuration } from "@/lib/skidmarks";
+import { formatDuration, getEpisodeExtrasState } from "@/lib/skidmarks";
 
 interface SkidmarksArchiveShelfProps {
   /** Restores an archived song into the live top workspace — the
@@ -126,7 +127,9 @@ export function SkidmarksArchiveShelf({ onOpenInEditor, refreshToken }: Skidmark
       setBusyId(null);
       return;
     }
-    const zipOutcome = await buildArchiveZip(song, snapshotOutcome.snapshot);
+    // The song's Extras (2026-10-04) go in the zip's extras/ folder.
+    const extras = episodeExtrasZipEntries(episodeExtrasFor(getEpisodeExtrasState(), songEpisodeFolder(song.fileName)));
+    const zipOutcome = await buildArchiveZip(song, snapshotOutcome.snapshot, extras);
     if (!zipOutcome.ok) {
       setRowError({ id: song.id, message: zipOutcome.message });
       setBusyId(null);
