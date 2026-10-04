@@ -2,7 +2,10 @@
  * Each Skidmarks episode has its own Cast and Locations (2026-10-04,
  * Stuart: "Skidmarks episodes are standalone shows"). A new episode starts
  * with empty Cast and Locations rows; Sunny Banks keeps its one shared
- * Cast across episodes and is never read through this file.
+ * Cast across episodes and is never read through this file. The rule is
+ * the one every standalone genre shares (`lib/episodeCast.ts`, Shorts
+ * too); this file only says which Skidmarks episode is open and which
+ * one is the older one (the pilot).
  *
  * How an episode's own Cast and Locations are found (no list is copied,
  * nothing is moved, nothing is deleted):
@@ -26,6 +29,15 @@
  */
 import { deckMediaSlug, isSafeDeckMediaSlug } from "./deckMediaPaths";
 import type { DeckLocation, DeckLocationsState } from "./deckLocations";
+import {
+  NO_EPISODE_SCOPE,
+  episodeNameFirstMessage,
+  episodeOwnItems,
+  episodeOwnLocations,
+  isInEpisode,
+  isLocationInEpisode,
+  type EpisodeScope,
+} from "./episodeCast";
 import type { SkidmarksState } from "./skidmarks";
 import type { SkidmarksCastMember } from "./skidmarksEpisodes";
 import type { SkidmarksSunnyBanksState, SunnyBanksLiveState, SunnyBanksWorkspaceSnapshot } from "./sunnyBanksWorkspace";
@@ -33,18 +45,12 @@ import type { SkidmarksSunnyBanksState, SunnyBanksLiveState, SunnyBanksWorkspace
 /** The pilot's pinned media folder: `deck/skidmarks/episodes/ep00-cornish-arsehole/`. */
 export const SKIDMARKS_PILOT_MEDIA_SLUG = "ep00-cornish-arsehole";
 
-/** Which Skidmarks episode a Cast card or place is being looked up for. */
-export interface SkidmarksEpisodeScope {
-  /** The episode's pinned media folder name, or `null` for a new episode
-   * with no name yet (it has no Cast or Locations of its own yet). */
-  episode: string | null;
-  /** The pilot: every card and place from before 2026-10-04 is in it. */
-  pilot: boolean;
-  /** Old cards ticked "In this episode" before 2026-10-04 (PR 242). */
-  tickedCastIds: readonly string[];
-}
+/** Which Skidmarks episode a Cast card or place is being looked up for
+ * (the shared `EpisodeScope`: `legacy` = the pilot, `tickedIds` = old
+ * cards ticked "In this episode" before 2026-10-04, PR 242). */
+export type SkidmarksEpisodeScope = EpisodeScope;
 
-export const NO_SKIDMARKS_EPISODE: SkidmarksEpisodeScope = { episode: null, pilot: false, tickedCastIds: [] };
+export const NO_SKIDMARKS_EPISODE: SkidmarksEpisodeScope = NO_EPISODE_SCOPE;
 
 type EpisodeLike = Pick<SunnyBanksLiveState, "mediaSlug" | "castIds" | "episodeId"> & {
   workspaceTitle?: string;
@@ -65,7 +71,7 @@ export function skidmarksEpisodeScopeOf(
   // is pinned as `ep00-cornish-arsehole-2`, a different episode).
   const pilot = pinned ? pinned === SKIDMARKS_PILOT_MEDIA_SLUG : deckMediaSlug(title, "") === SKIDMARKS_PILOT_MEDIA_SLUG;
   const ticked = episode.castIds ?? card?.castIds ?? [];
-  return { episode: pilot && !pinned ? SKIDMARKS_PILOT_MEDIA_SLUG : pinned, pilot, tickedCastIds: [...ticked] };
+  return { episode: pilot && !pinned ? SKIDMARKS_PILOT_MEDIA_SLUG : pinned, legacy: pilot, tickedIds: [...ticked] };
 }
 
 /** The episode open in the Skidmarks studio (`skidmarksStudio.live`). */
@@ -81,15 +87,12 @@ export function openSkidmarksEpisodeScopeIn(state: Pick<SkidmarksState, "skidmar
 
 /** Is this Cast card in the episode? */
 export function isCastInSkidmarksEpisode(member: Pick<SkidmarksCastMember, "id" | "episode">, scope: SkidmarksEpisodeScope): boolean {
-  if (member.episode) return member.episode === scope.episode;
-  return scope.pilot || scope.tickedCastIds.includes(member.id);
+  return isInEpisode(member, scope);
 }
 
 /** Is this place in the episode? (Skidmarks places only.) */
 export function isLocationInSkidmarksEpisode(location: Pick<DeckLocation, "genre" | "episode">, scope: SkidmarksEpisodeScope): boolean {
-  if (location.genre !== "skidmarks") return false;
-  if (location.episode) return location.episode === scope.episode;
-  return scope.pilot;
+  return isLocationInEpisode(location, "skidmarks", scope);
 }
 
 /** The episode's own Cast, in Cast order. */
@@ -97,16 +100,16 @@ export function skidmarksEpisodeCast<T extends Pick<SkidmarksCastMember, "id" | 
   cast: readonly T[],
   scope: SkidmarksEpisodeScope,
 ): T[] {
-  return cast.filter((m) => isCastInSkidmarksEpisode(m, scope));
+  return episodeOwnItems(cast, scope);
 }
 
 /** The episode's own Locations, in saved order. */
 export function skidmarksEpisodeLocations(state: DeckLocationsState | null | undefined, scope: SkidmarksEpisodeScope): DeckLocation[] {
-  return (state?.locations ?? []).filter((l) => isLocationInSkidmarksEpisode(l, scope));
+  return episodeOwnLocations(state, "skidmarks", scope);
 }
 
 /** Why the "+" on the Cast or Locations row can't add yet, or `null`. */
 export function skidmarksEpisodeAddBlockedReason(scope: SkidmarksEpisodeScope, liveTitle: string, what: "characters" | "locations"): string | null {
   if (scope.episode || liveTitle.trim()) return null;
-  return `Give the episode a name first (the # EPISODE: line), then add its ${what}.`;
+  return episodeNameFirstMessage("skidmarks", what);
 }
