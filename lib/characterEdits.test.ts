@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { pilotOpenSkidmarksStudio } from "@/lib/skidmarksEpisodeCast.fixtures";
 import {
   characterDeleteBlocker,
   characterRenameProblem,
@@ -34,6 +35,8 @@ function stateWith(extra: Partial<SkidmarksState>): SkidmarksState {
     removedSeedBandIds: [],
     sunnyBanks: null,
     skidmarksEpisodes: null,
+    // The Skidmarks pilot is open (2026-10-04: each episode has its own Cast).
+    skidmarksStudio: pilotOpenSkidmarksStudio(),
     adultShorts: null,
     characterLoras: null,
     rosterExtras: null,
@@ -231,7 +234,7 @@ describe("rename and delete, saved per item", () => {
     const clive = { ...DAP, id: "cast_clive", name: "Clive", role: "supporting" as const };
     const episode = { id: "ep1", title: "Pilot", antiheroId: null, castIds: ["cast_clive"], beats: {}, createdAt: 1, updatedAt: 1 };
     const server = {
-      session: { bands: [], removedSeedBandIds: [], session: { projectKind: "skidmarks", bandId: null, mp3: null, scriptSequenceDraft: null }, skidmarksEpisodes: { episodes: [episode], cast: [DAP, clive] } },
+      session: { bands: [], removedSeedBandIds: [], session: { projectKind: "skidmarks", bandId: null, mp3: null, scriptSequenceDraft: null }, skidmarksStudio: pilotOpenSkidmarksStudio(), skidmarksEpisodes: { episodes: [episode], cast: [DAP, clive] } },
       rows: [SHAZZA_CARD, dapCard],
     };
     const page = await boot(server);
@@ -366,7 +369,7 @@ describe("voice id, saved per item", () => {
 
   it("works the same for a Skidmarks cast member", async () => {
     const server = {
-      session: { bands: [], removedSeedBandIds: [], session: { projectKind: "skidmarks", bandId: null, mp3: null, scriptSequenceDraft: null }, skidmarksEpisodes: { episodes: [], cast: [DAP] } },
+      session: { bands: [], removedSeedBandIds: [], session: { projectKind: "skidmarks", bandId: null, mp3: null, scriptSequenceDraft: null }, skidmarksStudio: pilotOpenSkidmarksStudio(), skidmarksEpisodes: { episodes: [], cast: [DAP] } },
       rows: [] as Row[],
     };
     const page = await boot(server);

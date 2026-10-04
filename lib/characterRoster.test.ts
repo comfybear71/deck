@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { pilotOpenSkidmarksStudio } from "@/lib/skidmarksEpisodeCast.fixtures";
 import { buildCharacterLoraEntry } from "./characterLoras";
 import {
   buildCharacterRoster,
@@ -29,7 +30,8 @@ import {
 } from "./rosterExtras";
 
 function stateWith(extra: Partial<SkidmarksState> = {}): SkidmarksState {
-  return { ...getSkidmarksSnapshot(), ...extra };
+  // The Skidmarks pilot is open (2026-10-04: each episode has its own Cast).
+  return { ...getSkidmarksSnapshot(), skidmarksStudio: pilotOpenSkidmarksStudio(), ...extra };
 }
 
 describe("buildCharacterRoster", () => {

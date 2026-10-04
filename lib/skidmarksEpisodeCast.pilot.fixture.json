@@ -1,0 +1,318 @@
+{
+ "_note": "Shape of the live Skidmarks pilot on 2026-10-04 (read-only copy; Blob host replaced). Used by lib/skidmarksEpisodeCast.test.ts.",
+ "skidmarksStudio": {
+  "live": {
+   "actIds": [
+    "I",
+    "II",
+    "III"
+   ],
+   "activeAct": "I",
+   "actScripts": {
+    "I": "",
+    "II": "",
+    "III": ""
+   },
+   "runtimeMap": {
+    "I": {},
+    "II": {},
+    "III": {}
+   },
+   "workspaceTitle": "",
+   "defaultLocationId": "",
+   "locationOverrides": {
+    "I": {},
+    "II": {},
+    "III": {}
+   },
+   "characterOverrides": {
+    "I": {},
+    "II": {},
+    "III": {}
+   }
+  },
+  "workspaces": [
+   {
+    "id": "ws-1791078581843-1-828a7266",
+    "label": "EP00 — Cornish Arsehole",
+    "actIds": [
+     "I",
+     "II",
+     "III"
+    ],
+    "savedAt": 1791091104191,
+    "activeAct": "I",
+    "mediaSlug": "ep00-cornish-arsehole",
+    "actScripts": {
+     "I": "# EPISODE: EP00 — Cornish Arsehole\n\n=== ACT I — SCENE 1 — TOWN STREET ===\n[Location: town_street]\n[Character Dap: alone nearest camera, medium shot from the waist up, still pose, three-quarter view facing camera, smug face, mouth open talking, wearing a black turtleneck, at the town street]\nDap: [smug] I walk this street every morning. Nobody else appreciates it properly. [pause]\n\n[Location: town_street]\n[Character Dap: alone nearest camera, medium shot from the waist up, three-quarter view facing camera, looking straight into the camera, smug face, mouth open talking, wearing a black turtleneck, at the town street, after speaking he turns away and walks off towards the right of screen]\nDap: [smug] One does try to engage with the community. [pause] The community, regrettably, is composed almost entirely of people. [pause]\n\n[Location: town_street]\n[Action: Dap walks at a calm, natural pace along the footpath past the row of terraced houses and shopfronts, strict side profile, moving left to right, normal relaxed steps with arms swinging gently, chin raised slightly, smug and oblivious, wearing a black turtleneck. Camera still. Semi-photoreal 3D feature film render, realistic soft overcast lighting. Not a cartoon, not flat 2D]\nDap:\n\n=== ACT I — SCENE 2 — PARK ===\n[Location: park]\n[Action: Dap walks at a calm, natural pace along the park path past bare trees and the black iron railing, strict side profile, moving left to right, normal relaxed steps, chin raised high, completely oblivious, wearing a black turtleneck and black trousers. Camera still. Semi-photoreal 3D feature film render, realistic soft overcast lighting. Not a cartoon, not flat 2D]\nDap:\n\n[Location: park]\n[Character Dap: alone in frame, medium-wide shot, strict side profile, striding left to right along the park path, chin raised high, completely oblivious, wearing a black turtleneck sweater, mouth open talking, at the quiet park]\nDap: [smug] Nature is simply infrastructure that nobody has bothered to organise. [pause] I have views on the trees. They are not evenly spaced. [pause]\n\n[Location: park]\n[Cast: Sparrow]\n[Action: The sparrow on the park railing spots someone off screen, eyes go huge, feathers spike out in horror, beak wide open, then it flaps away fast. Camera still. Semi-photoreal 3D feature film render, realistic soft overcast lighting. Not a cartoon, not flat 2D]\nSparrow:\n\n[Location: park]\n[Action: Dap seen from behind, walking away from camera down the long straight park path at a calm natural pace, bare trees on both sides, chin raised, wearing a black turtleneck and black trousers. Camera still. Semi-photoreal 3D feature film render, realistic soft overcast lighting. Not a cartoon, not flat 2D]\nDap:\n\n[Location: park]\n[Character Dap: alone nearest camera, medium shot from the waist up, still pose, three-quarter view facing camera, smug face, mouth open talking, wearing a black turtleneck and black trousers, at the quiet park]\nDap: [smug] And if they imagine that concludes the matter, they have gravely misjudged both my patience and my filing system. [pause]\n\n=== ACT I — SCENE 3 — THE WHACK ===\n[Location: park]\n[Character Dap: alone nearest camera, medium shot from the waist up, three-quarter view facing camera, looking straight into the camera, smug face, mouth open talking, wearing a black turtleneck and black trousers, at the quiet park on the long straight path, after speaking he turns around and walks away from camera down the path]\nDap: [smug] People do find me difficult. [pause] That is because I hold them to a standard. [pause] And a standard is only difficult if you are already failing to mee— [pause]\n\n[Location: park]\n[Action: A huge rusty shipping container lies slammed down on the long straight park path far away, dust and debris settling around it, nobody in sight, bare winter trees on both sides, silent and still. Camera still. Semi-photoreal 3D feature film render, realistic soft overcast lighting. Not a cartoon, not flat 2D]\nCrowd:",
+     "II": "",
+     "III": ""
+    },
+    "runtimeMap": {
+     "I": {
+      "0": {
+       "line": "[smug] I walk this street every morning. Nobody else appreciates it properly. [pause]",
+       "status": "done",
+       "lineKey": "Dap: [smug] I walk this street every morning. Nobody else appreciates it properly. [pause]",
+       "videoUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/episodes/ep00-cornish-arsehole/act-i/ep00-cornish-arsehole-act-i-beat-01-dap-speak-v2.mp4",
+       "audioMuxed": true,
+       "durationSec": 5.015510204081638,
+       "videoBackend": "ltx",
+       "characterName": "Dap"
+      },
+      "1": {
+       "line": "[smug] One does try to engage with the community. [pause] The community, regrettably, is composed almost entirely of people. [pause]",
+       "status": "done",
+       "lineKey": "Dap: [smug] One does try to engage with the community. [pause] The community, regrettably, is composed almost entirely of people. [pause]",
+       "videoUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/episodes/ep00-cornish-arsehole/act-i/ep00-cornish-arsehole-act-i-beat-02-dap-speak-v2.mp4",
+       "audioMuxed": true,
+       "durationSec": 8.542040816326578,
+       "videoBackend": "ltx",
+       "characterName": "Dap"
+      },
+      "2": {
+       "line": "",
+       "status": "done",
+       "lineKey": "Dap:",
+       "videoUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/episodes/ep00-cornish-arsehole/act-i/ep00-cornish-arsehole-act-i-beat-03-dap-hold.mp4",
+       "audioMuxed": true,
+       "durationSec": 5.067755102040822,
+       "videoBackend": "grok",
+       "characterName": "Dap"
+      },
+      "3": {
+       "line": "",
+       "status": "done",
+       "lineKey": "Dap:",
+       "videoUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/episodes/ep00-cornish-arsehole/act-i/ep00-cornish-arsehole-act-i-beat-04-dap-hold.mp4",
+       "audioMuxed": true,
+       "durationSec": 5.067755102040822,
+       "videoBackend": "grok",
+       "characterName": "Dap"
+      },
+      "4": {
+       "line": "[smug] Nature is simply infrastructure that nobody has bothered to organise. [pause] I have views on the trees. They are not evenly spaced. [pause]",
+       "status": "done",
+       "lineKey": "Dap: [smug] Nature is simply infrastructure that nobody has bothered to organise. [pause] I have views on the trees. They are not evenly spaced. [pause]",
+       "videoUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/episodes/ep00-cornish-arsehole/act-i/ep00-cornish-arsehole-act-i-beat-02-dap-speak.mp4",
+       "audioMuxed": true,
+       "durationSec": 9.90040816326537,
+       "videoBackend": "ltx",
+       "characterName": "Dap"
+      },
+      "5": {
+       "line": "",
+       "status": "done",
+       "lineKey": "Sparrow:",
+       "videoUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/episodes/ep00-cornish-arsehole/act-i/ep00-cornish-arsehole-act-i-beat-05-sparrow-hold-v2.mp4",
+       "audioMuxed": true,
+       "durationSec": 5.067755102040822,
+       "videoBackend": "grok",
+       "characterName": "Sparrow"
+      },
+      "6": {
+       "line": "",
+       "status": "done",
+       "lineKey": "Dap:",
+       "videoUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/episodes/ep00-cornish-arsehole/act-i/ep00-cornish-arsehole-act-i-beat-07-dap-hold.mp4",
+       "audioMuxed": true,
+       "durationSec": 5.067755102040822,
+       "videoBackend": "grok",
+       "characterName": "Dap"
+      },
+      "7": {
+       "line": "[smug] And if they imagine that concludes the matter, they have gravely misjudged both my patience and my filing system. [pause]",
+       "status": "done",
+       "lineKey": "Dap: [smug] And if they imagine that concludes the matter, they have gravely misjudged both my patience and my filing system. [pause]",
+       "videoUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/episodes/ep00-cornish-arsehole/act-i/ep00-cornish-arsehole-act-i-beat-08-dap-speak.mp4",
+       "audioMuxed": true,
+       "durationSec": 6.791836734693904,
+       "videoBackend": "ltx",
+       "characterName": "Dap"
+      },
+      "8": {
+       "line": "[smug] People do find me difficult. [pause] That is because I hold them to a standard. [pause] And a standard is only difficult if you are already failing to mee— [pause]",
+       "status": "done",
+       "lineKey": "Dap: [smug] People do find me difficult. [pause] That is because I hold them to a standard. [pause] And a standard is only difficult if you are already failing to mee— [pause]",
+       "videoUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/episodes/ep00-cornish-arsehole/act-i/ep00-cornish-arsehole-act-i-beat-09-dap-speak-v3.mp4",
+       "audioMuxed": true,
+       "durationSec": 10.553469387755174,
+       "videoBackend": "ltx",
+       "characterName": "Dap"
+      },
+      "9": {
+       "line": "",
+       "status": "done",
+       "lineKey": "Crowd:",
+       "videoUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/episodes/ep00-cornish-arsehole/act-i/ep00-cornish-arsehole-act-i-beat-10-crowd-hold.mp4",
+       "audioMuxed": true,
+       "durationSec": 5.067755102040822,
+       "videoBackend": "grok",
+       "characterName": "Crowd"
+      }
+     },
+     "II": {},
+     "III": {}
+    },
+    "fingerprint": "60672279",
+    "defaultLocationId": "",
+    "locationOverrides": {
+     "I": {},
+     "II": {},
+     "III": {}
+    },
+    "characterOverrides": {
+     "I": {},
+     "II": {},
+     "III": {}
+    }
+   }
+  ],
+  "saveSeq": 62
+ },
+ "skidmarksEpisodes": {
+  "cast": [
+   {
+    "id": "cast_692c629e-c8f0-413a-b9d1-51081c80f0a9",
+    "look": "",
+    "name": "Dap",
+    "role": "supporting",
+    "createdAt": 1790660207774,
+    "pictureUrls": [
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/pictures/dap-picture-01.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/pictures/dap-picture-02.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/pictures/dap-picture-03.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/pictures/dap-picture-04.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/pictures/dap-picture-05.jpg"
+    ],
+    "fictionalAdultConfirmed": true
+   },
+   {
+    "id": "cast_1c265327-4969-421c-8cd2-d00b09fe12bd",
+    "look": "",
+    "name": "Sparrow",
+    "role": "supporting",
+    "isAnimal": true,
+    "createdAt": 1791077659838,
+    "pictureUrls": [
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/pictures/sparrow-picture-01.jpg"
+    ],
+    "fictionalAdultConfirmed": true
+   }
+  ],
+  "episodes": []
+ },
+ "locations": {
+  "locations": [
+   {
+    "id": "loc_skidmarks_town_street",
+    "key": "town_street",
+    "name": "town_street",
+    "genre": "skidmarks",
+    "createdAt": 1791077381133,
+    "pictureUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/locations/town-street.jpg"
+   },
+   {
+    "id": "loc_skidmarks_park",
+    "key": "park",
+    "name": "park",
+    "genre": "skidmarks",
+    "createdAt": 1791077397330,
+    "pictureUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/locations/park.jpg"
+   }
+  ]
+ },
+ "characterLoras": {
+  "characters": [
+   {
+    "id": "clora_6c22b460-50d5-4048-9075-fb816294fb6b",
+    "name": "Dap",
+    "slug": "dap",
+    "error": null,
+    "hfRepo": "comfybear71/deck-loras",
+    "status": "ready",
+    "costUsd": 0.33,
+    "version": 1,
+    "voiceId": "mvdA70bfQ2Ivt1OXHJqC",
+    "loraFile": "dap_v1.safetensors",
+    "autoTrain": true,
+    "createdAt": "2026-09-29T05:42:56.191Z",
+    "sourceKey": "sk:cast_692c629e-c8f0-413a-b9d1-51081c80f0a9",
+    "trainedAt": "2026-09-29T18:33:40.601Z",
+    "subjectWord": "person",
+    "pictureRound": 0,
+    "referenceUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/dap-reference-v3.jpg",
+    "embeddingFile": "dap_v1_emb.safetensors",
+    "trainingStyle": "render3d",
+    "awaitingReview": false,
+    "importedToComfy": false,
+    "autoPictureTarget": null,
+    "cleanCandidateUrl": null,
+    "trainingImageUrls": [
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-01.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-02.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-03.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-04.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-05.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-06.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-07-v2.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-08-v2.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-05-v2.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-06-v2.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-07.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-08.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-13.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-14-v3.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/dap/plates/dap-plate-15.jpg"
+    ],
+    "replicateTrainingId": "ep73e0vzgsrmt0d0xsn81kzj8r",
+    "cleanReferenceApproved": true,
+    "fictionalAdultConfirmed": true
+   },
+   {
+    "id": "clora_72aeb3b8-372d-4cf0-b19b-a101bee62b6b",
+    "name": "Sparrow",
+    "slug": "sparrow",
+    "error": null,
+    "hfRepo": "comfybear71/deck-loras",
+    "status": "ready",
+    "costUsd": 0.47,
+    "version": 1,
+    "loraFile": "sparrow_v1.safetensors",
+    "autoTrain": true,
+    "createdAt": "2026-10-04T01:34:27.876Z",
+    "sourceKey": "sk:cast_1c265327-4969-421c-8cd2-d00b09fe12bd",
+    "trainedAt": "2026-10-04T01:45:22.848Z",
+    "subjectWord": "animal",
+    "pictureRound": 0,
+    "referenceUrl": "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/sparrow-reference.jpg",
+    "embeddingFile": "sparrow_v1_emb.safetensors",
+    "trainingStyle": "semireal",
+    "awaitingReview": false,
+    "importedToComfy": false,
+    "autoPictureTarget": null,
+    "cleanCandidateUrl": null,
+    "trainingImageUrls": [
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-01.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-02.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-03.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-04.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-05.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-06.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-07.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-08.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-09.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-10.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-11.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-12.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-13.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-14.jpg",
+     "https://abc123.public.blob.vercel-storage.com/deck/skidmarks/characters/sparrow/plates/sparrow-plate-15.jpg"
+    ],
+    "replicateTrainingId": "nfacxy250xrmw0d10j7asnmjwr",
+    "cleanReferenceApproved": true,
+    "fictionalAdultConfirmed": true
+   }
+  ]
+ }
+}
