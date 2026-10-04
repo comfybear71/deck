@@ -16,8 +16,13 @@ function toLock(l: DeckLocation): SunnyBanksLocationLock {
   return lock;
 }
 
-export function sunnyBanksLocationList(state: DeckLocationsState | null | undefined): SunnyBanksLocationLock[] {
-  return effectiveDeckLocations(state, "sunnybank").map(toLock);
+/** A show's locations (2026-10-04: Skidmarks' own Locations row too; it
+ * has no built-ins, so it is empty until a place is added). */
+export function sunnyBanksLocationList(
+  state: DeckLocationsState | null | undefined,
+  genre: "sunnybank" | "skidmarks" = "sunnybank",
+): SunnyBanksLocationLock[] {
+  return effectiveDeckLocations(state, genre).map(toLock);
 }
 
 /** A location by its key, its key spelled loosely, or its name. */
@@ -42,6 +47,7 @@ export function sunnyBanksLocationProblem(
   list: readonly SunnyBanksLocationLock[],
   locationId: string,
 ): string | null {
+  if (!locationId) return "No location yet. Add one on the Locations row, or a [Location: …] tag above this line.";
   const loc = list.find((l) => l.id === locationId);
   if (!loc) return `Unknown location "${locationId}". Add it on the Locations row or fix the [Location: …] tag.`;
   if (!loc.image) return `${loc.label} has no picture yet. Add one on the Locations row.`;

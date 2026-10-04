@@ -49,17 +49,21 @@ import { sunnybankBeatTarget, sunnybankPlateTarget, type DeckMediaTarget } from 
 import { resolveSunnyBanksRowCast, sunnyBanksMultiCastRequest, type SunnyBanksRowCast } from "@/lib/sunnyBanksShotCast";
 import { CastChips } from "@/components/CastChips";
 import { setSunnyBanksBusy } from "@/lib/sunnyBanksBusy";
+import { studioGenreProfile, type StudioGenre } from "@/lib/studioGenre";
 import {
   buildSunnyBanksGodScriptPrompt,
   listSunnyBanksLocationIds,
   listSunnyBanksNonSpeakingCast,
   listSunnyBanksSpeakingCast,
+  SKIDMARKS_GOD_SCRIPT_NOTE,
   SUNNY_BANKS_GOD_SCRIPT_EXAMPLE,
   SUNNY_BANKS_GOD_SCRIPT_RULES,
 } from "@/lib/sunnyBanksGodScriptGuide";
 import {
   ensureSunnyBanksEpisodeMediaSlug,
+  getSkidmarksEpisodesState,
   getSkidmarksSnapshot,
+  getStudioState,
   getSunnyBanksLiveOrDefault,
   patchSunnyBanksLive,
   setSunnyBanksSilentShotBackend,
@@ -71,6 +75,7 @@ import {
   mintWorkspaceId,
   SUNNY_BANKS_INITIAL_ACTS,
   type SunnyBanksActKeyed,
+  type SunnyBanksLiveState,
   type SunnyBanksRowRuntime,
 } from "@/lib/sunnyBanksWorkspace";
 import { deckBuildHeaders } from "@/lib/deckBuild";
@@ -205,17 +210,46 @@ import { deckBuildHeaders } from "@/lib/deckBuild";
 
 const CAST_LIST = Object.values(SUNNY_BANKS_CAST);
 
+/**
+ * Which show the script helpers below read (2026-10-04: Skidmarks has
+ * exactly this structure). The script parser, the tag colours and the
+ * formatter need the show's cast and locations, and they are called
+ * from many places, so they read the show that is open on screen (the
+ * session's project, which is also what picks this panel) and
+ * `inStudioGenre` can name one for code that runs on its own (a save,
+ * an episode zip, a test). Sunny Banks unless it is Skidmarks: every
+ * Sunny Banks call reads exactly what it always did.
+ */
+let genreOverride: StudioGenre | null = null;
+
+function helperGenre(): StudioGenre {
+  if (genreOverride) return genreOverride;
+  return getSkidmarksSnapshot().session?.projectKind === "skidmarks" ? "skidmarks" : "sunnybank";
+}
+
+/** Runs `fn` with the script helpers reading `genre`'s cast and locations. */
+export function inStudioGenre<T>(genre: StudioGenre, fn: () => T): T {
+  const previous = genreOverride;
+  genreOverride = genre;
+  try {
+    return fn();
+  } finally {
+    genreOverride = previous;
+  }
+}
+
 /** The character a `Name:` line means, with the voice from their card
  * when one is saved (`lib/sunnyBanksVoices.ts`, 2026-09-30). */
 function speakerLock(name: string) {
-  return resolveSunnyBanksSpeaker(name, getSkidmarksSnapshot());
+  return resolveSunnyBanksSpeaker(name, getSkidmarksSnapshot(), helperGenre());
 }
 
 /** Longest name first so "Ranger Bazza" / "Unit 4S" win over a
  * shorter prefix. Keys of `SUNNY_BANKS_CAST`, not a parallel array. */
 function speakerNames(): string[] {
-  // Built-in cast plus characters added with "+" once they have a voice.
-  return sunnyBanksSpeakerNames(getSkidmarksSnapshot());
+  // Built-in cast plus characters added with "+" once they have a voice
+  // (Skidmarks: the Skidmarks Cast, once they have a voice).
+  return sunnyBanksSpeakerNames(getSkidmarksSnapshot(), helperGenre());
 }
 
 type BeatKind = "speak" | "hold";
@@ -337,6 +371,9 @@ export interface SunnyBanksBeatArgs {
   /** Multi-cast fields (2026-10-03). Empty for a one-person row, so its
    * request is exactly what it was before. */
   multiCast?: Record<string, unknown>;
+  /** Which show (2026-10-04). Only Skidmarks says so; a Sunny Banks
+   * request is exactly what it was before. */
+  genre?: StudioGenre;
 }
 
 /**
@@ -348,6 +385,7 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
   const appearanceModifier = args.appearanceModifier?.trim() ?? "";
   const mediaTarget = args.mediaTarget ? { mediaTarget: args.mediaTarget } : {};
   const speaker = args.speaker ?? {};
+  const genre = args.genre && args.genre !== "sunnybank" ? { genre: args.genre } : {};
   // `action` and `appearanceModifier` travel as two separate fields —
   // the route itself merges them into the motion prompt (2026-09-18).
   return (
@@ -365,6 +403,7 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
           ...mediaTarget,
           ...speaker,
           ...(args.multiCast ?? {}),
+          ...genre,
         }
       : {
           characterName: args.characterName,
@@ -378,6 +417,7 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
           ...mediaTarget,
           ...speaker,
           ...(args.multiCast ?? {}),
+          ...genre,
         }
   );
 }
@@ -401,8 +441,13 @@ export function sunnyBanksRowBeatArgs(args: {
   /** The scene's first row number (names the shared picture). */
   sceneFirstRowNumber: number;
   scenePlateUrl?: string;
+  /** Which show (Sunny Banks when left out): its clip folders and look. */
+  genre?: StudioGenre;
 }): SunnyBanksBeatArgs {
   const { chunk, rowCast } = args;
+  const genre = args.genre ?? "sunnybank";
+  // Only Skidmarks names its show on the paths and the request.
+  const genreField = genre !== "sunnybank" ? { genre } : {};
   return {
     kind: chunk.kind,
     characterName: args.characterName,
@@ -426,6 +471,7 @@ export function sunnyBanksRowBeatArgs(args: {
             actId: args.act,
             beatNumber: args.sceneFirstRowNumber,
             castNames: rowCast.cast.names,
+            ...genreField,
           })
         : null,
       locationHasPeople: args.location.peopleInPicture === true,
@@ -438,7 +484,9 @@ export function sunnyBanksRowBeatArgs(args: {
       beatNumber: args.rowNumber,
       characterName: args.characterName,
       kind: chunk.kind,
+      ...genreField,
     }),
+    ...genreField,
   };
 }
 
@@ -493,7 +541,12 @@ export interface SunnyBanksRenderedClip {
   castNames?: string[];
 }
 
-const FALLBACK_CHARACTER_NAME = CAST_LIST[0]?.name ?? "";
+/** Who an unnamed line belongs to when nobody spoke before it: Sunny
+ * Banks' first built-in; Skidmarks' first voiced character, else nobody. */
+function fallbackCharacterName(): string {
+  if (helperGenre() === "sunnybank") return CAST_LIST[0]?.name ?? "";
+  return sunnyBanksSpeakerList(getSkidmarksSnapshot(), helperGenre())[0]?.name ?? "";
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -576,13 +629,20 @@ export function parseSunnyBanksSceneHeader(raw: string): string | null {
 /** The saved characters for the God-script guide: the built-in cast with
  *  any voice saved on their card (Hans), plus characters added with "+". */
 function guideCast() {
-  return sunnyBanksSpeakerList(getSkidmarksSnapshot());
+  return sunnyBanksSpeakerList(getSkidmarksSnapshot(), helperGenre());
 }
 
 /** Sunnybank's locations: the Locations row's saved list, or the
  *  built-ins until it has one (`lib/sunnyBanksLocations.ts`). */
 function locationList(): SunnyBanksLocationLock[] {
-  return sunnyBanksLocationList(getSkidmarksSnapshot().locations);
+  return sunnyBanksLocationList(getSkidmarksSnapshot().locations, helperGenre());
+}
+
+/** Where a script starts before its first `[Location: …]`: Sunny Banks'
+ * storefront; Skidmarks' first place on its Locations row, else none. */
+function defaultScriptLocationId(): SunnyBanksLocationId {
+  if (helperGenre() === "sunnybank") return SUNNY_BANKS_DEFAULT_LOCATION_ID;
+  return locationList()[0]?.id ?? "";
 }
 
 /** Map `[Location: id]` onto a location on the Locations row (its key,
@@ -602,7 +662,7 @@ function unknownLocationKey(token: string): SunnyBanksLocationId | undefined {
 /** Every Sunnybank Cast card (voice or not), for `[Character Name: …]`
  *  and `[Cast: …]` names (2026-10-03). */
 function castCards() {
-  return sunnyBanksCastCards(getSkidmarksSnapshot());
+  return sunnyBanksCastCards(getSkidmarksSnapshot(), helperGenre());
 }
 
 /**
@@ -1190,7 +1250,7 @@ export function pickSunnyBanksRowLocation(
 export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[] {
   const chunks: SunnyBanksScriptChunk[] = [];
   let previousName = "";
-  let currentLocation: SunnyBanksLocationId = SUNNY_BANKS_DEFAULT_LOCATION_ID;
+  let currentLocation: SunnyBanksLocationId = defaultScriptLocationId();
   let taggedLocation: SunnyBanksLocationId | undefined;
   let pendingActions: string[] = [];
   let pendingLooks: Array<{ name: string | null; look: string }> = [];
@@ -1283,7 +1343,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       line = matched.rest;
       previousName = matched.name;
     } else {
-      characterName = previousName || FALLBACK_CHARACTER_NAME;
+      characterName = previousName || fallbackCharacterName();
       line = tagged.rest;
       if (characterName) previousName = characterName;
     }
@@ -1356,7 +1416,7 @@ function markSunnyBanksScene(scene: {
 
 /** Empty `Name:` Hold — the inserted shot between two existing clips. */
 export function buildSunnyBanksHoldScriptLine(characterName: string): string {
-  const name = characterName.trim() || FALLBACK_CHARACTER_NAME;
+  const name = characterName.trim() || fallbackCharacterName();
   return `${name}:`;
 }
 
@@ -1406,7 +1466,7 @@ export function rewriteSunnyBanksSpeakerLine(
   characterName: string,
   dialogue: string
 ): string {
-  const name = characterName.trim() || FALLBACK_CHARACTER_NAME;
+  const name = characterName.trim() || fallbackCharacterName();
   let rest = original.trimEnd();
   const tags: string[] = [];
   const tagRe = /^(\[[^\]]+\]\s*)/;
@@ -1736,6 +1796,7 @@ export function collectSunnyBanksEpisodePrompts(source: {
   locationPickTags?: ActKeyed<Record<number, SunnyBanksLocationId>>;
   defaultLocationId: SunnyBanksLocationId;
 }) {
+  const look = studioGenreProfile(helperGenre()).look;
   const prompts: Array<{
     act: SunnyBanksActId;
     index: number;
@@ -1758,8 +1819,8 @@ export function collectSunnyBanksEpisodePrompts(source: {
       const extra = [chunk.action, chunk.appearanceModifier].filter(Boolean).join(" ");
       const gold = lock
         ? kind === "hold"
-          ? buildSunnyBanksHoldPrompt(lock, chunk.action)
-          : buildSunnyBanksSpeakingPrompt(lock, chunk.line)
+          ? buildSunnyBanksHoldPrompt(lock, chunk.action, look)
+          : buildSunnyBanksSpeakingPrompt(lock, chunk.line, look)
         : kind === "hold"
           ? buildSunnyBanksLocationCutawayPrompt(chunk.action)
           : "";
@@ -1986,13 +2047,14 @@ function SunnyBanksFullScreenScriptEditor({
   );
 }
 
-function SunnyBanksGodScriptCheatSheet() {
+function SunnyBanksGodScriptCheatSheet({ genre = "sunnybank" }: { genre?: StudioGenre }) {
   const [open, setOpen] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   const handleCopyPrompt = async () => {
     try {
-      await navigator.clipboard.writeText(buildSunnyBanksGodScriptPrompt(locationList(), guideCast()));
+      const prompt = inStudioGenre(genre, () => buildSunnyBanksGodScriptPrompt(locationList(), guideCast(), genre));
+      await navigator.clipboard.writeText(prompt);
       setCopyState("copied");
     } catch {
       setCopyState("failed");
@@ -2016,6 +2078,9 @@ function SunnyBanksGodScriptCheatSheet() {
             Every queue row is a paid render. A line the parser doesn&apos;t recognise isn&apos;t
             skipped — it gets spoken out loud in a real clip.
           </p>
+          {genre === "skidmarks" && (
+            <p className="text-[11px] leading-snug text-white/60">{SKIDMARKS_GOD_SCRIPT_NOTE}</p>
+          )}
 
           <div className="flex flex-col gap-2.5">
             {SUNNY_BANKS_GOD_SCRIPT_RULES.map((rule) => (
@@ -2124,20 +2189,29 @@ function ZipIcon() {
   );
 }
 
-export function SkidmarksSunnyBanksPanel() {
+export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: StudioGenre } = {}) {
+  // The script helpers read the open show's cast and locations
+  // (`helperGenre()`: the session's project, which is also what put this
+  // panel on screen with this `genre`).
   const studioState = useSyncExternalStore(subscribeSkidmarks, getSkidmarksSnapshot, getSkidmarksSnapshot);
-  const live = studioState.sunnyBanks?.live ?? getSunnyBanksLiveOrDefault(studioState);
+  const studio = getStudioState(genre, studioState);
+  const live = studio?.live ?? getSunnyBanksLiveOrDefault(studioState, genre);
+  /** Every edit of this show's live episode (auto-saved onto its card),
+   * with the script helpers on this show even if it lands after a render. */
+  const patchLive = (updater: (prev: SunnyBanksLiveState) => SunnyBanksLiveState) =>
+    patchSunnyBanksLive((prev) => inStudioGenre(genre, () => updater(prev)), genre);
   const actIds = live.actIds;
   const activeAct = live.activeAct;
   const actScripts = live.actScripts;
-  const defaultLocationId = live.defaultLocationId;
+  // Skidmarks has no built-in place: its first saved location until one is picked.
+  const defaultLocationId = live.defaultLocationId || defaultScriptLocationId();
   const characterOverridesByAct = live.characterOverrides;
   const locationOverridesByAct = live.locationOverrides;
   const locationPickTagsByAct = live.locationPickTags ?? {};
   const runtimeMapByAct = live.runtimeMap;
   const workspaceTitle = live.workspaceTitle;
   /** The Grok/H3 switch for silent rows (saved with the session). */
-  const silentShotBackend = normalizeSilentShotBackend(studioState.sunnyBanks?.silentShotBackend);
+  const silentShotBackend = normalizeSilentShotBackend(studio?.silentShotBackend);
   /** The free H3 key check's last answer, shown next to the switch. */
   const [h3KeyCheck, setH3KeyCheck] = useState<string | null>(null);
   const [runningKind, setRunningKind] = useState<BeatKind | null>(null);
@@ -2179,8 +2253,32 @@ export function SkidmarksSunnyBanksPanel() {
   };
 
   // The Locations row's list (or the built-ins until it has one).
-  const locations = sunnyBanksLocationList(studioState.locations);
-  const castCardList = sunnyBanksCastCards(studioState);
+  const locations = sunnyBanksLocationList(studioState.locations, genre);
+  const castCardList = sunnyBanksCastCards(studioState, genre);
+  /** Who's ticked as in this episode (2026-10-04, Skidmarks): ids from
+   * the shared Skidmarks Cast. Nobody ticked = everyone is offered. */
+  const showCast = genre === "skidmarks" ? getSkidmarksEpisodesState(studioState).cast : [];
+  const tickedCastIds = (live.castIds ?? []).filter((id) => showCast.some((c) => c.id === id));
+  const tickedNames = new Set(
+    showCast.filter((c) => tickedCastIds.includes(c.id)).map((c) => c.name.trim().toLowerCase())
+  );
+  /** A row's character picker: the show's voiced cast (only those ticked
+   * as in this episode, when any are), always with the row's own. */
+  const rowSpeakerChoices = (current: string) =>
+    sunnyBanksSpeakerList(studioState, genre).filter(
+      (c) =>
+        tickedNames.size === 0 ||
+        tickedNames.has(c.name.trim().toLowerCase()) ||
+        c.name.trim().toLowerCase() === current.trim().toLowerCase()
+    );
+  const toggleEpisodeCast = (castId: string) => {
+    if (running) return;
+    patchLive((prev) => {
+      const ids = (prev.castIds ?? []).filter((id) => showCast.some((c) => c.id === id));
+      const next = ids.includes(castId) ? ids.filter((id) => id !== castId) : [...ids, castId];
+      return { ...prev, castIds: next.length > 0 ? next : undefined };
+    });
+  };
   const queue = sunnyBanksQueueChunks(parsed).map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
     const locationId = resolveSunnyBanksRowLocationId(chunk, locationOverrides[index], locationPickTags[index], defaultLocationId);
@@ -2266,7 +2364,7 @@ export function SkidmarksSunnyBanksPanel() {
    * has one, else its name. Read only: the zip never pins a folder. */
   const zipEpisodeName =
     live.mediaSlug ??
-    studioState.sunnyBanks?.workspaces.find((w) => w.id === live.episodeId)?.mediaSlug ??
+    studio?.workspaces.find((w) => w.id === live.episodeId)?.mediaSlug ??
     (live.workspaceTitle.trim() || "episode");
   /** Why an act's zip didn't start (rare: the page checks first). */
   const [zipNotice, setZipNotice] = useState<{ act: SunnyBanksActId; text: string } | null>(null);
@@ -2389,7 +2487,7 @@ export function SkidmarksSunnyBanksPanel() {
   /** Remove on a clip: its row goes back to Idle (no file deleted), ready for "Render 1 line". */
   const handleRemoveClip = (clip: SunnyBanksRenderedClip) => {
     if (runningRef.current) return;
-    patchSunnyBanksLive((prev) => ({
+    patchLive((prev) => ({
       ...prev,
       runtimeMap: {
         ...prev.runtimeMap,
@@ -2411,7 +2509,7 @@ export function SkidmarksSunnyBanksPanel() {
         characterName: next.characterName ?? row?.characterName,
         line: next.line ?? row?.line ?? "",
       };
-      patchSunnyBanksLive((prev) => ({
+      patchLive((prev) => ({
         ...prev,
         runtimeMap: {
           ...prev.runtimeMap,
@@ -2434,8 +2532,8 @@ export function SkidmarksSunnyBanksPanel() {
         // line that's rendering finishes and saves.
         shouldStop: () => stopRequestedRef.current,
         render: async (row, i) => {
-          const lock = speakerLock(row.characterName);
-          const cutaway = isSunnyBanksLocationCutaway(row.chunk);
+          const lock = inStudioGenre(genre, () => speakerLock(row.characterName));
+          const cutaway = inStudioGenre(genre, () => isSunnyBanksLocationCutaway(row.chunk));
           if ((!lock && !cutaway) || !row.location.image || row.locationProblem) {
             writeRuntime(i, {
               lineKey: row.chunk.raw,
@@ -2470,16 +2568,17 @@ export function SkidmarksSunnyBanksPanel() {
               sunnyBanksRowBeatArgs({
                 chunk: row.chunk,
                 characterName: lock?.name ?? row.characterName,
-                speaker: sunnyBanksSpeakerRequestExtras(lock),
+                speaker: sunnyBanksSpeakerRequestExtras(lock, genre),
                 location: row.location,
                 startImageDataUrl,
                 rowCast: row.rowCast,
                 videoBackend: row.backendChoice.backend,
                 act,
-                episodeSlug: ensureSunnyBanksEpisodeMediaSlug(),
+                episodeSlug: ensureSunnyBanksEpisodeMediaSlug(genre),
                 rowNumber: row.index + 1,
                 sceneFirstRowNumber: firstSceneRowNumber(row),
                 scenePlateUrl,
+                genre,
               })
             );
             if (result.plateUrl && row.chunk.sceneKey) scenePlatesThisRun[row.chunk.sceneKey] = result.plateUrl;
@@ -2544,7 +2643,7 @@ export function SkidmarksSunnyBanksPanel() {
 
   const handleUndoScript = () => {
     if (!scriptUndo || running) return;
-    patchSunnyBanksLive(() => ({
+    patchLive(() => ({
       actIds: [...scriptUndo.actIds],
       activeAct: scriptUndo.activeAct,
       actScripts: cloneActRecord(scriptUndo.actScripts, scriptUndo.actIds),
@@ -2602,7 +2701,7 @@ export function SkidmarksSunnyBanksPanel() {
     if (doc.hasActHeaders || decoded !== scriptText) {
       captureScriptUndo();
     }
-    patchSunnyBanksLive((prev) => {
+    patchLive((prev) => {
       // A pasted script whose own title header names a different episode
       // is a new episode, not a rename of the card that's open: auto-save
       // then adds a card instead of overwriting this one (as Save always
@@ -2658,7 +2757,7 @@ export function SkidmarksSunnyBanksPanel() {
   };
 
   const applyActScript = (nextScript: string) => {
-    patchSunnyBanksLive((prev) => ({
+    patchLive((prev) => ({
       ...prev,
       actScripts: { ...prev.actScripts, [prev.activeAct]: nextScript },
     }));
@@ -2671,7 +2770,7 @@ export function SkidmarksSunnyBanksPanel() {
     const holdLine = buildSunnyBanksHoldScriptLine(row.characterName);
     captureScriptUndo();
     const insertAt = rowIndex + 1;
-    patchSunnyBanksLive((prev) => {
+    patchLive((prev) => {
       const act = prev.activeAct;
       const script = prev.actScripts[act] ?? "";
       // The new hold sits under this row, so it gets this row's place
@@ -2710,10 +2809,10 @@ export function SkidmarksSunnyBanksPanel() {
   const handleInsertShotBeforeFirst = () => {
     if (running) return;
     const first = queue[0];
-    const name = first?.characterName || FALLBACK_CHARACTER_NAME;
+    const name = first?.characterName || fallbackCharacterName();
     const holdLine = buildSunnyBanksHoldScriptLine(name);
     captureScriptUndo();
-    patchSunnyBanksLive((prev) => {
+    patchLive((prev) => {
       const act = prev.activeAct;
       const script = prev.actScripts[act] ?? "";
       const nextScript = first
@@ -2754,7 +2853,7 @@ export function SkidmarksSunnyBanksPanel() {
     const status = runtimeFor(row.index, row.chunk.raw).status;
     if (status === "done" || status === "rendering") return;
     captureScriptUndo();
-    patchSunnyBanksLive((prev) => {
+    patchLive((prev) => {
       const act = prev.activeAct;
       const script = prev.actScripts[act] ?? "";
       return {
@@ -2801,7 +2900,7 @@ export function SkidmarksSunnyBanksPanel() {
   const handleAddAct = () => {
     if (running || actIds.length >= MAX_SUNNY_BANKS_ACTS) return;
     const id = nextSunnyBanksActId(actIds);
-    patchSunnyBanksLive((prev) => ({
+    patchLive((prev) => ({
       ...prev,
       actIds: [...prev.actIds, id],
       activeAct: id,
@@ -2823,6 +2922,41 @@ export function SkidmarksSunnyBanksPanel() {
       <div className="flex touch-pan-y flex-col gap-2.5 overscroll-y-contain rounded-2xl border border-amber-300/25 bg-amber-300/[0.03] p-3">
         {/* Every character always shows; one with no Cast card picture gets a red note on its rows (2026-10-01). */}
           <>
+            {genre === "skidmarks" && (
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <p className="text-[11px] font-semibold text-white/70">In this episode</p>
+                {showCast.length === 0 ? (
+                  <p className="text-[11px] leading-snug text-white/45">
+                    No Skidmarks Cast yet. Add characters on the Characters row above.
+                  </p>
+                ) : (
+                  <div className="flex min-w-0 flex-row flex-wrap gap-1.5">
+                    {showCast.map((member) => {
+                      const ticked = tickedCastIds.includes(member.id);
+                      return (
+                        <button
+                          key={member.id}
+                          type="button"
+                          role="checkbox"
+                          aria-checked={ticked}
+                          onClick={() => toggleEpisodeCast(member.id)}
+                          disabled={running}
+                          className={[
+                            "min-h-[36px] rounded-full px-3 text-[12px] font-medium transition-colors disabled:opacity-60",
+                            ticked
+                              ? "bg-amber-300 text-zinc-950"
+                              : "bg-white/[0.04] text-white/70 ring-1 ring-inset ring-white/10",
+                          ].join(" ")}
+                        >
+                          {ticked ? "✓ " : ""}
+                          {member.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
             {/* Acts scroll sideways; the script tools sit on their own
               * row below. Two separate rows is the fix (2026-09-18):
               * acts and tools used to share one strip, so adding the
@@ -2849,7 +2983,7 @@ export function SkidmarksSunnyBanksPanel() {
                     type="button"
                     role="tab"
                     aria-selected={selected}
-                    onClick={() => patchSunnyBanksLive((prev) => ({ ...prev, activeAct: act }))}
+                    onClick={() => patchLive((prev) => ({ ...prev, activeAct: act }))}
                     disabled={running}
                     className={[
                       "min-h-[40px] shrink-0 rounded-md px-3.5 text-[12px] font-semibold transition-colors disabled:opacity-60",
@@ -2942,7 +3076,11 @@ export function SkidmarksSunnyBanksPanel() {
                       handleScriptChange(`${el.value.slice(0, start)}${decoded}${el.value.slice(end)}`);
                     }}
                     disabled={running}
-                    placeholder={"Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"}
+                    placeholder={
+                      genre === "skidmarks"
+                        ? "[Location: Town street]\n[Action: walks along the pavement, side on]\nDap:"
+                        : "Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"
+                    }
                     rows={12}
                     className="relative z-10 w-full resize-y bg-transparent px-3 py-2 text-base leading-6 text-transparent caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60"
                   />
@@ -3036,7 +3174,7 @@ export function SkidmarksSunnyBanksPanel() {
                                     value={row.characterName}
                                     onChange={(e) => {
                                       const name = e.target.value;
-                                      patchSunnyBanksLive((prev) => ({
+                                      patchLive((prev) => ({
                                         ...prev,
                                         characterOverrides: {
                                           ...prev.characterOverrides,
@@ -3051,7 +3189,7 @@ export function SkidmarksSunnyBanksPanel() {
                                     aria-label={`Character for line ${row.index + 1}`}
                                     className="h-10 min-h-[40px] w-[4.75rem] max-w-[4.75rem] shrink-0 truncate rounded-lg border border-white/10 bg-white/[0.03] px-1 text-[12px] text-white disabled:opacity-60"
                                   >
-                                    {sunnyBanksSpeakerList(studioState).map((c) => (
+                                    {rowSpeakerChoices(row.characterName).map((c) => (
                                       <option key={c.name} value={c.name} className="bg-zinc-900">
                                         {c.name}
                                         {!resolveSunnyBanksStartImage(c)
@@ -3068,7 +3206,7 @@ export function SkidmarksSunnyBanksPanel() {
                                     value={row.location.id}
                                     onChange={(e) => {
                                       const locationId = e.target.value as SunnyBanksLocationId;
-                                      patchSunnyBanksLive((prev) => {
+                                      patchLive((prev) => {
                                         const act = prev.activeAct;
                                         const picked = pickSunnyBanksRowLocation(
                                           {
@@ -3233,7 +3371,7 @@ export function SkidmarksSunnyBanksPanel() {
               </div>
             )}
 
-            <SunnyBanksGodScriptCheatSheet />
+            <SunnyBanksGodScriptCheatSheet genre={genre} />
 
             {fullScreenScriptOpen && (
               <SunnyBanksFullScreenScriptEditor
@@ -3262,7 +3400,7 @@ export function SkidmarksSunnyBanksPanel() {
                     type="button"
                     aria-pressed={silentShotBackend === option}
                     onClick={() => {
-                      setSunnyBanksSilentShotBackend(option);
+                      setSunnyBanksSilentShotBackend(option, genre);
                       setH3KeyCheck(null);
                     }}
                     disabled={running}

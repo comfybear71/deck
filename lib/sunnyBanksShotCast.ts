@@ -34,7 +34,7 @@ import {
   SHOT_CAST_SILENT_LINE,
   type ShotCast,
 } from "./shotCast";
-import { SUNNY_BANKS_STYLE_LOCK, type SunnyBanksLocationLock } from "./sunnyBanks";
+import { SUNNY_BANKS_LOOK, type StudioLook, type SunnyBanksLocationLock } from "./sunnyBanks";
 import { SUNNY_BANKS_PICTURE_LOOK, type SunnyBanksCastCard } from "./sunnyBanksVoices";
 
 /** One person in a multi-cast shot, as the panel sends it. */
@@ -217,7 +217,10 @@ export function buildSunnyBanksMultiCastPlatePrompt(args: {
   speaker?: string | null;
   sceneSpeakers?: readonly string[];
   shotAction?: string;
+  /** The show's look (Sunny Banks unless said). */
+  look?: StudioLook;
 }): string {
+  const look = args.look ?? SUNNY_BANKS_LOOK;
   const names = args.people.map((p) => p.name);
   const action = args.shotAction?.replace(/\s+/g, " ").trim() || "";
   const anyShotLook = args.people.some((p) => p.shotLook);
@@ -229,8 +232,8 @@ export function buildSunnyBanksMultiCastPlatePrompt(args: {
     .map((p) => [p.name, p.look, p.position].map((s) => s?.trim()).filter(Boolean).join(", "))
     .join("; ");
   const lines = [
-    SUNNY_BANKS_STYLE_LOCK,
-    "Image 1 (<IMAGE_0>) is the LOCKED background — keep that exact place, lighting and materials. Do not move the camera. Do not replace the location with a photo street. Remove any people or crowds already in image 1 — empty place only, then add only the people below.",
+    look.styleLock,
+    `Image 1 (<IMAGE_0>) is the LOCKED background — keep that exact place, lighting and materials. Do not move the camera. ${look.keepPlaceLine} Remove any people or crowds already in image 1 — empty place only, then add only the people below.`,
     exactlyPeopleLine(names),
     ...castImageLabelLines(args.people, 2),
     SHOT_CAST_KEEP_APART_LINE,

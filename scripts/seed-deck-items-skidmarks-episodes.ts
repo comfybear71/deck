@@ -2,9 +2,9 @@
  * ONE-TIME SEED for per-item saving: Skidmarks episodes. Run by hand,
  * never by the app, never on deploy.
  *
- * Reads `skidmarksEpisodes.episodes` from Stuart's `skidmarks_sessions`
+ * Reads `skidmarksStudio.workspaces` (the episode cards, 2026-10-04) from Stuart's `skidmarks_sessions`
  * row and inserts each episode as one `deck_items` row (kind
- * `skidmarks-episode`, folder `skidmarks`, revision 1, its own `ep_…` id).
+ * `skidmarks-episode`, folder `skidmarks`, revision 1, its own id).
  * Refuses if the owner already has any episode rows (live or deleted), if
  * the tables haven't been created, or if there are no episodes.
  *
@@ -25,8 +25,8 @@ runDeckItemSeed({
   kind: "skidmarks-episode",
   label: "Skidmarks episodes",
   treeHeading: "Episodes",
-  statePath: ["skidmarksEpisodes", "episodes"],
-  plan: (list) => planDeckItemSeed(SKIDMARKS_EPISODE_ITEMS, "skidmarks", (ep) => ep.title, list),
+  statePath: ["skidmarksStudio", "workspaces"],
+  plan: (list) => planDeckItemSeed(SKIDMARKS_EPISODE_ITEMS, "skidmarks", (ep) => ep.label, list),
 }).catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);

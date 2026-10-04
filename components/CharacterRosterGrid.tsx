@@ -97,6 +97,7 @@ const STYLE_LABELS: Record<CharacterTrainingStyle, string> = {
   cartoon: "Cartoon",
   faceless: "Face hidden",
   render3d: "3D cartoon",
+  semireal: "Semi-photoreal",
 };
 
 /**

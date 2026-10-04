@@ -200,6 +200,14 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
   },
 ];
 
+/** The one Skidmarks note (2026-10-04): same script, its own cast, no
+ * narrator lines. Shown on the Skidmarks cheat sheet and in its prompt. */
+export const SKIDMARKS_GOD_SCRIPT_NOTE =
+  "SKIDMARKS: same tags and rules, with the Skidmarks Cast and the Skidmarks Locations row. " +
+  "The narrator is voice-over added later in the edit, not a character: never write Narrator lines. " +
+  "Put only the characters in the shot on screen, and describe caricature as their body and face, never as a drawing. " +
+  "The examples below use Sunny Banks names: write with the Skidmarks Cast and location ids listed here instead.";
+
 /** The worked example carried by both the cheat sheet and the prompt.
  * `lib/sunnyBanksGodScriptGuide.test.ts` runs this through the real
  * `parseSunnyBanksScriptBlock`, so it cannot drift into teaching a
@@ -232,6 +240,9 @@ export function buildSunnyBanksGodScriptPrompt(
   locationList?: readonly { id: string; label: string }[],
   /** The saved characters (`sunnyBanksSpeakerList(state)`); the built-in cast when left out. */
   characters?: readonly GuideCharacter[],
+  /** Which show (2026-10-04). Skidmarks gets its name and its one note;
+   * Sunny Banks' prompt is exactly what it was. */
+  genre: "sunnybank" | "skidmarks" = "sunnybank",
 ): string {
   const cast = listSunnyBanksSpeakingCast(characters).join(", ");
   const nonSpeaking = listSunnyBanksNonSpeakingCast(characters);
@@ -243,12 +254,14 @@ export function buildSunnyBanksGodScriptPrompt(
     .map(({ id, label }) => `   ${id.padEnd(20)} — ${label}`)
     .join("\n");
 
+  const show = genre === "skidmarks" ? "Skidmarks" : "Sunny Banks";
+  const showNote = genre === "skidmarks" ? `\n\n${SKIDMARKS_GOD_SCRIPT_NOTE}` : "";
   return `You are writing scripts in a strict format called a "God Script" for an
-animated show called Sunny Banks. The script is pasted into a tool that
+animated show called ${show}. The script is pasted into a tool that
 parses it line by line and turns each line into a rendered video clip.
 Every clip costs real money, so a malformed line wastes a paid render.
 
-Follow these rules exactly. Do not improvise new syntax.
+Follow these rules exactly. Do not improvise new syntax.${showNote}
 
 === HARD RULES ===
 

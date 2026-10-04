@@ -35,6 +35,7 @@ import {
 } from "@/lib/sunnyBanksShotCast";
 import { normalizeElevenLabsVoiceId } from "@/lib/characterLoras";
 import { parseSunnyBanksCharacterCard, resolveSpeakBeatCharacter } from "@/lib/sunnyBanksVoices";
+import { parseStudioGenre, studioGenreProfile, type StudioGenreProfile } from "@/lib/studioGenre";
 import {
   buildLtx23Ia2vWorkflow,
   downloadComfyCloudOutput,
@@ -259,6 +260,10 @@ interface GenerateSpeakBeatRequestBody {
   /** `true` = the location's picture already has the people in it (the
    * Locations row's tick): used as the start picture as it is. */
   locationHasPeople?: unknown;
+  /** Which show (2026-10-04): `"skidmarks"` uses the Skidmarks Cast,
+   * look and folders (`lib/studioGenre.ts`). Missing or anything else is
+   * Sunny Banks, exactly as before. */
+  genre?: unknown;
 }
 
 /** `kind: "voice-test"` — the ▶ on a character's panel: speak one short
@@ -304,6 +309,7 @@ export async function POST(request: Request) {
   if (stalePage) return stalePage;
 
   const kind = parseBeatKind(body.kind);
+  const profile = studioGenreProfile(parseStudioGenre(body.genre));
   const characterName = typeof body.characterName === "string" ? body.characterName.trim() : "";
   // A `[GROK]` / `[LTX]` / `[H3]` tag never reaches ElevenLabs. The
   // panel already strips it; this is the belt to that.
@@ -329,7 +335,12 @@ export async function POST(request: Request) {
   }
 
   const cardVoiceId = normalizeElevenLabsVoiceId(body.voiceId);
-  const character = resolveSpeakBeatCharacter(characterName, parseSunnyBanksCharacterCard(body.characterCard), cardVoiceId);
+  const character = resolveSpeakBeatCharacter(
+    characterName,
+    parseSunnyBanksCharacterCard(body.characterCard),
+    cardVoiceId,
+    profile.genre
+  );
   const isLocationCutaway = kind === "hold" && !character;
   // Multi-cast (2026-10-03): only for a character row, never a cutaway.
   const cast = character ? parseSunnyBanksShotCast(body.cast, character.name) : null;
@@ -342,7 +353,7 @@ export async function POST(request: Request) {
   const cutawayLabel = characterName || "Crowd";
   if (kind === "speak" && !character) {
     return NextResponse.json(
-      { error: `"${characterName}" isn't a locked Sunny Banks character.`, code: "unknown_character" },
+      { error: `"${characterName}" isn't a locked ${profile.showName} character.`, code: "unknown_character" },
       { status: 400 }
     );
   }
@@ -384,7 +395,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "COMFY_CLOUD_API_KEY is not set on the server — Sunny Banks rendering (Comfy Cloud LTX) is " +
+          `COMFY_CLOUD_API_KEY is not set on the server — ${profile.showName} rendering (Comfy Cloud LTX) is ` +
           "unavailable here.",
         code: "missing_api_key",
       },
@@ -417,7 +428,7 @@ export async function POST(request: Request) {
     prompt = isLocationCutaway
       ? buildLocationCutawayPrompt(action)
       : // With an [Action:], the action sets framing and movement (2026-10-01).
-        buildSunnyBanksHoldPrompt(character!, action);
+        buildSunnyBanksHoldPrompt(character!, action, profile.look);
     // Others in frame (2026-10-03): everyone animates, every mouth closed.
     if (cast) prompt = `${prompt} ${buildSunnyBanksMultiCastHoldSuffix(cast)}`;
   } else {
@@ -476,7 +487,7 @@ export async function POST(request: Request) {
     // quotes only the words: the tag's delivery is already in the audio
     // LTX lip-syncs to, and a quoted "[whispers]" is just noise to it.
     // A tag-only line ("[laughs]") keeps its text so the quote isn't empty.
-    prompt = buildSunnyBanksSpeakingPrompt(character!, stripElevenLabsAudioTags(line) || line);
+    prompt = buildSunnyBanksSpeakingPrompt(character!, stripElevenLabsAudioTags(line) || line, profile.look);
     // Others in frame (2026-10-03, Stuart's wording): the speaker is the
     // only one talking, everyone else listens with their mouth closed.
     if (cast) prompt = `${prompt} ${buildSunnyBanksSpeakerListenerSuffix(cast, character!.name)}`;
@@ -520,12 +531,18 @@ export async function POST(request: Request) {
         speaker: kind === "speak" ? character!.name : null,
         sceneSpeakers,
         shotAction: action || sceneAction || undefined,
+        genre: profile.genre,
       });
       if (!plated.ok) {
         return NextResponse.json({ error: plated.error, code: plated.code, ...responseExtras }, { status: plated.status });
       }
       plateDataUrl = plated.dataUrl;
-      const savedUrl = await saveSharedPlate(plated.dataUrl, cast.map((m) => m.name), parseDeckMediaTarget(body.plateTarget));
+      const savedUrl = await saveSharedPlate(
+        plated.dataUrl,
+        cast.map((m) => m.name),
+        parseDeckMediaTarget(body.plateTarget),
+        profile
+      );
       if (savedUrl) responseExtras.plateUrl = savedUrl;
     }
   } else if (!isLocationCutaway) {
@@ -537,6 +554,7 @@ export async function POST(request: Request) {
       appearanceOverride: appearanceModifier || undefined,
       // A silent hold's [Action:] shapes its start still too (2026-10-01).
       shotAction: kind === "hold" ? action || undefined : undefined,
+      genre: profile.genre,
     });
     if (!plated.ok) {
       return NextResponse.json({ error: plated.error, code: plated.code }, { status: plated.status });
@@ -554,6 +572,7 @@ export async function POST(request: Request) {
       silentAudioBytes: audioBytes,
       startImageDataUrl: plateDataUrl,
       mediaTarget: parseDeckMediaTarget(body.mediaTarget),
+      profile,
       deadlineMs: Math.min(
         SPEAK_BEAT_POLL_DEADLINE_MS,
         Math.max(SILENT_SHOT_MIN_DEADLINE_MS, SILENT_SHOT_BUDGET_MS - (Date.now() - startedAt))
@@ -572,6 +591,7 @@ export async function POST(request: Request) {
     startImageDataUrl: plateDataUrl,
     creds: creds!,
     mediaTarget: parseDeckMediaTarget(body.mediaTarget),
+    profile,
     ttsModel,
   });
 }
@@ -587,6 +607,7 @@ async function runSilentShotAndPersist(args: {
   silentAudioBytes: Uint8Array;
   startImageDataUrl: string;
   mediaTarget: DeckMediaTarget | null;
+  profile: StudioGenreProfile;
   deadlineMs: number;
 }) {
   const rendered = await renderSilentShotVideo({
@@ -610,6 +631,7 @@ async function runSilentShotAndPersist(args: {
     kind: "hold",
     durationSec: args.durationSec,
     mediaTarget: args.mediaTarget,
+    profile: args.profile,
     videoBackend: args.backend,
     responseExtras: args.responseExtras,
   });
@@ -631,6 +653,7 @@ async function runLtxAndPersist(args: {
   startImageDataUrl: string;
   creds: NonNullable<ReturnType<typeof resolveComfyCloudCredentials>>;
   mediaTarget: DeckMediaTarget | null;
+  profile: StudioGenreProfile;
   ttsModel?: string;
 }) {
   const decodedImage = decodeDataUrl(args.startImageDataUrl);
@@ -702,6 +725,7 @@ async function runLtxAndPersist(args: {
     kind: args.kind,
     durationSec: args.durationSec,
     mediaTarget: args.mediaTarget,
+    profile: args.profile,
     ttsModel: args.ttsModel,
     videoBackend: "ltx",
     responseExtras: args.responseExtras,
@@ -720,6 +744,8 @@ async function persistBeatVideo(args: {
   kind: BeatKind;
   durationSec: number;
   mediaTarget: DeckMediaTarget | null;
+  /** The show: its old flat folder for a clip with no episode folder yet. */
+  profile: StudioGenreProfile;
   ttsModel?: string;
   videoBackend: RowVideoBackend;
   /** `castNames` / `plateUrl` of a multi-cast shot (2026-10-03). */
@@ -729,8 +755,8 @@ async function persistBeatVideo(args: {
   const audioMuxed = muxed.ok;
   const pathname =
     args.kind === "hold"
-      ? buildSunnyBanksHoldBeatPathname(args.characterName, Date.now())
-      : buildSunnyBanksSpeakBeatPathname(args.characterName, Date.now());
+      ? buildSunnyBanksHoldBeatPathname(args.characterName, Date.now(), args.profile.legacyBlobPrefix)
+      : buildSunnyBanksSpeakBeatPathname(args.characterName, Date.now(), args.profile.legacyBlobPrefix);
   const common = {
     durationSec: args.durationSec,
     character: args.characterName,
@@ -766,7 +792,12 @@ async function persistBeatVideo(args: {
  * A Blob miss never stops the render: the line still uses the picture,
  * it just can't be reused by the scene's next line.
  */
-async function saveSharedPlate(dataUrl: string, castNames: readonly string[], target: DeckMediaTarget | null): Promise<string | null> {
+async function saveSharedPlate(
+  dataUrl: string,
+  castNames: readonly string[],
+  target: DeckMediaTarget | null,
+  profile: StudioGenreProfile
+): Promise<string | null> {
   const decoded = decodeDataUrl(dataUrl);
   if (!decoded) return null;
   const ext = extensionForImageContentType(decoded.mimeType);
@@ -776,7 +807,7 @@ async function saveSharedPlate(dataUrl: string, castNames: readonly string[], ta
       target,
       ext,
       contentType: decoded.mimeType,
-      legacyPathname: `sunnybanks/plates/${who}-plate-${Date.now()}.${ext}`,
+      legacyPathname: `${profile.legacyBlobPrefix}/plates/${who}-plate-${Date.now()}.${ext}`,
     });
     return blob.url;
   } catch {

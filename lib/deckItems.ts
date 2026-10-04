@@ -22,7 +22,7 @@
 /** The kinds this build saves per item. Later steps add more.
  * `character`: one character card (`SkidmarksState.characterLoras.characters[]`).
  * `sunnybank-episode`: one saved Sunnybank episode card.
- * `skidmarks-episode`: one Skidmarks episode (`SkidmarksState.skidmarksEpisodes.episodes[]`).
+ * `skidmarks-episode`: one Skidmarks episode card (`SkidmarksState.skidmarksStudio.workspaces[]`, 2026-10-04; the old nine-beat shape still reads).
  * `adult-short`: one saved short from the Shorts Library (`SkidmarksState.adultShorts.saved[]`).
  * `music-video-band` / `music-video-song`: one Music video band, and the
  * song on the desk (see `lib/musicVideoItemData.ts`).

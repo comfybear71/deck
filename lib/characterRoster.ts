@@ -30,6 +30,7 @@ import type { SkidmarksState } from "./skidmarks";
 import { normalizeSkidmarksEpisodesState } from "./skidmarksEpisodes";
 import { SUNNY_BANKS_CAST, resolveSunnyBanksStartImage, type SunnyBanksCharacterLock } from "./sunnyBanks";
 import { resolveSunnyBanksSpeaker } from "./sunnyBanksVoices";
+import { SKIDMARKS_PICTURE_STYLE } from "./studioGenre";
 
 export type RosterGroup = "music-video" | "sunny-banks" | "skidmarks" | "adult-shorts";
 
@@ -133,9 +134,10 @@ export function buildCharacterRoster(state: SkidmarksState): Record<RosterGroup,
       extraPictureUrls: (c.pictureUrls ?? []).slice(1),
       look: c.look,
       neverShow: "",
-      // Skidmarks characters are 3D cartoon caricatures, not photos and
-      // not the flat Sunny Banks style.
-      style: "render3d",
+      // Skidmarks is a semi-photoreal 3D feature render (2026-10-04, Stuart:
+      // 60–80% photoreal), not a 3D cartoon, not a photo, and not the flat
+      // Sunny Banks style. A card can still pick another style.
+      style: "semireal",
       subjectWord: c.isAnimal ? "animal" : "person",
       blockedReason: c.fictionalAdultConfirmed === true ? minorBlockReason(`${c.name} ${c.look}`) : "Not marked as a made-up adult.",
     });
@@ -563,6 +565,7 @@ export const CARTOON_PICTURE_STYLE =
 function styleLine(style: CharacterTrainingStyle): string {
   if (style === "cartoon") return `Keep the exact same flat 2D cartoon style as the reference: ${CARTOON_PICTURE_STYLE}.`;
   if (style === "render3d") return `Keep the exact same 3D cartoon look as the reference. ${RENDER_3D_STYLE}.`;
+  if (style === "semireal") return `Keep the exact same semi-photoreal look as the reference: ${SKIDMARKS_PICTURE_STYLE}.`;
   return "Photographic, realistic light and skin, sharp focus.";
 }
 
@@ -657,7 +660,13 @@ export function buildFacePrompt(char: Pick<RosterCharacter, "name" | "look" | "s
     `${char.name}: ${clip(stripHeldProps(char.look) || "an original made-up character", MAX_LOOK_CHARS)}.`,
     framing,
     EMPTY_HANDS_LINE,
-    char.style === "cartoon" ? `${CARTOON_PICTURE_STYLE}.` : char.style === "render3d" ? `${RENDER_3D_STYLE}.` : "Photographic, realistic.",
+    char.style === "cartoon"
+      ? `${CARTOON_PICTURE_STYLE}.`
+      : char.style === "render3d"
+        ? `${RENDER_3D_STYLE}.`
+        : char.style === "semireal"
+          ? `${SKIDMARKS_PICTURE_STYLE}.`
+          : "Photographic, realistic.",
     "A made-up adult, clearly over 25, not resembling any real person, fully clothed, one person only, no text.",
   ];
   return clip(parts.join(" "), MAX_PROMPT_CHARS);

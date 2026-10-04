@@ -79,6 +79,30 @@ export const SUNNY_BANKS_STYLE_LOCK =
   "rubbery adult cartoon, thick black outlines, flat cel colour, big heads, noodly arms, sun-bleached Aussie " +
   "palette, dusty ochre, faded teal, heat haze. Not photographic, not soft Pixar, not photorealistic";
 
+/**
+ * The show-specific words in the motion and plating prompts (2026-10-04,
+ * Skidmarks on the Sunnybank structure). Sunny Banks' values are below
+ * and give exactly the strings these prompts always had; Skidmarks'
+ * own are in `lib/studioGenre.ts`.
+ */
+export interface StudioLook {
+  /** Appended to every motion prompt and leads every plating prompt. */
+  styleLock: string;
+  /** A silent shot with its own action: the sentence after the look ("Heat haze, flies. "). */
+  ambienceSentence: string;
+  /** A plain idle hold: after "breathing" (", heat haze, flies"). */
+  idleAmbience: string;
+  /** Plating: what the locked background must never turn into. */
+  keepPlaceLine: string;
+}
+
+export const SUNNY_BANKS_LOOK: StudioLook = {
+  styleLock: SUNNY_BANKS_STYLE_LOCK,
+  ambienceSentence: "Heat haze, flies. ",
+  idleAmbience: ", heat haze, flies",
+  keepPlaceLine: "Do not replace the location with a photo street.",
+};
+
 /** Verbatim global lock — the lip-sync/delivery instruction every beat
  * (Speak especially) carries, same "dication" typo and all as the
  * source doc's own logged gold (see `lib/clipGeneration.ts`'s
@@ -246,7 +270,8 @@ export function buildSunnyBanksCompositePlatePrompt(
   /** The shot's own `[Action: …]` text (2026-10-01): silent holds send it
    * so the start still already shows what the shot describes (pose,
    * what's in their hands), not only the later motion prompt. */
-  shotAction?: string
+  shotAction?: string,
+  look: StudioLook = SUNNY_BANKS_LOOK
 ): string {
   const trimmedOverride = appearanceOverride?.trim() || "";
   const trimmedAction = shotAction?.replace(/\s+/g, " ").trim() || "";
@@ -271,8 +296,8 @@ export function buildSunnyBanksCompositePlatePrompt(
       : "Keep the EXACT body pose, clothes, and body from image 2. Same face from image 2. Do not stand them up. Do not change their clothes. Do not invent a second person. No passer-by. No extra body in the distance.";
 
   const lines = [
-    SUNNY_BANKS_STYLE_LOCK,
-    "<IMAGE_0> is the LOCKED background — keep that exact place, lighting and materials. Do not move the camera. Do not replace the location with a photo street. Remove any people or crowds already in image 1 — empty place only.",
+    look.styleLock,
+    `<IMAGE_0> is the LOCKED background — keep that exact place, lighting and materials. Do not move the camera. ${look.keepPlaceLine} Remove any people or crowds already in image 1 — empty place only.`,
     "<IMAGE_1> is the person — same face identity, hair, age and body from image 2. Do not turn them into a different person.",
     "Place that same person from image 2 into image 1.",
     bodyLine,
@@ -458,12 +483,16 @@ function accessoryLockSuffix(character: SunnyBanksCharacterLock): string {
  * Dazza gets `accessoryLockSuffix` after the gold string so held
  * objects cannot morph mid-clip; every other character is unchanged.
  */
-export function buildSunnyBanksSpeakingPrompt(character: SunnyBanksCharacterLock, line: string): string {
+export function buildSunnyBanksSpeakingPrompt(
+  character: SunnyBanksCharacterLock,
+  line: string,
+  look: StudioLook = SUNNY_BANKS_LOOK
+): string {
   return (
     `Use the provided start image as the first frame. ${character.name}, ${character.look} is prominent, mouth ` +
     `and head move naturally while speaking, subtle gesture. Props and background stay exactly as the start ` +
     `image, nothing new enters frame. ${character.name} says: "${line.trim()}". Camera holds. Same person and ` +
-    `objects as the start image. ${SUNNY_BANKS_STYLE_LOCK}` +
+    `objects as the start image. ${look.styleLock}` +
     accessoryLockSuffix(character)
   );
 }
@@ -494,15 +523,15 @@ function slugifySunnyBanksCharacterName(characterName: string): string {
  * place. `characterName` is slugified (lowercased, non-alphanumeric
  * collapsed to `-`) since it can contain a space ("Ranger Bazza").
  */
-export function buildSunnyBanksSpeakBeatPathname(characterName: string, timestampMs: number): string {
-  return `sunnybanks/speak-beats/${timestampMs}-${slugifySunnyBanksCharacterName(characterName)}.mp4`;
+export function buildSunnyBanksSpeakBeatPathname(characterName: string, timestampMs: number, prefix = "sunnybanks"): string {
+  return `${prefix}/speak-beats/${timestampMs}-${slugifySunnyBanksCharacterName(characterName)}.mp4`;
 }
 
 /** Same timestamped-file shape as a speak beat, under its own prefix so
  * a Hold never collides with a Speak of the same character in the same
  * millisecond. Same disclosed gap (no per-beat identity / prune). */
-export function buildSunnyBanksHoldBeatPathname(characterName: string, timestampMs: number): string {
-  return `sunnybanks/hold-beats/${timestampMs}-${slugifySunnyBanksCharacterName(characterName)}.mp4`;
+export function buildSunnyBanksHoldBeatPathname(characterName: string, timestampMs: number, prefix = "sunnybanks"): string {
+  return `${prefix}/hold-beats/${timestampMs}-${slugifySunnyBanksCharacterName(characterName)}.mp4`;
 }
 
 /**
@@ -522,7 +551,11 @@ export function buildSunnyBanksHoldBeatPathname(characterName: string, timestamp
  * image, not this string asking for a crowd. Callers must pass
  * `resolveSunnyBanksStartImage`, not the bible sheet.
  */
-export function buildSunnyBanksHoldPrompt(character: SunnyBanksCharacterLock, shotAction?: string): string {
+export function buildSunnyBanksHoldPrompt(
+  character: SunnyBanksCharacterLock,
+  shotAction?: string,
+  look: StudioLook = SUNNY_BANKS_LOOK
+): string {
   // A silent shot with its own `[Action: …]` (2026-10-01): the action
   // (appended after this by the caller) sets framing and movement, so
   // "holds their pose, subtle idle motion" and "Camera holds" are left
@@ -530,17 +563,17 @@ export function buildSunnyBanksHoldPrompt(character: SunnyBanksCharacterLock, sh
   // Nuggets standing still facing the camera.
   if (shotAction?.trim()) {
     return (
-      `Use the provided start image as the first frame. ${character.name}, ${character.look}. Heat haze, flies. ` +
+      `Use the provided start image as the first frame. ${character.name}, ${character.look}. ${look.ambienceSentence}` +
       `Props and background stay exactly as the start image, nothing new enters frame. No dialogue. No cuts. ` +
-      `Same person and objects as the start image. ${SUNNY_BANKS_STYLE_LOCK}` +
+      `Same person and objects as the start image. ${look.styleLock}` +
       accessoryLockSuffix(character)
     );
   }
   return (
     `Use the provided start image as the first frame. ${character.name}, ${character.look} holds their pose, ` +
-    `subtle idle motion, weight shift, breathing, heat haze, flies. Props and background stay exactly as the ` +
+    `subtle idle motion, weight shift, breathing${look.idleAmbience}. Props and background stay exactly as the ` +
     `start image, nothing new enters frame. No dialogue. Camera holds, no cuts. Same person and objects as the ` +
-    `start image. ${SUNNY_BANKS_STYLE_LOCK}` +
+    `start image. ${look.styleLock}` +
     accessoryLockSuffix(character)
   );
 }

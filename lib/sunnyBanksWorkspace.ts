@@ -26,6 +26,7 @@ import {
   type SunnyBanksLocationId,
 } from "./sunnyBanks";
 import { buildSunnyBanksDropBearsSeed, DROP_BEARS_TITLE } from "./sunnyBanksDropBears";
+import { studioGenreProfile, type StudioGenre } from "./studioGenre";
 import { deckMediaSlug, isSafeDeckMediaSlug, uniqueDeckMediaSlug } from "./deckMediaPaths";
 import { parseRowVideoBackend, type RowVideoBackend, type SilentShotBackend } from "./videoBackendRouting";
 
@@ -74,6 +75,10 @@ export interface SunnyBanksLiveState {
   episodeId?: string;
   /** Pinned media folder name, see `lib/deckMediaPaths.ts`. */
   mediaSlug?: string;
+  /** Who's in this episode (2026-10-04, Skidmarks): ids from the shared
+   * Skidmarks Cast, ticked on the episode. Missing = nobody ticked (every
+   * Sunny Banks episode), and then it isn't part of the fingerprint. */
+  castIds?: string[];
 }
 
 export interface SunnyBanksWorkspaceSnapshot {
@@ -93,6 +98,8 @@ export interface SunnyBanksWorkspaceSnapshot {
   /** Pinned media folder name (`deck/sunnybank/episodes/<mediaSlug>/`).
    * Set once, never re-derived from the label. Missing on older cards. */
   mediaSlug?: string;
+  /** See `SunnyBanksLiveState.castIds`. */
+  castIds?: string[];
 }
 
 export interface SkidmarksSunnyBanksState {
@@ -147,6 +154,7 @@ export function cloneSunnyBanksLive(live: SunnyBanksLiveState): SunnyBanksLiveSt
   if (pickTags) next.locationPickTags = pickTags;
   if (live.episodeId) next.episodeId = live.episodeId;
   if (live.mediaSlug) next.mediaSlug = live.mediaSlug;
+  if (live.castIds && live.castIds.length > 0) next.castIds = [...live.castIds];
   return next;
 }
 
@@ -163,6 +171,7 @@ export function liveFromSunnyBanksWorkspace(workspace: SunnyBanksWorkspaceSnapsh
     runtimeMap: workspace.runtimeMap,
     episodeId: workspace.id,
     mediaSlug: workspace.mediaSlug,
+    castIds: workspace.castIds,
   });
 }
 
@@ -199,13 +208,15 @@ export function buildDefaultSunnyBanksLive(): SunnyBanksLiveState {
  * episode gets a sensible name once it has lines, and a `# EPISODE:`
  * header in the script renames it.
  */
-export function buildEmptySunnyBanksLive(): SunnyBanksLiveState {
+export function buildEmptySunnyBanksLive(genre: StudioGenre = "sunnybank"): SunnyBanksLiveState {
   const actIds = [...SUNNY_BANKS_INITIAL_ACTS];
   const blank = <T,>(value: () => T): SunnyBanksActKeyed<T> =>
     Object.fromEntries(actIds.map((act) => [act, value()])) as SunnyBanksActKeyed<T>;
   return {
     workspaceTitle: "",
-    defaultLocationId: SUNNY_BANKS_DEFAULT_LOCATION_ID,
+    // Skidmarks has no built-in place: its first location comes from the
+    // Locations row (or the script's [Location: …]).
+    defaultLocationId: genre === "sunnybank" ? SUNNY_BANKS_DEFAULT_LOCATION_ID : "",
     actIds,
     activeAct: actIds[0],
     actScripts: blank(() => ""),
@@ -253,13 +264,16 @@ export function fingerprintWorkspace(snapshot: {
   runtimeMap: SunnyBanksActKeyed<Record<number, SunnyBanksRowRuntime>>;
   episodeId?: string;
   mediaSlug?: string;
+  castIds?: readonly string[];
 }): string {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { episodeId, mediaSlug, locationPickTags, ...content } = snapshot;
+  const { episodeId, mediaSlug, locationPickTags, castIds, ...content } = snapshot;
   // Empty or missing pick tags hash the same as before the field existed,
-  // and always in the same place, however the object was built.
+  // and always in the same place, however the object was built. Same
+  // for the episode's ticked cast (2026-10-04): none ticked = as before.
   const pickTags = compactLocationPickTags(locationPickTags, snapshot.actIds);
-  const payload = JSON.stringify(pickTags ? { ...content, locationPickTags: pickTags } : content);
+  const withPicks = pickTags ? { ...content, locationPickTags: pickTags } : content;
+  const payload = JSON.stringify(castIds && castIds.length > 0 ? { ...withPicks, castIds: [...castIds] } : withPicks);
   let hash = 5381;
   for (let i = 0; i < payload.length; i += 1) {
     hash = (hash * 33) ^ payload.charCodeAt(i);
@@ -444,10 +458,26 @@ function normalizeActScripts(value: unknown, actIds: readonly string[]): SunnyBa
   return next;
 }
 
-export function normalizeSunnyBanksLive(value: unknown): SunnyBanksLiveState | null {
+/** Up to 40 distinct non-empty ids, or `undefined` when there are none. */
+function normalizeCastIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids: string[] = [];
+  for (const id of value) {
+    if (typeof id !== "string" || !id.trim() || id.length > 120 || ids.includes(id)) continue;
+    ids.push(id);
+    if (ids.length >= 40) break;
+  }
+  return ids.length > 0 ? ids : undefined;
+}
+
+/**
+ * `genre` (2026-10-04) only decides what a missing field falls back to:
+ * Sunny Banks' EP02 Drop Bears seed, or a blank Skidmarks page.
+ */
+export function normalizeSunnyBanksLive(value: unknown, genre: StudioGenre = "sunnybank"): SunnyBanksLiveState | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Partial<SunnyBanksLiveState>;
-  const fallback = buildDefaultSunnyBanksLive();
+  const fallback = genre === "sunnybank" ? buildDefaultSunnyBanksLive() : buildEmptySunnyBanksLive(genre);
   const actIds = Array.isArray(v.actIds)
     ? v.actIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
     : [];
@@ -483,13 +513,18 @@ export function normalizeSunnyBanksLive(value: unknown): SunnyBanksLiveState | n
   if (pickTags) live.locationPickTags = pickTags;
   if (typeof v.episodeId === "string" && v.episodeId.length > 0) live.episodeId = v.episodeId;
   if (isSafeDeckMediaSlug(v.mediaSlug)) live.mediaSlug = v.mediaSlug;
+  const castIds = normalizeCastIds(v.castIds);
+  if (castIds) live.castIds = castIds;
   return live;
 }
 
-export function normalizeSunnyBanksWorkspace(value: unknown): SunnyBanksWorkspaceSnapshot | null {
+export function normalizeSunnyBanksWorkspace(
+  value: unknown,
+  genre: StudioGenre = "sunnybank"
+): SunnyBanksWorkspaceSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Partial<SunnyBanksWorkspaceSnapshot>;
-  const live = normalizeSunnyBanksLive(v);
+  const live = normalizeSunnyBanksLive(v, genre);
   if (!live) return null;
   if (typeof v.id !== "string" || v.id.length === 0) return null;
   if (typeof v.savedAt !== "number") return null;
@@ -510,16 +545,22 @@ export function normalizeSunnyBanksWorkspace(value: unknown): SunnyBanksWorkspac
   };
   if (live.locationPickTags) workspace.locationPickTags = live.locationPickTags;
   if (live.mediaSlug) workspace.mediaSlug = live.mediaSlug;
+  if (live.castIds) workspace.castIds = live.castIds;
   return workspace;
 }
 
-export function normalizeSunnyBanksStudio(value: unknown): SkidmarksSunnyBanksState | null {
+export function normalizeSunnyBanksStudio(
+  value: unknown,
+  genre: StudioGenre = "sunnybank"
+): SkidmarksSunnyBanksState | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Partial<SkidmarksSunnyBanksState>;
-  const live = normalizeSunnyBanksLive(v.live);
+  const live = normalizeSunnyBanksLive(v.live, genre);
   if (!live) return null;
   const workspaces = Array.isArray(v.workspaces)
-    ? v.workspaces.map(normalizeSunnyBanksWorkspace).filter((row): row is SunnyBanksWorkspaceSnapshot => row !== null)
+    ? v.workspaces
+        .map((row) => normalizeSunnyBanksWorkspace(row, genre))
+        .filter((row): row is SunnyBanksWorkspaceSnapshot => row !== null)
     : [];
   const saveSeq = typeof v.saveSeq === "number" && v.saveSeq >= 0 ? Math.floor(v.saveSeq) : workspaces.length;
   const studio: SkidmarksSunnyBanksState = { live, workspaces, saveSeq };
@@ -530,7 +571,8 @@ export function normalizeSunnyBanksStudio(value: unknown): SkidmarksSunnyBanksSt
 export function buildSunnyBanksWorkspaceFromLive(
   live: SunnyBanksLiveState,
   savedAt: number,
-  seq: number
+  seq: number,
+  genre: StudioGenre = "sunnybank"
 ): SunnyBanksWorkspaceSnapshot {
   const cloned = cloneSunnyBanksLive(live);
   const fingerprint = fingerprintWorkspace(cloned);
@@ -547,7 +589,7 @@ export function buildSunnyBanksWorkspaceFromLive(
       }
     }
   }
-  if (!label) label = "Sunny Banks episode";
+  if (!label) label = `${studioGenreProfile(genre).showName} episode`;
   const snapshot: SunnyBanksWorkspaceSnapshot = {
     id: mintWorkspaceId(savedAt, seq, fingerprint),
     savedAt,
@@ -563,6 +605,7 @@ export function buildSunnyBanksWorkspaceFromLive(
   };
   if (cloned.locationPickTags) snapshot.locationPickTags = cloned.locationPickTags;
   if (cloned.mediaSlug) snapshot.mediaSlug = cloned.mediaSlug;
+  if (cloned.castIds) snapshot.castIds = cloned.castIds;
   return snapshot;
 }
 
@@ -578,16 +621,22 @@ export function defaultSunnyBanksLiveFingerprint(): string {
 let emptyLiveFingerprint: string | null = null;
 
 /** Fingerprint of the blank page New Episode starts from. */
-export function emptySunnyBanksLiveFingerprint(): string {
+export function emptySunnyBanksLiveFingerprint(genre: StudioGenre = "sunnybank"): string {
+  if (genre !== "sunnybank") return fingerprintWorkspace(buildEmptySunnyBanksLive(genre));
   if (!emptyLiveFingerprint) {
     emptyLiveFingerprint = fingerprintWorkspace(buildEmptySunnyBanksLive());
   }
   return emptyLiveFingerprint;
 }
 
-/** True when a named card exists, or the live copy is not the EP02 seed. */
-export function sunnyBanksStudioHasUserContent(studio: SkidmarksSunnyBanksState | null | undefined): boolean {
+/** True when a named card exists, or the live copy is not the page the
+ * show opens on (Sunny Banks: the EP02 seed; Skidmarks: a blank page). */
+export function sunnyBanksStudioHasUserContent(
+  studio: SkidmarksSunnyBanksState | null | undefined,
+  genre: StudioGenre = "sunnybank"
+): boolean {
   if (!studio) return false;
   if (studio.workspaces.length > 0) return true;
-  return fingerprintWorkspace(studio.live) !== defaultSunnyBanksLiveFingerprint();
+  const opening = genre === "sunnybank" ? defaultSunnyBanksLiveFingerprint() : emptySunnyBanksLiveFingerprint(genre);
+  return fingerprintWorkspace(studio.live) !== opening;
 }

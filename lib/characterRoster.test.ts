@@ -313,11 +313,11 @@ describe("clean reference fields", () => {
 });
 
 describe("Add a Skidmarks character", () => {
-  it("shows a new cast member in the Skidmarks row as a photo character with no picture yet", () => {
+  it("shows a new cast member in the Skidmarks row, semi-photoreal, with no picture yet", () => {
     const member = buildSkidmarksCastMember(" Darryl ", "late-40s bloke, grey mullet, faded hi-vis", "supporting", 1, "cast_1");
     const r = buildCharacterRoster(stateWith({ skidmarksEpisodes: { episodes: [], cast: [member] } }));
     expect(r.skidmarks).toHaveLength(1);
-    expect(r.skidmarks[0]).toMatchObject({ sourceKey: "sk:cast_1", name: "Darryl", style: "render3d", thumbUrl: null, blockedReason: null });
+    expect(r.skidmarks[0]).toMatchObject({ sourceKey: "sk:cast_1", name: "Darryl", style: "semireal", thumbUrl: null, blockedReason: null });
   });
 });
 
@@ -325,14 +325,14 @@ describe("Add a Skidmarks character", () => {
 describe("Skidmarks pictures, 3D cartoon and animals", () => {
   const withCast = (cast: unknown[]) => stateWith({ skidmarksEpisodes: { episodes: [], cast } as SkidmarksState["skidmarksEpisodes"] });
 
-  it("uses the first uploaded picture as the thumbnail and the rest as extras, in 3D cartoon style", () => {
+  it("uses the first uploaded picture as the thumbnail and the rest as extras, semi-photoreal (not 3D cartoon, 2026-10-04)", () => {
     const member = buildSkidmarksCastMember("Clive", "", "supporting", 1, "c9", {
       pictureUrls: ["https://x.public.blob.vercel-storage.com/a.jpg", "https://x.public.blob.vercel-storage.com/b.jpg"],
     });
     const [c] = buildCharacterRoster(withCast([member])).skidmarks;
     expect(c.thumbUrl).toBe("https://x.public.blob.vercel-storage.com/a.jpg");
     expect(c.extraPictureUrls).toEqual(["https://x.public.blob.vercel-storage.com/b.jpg"]);
-    expect(c.style).toBe("render3d");
+    expect(c.style).toBe("semireal");
     expect(c.subjectWord).toBe("person");
   });
 
