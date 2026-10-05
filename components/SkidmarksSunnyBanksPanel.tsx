@@ -3815,9 +3815,6 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         )}
       </div>
 
-      {/* Extras (2026-10-04): the same row in every genre, below the acts/script. */}
-      <EpisodeExtrasRow genre={genre} />
-
       <div className="flex flex-col gap-3 border-t border-white/10 pt-4">
         <button
           type="button"
@@ -3991,6 +3988,9 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         />
       </div>
 
+      {/* Extras (2026-10-04): the same row in every genre. At the very bottom,
+          below CLIPS, in every genre (2026-10-05, Stuart). */}
+      <EpisodeExtrasRow genre={genre} />
     </div>
   );
 }
