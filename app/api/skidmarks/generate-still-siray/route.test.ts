@@ -22,6 +22,17 @@ function jsonResponse(status: number, body: unknown): Response {
 
 const REFERENCE = "data:image/jpeg;base64,AAAA";
 
+/** Varied bytes so the blank-image guard does not trip on mock downloads. */
+function fakeStillBytes(n = 3000): ArrayBuffer {
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) out[i] = (i * 37 + 11) & 0xff;
+  return out.buffer;
+}
+
+function flatStillBytes(n = 3000): ArrayBuffer {
+  return new Uint8Array(n).fill(128).buffer;
+}
+
 function postRequest(body: Record<string, unknown>): Request {
   return new Request("http://localhost/api/skidmarks/generate-still-siray", {
     method: "POST",
@@ -72,7 +83,7 @@ describe("POST /api/skidmarks/generate-still-siray", () => {
         jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/t2i.png"] } })
       )
       .mockResolvedValueOnce(
-        new Response(new Uint8Array([9, 8, 7]), { status: 200, headers: { "content-type": "image/png" } })
+        new Response(fakeStillBytes(), { status: 200, headers: { "content-type": "image/png" } })
       );
 
     const res = await POST(postRequest({ prompt: "adult party glitter rain", referenceImageDataUrls: [] }));
@@ -93,7 +104,7 @@ describe("POST /api/skidmarks/generate-still-siray", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, { data: { task_id: "task-blob" } }))
       .mockResolvedValueOnce(jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/b.png"] } }))
-      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2]), { status: 200, headers: { "content-type": "image/png" } }));
+      .mockResolvedValueOnce(new Response(fakeStillBytes(), { status: 200, headers: { "content-type": "image/png" } }));
     const res = await POST(postRequest({ prompt: "wide", referenceImageDataUrls: [] }));
     const body = await res.json();
     expect(putMock).toHaveBeenCalledTimes(1);
@@ -107,7 +118,7 @@ describe("POST /api/skidmarks/generate-still-siray", () => {
         jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/t2i2.png"] } })
       )
       .mockResolvedValueOnce(
-        new Response(new Uint8Array([1]), { status: 200, headers: { "content-type": "image/png" } })
+        new Response(fakeStillBytes(), { status: 200, headers: { "content-type": "image/png" } })
       );
 
     const res = await POST(postRequest({ prompt: "neon party" }));
@@ -145,7 +156,7 @@ describe("POST /api/skidmarks/generate-still-siray", () => {
         jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/out.png"] } })
       ) // poll
       .mockResolvedValueOnce(
-        new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "content-type": "image/png" } })
+        new Response(fakeStillBytes(), { status: 200, headers: { "content-type": "image/png" } })
       ); // download
 
     const res = await POST(postRequest({ prompt: "front wide", referenceImageDataUrls: [REFERENCE] }));
@@ -180,4 +191,33 @@ describe("POST /api/skidmarks/generate-still-siray", () => {
     expect(res.status).toBe(502);
     expect(body.error).toContain("content policy");
   });
+
+  it("stillKind cast submits the square 2048x2048 size", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { data: { task_id: "task-cast" } }))
+      .mockResolvedValueOnce(jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/cast.png"] } }))
+      .mockResolvedValueOnce(new Response(fakeStillBytes(), { status: 200, headers: { "content-type": "image/png" } }));
+
+    const res = await POST(postRequest({ prompt: "Pip the robot dog", referenceImageDataUrls: [], stillKind: "cast" }));
+    expect(res.status).toBe(200);
+    const submittedBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(submittedBody.size).toBe("2048x2048");
+  });
+
+  it("refuses a blank/flat still and never returns a data URL for it", async () => {
+    const flat = flatStillBytes();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { data: { task_id: "task-blank" } }))
+      .mockResolvedValueOnce(jsonResponse(200, { data: { status: "SUCCESS", outputs: ["https://cdn.siray.ai/blank.png"] } }))
+      .mockResolvedValueOnce(new Response(flat, { status: 200, headers: { "content-type": "image/png" } }));
+
+    const res = await POST(postRequest({ prompt: "a wall speaker", referenceImageDataUrls: [], stillKind: "cast" }));
+    const body = await res.json();
+    expect(res.status).toBe(502);
+    expect(body.code).toBe("blank_image");
+    expect(body.error).toMatch(/blank/i);
+    expect(body.dataUrl).toBeUndefined();
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
 });

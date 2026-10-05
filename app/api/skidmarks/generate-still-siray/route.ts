@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { staleDeckPageResponse } from "@/lib/deckBuildServer";
 import { parseDeckMediaTarget, type DeckMediaTarget } from "@/lib/deckMediaPaths";
 import { putDeckMediaOrLegacy } from "@/lib/deckMediaPut";
+import { BLANK_IMAGE_ERROR, isBlankImageBytes } from "@/lib/imageBlankCheck";
 import {
   resolveSirayCredentials,
+  SIRAY_SEEDREAM_45_CAST_SIZE,
+  SIRAY_SEEDREAM_45_SIZE,
   siraySubmitStillImage,
   sirayPollStillImage,
   sirayDownloadStill,
@@ -54,6 +57,8 @@ interface GenerateStillSirayRequestBody {
    * (`lib/deckMediaPaths.ts`). Off-shape or missing → the old
    * `skidmarks/plate-stills/siray-…` path. */
   mediaTarget?: unknown;
+  /** `"cast"` → square 2048² (Cast faces). Anything else → 16:9 plates. */
+  stillKind?: unknown;
 }
 
 export async function POST(request: Request) {
@@ -114,7 +119,9 @@ export async function POST(request: Request) {
     );
   }
 
-  const submitResult = await siraySubmitStillImage(prompt, rawReferences, creds);
+  const stillKind = typeof body.stillKind === "string" ? body.stillKind.trim().toLowerCase() : "";
+  const size = stillKind === "cast" ? SIRAY_SEEDREAM_45_CAST_SIZE : SIRAY_SEEDREAM_45_SIZE;
+  const submitResult = await siraySubmitStillImage(prompt, rawReferences, creds, size);
   if (!submitResult.ok) {
     return NextResponse.json({ error: submitResult.error, code: submitResult.code }, { status: submitResult.status });
   }
@@ -127,6 +134,11 @@ export async function POST(request: Request) {
   const downloadResult = await sirayDownloadStill(pollResult.outputUrl);
   if (!downloadResult.ok) {
     return NextResponse.json({ error: downloadResult.error, code: downloadResult.code }, { status: downloadResult.status });
+  }
+
+  // Never save a blank / flat-colour plate (2026-10-05, Cast remakes from prompt).
+  if (isBlankImageBytes(downloadResult.bytes)) {
+    return NextResponse.json({ error: BLANK_IMAGE_ERROR, code: "blank_image" }, { status: 502 });
   }
 
   // 2026-09-24: a 2048² Seedream PNG as base64 is several MB. Shipping

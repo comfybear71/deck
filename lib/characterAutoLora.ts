@@ -19,6 +19,7 @@ import { uploadSkidmarksMemberPhoto } from "./memberPhotoBlob";
 import { resolvePlateReferenceDataUrl } from "./plateGeneration";
 import { readImageFileAsDataUrl } from "./skidmarks";
 import { deckBuildHeaders } from "./deckBuild";
+import { BLANK_IMAGE_ERROR, isBlankImageUrl } from "./imageBlankCheck";
 
 const TRAINING_PICTURE_MAX_DIMENSION = 1600;
 const SIRAY_STILL_ENDPOINT = "/api/skidmarks/generate-still-siray";
@@ -83,6 +84,7 @@ export async function makeSirayPicture(
       body: JSON.stringify({
         prompt,
         referenceImageDataUrls: referenceDataUrl ? [referenceDataUrl] : [],
+        stillKind: "cast",
         ...(original ? { mediaTarget: original } : {}),
       }),
     });
@@ -91,11 +93,21 @@ export async function makeSirayPicture(
   }
   const json = (await res.json().catch(() => ({}))) as { url?: string; dataUrl?: string; error?: string; code?: string };
   if (!res.ok) {
-    const permanent = res.status === 501 || res.status === 400 || res.status === 401 || res.status === 403 || res.status === 402;
+    const permanent =
+      res.status === 501 ||
+      res.status === 400 ||
+      res.status === 401 ||
+      res.status === 403 ||
+      res.status === 402 ||
+      json.code === "blank_image";
     throw new AutoLoraError(json.error || `Siray didn't make the picture (HTTP ${res.status}).`, permanent);
   }
   const out = json.url || json.dataUrl;
   if (!out) throw new AutoLoraError("Siray finished but sent no picture back.", false);
+  // Client-side blank check too (in case a Blob/data URL is flat grey).
+  if (await isBlankImageUrl(out)) {
+    throw new AutoLoraError(BLANK_IMAGE_ERROR, false);
+  }
   return toTrainingPicture(out, target);
 }
 
