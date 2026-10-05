@@ -100,6 +100,20 @@ describe("the same row in all four genres", () => {
     expect(read("./EpisodeExtrasRow.tsx")).not.toMatch(/genre === "(sunnybank|skidmarks|shorts|music-video)"/);
   });
 
+  it("sits at the bottom, below CLIPS, in every genre (2026-10-05)", () => {
+    const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
+    // Studio panel (Sunny Banks, Skidmarks, Shorts): Extras is the last thing, after the Clips section.
+    const panel = read("./SkidmarksSunnyBanksPanel.tsx");
+    const extrasAt = panel.indexOf("<EpisodeExtrasRow genre={genre} />");
+    expect(extrasAt).toBeGreaterThan(panel.indexOf("setClipsOpen((open) => !open)"));
+    expect(extrasAt).toBeGreaterThan(panel.indexOf('title="Remove this clip?"'));
+    expect(panel.slice(extrasAt)).toMatch(/^<EpisodeExtrasRow genre=\{genre\} \/>\s*<\/div>\s*\);\s*\}\s*$/);
+    // Music video: below the Rendered clips shelf, on phone and on PC.
+    const sheet = read("./SkidmarksDetailSheet.tsx");
+    expect(sheet).not.toMatch(/\{extrasBlock\}\s*\{renderedBlock\}/);
+    expect(sheet.match(/\{renderedBlock\}\s*\{extrasBlock\}/g)).toHaveLength(2);
+  });
+
   it("each genre's row finds its own episode folder", () => {
     const state = {
       bands: [],

@@ -597,7 +597,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       />
     ) : null;
 
-  /** Extras (2026-10-04): the same row as every other genre, for the open song. */
+  /** Extras (2026-10-04): the same row as every other genre, for the open song.
+   *  Drawn below the Rendered clips shelf, like every genre (2026-10-05). */
   const extrasBlock = activeBand ? <EpisodeExtrasRow genre="music-video" /> : null;
 
   const renderedBlock =
@@ -653,8 +654,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             <div className="flex min-w-0 flex-col gap-8">
               {scriptBlock}
               {timelineBlock}
-              {extrasBlock}
               {renderedBlock}
+              {extrasBlock}
             </div>
           </div>
         ) : (
@@ -663,8 +664,8 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
             {mp3Block}
             {scriptBlock}
             {timelineBlock}
-            {extrasBlock}
             {renderedBlock}
+            {extrasBlock}
             {/* Finished Songs moved to Library (the shelf here was a duplicate). */}
             <button
               type="button"
