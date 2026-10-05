@@ -5,7 +5,6 @@ import {
   adultShortEpisodeCode,
   adultShortEpisodeNumbers,
   adultShortEpisodeView,
-  describeAdultShortEpisode,
   firstAdultShortClipUrl,
   type AdultShortsSaved,
 } from "@/lib/adultShorts";
@@ -20,6 +19,9 @@ import {
 import { getShortsBusy, subscribeShortsBusy } from "@/lib/shortsBusy";
 import { downloadShortsEpisodeZip, shortsZipEpisodeName } from "@/lib/shortsClipsZip";
 import type { EpisodeRowCards, EpisodeRowContext } from "@/components/SunnyBanksEpisodeRow";
+import { SUNNY_BANKS_EDITOR_ID } from "@/components/SkidmarksSunnyBanksPanel";
+import { describeSunnyBanksWorkspace } from "@/lib/sunnyBanksWorkspace";
+import { SHOT_CARD_SCRIPT_ACT, shotCardClipRuntimes } from "@/lib/shortsShotCardScript";
 import { episodeExtraZipItems, episodeExtrasFor, episodeFolderFor } from "@/lib/episodeExtras";
 
 /** The Shorts editor's anchor, for the pencil's "jump to the editor". */
@@ -74,7 +76,8 @@ export function useShotCardEpisodeCards(
   const edit = (id: string) => {
     if (!open(id)) return;
     window.setTimeout(() => {
-      document.getElementById(SHORTS_EDITOR_ID)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      // The script studio, where every Shorts episode opens (2026-10-05).
+      document.getElementById(SUNNY_BANKS_EDITOR_ID)?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 0);
   };
 
@@ -127,7 +130,11 @@ export function useShotCardEpisodeCards(
       return {
         id: entry.id,
         label: labelFor(entry),
-        sub: `Shot cards · ${describeAdultShortEpisode(view.shots)}`,
+        // Read like every script episode's card (it opens as one act of script, 2026-10-05).
+        sub: describeSunnyBanksWorkspace({
+          actIds: [SHOT_CARD_SCRIPT_ACT],
+          runtimeMap: { [SHOT_CARD_SCRIPT_ACT]: shotCardClipRuntimes(view.shots) },
+        }),
         clipUrl: firstAdultShortClipUrl(view.shots),
         active: shown && entry.id === state.currentSavedId,
       };

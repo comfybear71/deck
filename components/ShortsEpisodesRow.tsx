@@ -4,8 +4,9 @@ import { useState, useSyncExternalStore } from "react";
 import { EpisodeCardsRow, type EpisodeRowNotice } from "@/components/EpisodeCardsRow";
 import { useStudioEpisodeCards } from "@/components/SunnyBanksEpisodeRow";
 import { useShotCardEpisodeCards } from "@/components/ShortsEpisodeRow";
-import { getAdultShortsState, getSkidmarksSnapshot, setShortsEditor, subscribeSkidmarks } from "@/lib/skidmarks";
+import { getAdultShortsState, getSkidmarksSnapshot, getStudioState, setShortsEditor, subscribeSkidmarks } from "@/lib/skidmarks";
 import { shortsOpenEditor } from "@/lib/shortsEpisodeCast";
+import { shotCardsSavedAsScript } from "@/lib/shortsShotCardStudio";
 
 /** Shot-card episode ids on the shared row, so they can never clash with a script episode's. */
 const CARDS_PREFIX = "cards:";
@@ -15,8 +16,10 @@ const CARDS_PREFIX = "cards:";
  * like Skidmarks and Sunny Banks, with the same UI"). It's the same row
  * as theirs (`EpisodeCardsRow` with the script studio's episode cards),
  * plus the older shot-card episodes (EP01–EP03) first, marked "Shot
- * cards". Tapping a card opens it in its own editor: a script episode in
- * the script studio, a shot-card episode in the shot cards, untouched.
+ * cards". Since 2026-10-05 every card opens in the script studio: a
+ * shot-card episode is shown there converted to a script on the fly
+ * (`lib/shortsShotCardStudio.ts`), and once it's changed it is a script
+ * episode on this row (the shot-card card then hides; its cards are kept).
  * "+ New" always starts a script episode. No editor switch any more.
  */
 export function ShortsEpisodesRow() {
@@ -37,7 +40,11 @@ export function ShortsEpisodesRow() {
     { shown: editor === "script", onShow: () => setShortsEditor("script") },
   );
   const cards = useShotCardEpisodeCards(cardsCtx, { shown: editor === "cards", onShow: () => setShortsEditor("cards") });
-  if (!getAdultShortsState(snapshot).ageConfirmed) return null;
+  const adult = getAdultShortsState(snapshot);
+  if (!adult.ageConfirmed) return null;
+  // A shot-card episode already saved as a script episode shows once, as that script episode.
+  const savedAsScript = shotCardsSavedAsScript(adult, getStudioState("shorts", snapshot)?.workspaces ?? []);
+  const shotCards = cards.cards.filter((c) => !savedAsScript.has(c.id));
 
   const isCard = (id: string) => id.startsWith(CARDS_PREFIX);
   const pick =
@@ -49,7 +56,7 @@ export function ShortsEpisodesRow() {
   const busy = script.busy || cards.busy;
   return (
     <EpisodeCardsRow
-      cards={[...cards.cards.map((c) => ({ ...c, id: `${CARDS_PREFIX}${c.id}` })), ...script.cards]}
+      cards={[...shotCards.map((c) => ({ ...c, id: `${CARDS_PREFIX}${c.id}` })), ...script.cards]}
       busy={busy}
       confirmDeleteId={confirmDeleteId}
       downloadingId={script.downloadingId}

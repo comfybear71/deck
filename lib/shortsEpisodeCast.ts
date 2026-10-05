@@ -81,10 +81,12 @@ export function shortsScriptEditorOpen(state: Pick<SkidmarksState, "adultShorts"
 
 /**
  * The open Shorts script episode as a scope (2026-10-04): its pinned
- * folder, or its card's. Script episodes are all new (standalone), never
- * one of the older ones.
+ * folder, or its card's. A script episode is standalone, except one
+ * converted from an older shot-card episode (2026-10-05, EP01/EP02: it
+ * keeps the shot cards' folder), which keeps that episode's Cast exactly
+ * as before. Pass `adultShorts` to know which folders those are.
  */
-export function shortsStudioEpisodeScopeOf(studio: SkidmarksState["shortsStudio"]): EpisodeScope {
+export function shortsStudioEpisodeScopeOf(studio: SkidmarksState["shortsStudio"], adultShorts?: unknown): EpisodeScope {
   if (!studio) return { episode: null, legacy: false, tickedIds: [] };
   const live = studio.live;
   const card = live?.episodeId ? studio.workspaces.find((w) => w.id === live.episodeId) : undefined;
@@ -93,12 +95,16 @@ export function shortsStudioEpisodeScopeOf(studio: SkidmarksState["shortsStudio"
     : card && isSafeDeckMediaSlug(card.mediaSlug)
       ? card.mediaSlug
       : null;
-  return { episode, legacy: false, tickedIds: [] };
+  const adult = adultShorts === undefined ? null : normalizeAdultShortsState(adultShorts);
+  const folderOf = (x: AdultShortsSaved) => x.mediaSlug ?? (adult && x.id === adult.currentSavedId ? adult.mediaSlug : undefined);
+  const shotCards = episode && adult ? adult.saved.filter((x) => folderOf(x) === episode) : [];
+  const legacy = shotCards.length > 0 && shotCards.every((x) => isOlderShortsEpisode(x));
+  return { episode, legacy, tickedIds: [] };
 }
 
 /** The open Shorts episode (shot cards or script, whichever is open), from the whole session. */
 export function openShortsEpisodeScopeIn(state: Pick<SkidmarksState, "adultShorts"> & Partial<Pick<SkidmarksState, "shortsStudio">>): EpisodeScope {
-  if (shortsScriptEditorOpen(state)) return shortsStudioEpisodeScopeOf(state.shortsStudio ?? null);
+  if (shortsScriptEditorOpen(state)) return shortsStudioEpisodeScopeOf(state.shortsStudio ?? null, state.adultShorts);
   return shortsEpisodeScopeOf(normalizeAdultShortsState(state.adultShorts));
 }
 
