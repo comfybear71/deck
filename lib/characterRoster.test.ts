@@ -347,12 +347,33 @@ describe("Skidmarks pictures, 3D cartoon and animals", () => {
     const [c] = buildCharacterRoster(withCast([owl])).skidmarks;
     expect(c.subjectWord).toBe("animal");
     const [p] = buildTrainingPicturePrompts(c, 1);
-    expect(p).toMatch(/same animal character/);
+    expect(p).toMatch(/same animal/);
     expect(p).toMatch(/made-up animal/);
     expect(p).not.toMatch(/two arms/);
     expect(p).not.toMatch(/\bperson\b/);
+    expect(p).not.toMatch(/\bcharacter\b/);
     const clean = buildCleanReferencePrompt(c, true);
-    expect(clean).toMatch(/animal character/);
+    expect(clean).toMatch(/made-up animal/);
+    expect(clean).not.toMatch(/over 25/);
+    expect(clean).not.toMatch(/\bperson\b/);
+  });
+
+  it("marks an object cast member so prompts say object, never person", () => {
+    const house = buildSkidmarksCastMember("House", "a wall-mounted speaker", "supporting", 1, "h1", {
+      kind: "object",
+    });
+    expect(house.kind).toBe("object");
+    expect(house.isAnimal).toBeUndefined();
+    const [c] = buildCharacterRoster(withCast([house])).skidmarks;
+    expect(c.subjectWord).toBe("object");
+    const [p] = buildTrainingPicturePrompts(c, 1);
+    expect(p).toMatch(/same object/);
+    expect(p).toMatch(/made-up object/);
+    expect(p).not.toMatch(/\bperson\b/);
+    expect(p).not.toMatch(/two arms/);
+    const clean = buildCleanReferencePrompt(c, false);
+    expect(clean).toMatch(/object/);
+    expect(clean).not.toMatch(/one person only/);
     expect(clean).not.toMatch(/over 25/);
   });
 

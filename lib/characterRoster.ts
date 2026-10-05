@@ -12,6 +12,7 @@
  * anything is trained.
  */
 
+import { castKindFrom, subjectWordForCastKind, type CastKind } from "./castKind";
 import {
   AUTO_PICTURE_TARGET,
   CHARACTER_LORA_ESTIMATED_COST_USD,
@@ -154,7 +155,7 @@ export function buildCharacterRoster(
       // 60–80% photoreal), not a 3D cartoon, not a photo, and not the flat
       // Sunny Banks style. A card can still pick another style.
       style: "semireal",
-      subjectWord: c.isAnimal ? "animal" : "person",
+      subjectWord: subjectWordForCastKind(castKindFrom(c)),
       blockedReason: c.fictionalAdultConfirmed === true ? minorBlockReason(`${c.name} ${c.look}`) : "Not marked as a made-up adult.",
     });
   }
@@ -247,8 +248,8 @@ export function buildCharacterRoster(
         look: x.look,
         neverShow: "",
         style: EXTRA_STYLE[g],
-        subjectWord: x.isAnimal ? "animal" : g === "sunny-banks" ? "character" : "person",
-        blockedReason: x.isAnimal ? null : minorBlockReason(`${x.name} ${x.look}`),
+        subjectWord: subjectWordForCastKind(castKindFrom(x), g === "sunny-banks" ? "character" : "person"),
+        blockedReason: castKindFrom(x) === "person" ? minorBlockReason(`${x.name} ${x.look}`) : null,
       });
     }
   }
@@ -439,6 +440,21 @@ const ANIMAL_VARIATIONS = [
   "head-and-shoulders, facing the camera, neutral expression, plain white background",
 ];
 
+// Objects / products (wall speaker, radio, robot body without a face as "animal"):
+// no arms/hands poses, product-hero framing, centered.
+const OBJECT_VARIATIONS = [
+  "product hero shot, centered, three-quarter view, plain light grey background, soft even light",
+  "front view, centered, filling most of the frame, plain pale background",
+  "slightly high angle, centered on a plain surface, soft daylight",
+  "slightly low angle, centered, plain dark background, one soft key light",
+  "side profile facing left, centered, plain light background",
+  "three-quarter view from the right, centered, soft window light",
+  "close-up of the front face of the object, centered, plain background",
+  "centered on a wooden shelf, soft warm light",
+  "centered on a clean white surface, studio light",
+  "centered against a plain wall, even daylight",
+];
+
 // Redo rounds (2026-09-29): Stuart's Redo should give new poses and new
 // places, not the same 15 again. Round 0 is the fixed list above; each
 // later round pairs a pose with a background from these pools, shifted
@@ -463,7 +479,7 @@ const REDO_POSES = [
   "head-and-shoulders, looking down, thoughtful",
   "full body, waving one hand hello",
 ];
-const REDO_BACKGROUNDS: Record<"cartoon" | "photo" | "animal", string[]> = {
+const REDO_BACKGROUNDS: Record<"cartoon" | "photo" | "animal" | "object", string[]> = {
   cartoon: [
     "outside a rusty letterbox",
     "beside a clothesline full of washing",
@@ -508,11 +524,25 @@ const REDO_BACKGROUNDS: Record<"cartoon" | "photo" | "animal", string[]> = {
     "by a back door screen",
     "in soft morning mist",
   ],
+  object: [
+    "plain pale background, soft even light",
+    "on a wooden shelf, soft daylight",
+    "on a clean white surface, studio light",
+    "against a plain wall, even light",
+    "on a kitchen bench, soft window light",
+    "plain dark background, one soft key light",
+  ],
 };
 
 function redoVariation(style: CharacterTrainingStyle, subjectWord: string | undefined, index: number, round: number): string {
-  const bgs = isAnimal(subjectWord) ? REDO_BACKGROUNDS.animal : style === "cartoon" || style === "render3d" ? REDO_BACKGROUNDS.cartoon : REDO_BACKGROUNDS.photo;
-  if (isAnimal(subjectWord) || style === "faceless") {
+  const bgs = isAnimal(subjectWord)
+    ? REDO_BACKGROUNDS.animal
+    : isObject(subjectWord)
+      ? REDO_BACKGROUNDS.object
+      : style === "cartoon" || style === "render3d"
+        ? REDO_BACKGROUNDS.cartoon
+        : REDO_BACKGROUNDS.photo;
+  if (isAnimal(subjectWord) || isObject(subjectWord) || style === "faceless") {
     // Keep their own safe poses (no chair poses for animals, face hidden for faceless); only the place changes.
     const base = variationsFor(style, subjectWord);
     const pose = base[(index + round * 4) % base.length].split(",").slice(0, 2).join(",");
@@ -522,29 +552,46 @@ function redoVariation(style: CharacterTrainingStyle, subjectWord: string | unde
   return `${pose}, ${bgs[(index * 3 + round * 7) % bgs.length]}`;
 }
 
+function subjectKind(subjectWord?: string): CastKind {
+  const w = (subjectWord ?? "").trim().toLowerCase();
+  if (w === "animal") return "animal";
+  if (w === "object" || w === "product") return "object";
+  return "person";
+}
+
 function isAnimal(subjectWord?: string): boolean {
-  return (subjectWord ?? "").trim().toLowerCase() === "animal";
+  return subjectKind(subjectWord) === "animal";
+}
+
+function isObject(subjectWord?: string): boolean {
+  return subjectKind(subjectWord) === "object";
 }
 
 function variationsFor(style: CharacterTrainingStyle, subjectWord?: string): string[] {
   if (isAnimal(subjectWord)) return ANIMAL_VARIATIONS;
+  if (isObject(subjectWord)) return OBJECT_VARIATIONS;
   if (style === "faceless") return FACELESS_VARIATIONS;
   if (style === "cartoon") return CARTOON_VARIATIONS;
   return PHOTO_VARIATIONS;
 }
 
-/** What the prompts call them: "animal character", "cartoon character", "man" or "person". */
+/** What the prompts call them: animal, object/product, cartoon character, or person. */
 function whoWord(style: CharacterTrainingStyle, subjectWord?: string, facelessWord = "person"): string {
-  if (isAnimal(subjectWord)) return "animal character";
+  if (isAnimal(subjectWord)) return "animal";
+  if (isObject(subjectWord)) return "object";
   if (style === "cartoon" || style === "render3d") return "cartoon character";
   return style === "faceless" ? facelessWord : "person";
 }
 
-/** The closing safety line: made-up adults for people, a made-up animal for animals. */
+/** Closing safety line — never says person/character for animal or object. */
 function madeUpLine(who: string, subjectWord?: string): string {
-  return isAnimal(subjectWord)
-    ? `Only this one ${who} in the picture, a made-up animal, no people, no text, no watermark.`
-    : `Only this one ${who} in the picture, a made-up adult, clearly over 25, not resembling any real person, fully clothed, no text, no watermark.`;
+  if (isAnimal(subjectWord)) {
+    return `Only this one ${who} in the picture, a made-up animal, no people, no text, no watermark.`;
+  }
+  if (isObject(subjectWord)) {
+    return `Only this one ${who} in the picture, a made-up object or product, no people, no animals, no text, no watermark.`;
+  }
+  return `Only this one ${who} in the picture, a made-up adult, clearly over 25, not resembling any real person, fully clothed, no text, no watermark.`;
 }
 
 const MAX_LOOK_CHARS = 1100;
@@ -572,6 +619,8 @@ export const EMPTY_HANDS_LINE =
   "Nothing in the hands: no props, no cigarette, no drink, no phone, no tools, no weapons, no instrument. If the reference shows them holding something, leave it out. Correct anatomy: exactly two arms and two hands, arms posed only as this shot describes, no extra or duplicated limbs.";
 export const ANIMAL_ANATOMY_LINE =
   "Nothing held and no props. Correct anatomy for this animal: the right number of legs, wings or paws, no extra or duplicated limbs.";
+export const OBJECT_ANATOMY_LINE =
+  "A single object or product only. No people, no hands holding it, no animals. Correct shape for this object, no duplicated parts, no extra limbs.";
 const MAX_PROMPT_CHARS = 1900; // the Siray route refuses over 2000
 
 function clip(text: string, max: number): string {
@@ -622,13 +671,16 @@ export function buildTrainingPicturePrompts(
   round = 0,
 ): string[] {
   const animal = isAnimal(char.subjectWord);
+  const object = isObject(char.subjectWord);
   const list = variationsFor(char.style, char.subjectWord);
   const who = whoWord(char.style, char.subjectWord);
   const same = animal
     ? "exactly the same species, face, markings, body shape and any clothes"
-    : char.style === "faceless"
-      ? "exactly the same silhouette, hat, clothes and build"
-      : "exactly the same face, hair, body shape and outfit";
+    : object
+      ? "exactly the same shape, materials, colours and any markings"
+      : char.style === "faceless"
+        ? "exactly the same silhouette, hat, clothes and build"
+        : "exactly the same face, hair, body shape and outfit";
   return Array.from({ length: Math.max(0, count) }, (_, i) => {
     const variation = round > 0 ? redoVariation(char.style, char.subjectWord, startIndex + i, round) : list[(startIndex + i) % list.length];
     const parts = [
@@ -637,7 +689,7 @@ export function buildTrainingPicturePrompts(
       signatureLine(char.look),
       char.look ? clip(stripHeldProps(char.look), MAX_LOOK_CHARS) : "",
       styleLine(char.style),
-      animal ? ANIMAL_ANATOMY_LINE : EMPTY_HANDS_LINE,
+      animal ? ANIMAL_ANATOMY_LINE : isObject(char.subjectWord) ? OBJECT_ANATOMY_LINE : EMPTY_HANDS_LINE,
       madeUpLine(who, char.subjectWord),
       char.neverShow ? `Do not show: ${clip(char.neverShow, 300)}.` : "",
     ];
@@ -656,27 +708,41 @@ export function buildCleanReferencePrompt(
   hasReference: boolean,
 ): string {
   const animal = isAnimal(char.subjectWord);
+  const object = isObject(char.subjectWord);
   const who = whoWord(char.style, char.subjectWord, "man");
   const look = stripHeldProps(char.look);
   // Cartoon: a flat pale backdrop, never "soft light" (it pulls Seedream toward shaded 3D).
   const backdrop = char.style === "cartoon" ? "plain flat pale background." : "plain light background, even soft light.";
+  // Centered + filling the frame: Cast tiles are square; landscape stills with the
+  // subject off to one side looked blank after the tile crop (2026-10-05).
   const pose = animal
-    ? `Full body, standing, facing the viewer at a slight angle, neutral expression, ${backdrop}`
-    : char.style === "faceless"
-      ? "Full body standing, three-quarter view, arms hanging relaxed at the sides, hands open and empty, face in deep shadow under the hat brim, plain dark background, one soft key light."
-      : `Full body standing, facing the viewer at a slight angle, arms hanging relaxed straight down at the sides, hands open and empty, neutral expression, ${backdrop}`;
+    ? `Full body, centered in frame, filling most of the picture, standing, facing the viewer at a slight angle, neutral expression, ${backdrop}`
+    : object
+      ? `Product hero shot, centered in frame, filling most of the picture, three-quarter view, ${backdrop}`
+      : char.style === "faceless"
+        ? "Full body standing, centered in frame, three-quarter view, arms hanging relaxed at the sides, hands open and empty, face in deep shadow under the hat brim, plain dark background, one soft key light."
+        : `Full body standing, centered in frame, filling most of the picture, facing the viewer at a slight angle, arms hanging relaxed straight down at the sides, hands open and empty, neutral expression, ${backdrop}`;
+  const sameBits = animal
+    ? "species, face, markings, body shape and any clothes"
+    : object
+      ? "shape, materials, colours and any markings"
+      : "face, hair, body shape and outfit";
+  const fallbackLook = object ? "an original made-up object" : animal ? "an original made-up animal" : "an original made-up character";
+  const closing = animal
+    ? "A made-up animal, one animal only, no people, no text, no watermark."
+    : object
+      ? "A made-up object or product, one object only, no people, no animals, no text, no watermark."
+      : "A made-up adult, clearly over 25, not resembling any real person, fully clothed, one person only, no text, no watermark.";
   const parts = [
     hasReference
-      ? `The same ${who} as in the reference image (${char.name}): exactly the same ${animal ? "species, face, markings, body shape and any clothes" : "face, hair, body shape and outfit"}, but a new pose.`
-      : `${char.name}: ${clip(look || "an original made-up character", MAX_LOOK_CHARS)}.`,
+      ? `The same ${who} as in the reference image (${char.name}): exactly the same ${sameBits}, but a new angle.`
+      : `${char.name}: ${clip(look || fallbackLook, MAX_LOOK_CHARS)}.`,
     pose,
     hasReference && look ? clip(look, MAX_LOOK_CHARS) : "",
     signatureLine(char.look),
     styleLine(char.style),
-    animal ? ANIMAL_ANATOMY_LINE : EMPTY_HANDS_LINE,
-    animal
-      ? "A made-up animal character, one animal only, no people, no text, no watermark."
-      : "A made-up adult, clearly over 25, not resembling any real person, fully clothed, one person only, no text, no watermark.",
+    animal ? ANIMAL_ANATOMY_LINE : object ? OBJECT_ANATOMY_LINE : EMPTY_HANDS_LINE,
+    closing,
   ];
   return clip(parts.filter(Boolean).join(" "), MAX_PROMPT_CHARS);
 }

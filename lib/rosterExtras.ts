@@ -15,6 +15,7 @@
  * Pictures are Blob URLs, never bytes.
  */
 
+import { castKindFrom, castKindPersist, type CastKind } from "./castKind";
 import { isSafeDeckMediaSlug } from "./deckMediaPaths";
 import { SKIDMARKS_CAST_MAX_PICTURES, cleanPictureUrls, mintSkidmarksId } from "./skidmarksEpisodes";
 
@@ -35,6 +36,9 @@ export interface RosterExtraCharacter {
   look: string;
   /** Blob URLs, first one is the main picture. */
   pictureUrls: string[];
+  /** Person / Animal / Object (2026-10-05). See `lib/castKind.ts`. */
+  kind?: CastKind;
+  /** @deprecated Prefer `kind: "animal"`. */
   isAnimal?: boolean;
   /** Ticked when added: made up, clearly adult (over 25), not a real person. */
   fictionalAdultConfirmed: true;
@@ -73,7 +77,7 @@ export function emptyRosterExtrasState(): RosterExtrasState {
 export function buildRosterExtraCharacter(
   name: string,
   look: string,
-  extra: { pictureUrls?: readonly string[]; isAnimal?: boolean; episode?: string | null } = {},
+  extra: { pictureUrls?: readonly string[]; kind?: CastKind; isAnimal?: boolean; episode?: string | null } = {},
   now: number = Date.now(),
   id = mintSkidmarksId("chr"),
 ): RosterExtraCharacter {
@@ -85,7 +89,7 @@ export function buildRosterExtraCharacter(
     fictionalAdultConfirmed: true,
     createdAt: now,
   };
-  if (extra.isAnimal) c.isAnimal = true;
+  Object.assign(c, castKindPersist(castKindFrom({ kind: extra.kind, isAnimal: extra.isAnimal })));
   if (isSafeDeckMediaSlug(extra.episode)) c.episode = extra.episode;
   return c;
 }
@@ -94,12 +98,16 @@ export function buildRosterExtraCharacter(
 export function addPicturesToRosterExtra(
   c: RosterExtraCharacter,
   urls: readonly string[],
-  isAnimal = false,
+  kindOrAnimal: CastKind | boolean = false,
 ): RosterExtraCharacter {
+  const kind =
+    typeof kindOrAnimal === "boolean"
+      ? castKindFrom({ kind: c.kind, isAnimal: kindOrAnimal || c.isAnimal })
+      : kindOrAnimal;
   return {
     ...c,
     pictureUrls: cleanPictureUrls([...c.pictureUrls, ...urls]),
-    ...(isAnimal ? { isAnimal: true } : {}),
+    ...castKindPersist(kind),
   };
 }
 
@@ -115,7 +123,7 @@ function normalizeExtra(value: unknown): RosterExtraCharacter | null {
     name: v.name.trim(),
     look: typeof v.look === "string" ? v.look : "",
     pictureUrls: cleanPictureUrls(v.pictureUrls),
-    ...(v.isAnimal === true ? { isAnimal: true } : {}),
+    ...castKindPersist(castKindFrom(v)),
     fictionalAdultConfirmed: true,
     createdAt: typeof v.createdAt === "number" ? v.createdAt : Date.now(),
     ...(isSafeDeckMediaSlug(v.episode) ? { episode: v.episode } : {}),

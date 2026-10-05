@@ -43,6 +43,14 @@ import {
   type RosterGroup,
 } from "@/lib/characterRoster";
 import {
+  CAST_KINDS,
+  CAST_KIND_LABEL,
+  castKindPersist,
+  parseCastKind,
+  subjectWordForCastKind,
+  type CastKind,
+} from "@/lib/castKind";
+import {
   addSkidmarksMemberWithPictures,
   flushSkidmarksSessionNow,
   getCharacterLorasState,
@@ -138,7 +146,7 @@ const LOOK_PLACEHOLDER: Record<RosterGroup, string> = {
 interface CastUpload {
   key: string;
   name: string;
-  isAnimal: boolean;
+  kind: CastKind;
   files: File[];
   previews: string[];
 }
@@ -310,10 +318,11 @@ export function CharacterRosterGrid({
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [message, setMessage] = useState<Record<string, string>>({});
   const [armedGroup, setArmedGroup] = useState<string | null>(null);
-  const [newCast, setNewCast] = useState<{ name: string; look: string; adult: boolean; openGroup: RosterGroup | null }>({
+  const [newCast, setNewCast] = useState<{ name: string; look: string; adult: boolean; kind: CastKind; openGroup: RosterGroup | null }>({
     name: "",
     look: "",
     adult: false,
+    kind: "person",
     openGroup: null,
   });
   // Picked picture files, grouped by name ("Clive 1.jpg", "Clive 2.jpg" are one character).
@@ -938,6 +947,46 @@ export function CharacterRosterGrid({
    * the bin, and the close ✕. Built-in Sunny Banks regulars keep a plain
    * name and no bin (their names are Deck's cast list).
    */
+
+  /** Person / Animal / Object on an open Cast card (2026-10-05). Writes the
+   * Cast/roster record when editable, and always the LoRA card's subjectWord. */
+  const setCastKind = (char: RosterCharacter, kind: CastKind) => {
+    const key = char.sourceKey;
+    const colon = key.indexOf(":");
+    const prefix = colon > 0 ? key.slice(0, colon) : "";
+    const id = colon > 0 ? key.slice(colon + 1) : "";
+    const fields = castKindPersist(kind);
+    if (prefix === "sk" && id) {
+      patchSkidmarksEpisodes((st) => ({
+        ...st,
+        cast: st.cast.map((c) => {
+          if (c.id !== id) return c;
+          const next = { ...c, ...fields };
+          if (kind !== "animal") delete next.isAnimal;
+          return next;
+        }),
+      }));
+    } else if ((prefix === "asx" || prefix === "sbx" || prefix === "mvx") && id) {
+      const g =
+        prefix === "asx" ? "adult-shorts" : prefix === "sbx" ? "sunny-banks" : "music-video";
+      patchRosterExtras((st) => ({
+        ...st,
+        [g]: st[g].map((x) => {
+          if (x.id !== id) return x;
+          const next = { ...x, ...fields };
+          if (kind !== "animal") delete (next as { isAnimal?: boolean }).isAnimal;
+          return next;
+        }),
+      }));
+    }
+    const personWord = char.group === "sunny-banks" ? "character" : "person";
+    const entry = entryForRosterCharacter(getCharacterLorasState().characters, char.sourceKey);
+    if (entry) {
+      patchEntry(entry.id, { subjectWord: subjectWordForCastKind(kind, personWord) });
+    }
+    flushSkidmarksSessionNow();
+  };
+
   const renderPanelHeader = (char: RosterCharacter, entry: CharacterLoraEntry | null, extra?: ReactNode) => {
     const editable = characterCanBeEdited(char, snapshot);
     const editing = editable && nameDraft?.key === char.sourceKey;
@@ -1009,6 +1058,21 @@ export function CharacterRosterGrid({
             {notice.text}
           </p>
         )}
+        <label className="mt-1.5 flex items-center gap-1.5 text-[11px] text-white/60">
+          Kind
+          <select
+            value={parseCastKind(entry?.subjectWord === "animal" || entry?.subjectWord === "object" ? entry.subjectWord : char.subjectWord)}
+            onChange={(e) => setCastKind(char, parseCastKind(e.target.value))}
+            aria-label={`Kind for ${char.name}`}
+            className="rounded border border-white/15 bg-black/40 px-1.5 py-0.5 text-[11px] text-white"
+          >
+            {CAST_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {CAST_KIND_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </label>
         {/* Shorts characters' optional profile (2026-09-30), folded to one line. */}
         {characterCanHaveProfile(char, snapshot) && <CharacterProfileFields key={char.sourceKey} char={char} entry={entry} />}
       </>
@@ -1267,7 +1331,7 @@ export function CharacterRosterGrid({
   };
 
   const newCastBlocked = minorBlockReason(`${newCast.name} ${newCast.look}`);
-  const uploadsBlocked = castUploads.map((u) => (u.isAnimal ? null : minorBlockReason(u.name))).find(Boolean) ?? null;
+  const uploadsBlocked = castUploads.map((u) => (u.kind === "person" ? minorBlockReason(u.name) : null)).find(Boolean) ?? null;
   const hasUploads = castUploads.length > 0;
   const canAddCast = hasUploads
     ? newCast.adult && !uploadsBlocked && !castUploadBusy && castUploads.every((u) => u.name.trim().length > 0)
@@ -1288,7 +1352,7 @@ export function CharacterRosterGrid({
   const closeAddCast = () => {
     clearCastUploads();
     setCastUploadBusy(null);
-    setNewCast({ name: "", look: "", adult: false, openGroup: null });
+    setNewCast({ name: "", look: "", adult: false, kind: "person", openGroup: null });
   };
 
   const pickCastFiles = (files: FileList | null) => {
@@ -1301,7 +1365,7 @@ export function CharacterRosterGrid({
         const key = name.toLowerCase();
         let group = next.find((u) => u.key === key);
         if (!group) {
-          group = { key, name, isAnimal: false, files: [], previews: [] };
+          group = { key, name, kind: "person", files: [], previews: [] };
           next.push(group);
         }
         if (group.files.length >= SKIDMARKS_CAST_MAX_PICTURES) continue;
@@ -1323,16 +1387,31 @@ export function CharacterRosterGrid({
     name: string,
     look: string,
     urls: string[],
-    isAnimal: boolean,
+    kind: CastKind,
   ): string => {
     const slug = slugifyCharacterName(name);
+    const kindFields = castKindPersist(kind);
     if (group === "music-video" && addToBandId) {
       const memberId = addSkidmarksMemberWithPictures(addToBandId, name, look, urls);
       if (!memberId) {
         setMessage((m) => ({ ...m, "add-cast": `This band already has ${MAX_MEMBERS_PER_BAND} people.` }));
         return "";
       }
-      return `mv:${memberId}`;
+      // Band members have no Cast kind field; the LoRA card's subjectWord carries it.
+      const sourceKey = `mv:${memberId}`;
+      const entry = entryForRosterCharacter(getCharacterLorasState().characters, sourceKey);
+      if (entry) {
+        patchEntry(entry.id, { subjectWord: subjectWordForCastKind(kind) });
+      } else {
+        const created = buildCharacterLoraEntry(
+          name,
+          getCharacterLorasState().characters.map((c) => c.slug),
+          new Date(),
+          { sourceKey, subjectWord: subjectWordForCastKind(kind) },
+        );
+        patchCharacterLoras((st) => ({ characters: [...st.characters, created] }));
+      }
+      return sourceKey;
     }
     if (group === "skidmarks") {
       const existingKey = addGroupKeyByName.get(slug);
@@ -1345,7 +1424,8 @@ export function CharacterRosterGrid({
               ? {
                   ...c,
                   pictureUrls: [...new Set([...(c.pictureUrls ?? []), ...urls])].slice(0, SKIDMARKS_CAST_MAX_PICTURES),
-                  ...(isAnimal ? { isAnimal: true } : {}),
+                  ...kindFields,
+                  ...(kind === "animal" ? {} : { isAnimal: undefined }),
                 }
               : c,
           ),
@@ -1355,7 +1435,7 @@ export function CharacterRosterGrid({
       // A new card belongs to the open episode (2026-10-04, each Skidmarks
       // episode has its own Cast); `addCharacters` pinned its folder first.
       const episode = getOpenEpisodeFolder("skidmarks");
-      const member = buildSkidmarksCastMember(name, look, "supporting", Date.now(), undefined, { pictureUrls: urls, isAnimal, episode });
+      const member = buildSkidmarksCastMember(name, look, "supporting", Date.now(), undefined, { pictureUrls: urls, kind, episode });
       patchSkidmarksEpisodes((st) => ({ ...st, cast: [...st.cast, member] }));
       return `sk:${member.id}`;
     }
@@ -1369,10 +1449,10 @@ export function CharacterRosterGrid({
       (x) => slugifyCharacterName(x.name) === slug && (!shortsScope || isInEpisode(x, shortsScope)),
     );
     if (already) {
-      patchRosterExtras((st) => ({ ...st, [g]: st[g].map((x) => (x.id === already.id ? addPicturesToRosterExtra(x, urls, isAnimal) : x)) }));
+      patchRosterExtras((st) => ({ ...st, [g]: st[g].map((x) => (x.id === already.id ? addPicturesToRosterExtra(x, urls, kind) : x)) }));
     } else {
       const episode = g === "adult-shorts" ? getOpenEpisodeFolder("adult-shorts") : null;
-      const c = buildRosterExtraCharacter(name, look, { pictureUrls: urls, isAnimal, episode });
+      const c = buildRosterExtraCharacter(name, look, { pictureUrls: urls, kind, episode });
       patchRosterExtras((st) => ({ ...st, [g]: [...st[g], c] }));
       // A built-in character with this name (a band member, a Sunnybank
       // regular) keeps their own tile; the pictures just join them.
@@ -1390,7 +1470,7 @@ export function CharacterRosterGrid({
       return;
     }
     if (!hasUploads) {
-      const key = saveCharacter(addGroup, newCast.name, newCast.look, [], false);
+      const key = saveCharacter(addGroup, newCast.name, newCast.look, [], newCast.kind);
       flushSkidmarksSessionNow();
       closeAddCast();
       if (key) setSelectedKey(key);
@@ -1409,7 +1489,7 @@ export function CharacterRosterGrid({
           const target = rosterPictureTargetFor(addGroup, u.name, existingKey, already + i + 1, addToBandId);
           urls.push(await toTrainingPicture(u.previews[i], target));
         }
-        lastKey = saveCharacter(addGroup, u.name, "", urls, u.isAnimal) || lastKey;
+        lastKey = saveCharacter(addGroup, u.name, "", urls, u.kind) || lastKey;
         flushSkidmarksSessionNow();
       }
       closeAddCast();
@@ -1446,19 +1526,24 @@ export function CharacterRosterGrid({
                   maxLength={60}
                   className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/40 px-2 py-1 text-xs text-white"
                 />
-                {addGroup !== "adult-shorts" && (
-                  <label className="flex items-center gap-1 text-[11px] text-white/60">
-                    <input
-                      type="checkbox"
-                      checked={u.isAnimal}
-                      onChange={(e) => {
-                        const isAnimal = e.target.checked;
-                        setCastUploads((list) => list.map((x, j) => (j === i ? { ...x, isAnimal } : x)));
-                      }}
-                    />
-                    Animal
-                  </label>
-                )}
+                <label className="flex shrink-0 items-center gap-1 text-[11px] text-white/60">
+                  <span className="sr-only">Kind</span>
+                  <select
+                    value={u.kind}
+                    onChange={(e) => {
+                      const kind = parseCastKind(e.target.value);
+                      setCastUploads((list) => list.map((x, j) => (j === i ? { ...x, kind } : x)));
+                    }}
+                    aria-label={`Kind for ${u.name}`}
+                    className="rounded border border-white/15 bg-black/40 px-1.5 py-0.5 text-[11px] text-white"
+                  >
+                    {CAST_KINDS.map((k) => (
+                      <option key={k} value={k}>
+                        {CAST_KIND_LABEL[k]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   type="button"
                   onClick={() =>
@@ -1490,7 +1575,7 @@ export function CharacterRosterGrid({
    */
   const openAddCast = (group: RosterGroup) => {
     clearCastUploads();
-    setNewCast({ name: "", look: "", adult: false, openGroup: group });
+    setNewCast({ name: "", look: "", adult: false, kind: "person", openGroup: group });
   };
 
   const renderAddCharacter = (group: RosterGroup) =>
@@ -1540,6 +1625,22 @@ export function CharacterRosterGrid({
           </>
         )}
         {renderCastUploads()}
+        {!hasUploads && (
+          <label className="flex items-center gap-1.5 text-[11px] text-white/60">
+            Kind
+            <select
+              value={newCast.kind}
+              onChange={(e) => setNewCast((c) => ({ ...c, kind: parseCastKind(e.target.value) }))}
+              className="rounded border border-white/15 bg-black/40 px-1.5 py-0.5 text-[11px] text-white"
+            >
+              {CAST_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {CAST_KIND_LABEL[k]}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="flex items-start gap-2 text-[11px] text-white/60">
           <input
             type="checkbox"

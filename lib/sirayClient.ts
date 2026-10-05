@@ -170,10 +170,16 @@ export type SubmitStillOutcome = { ok: true; taskId: string } | SirayFailure;
  * still generation (a character's master reference still + a position
  * prompt) and returns the async `task_id` used to poll for the result.
  */
+/** Square stills for Cast faces (2026-10-05): same $0.04 tier as 2560x1440.
+ * Landscape Cast remakes looked blank in the square Cast tile after crop. */
+export const SIRAY_SEEDREAM_45_CAST_SIZE = "2048x2048";
+
 export async function siraySubmitStillImage(
   prompt: string,
   referenceImageDataUrls: string[],
-  creds: SirayCredentials
+  creds: SirayCredentials,
+  /** Override size. Cast clean/training pictures use `SIRAY_SEEDREAM_45_CAST_SIZE`. */
+  size: string = SIRAY_SEEDREAM_45_SIZE,
 ): Promise<SubmitStillOutcome> {
   // 0 refs → t2i spicy (text only). 1+ refs → ref2i spicy. Callers
   // (the route) currently cap at 1 reference; the API allows more.
@@ -182,7 +188,7 @@ export async function siraySubmitStillImage(
   const body: Record<string, unknown> = {
     model,
     prompt,
-    size: SIRAY_SEEDREAM_45_SIZE,
+    size,
   };
   if (hasRefs) body.images = referenceImageDataUrls;
 

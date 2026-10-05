@@ -13,6 +13,7 @@
  * person's likeness or name. Adding a character requires ticking that.
  */
 import { effectiveDeckLocations, type DeckLocationsState } from "./deckLocations";
+import { castKindFrom, castKindPersist, type CastKind } from "./castKind";
 import { isSafeDeckMediaSlug } from "./deckMediaPaths";
 
 export type SkidmarksBeatId =
@@ -69,7 +70,13 @@ export interface SkidmarksCastMember {
   createdAt: number;
   /** Uploaded pictures of them (Blob https URLs), first one is the main picture. */
   pictureUrls?: string[];
-  /** An animal character (owl, pig cop, street cat): prompts say "animal", not "person". */
+  /**
+   * Person / Animal / Object (2026-10-05). Pip the robot dog is Animal;
+   * House the wall speaker is Object. Older saves may only have
+   * `isAnimal: true` — read via `castKindFrom`.
+   */
+  kind?: CastKind;
+  /** @deprecated Prefer `kind: "animal"`. Kept so older builds still read animals. */
   isAnimal?: boolean;
   /**
    * The episode this Cast card belongs to (2026-10-04, Stuart: each
@@ -155,12 +162,13 @@ export function buildSkidmarksCastMember(
   role: SkidmarksCastRole = "supporting",
   now: number = Date.now(),
   id = mintSkidmarksId("cast"),
-  extra: { pictureUrls?: readonly string[]; isAnimal?: boolean; episode?: string | null } = {},
+  extra: { pictureUrls?: readonly string[]; kind?: CastKind; isAnimal?: boolean; episode?: string | null } = {},
 ): SkidmarksCastMember {
   const member: SkidmarksCastMember = { id, name: name.trim(), role, look: look.trim(), fictionalAdultConfirmed: true, createdAt: now };
   const pictures = cleanPictureUrls(extra.pictureUrls);
   if (pictures.length) member.pictureUrls = pictures;
-  if (extra.isAnimal) member.isAnimal = true;
+  const kind = castKindFrom({ kind: extra.kind, isAnimal: extra.isAnimal });
+  Object.assign(member, castKindPersist(kind));
   if (isSafeDeckMediaSlug(extra.episode)) member.episode = extra.episode;
   return member;
 }
@@ -341,7 +349,7 @@ function normalizeCast(value: unknown): SkidmarksCastMember | null {
     fictionalAdultConfirmed: true,
     createdAt: typeof v.createdAt === "number" ? v.createdAt : Date.now(),
     ...(cleanPictureUrls(v.pictureUrls).length ? { pictureUrls: cleanPictureUrls(v.pictureUrls) } : {}),
-    ...(v.isAnimal === true ? { isAnimal: true } : {}),
+    ...castKindPersist(castKindFrom(v)),
     ...(isSafeDeckMediaSlug(v.episode) ? { episode: v.episode } : {}),
   };
 }
