@@ -2,11 +2,13 @@ import { NextResponse } from "next/server";
 import { staleDeckPageResponse } from "@/lib/deckBuildServer";
 import {
   deckMediaSlug,
+  deckMediaStem,
   extensionForImageContentType,
   parseDeckMediaTarget,
   type DeckMediaTarget,
 } from "@/lib/deckMediaPaths";
 import { putDeckMediaOrLegacy } from "@/lib/deckMediaPut";
+import { extractLastVideoFrameServer } from "@/lib/serverVideoFrame";
 import { decodeDataUrl } from "@/lib/dataUrl";
 import { stripElevenLabsAudioTags, synthesizeSunnyBanksLine } from "@/lib/elevenLabsSpeech";
 import { estimateMp3DurationSec } from "@/lib/mp3Slice";
@@ -922,7 +924,13 @@ async function persistBeatVideo(args: {
       contentType: "video/mp4",
       legacyPathname: pathname,
     });
-    return NextResponse.json({ videoUrl: blob.url, persisted: true, ...common });
+    const lastFrameUrl = await persistBeatLastFrame(videoBytes, args.mediaTarget, blob.pathname, pathname);
+    return NextResponse.json({
+      videoUrl: blob.url,
+      persisted: true,
+      ...(lastFrameUrl ? { lastFrameUrl } : {}),
+      ...common,
+    });
   } catch (err) {
     return NextResponse.json({
       videoUrl: `data:video/mp4;base64,${Buffer.from(videoBytes).toString("base64")}`,
@@ -930,6 +938,34 @@ async function persistBeatVideo(args: {
       persistError: err instanceof Error ? err.message : "Vercel Blob upload failed for an unknown reason.",
       ...common,
     });
+  }
+}
+
+/** Best-effort last-frame JPEG next to the beat MP4. A miss never fails
+ * the paid clip — Chain last→first then reports honestly instead. */
+async function persistBeatLastFrame(
+  videoBytes: Uint8Array,
+  mediaTarget: DeckMediaTarget | null,
+  savedPathname: string,
+  videoLegacyPathname: string
+): Promise<string | undefined> {
+  const frame = await extractLastVideoFrameServer(videoBytes);
+  if (!frame.ok) return undefined;
+  const frameTarget: DeckMediaTarget | null =
+    mediaTarget && savedPathname.startsWith(`${mediaTarget.folder}/`)
+      ? { folder: mediaTarget.folder, name: `${deckMediaStem(savedPathname)}-last-frame` }
+      : null;
+  const legacyPathname = videoLegacyPathname.replace(/\.mp4$/i, "-last-frame.jpg");
+  try {
+    const blob = await putDeckMediaOrLegacy(Buffer.from(frame.bytes), {
+      target: frameTarget,
+      ext: "jpg",
+      contentType: "image/jpeg",
+      legacyPathname,
+    });
+    return blob.url;
+  } catch {
+    return undefined;
   }
 }
 

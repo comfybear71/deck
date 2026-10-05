@@ -30,6 +30,9 @@ import { SKIDMARKS_SEGMENT_LABEL_META, type SkidmarksClipSegment, type Skidmarks
 import type { PersistedClipRender } from "./clipRenders";
 import { buildClipGenerationRequest, computePlateDurationSec, LTX_DURATION_BOUNDS, SIRAY_DURATION_BOUNDS } from "./clipGeneration";
 import { getSkidmarksCharacterLock } from "./plateGeneration";
+import { clipLoopBounds, planChainLastFrameFill } from "./chainLastFrame";
+
+export { plateStillAllowsChainFill } from "./chainLastFrame";
 
 /**
  * **The identity-safe one-button song render** (2026-09-19) — a second,
@@ -397,19 +400,6 @@ export interface AnimateExistingPlatesTarget extends IdentitySafeRunTarget {
   plateStillSource?: SkidmarksPlateStill["source"];
 }
 
-/**
- * Whether chain mode may write a last-frame still onto this plate.
- * Empty → yes. Already `source: "chained"` → yes (refresh the chain).
- * `upload` / `generated` / `library` → never (sleeve Keep, Generate
- * plates, Clip 1 upload stay locked).
- */
-export function plateStillAllowsChainFill(
-  still: { source?: string } | null | undefined
-): boolean {
-  if (!still?.source) return true;
-  return still.source === "chained";
-}
-
 export interface AnimateExistingPlatesDeps {
   /** Same as identity-safe renderClip, plus optional `lastFrameUrl` when
    * the generate-clip route captured the closing frame (needed for chain
@@ -642,7 +632,9 @@ export async function runGeneratePlates(
   deps: GeneratePlatesDeps,
   startAtClipIndex: number = 0,
   shouldStop?: () => boolean,
-  clip1StartingImageUrl?: string
+  clip1StartingImageUrl?: string,
+  /** When set, plates only this clip (This plate) — full Generate plates stays the default. */
+  onlyClipIndex?: number
 ): Promise<GeneratePlatesOutcome> {
   const report = (event: GeneratePlatesEvent) => deps.onProgress?.(event);
 
@@ -658,11 +650,15 @@ export async function runGeneratePlates(
     };
   }
 
-  const startIndex = Math.max(0, Math.min(startAtClipIndex, parts.length));
+  const bounds = clipLoopBounds({ length: parts.length, startAtClipIndex, onlyClipIndex });
+  if (!bounds.ok) {
+    return { ok: false, failedAtClipIndex: onlyClipIndex ?? 0, message: bounds.message, platedCount: 0 };
+  }
+  const startIndex = bounds.start;
   let platedCount = 0;
   let skippedCount = 0;
 
-  for (let i = startIndex; i < parts.length; i++) {
+  for (let i = startIndex; i < bounds.endExclusive; i++) {
     if (shouldStop?.()) {
       return {
         ok: false,
@@ -798,7 +794,9 @@ export async function runAnimateExistingPlates(
   shouldStop?: () => boolean,
   chainLastFrameToNext: boolean = false,
   /** Backend for Instrumental parts. Vocal parts always go to LTX. */
-  instrumentalVideoModel: "grok" | "siray" = "grok"
+  instrumentalVideoModel: "grok" | "siray" = "grok",
+  /** When set, animates only this clip (Render this) — full Generate stays the default. */
+  onlyClipIndex?: number
 ): Promise<AnimateExistingPlatesOutcome> {
   const report = (event: AnimateExistingPlatesEvent) => deps.onProgress?.(event);
 
@@ -814,9 +812,13 @@ export async function runAnimateExistingPlates(
     };
   }
 
-  const startIndex = Math.max(0, Math.min(startAtClipIndex, parts.length));
+  const bounds = clipLoopBounds({ length: parts.length, startAtClipIndex, onlyClipIndex });
+  if (!bounds.ok) {
+    return { ok: false, failedAtClipIndex: onlyClipIndex ?? 0, message: bounds.message, renderedCount: 0 };
+  }
+  const startIndex = bounds.start;
 
-  for (let i = startIndex; i < parts.length; i++) {
+  for (let i = startIndex; i < bounds.endExclusive; i++) {
     if (shouldStop?.()) {
       return {
         ok: false,
@@ -909,31 +911,26 @@ export async function runAnimateExistingPlates(
 
     report({ type: "clip-done", clipIndex: i, clipCount: parts.length });
 
-    if (!chainLastFrameToNext) continue;
-
     const nextTarget = targets[i + 1];
-    if (!nextTarget) continue; // last clip — nothing to chain into
-
-    if (
-      !plateStillAllowsChainFill(
-        nextTarget.plateStillSource ? { source: nextTarget.plateStillSource } : nextTarget.plateStillUrl ? { source: "generated" } : undefined
-      )
-    ) {
-      // Next clip already has a user/plate still (upload, Generate plates,
-      // sleeve Keep) — leave it alone; still render it from that still.
-      continue;
-    }
-
-    if (!outcome.lastFrameUrl) {
+    const chainPlan = planChainLastFrameFill({
+      chainOn: chainLastFrameToNext,
+      fromIndex: i,
+      nextIndexExists: !!nextTarget,
+      lastFrameUrl: outcome.lastFrameUrl,
+      nextStill: nextTarget
+        ? { source: nextTarget.plateStillSource, url: nextTarget.plateStillUrl }
+        : undefined,
+    });
+    if (chainPlan.action === "skip") continue;
+    if (chainPlan.action === "fail") {
       return {
         ok: false,
         failedAtClipIndex: i,
-        message: `Couldn't carry clip ${i + 1}'s last frame into clip ${i + 2}: the server couldn't capture this render's last frame.`,
+        message: chainPlan.message,
         renderedCount: i + 1,
       };
     }
-
-    if (!deps.setPlateStill) {
+    if (!nextTarget || !deps.setPlateStill) {
       return {
         ok: false,
         failedAtClipIndex: i,
@@ -944,18 +941,21 @@ export async function runAnimateExistingPlates(
 
     report({ type: "chaining", clipIndex: i, clipCount: parts.length });
     const chainedStill: SkidmarksPlateStill = {
-      dataUrl: outcome.lastFrameUrl,
+      dataUrl: chainPlan.url,
       source: "chained",
       createdAt: Date.now(),
     };
     deps.setPlateStill(nextTarget.segmentId, nextTarget.plateId, chainedStill);
-    // So the next loop iteration renders from the chained frame without a
-    // store re-read (targets were built once before the run).
-    nextTarget.plateStillUrl = outcome.lastFrameUrl;
+    // So the next loop iteration (or a later Render this on clip i+1)
+    // renders from the chained frame without a store re-read.
+    nextTarget.plateStillUrl = chainPlan.url;
     nextTarget.plateStillSource = "chained";
   }
 
-  return { ok: true, renderedCount: parts.length };
+  return {
+    ok: true,
+    renderedCount: onlyClipIndex === undefined ? parts.length : bounds.endExclusive - startIndex,
+  };
 }
 
 export interface ScriptSequenceRunnerDeps {

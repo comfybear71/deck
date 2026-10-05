@@ -50,6 +50,7 @@ import {
   type IdentitySafeScriptPart,
 } from "@/lib/scriptSequenceRunner";
 import { findPersistedRenderForClip, type PersistedClipRender } from "@/lib/clipRenders";
+import { chainLastFrameToggleLabel, chainLastFrameToggleTitle } from "@/lib/chainLastFrame";
 
 const SCRIPT_ENGINE_STORAGE_KEY = "deck.scriptEngine";
 
@@ -335,6 +336,9 @@ export function SkidmarksScriptSequencePanel({
   const [scriptUndo, setScriptUndo] = useState<string | null>(null);
   const [fullScreenScriptOpen, setFullScreenScriptOpen] = useState(false);
   const scriptHighlightRef = useRef<HTMLDivElement | null>(null);
+  /** Which script part "This plate" / "Render this" targets. Tap a chip;
+   * 0-based. Clamped when the paste shrinks. */
+  const [selectedClipIndex, setSelectedClipIndex] = useState(0);
 
   const script = scriptSequenceDraft?.script ?? "";
   const startingImageUrl = scriptSequenceDraft?.startingImageUrl;
@@ -363,6 +367,7 @@ export function SkidmarksScriptSequencePanel({
     }
   };
   const parts = useMemo(() => parseScriptSequence(script), [script]);
+  const focusedClipIndex = parts.length === 0 ? 0 : Math.min(selectedClipIndex, parts.length - 1);
   /** One parsed kind per part, positionally aligned with `parts` — see
    * `lib/scriptSequenceRunner.ts`'s `parseScriptPartKind` doc comment
    * for the label words it recognizes. */
@@ -648,8 +653,9 @@ export function SkidmarksScriptSequencePanel({
     return segments;
   };
 
-  /** Plates-only pass — stills for every clip, no video. */
-  const handleGeneratePlates = async () => {
+  /** Plates-only pass — stills for every clip, no video. `onlyClipIndex`
+   * is This plate (one clip); omit it for full Generate plates. */
+  const handleGeneratePlates = async (onlyClipIndex?: number) => {
     if (running) return;
     if (parts.length === 0) {
       setResult({ ok: false, message: "Couldn't find any Part entries in that text. Use either `Part N (start - end) — Title[Duration: ...].` on one line, or the multiline shape: Part times, then Vocal/Instrumental, optional [Duration], then Lyrics / Positive Prompt / Negative Prompt." });
@@ -727,7 +733,8 @@ export function SkidmarksScriptSequencePanel({
       0,
       () => stopRequestedRef.current,
       // Only pass clip-1 upload when clip 1 still needs a plate.
-      clip0Ready ? undefined : startingImageUrl
+      clip0Ready ? undefined : startingImageUrl,
+      onlyClipIndex
     );
 
     flushSkidmarksSessionNow();
@@ -737,11 +744,21 @@ export function SkidmarksScriptSequencePanel({
   };
 
   /** Animate existing plates only — refuses a clip with no plate still. */
-  const runAnimateFrom = async (segments: SkidmarksClipSegment[], startAtClipIndex: number) => {
+  const runAnimateFrom = async (
+    segments: SkidmarksClipSegment[],
+    startAtClipIndex: number,
+    onlyClipIndex?: number
+  ) => {
     stopRequestedRef.current = false;
     setRunning("render");
     setResult(null);
-    setProgressText(startAtClipIndex > 0 ? `Resuming at clip ${startAtClipIndex + 1} of ${segments.length}…` : "Starting…");
+    setProgressText(
+      onlyClipIndex !== undefined
+        ? `Rendering clip ${onlyClipIndex + 1} of ${segments.length}…`
+        : startAtClipIndex > 0
+          ? `Resuming at clip ${startAtClipIndex + 1} of ${segments.length}…`
+          : "Starting…"
+    );
 
     const targets: AnimateExistingPlatesTarget[] = segments.map((segment) => ({
       segmentId: segment.id,
@@ -761,7 +778,8 @@ export function SkidmarksScriptSequencePanel({
       startAtClipIndex,
       () => stopRequestedRef.current,
       chainLastFrameToNext,
-      scriptEngine
+      scriptEngine,
+      onlyClipIndex
     );
 
     flushSkidmarksSessionNow();
@@ -788,6 +806,21 @@ export function SkidmarksScriptSequencePanel({
 
     const segments = ensureTimeline();
     await runAnimateFrom(segments, 0);
+  };
+
+  const handleThisPlate = () => void handleGeneratePlates(focusedClipIndex);
+  const handleRenderThis = async () => {
+    if (running) return;
+    if (parts.length === 0) {
+      setResult({ ok: false, message: "Couldn't find any Part entries in that text." });
+      return;
+    }
+    if (!hasMp3) {
+      setResult({ ok: false, message: "Attach an MP3 to this band first — the clip timeline needs one to hold clips, even a placeholder track." });
+      return;
+    }
+    const segments = ensureTimeline();
+    await runAnimateFrom(segments, focusedClipIndex, focusedClipIndex);
   };
 
   return (
@@ -967,12 +1000,39 @@ export function SkidmarksScriptSequencePanel({
               : undefined
           }
         >
-          {parts.length > 0 ? `${parts.length} part${parts.length === 1 ? "" : "s"}` : "No parts yet"}
-        </span>
-        <div className="grid grid-cols-3 gap-2">
+            {parts.length > 0 ? `${parts.length} part${parts.length === 1 ? "" : "s"}` : "No parts yet"}
+          </span>
+          {parts.length > 1 && (
+            <div
+              role="group"
+              aria-label="Clip for This plate / Render this"
+              className="flex min-w-0 flex-row flex-nowrap gap-1 overflow-x-auto overscroll-x-contain touch-pan-x pb-0.5 [-webkit-overflow-scrolling:touch] [scrollbar-width:none]"
+            >
+              {parts.map((_, i) => {
+                const selected = i === focusedClipIndex;
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setSelectedClipIndex(i)}
+                    disabled={!!running}
+                    className={
+                      selected
+                        ? "min-h-[36px] min-w-[36px] shrink-0 rounded-full bg-rose-400 px-2.5 text-[11px] font-semibold text-zinc-950 disabled:opacity-60"
+                        : "min-h-[36px] min-w-[36px] shrink-0 rounded-full border border-white/15 bg-white/[0.03] px-2.5 text-[11px] font-medium text-white/80 disabled:opacity-60"
+                    }
+                  >
+                    {i + 1}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
-            onClick={handleGeneratePlates}
+            onClick={() => void handleGeneratePlates()}
             disabled={isGeneratePlatesButtonDisabled(running, parts.length)}
             title={
               parts.length > 0
@@ -1011,18 +1071,44 @@ export function SkidmarksScriptSequencePanel({
             }
             disabled={!!running}
             aria-pressed={chainLastFrameToNext}
-            title={
-              chainLastFrameToNext
-                ? "ON: after each clip renders, capture its last frame and set it as the next clip's starting image when that start is empty or was itself auto-chained. Never overwrites Generate plates, Clip 1 upload, or sleeve Keep."
-                : "OFF (default): plate-first — each clip keeps its own Generate plates / upload / sleeve still. Tap to enable Chain last→first continuity."
-            }
+            title={chainLastFrameToggleTitle(chainLastFrameToNext)}
             className={
               chainLastFrameToNext
                 ? "min-w-0 rounded-full border border-emerald-400/50 bg-emerald-400/20 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-emerald-100 transition-colors hover:bg-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
                 : "min-w-0 rounded-full border border-white/15 bg-white/[0.03] px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
             }
           >
-            {chainLastFrameToNext ? "Chain last→first · ON" : "Chain last→first"}
+            {chainLastFrameToggleLabel(chainLastFrameToNext)}
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={handleThisPlate}
+            disabled={isGeneratePlatesButtonDisabled(running, parts.length)}
+            title={
+              parts.length > 0
+                ? `Builds the still for clip ${focusedClipIndex + 1} only — skips it if it already has a good still or a finished video`
+                : undefined
+            }
+            className="min-w-0 rounded-full border border-rose-400/40 bg-rose-400/15 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-rose-100 transition-colors hover:bg-rose-400/25 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
+          >
+            {running === "plates" ? "Plating…" : "This plate"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleRenderThis()}
+            disabled={!!running || parts.length === 0}
+            title={
+              parts.length > 0
+                ? chainLastFrameToNext
+                  ? `Animates clip ${focusedClipIndex + 1} only; with Chain ON, its last frame can fill the next empty start`
+                  : `Animates clip ${focusedClipIndex + 1} only — full Generate still walks every clip`
+                : undefined
+            }
+            className="min-w-0 rounded-full border border-rose-400/50 bg-rose-400/25 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-rose-50 transition-colors hover:bg-rose-400/35 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
+          >
+            {running === "render" ? "Rendering…" : "Render this"}
           </button>
         </div>
         <button

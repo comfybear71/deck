@@ -78,6 +78,47 @@ describe("Sunny Banks workspace snapshots", () => {
     const fingerprint = fingerprintWorkspace(live);
     expect(mintWorkspaceId(1, 1, fingerprint)).not.toBe(mintWorkspaceId(1, 2, fingerprint));
   });
+
+  it("persists Chain last→first on the episode draft without treating the toggle as unsaved work", () => {
+    const live = buildEmptySunnyBanksLive();
+    const off = fingerprintWorkspace(live);
+    const on = { ...live, chainLastFrameToNext: true as const };
+    expect(fingerprintWorkspace(on)).toBe(off);
+    const studio = normalizeSunnyBanksStudio({ live: on, workspaces: [], saveSeq: 0 });
+    expect(studio?.live.chainLastFrameToNext).toBe(true);
+    const snap = buildSunnyBanksWorkspaceFromLive(on, 1, 1);
+    expect(snap.chainLastFrameToNext).toBe(true);
+    expect(liveFromSunnyBanksWorkspace(snap).chainLastFrameToNext).toBe(true);
+  });
+
+  it("keeps a chained last-frame plate on a row through normalize", () => {
+    const live = buildEmptySunnyBanksLive();
+    const withChain = {
+      ...live,
+      runtimeMap: {
+        ...live.runtimeMap,
+        I: {
+          0: {
+            lineKey: "Pip:",
+            status: "idle" as const,
+            plateUrl: "https://blob.example/last.jpg",
+            plateSource: "chained" as const,
+            lastFrameUrl: "https://blob.example/prev-last.jpg",
+            castNames: ["Pip"],
+          },
+        },
+      },
+    };
+    const studio = normalizeSunnyBanksStudio({ live: withChain, workspaces: [], saveSeq: 0 });
+    expect(studio?.live.runtimeMap.I[0]).toMatchObject({
+      plateUrl: "https://blob.example/last.jpg",
+      plateSource: "chained",
+      lastFrameUrl: "https://blob.example/prev-last.jpg",
+      castNames: ["Pip"],
+    });
+    const snap = buildSunnyBanksWorkspaceFromLive(studio!.live, 1, 1);
+    expect(liveFromSunnyBanksWorkspace(snap).runtimeMap.I[0]?.plateSource).toBe("chained");
+  });
 });
 
 function countLabel(workspaces: Array<{ label: string }>): number {
