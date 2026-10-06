@@ -94,6 +94,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
     setClipPlateMotionPrompt,
     setClipPlateLastSent,
     setClipInstrumentalModel,
+    setClipChainFromPrevious,
     restoreArchivedSession,
     clearSessionAfterArchive,
     markSessionArchived,
@@ -562,6 +563,7 @@ export function SkidmarksDetailSheet({ onClose }: SkidmarksDetailSheetProps) {
       onSetScriptSequenceDraft={setScriptSequenceDraft}
       onSetScriptSequence={setScriptSequence}
       onSetClipPlateStill={setClipPlateStill}
+      onSetClipChainFromPrevious={setClipChainFromPrevious}
       onRecordRender={addRender}
     />
   ) : null;

@@ -38,7 +38,16 @@ import {
 import { deckLocationKeyFromName } from "@/lib/deckLocations";
 import { findSunnyBanksLocation, studioLocationList, sunnyBanksLocationProblem } from "@/lib/sunnyBanksLocations";
 import { runSunnyBanksRenderQueue, sunnyBanksStoppedText } from "@/lib/sunnyBanksRenderQueue";
-import { chainLastFrameToggleLabel, chainLastFrameToggleTitle, planChainLastFrameFill } from "@/lib/chainLastFrame";
+import {
+  chainFromPreviousBlocksRender,
+  chainFromPreviousButtonTitle,
+  chainFromPreviousLabel,
+  chainFromPreviousStatusText,
+  resolveChainFromPreviousStatus,
+  resolveRowStartPlateUrl,
+  type ChainFromPreviousStatus,
+} from "@/lib/chainLastFrame";
+import { fetchExtractedLastFrame } from "@/lib/extractLastFrame";
 import { downloadSunnyBanksActZip } from "@/lib/sunnyBanksClipsZip";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
 import { parseCastTagNames, sameShotCastName } from "@/lib/shotCast";
@@ -2291,8 +2300,6 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   const locationPickTagsByAct = live.locationPickTags ?? {};
   const runtimeMapByAct = live.runtimeMap;
   const workspaceTitle = live.workspaceTitle;
-  /** Default OFF — same Music video Script Sequence toggle, persisted on this episode draft. */
-  const chainLastFrameToNext = live.chainLastFrameToNext === true;
   /** The show's engines (2026-10-04): Shorts adds Siray for silent rows and plates. */
   const profile = studioGenreProfile(genre);
   /** The silent-row switch (saved with the session): Grok/H3, or Siray/Grok/H3 on Shorts. */
@@ -2324,6 +2331,14 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
    * line that's rendering finishes and saves. */
   const stopRequestedRef = useRef(false);
   const [stopRequested, setStopRequested] = useState(false);
+  /** Per-row "Chain from shot N" (PR #258+) — free last-frame extraction
+   * in flight / its own honest failure, keyed by `${act}:${row index}`
+   * of the *previous* row being extracted from. Local only: once
+   * extraction succeeds it's cached onto that row's own
+   * `lastFrameUrl` (persisted), so this is only ever "still working on
+   * it" state, never the source of truth. */
+  const [chainExtractingFor, setChainExtractingFor] = useState<Record<string, boolean>>({});
+  const [chainExtractError, setChainExtractError] = useState<Record<string, string>>({});
 
   const scriptText = actScripts[activeAct] ?? "";
   const characterOverrides = characterOverridesByAct[activeAct] ?? {};
@@ -2352,7 +2367,8 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   /** A row's character picker: the show's cast, voiced first
    * (Skidmarks: the open episode's own Cast). */
   const rowSpeakerChoices = sunnyBanksSpeakerList(studioState, genre);
-  const queue = sunnyBanksQueueChunks(parsed).map((chunk, index) => {
+  const sunnyBanksChunks = sunnyBanksQueueChunks(parsed);
+  const queue = sunnyBanksChunks.map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
     const locationId = resolveSunnyBanksRowLocationId(chunk, locationOverrides[index], locationPickTags[index], defaultLocationId);
     const character = speakerLock(characterName);
@@ -2388,7 +2404,36 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       },
       castCardList
     );
-    return { chunk, index, characterName, character, location, locationProblem, line, kind: chunk.kind, backendChoice, rowCast };
+    // Per-row "Chain from shot N" (PR #258+) — see `lib/chainLastFrame.ts`'s
+    // module doc comment. Row 0 has no previous shot to chain from.
+    const runtime = runtimeFor(index, chunk.raw);
+    const chainFromPrevious = runtime.chainFromPrevious === true;
+    const previousChunk = index > 0 ? sunnyBanksChunks[index - 1] : undefined;
+    const previousRuntime = previousChunk ? runtimeFor(index - 1, previousChunk.raw) : undefined;
+    const extractKey = `${activeAct}:${index - 1}`;
+    const chainStatus: ChainFromPreviousStatus = resolveChainFromPreviousStatus({
+      chainOn: chainFromPrevious && index > 0,
+      fromRowNumber: index,
+      previousDone: previousRuntime?.status === "done",
+      previousLastFrameUrl: previousRuntime?.lastFrameUrl,
+      previousVideoUrl: previousRuntime?.videoUrl,
+      extracting: chainExtractingFor[extractKey] === true,
+      extractionError: chainExtractError[extractKey],
+    });
+    return {
+      chunk,
+      index,
+      characterName,
+      character,
+      location,
+      locationProblem,
+      line,
+      kind: chunk.kind,
+      backendChoice,
+      rowCast,
+      chainFromPrevious,
+      chainStatus,
+    };
   });
   type QueueRow = (typeof queue)[number];
   /** A scene's shared picture already made (a row in it kept its `plateUrl`). */
@@ -2429,6 +2474,10 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   /** Pictures this row still needs before it can render (one person or several). */
   const rowMissingPictures = (row: QueueRow): string[] => {
     if (row.location.peopleInPicture) return [];
+    // A resolved "Chain from shot N" already supplies the whole start
+    // image — same as a Make-plate still, no character/scene picture
+    // needed on top of it.
+    if (row.chainStatus.kind === "ready") return [];
     if (row.rowCast.cast.isMulti) {
       if (savedScenePlate(row)) return [];
       return row.rowCast.cast.missingPicture;
@@ -2502,6 +2551,10 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   const rowReadyToRender = (row: QueueRow): boolean => {
     if (row.locationProblem || !row.location.image) return false;
     if (preSendBlocks(rowPreSend(row))) return false;
+    // "Chain from shot N" on but not yet resolved to a real frame
+    // (still waiting on shot N, mid-extraction, or genuinely unavailable)
+    // blocks Render — never fire with an ambiguous start image.
+    if (chainFromPreviousBlocksRender(row.chainStatus)) return false;
     if (isSunnyBanksLocationCutaway(row.chunk)) return true;
     if (!row.character) return false;
     if (rowMissingPictures(row).length > 0) return false;
@@ -2645,6 +2698,69 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     }));
   };
 
+  /**
+   * "Chain from shot N" toggle (PR #258+, replacing the old bottom
+   * global toggle) — flips just this row's own setting, never touches
+   * its stored `plateUrl`/`plateSource` (see `lib/chainLastFrame.ts`'s
+   * module doc comment for why that's the whole point: turning this
+   * back off reverts instantly, nothing to restore).
+   */
+  const handleToggleChainFromPrevious = (row: QueueRow) => {
+    if (running || row.index === 0) return;
+    const runtime = runtimeFor(row.index, row.chunk.raw);
+    writeRowRuntime(activeAct, row.index, { ...runtime, chainFromPrevious: !row.chainFromPrevious });
+  };
+
+  /**
+   * Free, local last-frame extraction for whichever row above is the
+   * furthest-behind "shot N" another row is actually waiting to chain
+   * from (`chainStatus.kind === "need-extract"`) — never a paid call,
+   * see `lib/extractLastFrame.ts`'s own doc comment. Runs one at a
+   * time; its result is cached onto *that* row's own `lastFrameUrl`
+   * (persisted), so every other row chaining off the same shot reuses
+   * it for free and this effect naturally stops finding work to do.
+   */
+  useEffect(() => {
+    const target = queue.find((row) => row.chainStatus.kind === "need-extract");
+    if (!target || target.chainStatus.kind !== "need-extract") return;
+    const key = `${activeAct}:${target.index - 1}`;
+    if (chainExtractingFor[key]) return;
+    let cancelled = false;
+    void (async () => {
+      setChainExtractingFor((prev) => ({ ...prev, [key]: true }));
+      const outcome = await fetchExtractedLastFrame(target.chainStatus.kind === "need-extract" ? target.chainStatus.videoUrl : "");
+      if (cancelled) return;
+      setChainExtractingFor((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      if (outcome.ok) {
+        const previousIndex = target.index - 1;
+        const previousRow = queue[previousIndex];
+        const previousRuntime = previousRow ? runtimeFor(previousIndex, previousRow.chunk.raw) : undefined;
+        if (previousRuntime) {
+          writeRowRuntime(activeAct, previousIndex, { ...previousRuntime, lastFrameUrl: outcome.url });
+        }
+        setChainExtractError((prev) => {
+          if (!(key in prev)) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+      } else {
+        setChainExtractError((prev) => ({ ...prev, [key]: outcome.message }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `queue` is rebuilt every render; the two local state maps below
+    // are this effect's own guard against re-firing the same extraction
+    // while it's already in flight or already failed once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, activeAct, chainExtractingFor]);
+
   /** The row number a scene's shared picture is named after (its first line). */
   const firstSceneRowNumber = (row: QueueRow): number => {
     const first = row.chunk.sceneKey ? queue.find((q) => q.chunk.sceneKey === row.chunk.sceneKey) : undefined;
@@ -2732,7 +2848,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     row: QueueRow,
     i: number,
     act: SunnyBanksActId,
-    ctx: { scenePlatesThisRun: Record<string, string>; chainedStarts: Record<number, string>; videoBackend?: RowVideoBackend }
+    ctx: { scenePlatesThisRun: Record<string, string>; videoBackend?: RowVideoBackend }
   ): Promise<boolean> => {
     const writeRuntime = (index: number, next: RowRuntime) => writeRowRuntime(act, index, next);
     // An old "Plate not made" note goes: this render says what happens now.
@@ -2753,7 +2869,15 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     let scenePlateUrl = row.rowCast.cast.isMulti
       ? ((row.chunk.sceneKey ? ctx.scenePlatesThisRun[row.chunk.sceneKey] : undefined) ?? savedScenePlate(row))
       : undefined;
-    let rowPlateUrl = ctx.chainedStarts[i] ?? rowOwnPlate(row);
+    // Per-row "Chain from shot N" (PR #258+): a `"ready"` chain status
+    // is the deliberate override this row's own toggle asked for, and
+    // wins over whatever plate it would otherwise use — see
+    // `lib/chainLastFrame.ts`'s `resolveRowStartPlateUrl` doc comment.
+    // `rowReadyToRender` already refuses to let Render fire while the
+    // chain isn't resolved yet, so reaching here with `chainFromPrevious`
+    // on means it's either `"ready"` or the row genuinely has no chain
+    // in play (`"off"`).
+    let rowPlateUrl = resolveRowStartPlateUrl({ chainStatus: row.chainStatus, ownPlateUrl: rowOwnPlate(row) });
     const missing = row.rowCast.cast.isMulti && scenePlateUrl ? [] : rowMissingPictures(row);
     if (lock && !cutaway && missing.length > 0) {
       writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: missingCastPictureMessage(missing[0]) });
@@ -2849,7 +2973,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         audioMuxed: result.audioMuxed,
         videoBackend: result.videoBackend,
         ...(result.lastFrameUrl ? { lastFrameUrl: result.lastFrameUrl } : {}),
-        plateSource: ctx.chainedStarts[i] ? "chained" : plateFields.plateUrl ? "generated" : before.plateSource,
+        plateSource: row.chainStatus.kind === "ready" ? "chained" : plateFields.plateUrl ? "generated" : before.plateSource,
         error:
           result.audioMuxed === false
             ? result.videoBackend && result.videoBackend !== "ltx"
@@ -2857,39 +2981,6 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
               : "Clip finished, but the driving audio did not land in the file. Lips may move with no sound."
             : undefined,
       });
-      const next = queue[i + 1];
-      const nextRuntime = next ? runtimeFor(next.index, next.chunk.raw) : undefined;
-      const chainPlan = planChainLastFrameFill({
-        chainOn: chainLastFrameToNext,
-        fromIndex: i,
-        nextIndexExists: !!next && nextRuntime?.status !== "done",
-        lastFrameUrl: result.lastFrameUrl,
-        nextStill: next
-          ? {
-              source: nextRuntime?.plateSource ?? (ctx.chainedStarts[next.index] ? "chained" : undefined),
-              url: ctx.chainedStarts[next.index] ?? nextRuntime?.plateUrl,
-            }
-          : undefined,
-      });
-      if (chainPlan.action === "fail") {
-        setProgressText(chainPlan.message);
-        return false;
-      }
-      if (chainPlan.action === "fill" && next) {
-        ctx.chainedStarts[next.index] = chainPlan.url;
-        const nextLock = inStudioGenre(genre, () => speakerLock(next.characterName));
-        writeRuntime(next.index, {
-          lineKey: next.chunk.raw,
-          status: nextRuntime?.status === "failed" ? "idle" : nextRuntime?.status ?? "idle",
-          plateUrl: chainPlan.url,
-          plateSource: "chained",
-          castNames: next.rowCast.cast.isMulti
-            ? next.rowCast.cast.names
-            : nextLock
-              ? [nextLock.name]
-              : [next.characterName],
-        });
-      }
       return true;
     } catch (err) {
       writeRuntime(i, {
@@ -2921,14 +3012,13 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     /** Shared pictures made during this run, by scene, so a two-hander's
      * second line uses the first line's picture (2026-10-03). */
     const scenePlatesThisRun: Record<string, string> = {};
-    const chainedStarts: Record<number, string> = {};
     try {
       const run = await runSunnyBanksRenderQueue(queue, {
         skip: (row) => runtimeFor(row.index, row.chunk.raw).status === "done",
         // Stop (2026-09-30): read before each new line starts, so the
         // line that's rendering finishes and saves.
         shouldStop: () => stopRequestedRef.current,
-        render: (row, i) => renderRow(row, i, act, { scenePlatesThisRun, chainedStarts }),
+        render: (row, i) => renderRow(row, i, act, { scenePlatesThisRun }),
       });
       if (run.outcome === "stopped") setProgressText(sunnyBanksStoppedText(run.index));
       else if (run.outcome === "halted") setProgressText(`Stopped at line ${run.index + 1} — later lines were not billed.`);
@@ -2947,7 +3037,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     const act = activeAct;
     runningRef.current = true;
     try {
-      await renderRow(row, row.index, act, { scenePlatesThisRun: {}, chainedStarts: {}, videoBackend: "grok" });
+      await renderRow(row, row.index, act, { scenePlatesThisRun: {}, videoBackend: "grok" });
     } finally {
       finishRun();
     }
@@ -2960,7 +3050,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     const act = activeAct;
     runningRef.current = true;
     try {
-      await renderRow(row, row.index, act, { scenePlatesThisRun: {}, chainedStarts: {} });
+      await renderRow(row, row.index, act, { scenePlatesThisRun: {} });
     } finally {
       finishRun();
     }
@@ -2991,7 +3081,6 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       runtimeMap: cloneActRecord(scriptUndo.runtimeMap, scriptUndo.actIds),
       workspaceTitle: scriptUndo.workspaceTitle,
       defaultLocationId,
-      chainLastFrameToNext: chainLastFrameToNext || undefined,
     }));
     setScriptUndo(null);
   };
@@ -3596,8 +3685,17 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                       </p>
                                     )}
                                     {(() => {
-                                      const plateShown = runtime?.plateUrl ?? (isStatic ? undefined : rowPlate(row));
-                                      const plateLabel = row.rowCast.cast.isMulti ? "Shared plate" : "Plate";
+                                      const plateShown =
+                                        runtime?.plateUrl ??
+                                        (isStatic
+                                          ? undefined
+                                          : resolveRowStartPlateUrl({ chainStatus: row.chainStatus, ownPlateUrl: rowPlate(row) }));
+                                      const plateLabel =
+                                        row.chainStatus.kind === "ready"
+                                          ? `Chain — shot ${row.index}`
+                                          : row.rowCast.cast.isMulti
+                                            ? "Shared plate"
+                                            : "Plate";
                                       const canPlate = !isStatic && rowTakesPlate(row) && !row.locationProblem && !!row.location.image;
                                       return (
                                         <>
@@ -3639,8 +3737,8 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                                   disabled={running || platingIndex !== null || !rowReadyToRender(row)}
                                                   aria-label={`Render this line ${row.index + 1}`}
                                                   title={
-                                                    chainLastFrameToNext
-                                                      ? "Animates this line only; with Chain ON, its last frame can fill the next empty start"
+                                                    row.chainFromPrevious
+                                                      ? `Animates this line only, starting from shot ${row.index}'s last frame`
                                                       : "Animates this line only — Render N lines still walks the rest of the act"
                                                   }
                                                   className="min-h-[36px] self-start rounded-md border border-amber-300/40 bg-amber-300/15 px-2 text-[10px] font-semibold text-amber-100 disabled:opacity-50"
@@ -3648,7 +3746,43 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                                   {running && runningIndex === row.index ? "Rendering…" : "Render this"}
                                                 </button>
                                               )}
+                                              {!isStatic && row.index > 0 && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleToggleChainFromPrevious(row)}
+                                                  disabled={running || platingIndex !== null}
+                                                  aria-pressed={row.chainFromPrevious}
+                                                  title={chainFromPreviousButtonTitle(row.chainFromPrevious, row.index)}
+                                                  className={
+                                                    row.chainFromPrevious
+                                                      ? "min-h-[36px] self-start rounded-md border border-emerald-400/50 bg-emerald-400/20 px-2 text-[10px] font-semibold text-emerald-100 disabled:opacity-50"
+                                                      : "min-h-[36px] self-start rounded-md border border-white/15 px-2 text-[10px] font-medium text-white/60 disabled:opacity-50"
+                                                  }
+                                                >
+                                                  {chainFromPreviousLabel(row.index)}
+                                                </button>
+                                              )}
+                                              {row.chainFromPrevious && row.chainStatus.kind === "ready" && (
+                                                // eslint-disable-next-line @next/next/no-img-element -- a 36px live preview thumbnail, not worth next/image's overhead
+                                                <img
+                                                  src={row.chainStatus.url}
+                                                  alt={`Starting frame, from shot ${row.index}`}
+                                                  title={`Starts from shot ${row.index}'s last frame`}
+                                                  className="h-9 w-9 shrink-0 rounded-md object-cover ring-1 ring-emerald-400/50"
+                                                />
+                                              )}
                                             </div>
+                                          )}
+                                          {row.chainFromPrevious && chainFromPreviousStatusText(row.chainStatus) && (
+                                            <p
+                                              role={row.chainStatus.kind === "unavailable" ? "alert" : "status"}
+                                              className={[
+                                                "pt-0.5 text-[10px] leading-snug",
+                                                row.chainStatus.kind === "unavailable" ? "text-rose-300/90" : "text-white/45",
+                                              ].join(" ")}
+                                            >
+                                              {chainFromPreviousStatusText(row.chainStatus)}
+                                            </p>
                                           )}
                                           {plateNotice?.act === activeAct && plateNotice.index === row.index && (
                                             <p role="alert" className="pt-0.5 text-[10px] leading-snug text-rose-300/90">
@@ -3890,36 +4024,11 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                   </button>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() =>
-                  patchLive((prev) => ({
-                    ...prev,
-                    chainLastFrameToNext: prev.chainLastFrameToNext !== true,
-                  }))
-                }
-                disabled={running}
-                aria-pressed={chainLastFrameToNext}
-                title={chainLastFrameToggleTitle(chainLastFrameToNext)}
-                className={
-                  chainLastFrameToNext
-                    ? "min-h-[44px] w-full rounded-md border border-emerald-400/50 bg-emerald-400/20 px-3 text-[12px] font-semibold text-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    : "min-h-[44px] w-full rounded-md border border-white/15 bg-white/[0.03] px-3 text-[12px] font-semibold text-white/80 disabled:cursor-not-allowed disabled:opacity-60"
-                }
-              >
-                {chainLastFrameToggleLabel(chainLastFrameToNext)}
-              </button>
             </div>
             <p className="text-[10px] leading-snug text-white/40">
               {pendingRows.length === 0
                 ? "Existing Crash Lab clips are already in the strip below. Tap + on a row to insert a shot between them, or − on an Idle row to drop it — one clip at a time, never a batch of these 46."
-                : chainLastFrameToNext
-                  ? `Chain ON: last frame of each render → next empty start (skips Make plate). One clip at a time — overlay ~$${overlayCostUsd.toFixed(2)}${
-                      pendingRows.filter((row) => row.kind === "hold").length > 0
-                        ? `, silent video ~$${holdVideoCostUsd.toFixed(2)}`
-                        : ""
-                    }${speakCount > 0 ? `, speak video ~$0.13/s after TTS` : ""}. Stops if a line fails so later lines are not billed.`
-                  : `One clip at a time — overlay ~$${overlayCostUsd.toFixed(2)}${
+                : `One clip at a time — overlay ~$${overlayCostUsd.toFixed(2)}${
                       pendingRows.filter((row) => row.kind === "hold").length > 0
                         ? `, silent video ~$${holdVideoCostUsd.toFixed(2)}`
                         : ""

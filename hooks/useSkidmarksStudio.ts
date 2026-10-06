@@ -45,6 +45,7 @@ import {
   setSkidmarksMp3Duration,
   setSkidmarksScriptSequence,
   setSkidmarksScriptSequenceDraft,
+  setSkidmarksSegmentChainFromPrevious,
   setSkidmarksSegmentInstrumentalVideoModel,
   setSkidmarksSegmentNegativePrompt,
   setSkidmarksSegmentSelectedPlate,
@@ -370,6 +371,13 @@ export function useSkidmarksStudio() {
     []
   );
 
+  /** Script Sequence's per-clip "Chain from shot N" toggle — see
+   * `setSkidmarksSegmentChainFromPrevious`'s doc comment. */
+  const setClipChainFromPrevious = useCallback(
+    (segmentId: string, chainFromPrevious: boolean) => setSkidmarksSegmentChainFromPrevious(segmentId, chainFromPrevious),
+    []
+  );
+
   /** "Open in editor" on an archived song row — restores its band + mp3
    * snapshot into the live top workspace. Invalidates any in-flight
    * analysis/transcription/audio-upload for whatever was live before
@@ -440,6 +448,7 @@ export function useSkidmarksStudio() {
     setClipPlateMotionPrompt,
     setClipPlateLastSent,
     setClipInstrumentalModel,
+    setClipChainFromPrevious,
     restoreArchivedSession,
     clearSessionAfterArchive,
     markSessionArchived,

@@ -66,6 +66,17 @@ export interface SunnyBanksRowRuntime {
   /** How this row's `plateUrl` got there. `chained` may be refreshed by
    * the next last-frame fill; `generated` (Make plate) is locked. */
   plateSource?: "chained" | "generated";
+  /**
+   * Per-row **Chain from shot N** (PR #258+, replacing the old global
+   * bottom toggle — see `lib/chainLastFrame.ts`'s module doc comment).
+   * Default off/unset. When true, this row's own `plateUrl`/`plateSource`
+   * are left completely untouched in storage — the render path resolves
+   * the row's *effective* starting plate at render/preview time via
+   * `lib/chainLastFrame.ts`'s `resolveRowStartPlateUrl`, so turning this
+   * back off instantly reverts to whatever was already saved here,
+   * nothing to restore. Never set on row 0 (no previous shot to chain
+   * from). */
+  chainFromPrevious?: boolean;
 }
 
 export interface SunnyBanksLiveState {
@@ -94,9 +105,13 @@ export interface SunnyBanksLiveState {
    * of the fingerprint. */
   castIds?: string[];
   /**
-   * Script Sequence "Chain last→first" (default off). Persist on the
-   * live episode draft so a reload keeps the continuity choice — same as
-   * Music video `scriptSequenceDraft.chainLastFrameToNext`.
+   * **Legacy, no longer settable from any UI (PR #258+).** Used to be
+   * this panel's own global "Chain last→first" bottom toggle — replaced
+   * by a per-row `SunnyBanksRowRuntime.chainFromPrevious`, shown next to
+   * that *specific* row's own Render this (Stuart's own complaint about
+   * the old global switch: "it will not know what to chain?"). Kept on
+   * this type only so an episode saved before this change still
+   * normalizes cleanly; nothing reads it for render behavior anymore.
    */
   chainLastFrameToNext?: boolean;
 }
@@ -120,11 +135,7 @@ export interface SunnyBanksWorkspaceSnapshot {
   mediaSlug?: string;
   /** See `SunnyBanksLiveState.castIds`. */
   castIds?: string[];
-  /**
-   * Script Sequence "Chain last→first" (default off). Persist on the
-   * episode draft so a reload keeps the continuity choice — same as
-   * Music video `scriptSequenceDraft.chainLastFrameToNext`.
-   */
+  /** Legacy — see `SunnyBanksLiveState.chainLastFrameToNext`'s doc comment. */
   chainLastFrameToNext?: boolean;
 }
 
@@ -435,6 +446,7 @@ function normalizeRowRuntime(value: unknown): SunnyBanksRowRuntime | null {
     row.lastFrameUrl = v.lastFrameUrl;
   }
   if (v.plateSource === "chained" || v.plateSource === "generated") row.plateSource = v.plateSource;
+  if (v.chainFromPrevious === true) row.chainFromPrevious = true;
   return row;
 }
 
