@@ -6,31 +6,32 @@ const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8"
 /**
  * Continuity lock: Music video Script Sequence and the shared
  * Sunny Banks / Skidmarks / Shorts God Script panel both surface the
- * same two controls (Chain last→first, Render this). Source-grep so a
- * later layout pass cannot drop one genre's copy.
+ * same two controls — per-row/per-clip **Chain from shot N** (PR
+ * #258+, replacing the old global bottom toggle) and **Render this**.
+ * Source-grep so a later layout pass cannot drop one genre's copy.
  */
 describe("script-sequence controls on every God Script / Script Sequence panel", () => {
   const musicVideo = read("../components/SkidmarksScriptSequencePanel.tsx");
   const studio = read("../components/SkidmarksSunnyBanksPanel.tsx");
   const speakBeat = read("../app/api/skidmarks/sunnybank/generate-speak-beat/route.ts");
 
-  it("Music video Script Sequence has Chain last→first, This plate, and Render this", () => {
-    expect(musicVideo).toContain("chainLastFrameToggleLabel");
-    expect(musicVideo).toContain("Chain last→first");
+  it("Music video Script Sequence has per-row Chain from shot N, This plate, and Render this", () => {
+    expect(musicVideo).toContain("chainFromPreviousLabel");
+    expect(musicVideo).toContain("Chain from shot");
     expect(musicVideo).toContain("This plate");
     expect(musicVideo).toContain("Render this");
     expect(musicVideo).toContain("handleThisPlate");
     expect(musicVideo).toContain("handleRenderThis");
     expect(musicVideo).toContain("onlyClipIndex");
+    expect(musicVideo).toContain("resolveChainFromPreviousStatus");
   });
 
-  it("Sunny Banks / Skidmarks / Shorts God Script has Chain last→first and Render this", () => {
-    expect(studio).toContain("chainLastFrameToggleLabel");
-    expect(studio).toContain("Chain last→first");
+  it("Sunny Banks / Skidmarks / Shorts God Script has per-row Chain from shot N and Render this", () => {
+    expect(studio).toContain("chainFromPreviousLabel");
+    expect(studio).toContain("Chain from shot");
     expect(studio).toContain("Render this");
     expect(studio).toContain("handleRenderThis");
-    expect(studio).toContain("planChainLastFrameFill");
-    expect(studio).toContain("chainLastFrameToNext");
+    expect(studio).toContain("resolveChainFromPreviousStatus");
     expect(studio).toContain("Make plate");
   });
 
