@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
-  chainLastFrameToggleLabel,
+  chainFromPreviousBlocksRender,
+  chainFromPreviousButtonTitle,
+  chainFromPreviousLabel,
+  chainFromPreviousStatusText,
   clipLoopBounds,
   nextStartAllowsChainFill,
   planChainLastFrameFill,
   plateStillAllowsChainFill,
+  resolveChainFromPreviousStatus,
+  resolveRowStartPlateUrl,
 } from "./chainLastFrame";
 
 describe("plateStillAllowsChainFill", () => {
@@ -142,9 +147,142 @@ describe("clipLoopBounds — one-clip / one-plate scope", () => {
   });
 });
 
-describe("chainLastFrameToggleLabel", () => {
-  it("matches the Music video Script Sequence copy", () => {
-    expect(chainLastFrameToggleLabel(false)).toBe("Chain last→first");
-    expect(chainLastFrameToggleLabel(true)).toBe("Chain last→first · ON");
+describe("chainFromPreviousLabel", () => {
+  it("names the shot the row above actually is", () => {
+    expect(chainFromPreviousLabel(1)).toBe("Chain from shot 1");
+    expect(chainFromPreviousLabel(4)).toBe("Chain from shot 4");
+  });
+});
+
+describe("resolveChainFromPreviousStatus", () => {
+  it("off when the toggle itself is off, regardless of the previous row's state", () => {
+    expect(
+      resolveChainFromPreviousStatus({ chainOn: false, fromRowNumber: 1, previousDone: true, previousLastFrameUrl: "https://x/last.jpg" })
+    ).toEqual({ kind: "off" });
+  });
+
+  it("waiting when the previous row hasn't rendered yet", () => {
+    expect(resolveChainFromPreviousStatus({ chainOn: true, fromRowNumber: 2, previousDone: false })).toEqual({
+      kind: "waiting",
+      fromRowNumber: 2,
+    });
+  });
+
+  it("ready the moment the previous row is Done and already has a last frame", () => {
+    expect(
+      resolveChainFromPreviousStatus({
+        chainOn: true,
+        fromRowNumber: 1,
+        previousDone: true,
+        previousLastFrameUrl: "https://x/last.jpg",
+      })
+    ).toEqual({ kind: "ready", fromRowNumber: 1, url: "https://x/last.jpg" });
+  });
+
+  it("needs extraction when the previous row is Done but only has its finished video, no saved last frame yet", () => {
+    expect(
+      resolveChainFromPreviousStatus({
+        chainOn: true,
+        fromRowNumber: 1,
+        previousDone: true,
+        previousVideoUrl: "https://x/clip.mp4",
+      })
+    ).toEqual({ kind: "need-extract", fromRowNumber: 1, videoUrl: "https://x/clip.mp4" });
+  });
+
+  it("extracting while the caller's own free extraction call is in flight", () => {
+    expect(
+      resolveChainFromPreviousStatus({
+        chainOn: true,
+        fromRowNumber: 1,
+        previousDone: true,
+        previousVideoUrl: "https://x/clip.mp4",
+        extracting: true,
+      })
+    ).toEqual({ kind: "extracting", fromRowNumber: 1 });
+  });
+
+  it("unavailable with the caller's own honest extraction-failure message", () => {
+    expect(
+      resolveChainFromPreviousStatus({
+        chainOn: true,
+        fromRowNumber: 1,
+        previousDone: true,
+        previousVideoUrl: "https://x/clip.mp4",
+        extractionError: "ffmpeg could not extract the last frame: corrupt file.",
+      })
+    ).toEqual({ kind: "unavailable", fromRowNumber: 1, message: "ffmpeg could not extract the last frame: corrupt file." });
+  });
+
+  it("unavailable with its own honest fallback message when the previous row somehow has no clip at all", () => {
+    const status = resolveChainFromPreviousStatus({ chainOn: true, fromRowNumber: 3, previousDone: true });
+    expect(status.kind).toBe("unavailable");
+    if (status.kind === "unavailable") expect(status.message.toLowerCase()).toMatch(/shot 3/);
+  });
+});
+
+describe("resolveRowStartPlateUrl", () => {
+  it("never overwrites a manual plate while chain is off", () => {
+    expect(resolveRowStartPlateUrl({ chainStatus: { kind: "off" }, ownPlateUrl: "https://x/manual.jpg" })).toBe(
+      "https://x/manual.jpg"
+    );
+  });
+
+  it("never overwrites a manual plate while chain isn't resolved yet", () => {
+    expect(
+      resolveRowStartPlateUrl({ chainStatus: { kind: "waiting", fromRowNumber: 1 }, ownPlateUrl: "https://x/manual.jpg" })
+    ).toBe("https://x/manual.jpg");
+    expect(
+      resolveRowStartPlateUrl({
+        chainStatus: { kind: "unavailable", fromRowNumber: 1, message: "nope" },
+        ownPlateUrl: "https://x/manual.jpg",
+      })
+    ).toBe("https://x/manual.jpg");
+  });
+
+  it("deliberately overrides a manual plate once chain is ready — that's the point of turning it on", () => {
+    expect(
+      resolveRowStartPlateUrl({
+        chainStatus: { kind: "ready", fromRowNumber: 1, url: "https://x/last.jpg" },
+        ownPlateUrl: "https://x/manual.jpg",
+      })
+    ).toBe("https://x/last.jpg");
+  });
+
+  it("stays undefined when there's no manual plate and chain isn't ready", () => {
+    expect(resolveRowStartPlateUrl({ chainStatus: { kind: "off" } })).toBeUndefined();
+    expect(resolveRowStartPlateUrl({ chainStatus: { kind: "waiting", fromRowNumber: 1 } })).toBeUndefined();
+  });
+});
+
+describe("chainFromPreviousBlocksRender", () => {
+  it("never blocks when chain is off or already resolved", () => {
+    expect(chainFromPreviousBlocksRender({ kind: "off" })).toBe(false);
+    expect(chainFromPreviousBlocksRender({ kind: "ready", fromRowNumber: 1, url: "https://x/last.jpg" })).toBe(false);
+  });
+
+  it("blocks on every other state", () => {
+    expect(chainFromPreviousBlocksRender({ kind: "waiting", fromRowNumber: 1 })).toBe(true);
+    expect(chainFromPreviousBlocksRender({ kind: "need-extract", fromRowNumber: 1, videoUrl: "https://x/clip.mp4" })).toBe(true);
+    expect(chainFromPreviousBlocksRender({ kind: "extracting", fromRowNumber: 1 })).toBe(true);
+    expect(chainFromPreviousBlocksRender({ kind: "unavailable", fromRowNumber: 1, message: "nope" })).toBe(true);
+  });
+});
+
+describe("chainFromPreviousButtonTitle / chainFromPreviousStatusText", () => {
+  it("names the right shot in both the on and off title", () => {
+    expect(chainFromPreviousButtonTitle(true, 2)).toMatch(/shot 2/);
+    expect(chainFromPreviousButtonTitle(false, 2)).toMatch(/shot 2/);
+  });
+
+  it("has no status text for off/ready — those render their own chrome", () => {
+    expect(chainFromPreviousStatusText({ kind: "off" })).toBeUndefined();
+    expect(chainFromPreviousStatusText({ kind: "ready", fromRowNumber: 1, url: "https://x/last.jpg" })).toBeUndefined();
+  });
+
+  it("surfaces the real extraction-failure message verbatim", () => {
+    expect(chainFromPreviousStatusText({ kind: "unavailable", fromRowNumber: 1, message: "custom failure text" })).toBe(
+      "custom failure text"
+    );
   });
 });
