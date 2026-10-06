@@ -119,6 +119,36 @@ describe("Sunny Banks workspace snapshots", () => {
     const snap = buildSunnyBanksWorkspaceFromLive(studio!.live, 1, 1);
     expect(liveFromSunnyBanksWorkspace(snap).runtimeMap.I[0]?.plateSource).toBe("chained");
   });
+
+  it("persists a row's own per-row Chain from shot N setting through normalize and a save round trip", () => {
+    const live = buildEmptySunnyBanksLive();
+    const withChain = {
+      ...live,
+      runtimeMap: {
+        ...live.runtimeMap,
+        I: {
+          1: { lineKey: "Pip:", status: "idle" as const, chainFromPrevious: true },
+        },
+      },
+    };
+    const studio = normalizeSunnyBanksStudio({ live: withChain, workspaces: [], saveSeq: 0 });
+    expect(studio?.live.runtimeMap.I[1]?.chainFromPrevious).toBe(true);
+    const snap = buildSunnyBanksWorkspaceFromLive(studio!.live, 1, 1);
+    expect(liveFromSunnyBanksWorkspace(snap).runtimeMap.I[1]?.chainFromPrevious).toBe(true);
+  });
+
+  it("drops a junk chainFromPrevious value rather than trusting it", () => {
+    const live = buildEmptySunnyBanksLive();
+    const withJunk = {
+      ...live,
+      runtimeMap: {
+        ...live.runtimeMap,
+        I: { 0: { lineKey: "Pip:", status: "idle" as const, chainFromPrevious: "yes" as unknown as boolean } },
+      },
+    };
+    const studio = normalizeSunnyBanksStudio({ live: withJunk, workspaces: [], saveSeq: 0 });
+    expect(studio?.live.runtimeMap.I[0]?.chainFromPrevious).toBeUndefined();
+  });
 });
 
 function countLabel(workspaces: Array<{ label: string }>): number {
