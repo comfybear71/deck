@@ -52,6 +52,7 @@ import {
   setSkidmarksClipPlateStill,
   setSkidmarksMp3AudioUrl,
   setSkidmarksMp3Duration,
+  setSkidmarksSegmentChainFromPrevious,
   setSkidmarksSegmentInstrumentalVideoModel,
   setSkidmarksSegmentModel,
   setSkidmarksSegmentSelectedPlate,
@@ -1181,6 +1182,41 @@ describe("setSkidmarksSegmentInstrumentalVideoModel", () => {
   it("is the only way this field ever changes \u2014 unset until explicitly set", () => {
     const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
     expect(segment.instrumentalVideoModel).toBeUndefined();
+  });
+});
+
+describe("setSkidmarksSegmentChainFromPrevious (Script Sequence per-clip Chain from shot N, PR #258+)", () => {
+  beforeEach(() => {
+    selectSkidmarksBand("jack-ash");
+    attachSkidmarksMp3(createMp3Attachment("track.mp3", 120));
+  });
+
+  it("is off/unset until explicitly turned on, and never touches shotPrompt/model/plates", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    expect(segment.chainFromPrevious).toBeUndefined();
+
+    setSkidmarksSegmentChainFromPrevious(segment.id, true);
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.chainFromPrevious).toBe(true);
+    expect(updated.shotPrompt).toBe(segment.shotPrompt);
+    expect(updated.model).toBe(segment.model);
+    expect(updated.plates).toEqual(segment.plates);
+  });
+
+  it("turning it back off reverts to unset \u2014 nothing left to restore since the plate itself was never touched", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    setSkidmarksSegmentChainFromPrevious(segment.id, true);
+    setSkidmarksSegmentChainFromPrevious(segment.id, false);
+    const updated = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(updated.chainFromPrevious).toBeUndefined();
+  });
+
+  it("round-trips through normalizeSkidmarksSegment", () => {
+    const segment = getSkidmarksSnapshot().session.mp3!.segments[0];
+    setSkidmarksSegmentChainFromPrevious(segment.id, true);
+    const raw = getSkidmarksSnapshot().session.mp3!.segments.find((s) => s.id === segment.id)!;
+    expect(normalizeSkidmarksSegment(raw).chainFromPrevious).toBe(true);
+    expect(normalizeSkidmarksSegment({ ...raw, chainFromPrevious: undefined }).chainFromPrevious).toBeUndefined();
   });
 });
 

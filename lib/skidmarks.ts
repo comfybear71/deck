@@ -736,6 +736,20 @@ export interface SkidmarksClipSegment {
    * read on a Vocal clip. Set via
    * `setSkidmarksSegmentInstrumentalVideoModel`. */
   instrumentalVideoModel?: SkidmarksInstrumentalVideoModel;
+  /**
+   * Per-clip **Chain from shot N** (PR #258+) on the Script Sequence
+   * panel — replaces the old global "Chain last→first" bottom toggle
+   * (`SkidmarksScriptSequenceDraft.chainLastFrameToNext`, now unused by
+   * any UI; kept only so an old saved draft doesn't error). Default
+   * off/unset; never set on clip 1 (no previous clip to chain from).
+   * When true, this clip's render starts from the *previous* clip's own
+   * last frame instead of this clip's own plate still — resolved at
+   * render/preview time via `lib/chainLastFrame.ts`'s
+   * `resolveRowStartPlateUrl`, which never mutates `plates[0].still`
+   * itself, so turning this back off instantly reverts to whatever
+   * still was already there. Set via
+   * `setSkidmarksSegmentChainFromPrevious`. */
+  chainFromPrevious?: boolean;
 }
 
 /** One slot in a clip's plate strip — either the empty dashed
@@ -1153,6 +1167,7 @@ export function buildScriptSequenceSegments(
             instrumentalVideoModel:
               previous?.instrumentalVideoModel ?? ("grok" as const),
           }),
+      ...(previous?.chainFromPrevious === true ? { chainFromPrevious: true } : {}),
     };
   });
 }
@@ -1387,11 +1402,14 @@ export interface SkidmarksScriptSequenceDraft {
    * starting image picked (or it was removed). */
   startingImageUrl?: string;
   /**
-   * Script Sequence "Chain last→first" toggle (default off). When true,
-   * Generate / Resume writes each render's server last frame onto the
-   * next clip's starting plate (`source: "chained"`) if that plate is
-   * empty or already chain-sourced — never clobbers upload / generated /
-   * library. Persist so a reload keeps Stuart's continuity choice.
+   * **Legacy, no longer settable from any UI (PR #258+).** Used to be
+   * the Script Sequence panel's own global "Chain last→first" bottom
+   * toggle — replaced by a per-clip `SkidmarksClipSegment
+   * .chainFromPrevious`, shown next to that *specific* clip's own
+   * Render this (Stuart's own complaint about the old global switch:
+   * "it will not know what to chain?"). Kept on this type only so a
+   * draft saved before this change still normalizes cleanly; nothing
+   * reads it for render behavior anymore.
    */
   chainLastFrameToNext?: boolean;
 }
@@ -1771,6 +1789,7 @@ export function normalizeSkidmarksSegment(raw: SkidmarksClipSegment): SkidmarksC
     plates,
     selectedPlateId,
     instrumentalVideoModel,
+    ...(r.chainFromPrevious === true ? { chainFromPrevious: true } : {}),
   };
 }
 
@@ -5074,6 +5093,14 @@ export function setSkidmarksSegmentInstrumentalVideoModel(
   model: SkidmarksInstrumentalVideoModel
 ): void {
   updateSkidmarksSegment(segmentId, (s) => ({ ...s, instrumentalVideoModel: model }));
+}
+
+/** Script Sequence's per-clip **Chain from shot N** toggle — see
+ * `SkidmarksClipSegment.chainFromPrevious`'s doc comment. Never touches
+ * `plates[0].still`; the chain override is resolved at render/preview
+ * time instead, so this setter is purely the on/off flag. */
+export function setSkidmarksSegmentChainFromPrevious(segmentId: string, chainFromPrevious: boolean): void {
+  updateSkidmarksSegment(segmentId, (s) => ({ ...s, chainFromPrevious: chainFromPrevious || undefined }));
 }
 
 /** The plain-language "what happens in this shot" field on the expanded

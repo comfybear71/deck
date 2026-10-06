@@ -2,7 +2,7 @@
 
 import { useScriptFormatFeedback } from "@/hooks/useScriptFormatFeedback";
 import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
-import { useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   buildScriptSequenceHighlightSegments,
   formatScriptSequencePartTitles,
@@ -50,7 +50,16 @@ import {
   type IdentitySafeScriptPart,
 } from "@/lib/scriptSequenceRunner";
 import { findPersistedRenderForClip, type PersistedClipRender } from "@/lib/clipRenders";
-import { chainLastFrameToggleLabel, chainLastFrameToggleTitle } from "@/lib/chainLastFrame";
+import {
+  chainFromPreviousBlocksRender,
+  chainFromPreviousButtonTitle,
+  chainFromPreviousLabel,
+  chainFromPreviousStatusText,
+  resolveChainFromPreviousStatus,
+  resolveRowStartPlateUrl,
+  type ChainFromPreviousStatus,
+} from "@/lib/chainLastFrame";
+import { fetchExtractedLastFrame } from "@/lib/extractLastFrame";
 
 const SCRIPT_ENGINE_STORAGE_KEY = "deck.scriptEngine";
 
@@ -88,6 +97,9 @@ interface SkidmarksScriptSequencePanelProps {
   onSetScriptSequenceDraft: (draft: SkidmarksScriptSequenceDraft | null) => void;
   onSetScriptSequence: (segments: SkidmarksClipSegment[]) => void;
   onSetClipPlateStill: (segmentId: string, plateId: string, still: SkidmarksPlateStill | null) => void;
+  /** Per-clip "Chain from shot N" toggle (PR #258+) — see
+   * `SkidmarksClipSegment.chainFromPrevious`'s doc comment. */
+  onSetClipChainFromPrevious: (segmentId: string, chainFromPrevious: boolean) => void;
   onRecordRender: (render: PersistedClipRender) => void;
 }
 
@@ -313,6 +325,7 @@ export function SkidmarksScriptSequencePanel({
   onSetScriptSequenceDraft,
   onSetScriptSequence,
   onSetClipPlateStill,
+  onSetClipChainFromPrevious,
   onRecordRender,
 }: SkidmarksScriptSequencePanelProps) {
   const [running, setRunning] = useState<"plates" | "render" | false>(false);
@@ -339,11 +352,26 @@ export function SkidmarksScriptSequencePanel({
   /** Which script part "This plate" / "Render this" targets. Tap a chip;
    * 0-based. Clamped when the paste shrinks. */
   const [selectedClipIndex, setSelectedClipIndex] = useState(0);
+  /**
+   * Per-clip "Chain from shot N" (PR #258+) free last-frame extraction —
+   * same shape and same reasoning as `SkidmarksSunnyBanksPanel`'s own
+   * copy of this state (see `lib/chainLastFrame.ts`'s module doc
+   * comment). Keyed by the *previous* clip's own `segmentId`.
+   * `chainExtractedFrames` is this page-session's own cache of a
+   * successful extraction — deliberately not persisted to
+   * `scriptSequenceDraft` (same "a cheap/free re-derive after a refresh
+   * beats a new persisted field" trade `lib/plateLocation.ts`'s empty-
+   * place-still cache already makes); a fresh render's own
+   * `lastFrameUrl` is cached here too the moment it lands
+   * (`buildAnimateDeps`'s `recordRender`), so a later clip chaining off
+   * it never needs the extraction round trip at all.
+   */
+  const [chainExtractedFrames, setChainExtractedFrames] = useState<Record<string, string>>({});
+  const [chainExtracting, setChainExtracting] = useState<Record<string, boolean>>({});
+  const [chainExtractError, setChainExtractError] = useState<Record<string, string>>({});
 
   const script = scriptSequenceDraft?.script ?? "";
   const startingImageUrl = scriptSequenceDraft?.startingImageUrl;
-  /** Default OFF — plate-first Generate plates stays unchanged until Stuart flips this. */
-  const chainLastFrameToNext = scriptSequenceDraft?.chainLastFrameToNext === true;
   /** Which engine the bulk buttons use: Siray (default — stills via
    * Seedream 4.5 spicy, Instrumental videos via Wan 3.0 i2v spicy) or
    * Grok (the old xAI stills + Grok Instrumental video). Vocal parts
@@ -372,6 +400,94 @@ export function SkidmarksScriptSequencePanel({
    * `lib/scriptSequenceRunner.ts`'s `parseScriptPartKind` doc comment
    * for the label words it recognizes. */
   const partKinds = useMemo(() => parts.map((part) => parseScriptPartKind(part.title)), [parts]);
+
+  /**
+   * One clip's "Chain from shot N" status (PR #258+) — pure resolution
+   * off `segments[index].chainFromPrevious` plus whatever's known about
+   * the *previous* clip's own persisted render. `segments` is a
+   * parameter (not always `realSegments`) because `runAnimateFrom` may
+   * be resolving this against a just-built/re-minted timeline rather
+   * than the one currently in the session.
+   */
+  const resolveClipChainStatus = (segments: SkidmarksClipSegment[], index: number): ChainFromPreviousStatus => {
+    const segment = segments[index];
+    const previous = index > 0 ? segments[index - 1] : undefined;
+    if (!segment || !previous) return { kind: "off" };
+    const previousRender = findPersistedRenderForClip(
+      renders,
+      previous.id,
+      previous.plates[0]?.id ?? "",
+      previous.startSec,
+      previous.endSec
+    );
+    return resolveChainFromPreviousStatus({
+      chainOn: segment.chainFromPrevious === true,
+      fromRowNumber: index,
+      previousDone: !!previousRender,
+      previousLastFrameUrl: previousRender?.lastFrameUrl ?? chainExtractedFrames[previous.id],
+      previousVideoUrl: previousRender?.url,
+      extracting: chainExtracting[previous.id] === true,
+      extractionError: chainExtractError[previous.id],
+    });
+  };
+
+  const focusedSegment = realSegments[focusedClipIndex];
+  const focusedClipChainFromPrevious = focusedSegment?.chainFromPrevious === true;
+  const focusedClipChainStatus = resolveClipChainStatus(realSegments, focusedClipIndex);
+
+  /**
+   * Free, local last-frame extraction (`lib/extractLastFrame.ts` — no
+   * paid API call) for whichever clip is the furthest-behind "shot N"
+   * another clip is actually waiting to chain from
+   * (`chainStatus.kind === "need-extract"`). Runs one at a time; its
+   * result is cached in `chainExtractedFrames` (this page session only
+   * — see that state's own doc comment for why not persisted), so
+   * every other clip chaining off the same shot reuses it for free.
+   */
+  useEffect(() => {
+    let targetIndex = -1;
+    for (let i = 1; i < realSegments.length; i++) {
+      if (resolveClipChainStatus(realSegments, i).kind === "need-extract") {
+        targetIndex = i;
+        break;
+      }
+    }
+    if (targetIndex < 0) return;
+    const status = resolveClipChainStatus(realSegments, targetIndex);
+    if (status.kind !== "need-extract") return;
+    const previous = realSegments[targetIndex - 1];
+    if (!previous || chainExtracting[previous.id]) return;
+    let cancelled = false;
+    void (async () => {
+      setChainExtracting((prev) => ({ ...prev, [previous.id]: true }));
+      const outcome = await fetchExtractedLastFrame(status.videoUrl);
+      if (cancelled) return;
+      setChainExtracting((prev) => {
+        const next = { ...prev };
+        delete next[previous.id];
+        return next;
+      });
+      if (outcome.ok) {
+        setChainExtractedFrames((prev) => ({ ...prev, [previous.id]: outcome.url }));
+        setChainExtractError((prev) => {
+          if (!(previous.id in prev)) return prev;
+          const next = { ...prev };
+          delete next[previous.id];
+          return next;
+        });
+      } else {
+        setChainExtractError((prev) => ({ ...prev, [previous.id]: outcome.message }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `realSegments`/`renders` are recreated each render; the three
+    // local state maps above are this effect's own guard against
+    // re-firing the same extraction while it's already in flight or
+    // already failed once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realSegments, renders, chainExtracting]);
 
   /**
    * Where an earlier, partial run of *this same stored timeline* stopped
@@ -413,7 +529,7 @@ export function SkidmarksScriptSequencePanel({
         setStartingImageError("Couldn't save that image — try again.");
         return;
       }
-      onSetScriptSequenceDraft({ script, startingImageUrl: uploadOutcome.url, chainLastFrameToNext });
+      onSetScriptSequenceDraft({ script, startingImageUrl: uploadOutcome.url });
       flushSkidmarksSessionNow();
     } catch {
       setStartingImageError("Couldn't read that image — try a different file.");
@@ -423,7 +539,7 @@ export function SkidmarksScriptSequencePanel({
   };
 
   const handleRemoveStartingImage = () => {
-    onSetScriptSequenceDraft({ script, startingImageUrl: undefined, chainLastFrameToNext });
+    onSetScriptSequenceDraft({ script, startingImageUrl: undefined });
     flushSkidmarksSessionNow();
   };
 
@@ -434,7 +550,7 @@ export function SkidmarksScriptSequencePanel({
   const applyScriptText = (next: string, captureUndo: boolean) => {
     if (next === script) return;
     if (captureUndo) setScriptUndo(script);
-    onSetScriptSequenceDraft({ script: next, startingImageUrl, chainLastFrameToNext });
+    onSetScriptSequenceDraft({ script: next, startingImageUrl });
     // Format / Full-screen Apply are deliberate commits — flush Neon now
     // so a hard refresh before the 600ms debounce can't drop the edit.
     // Keystroke edits still ride the debounce + pagehide flush.
@@ -462,7 +578,7 @@ export function SkidmarksScriptSequencePanel({
 
   const handleUndoScript = () => {
     if (scriptUndo === null || running) return;
-    onSetScriptSequenceDraft({ script: scriptUndo, startingImageUrl, chainLastFrameToNext });
+    onSetScriptSequenceDraft({ script: scriptUndo, startingImageUrl });
     setScriptUndo(null);
   };
 
@@ -577,19 +693,32 @@ export function SkidmarksScriptSequencePanel({
     renderClip: async (request) => {
       const clipOutcome = await generateSkidmarksClip(request);
       if (!clipOutcome.ok) return { ok: false, message: clipOutcome.message };
-      // When Chain last→first is off, drop lastFrameUrl (plate-first /
-      // identity-safe). When on, pass it through for the runner's fill.
+      // `runAnimateFrom` always passes `chainLastFrameToNext: false` to
+      // the runner below, so its own internal forward-auto-chain never
+      // fires regardless of `lastFrameUrl` being present here — "Chain
+      // from shot N" is per-clip and resolved *before* the request is
+      // built instead (see `runAnimateFrom`'s `targets`). Still passed
+      // through so `recordRender` below can cache it for a *later*
+      // clip's own free chain extraction.
       return {
         ok: true,
         videoUrl: clipOutcome.videoUrl,
         persisted: clipOutcome.persisted,
         persistError: clipOutcome.persistError,
-        ...(chainLastFrameToNext && clipOutcome.lastFrameUrl
-          ? { lastFrameUrl: clipOutcome.lastFrameUrl }
-          : {}),
+        ...(clipOutcome.lastFrameUrl ? { lastFrameUrl: clipOutcome.lastFrameUrl } : {}),
       };
     },
-    recordRender: onRecordRender,
+    recordRender: (render) => {
+      onRecordRender(render);
+      // A fresh render's own extracted last frame is already carried on
+      // `render.lastFrameUrl` the moment it lands — caching it here too
+      // means a *later* clip that chains from this one doesn't need the
+      // free extraction round trip at all.
+      const lastFrameUrl = render.lastFrameUrl;
+      if (lastFrameUrl) {
+        setChainExtractedFrames((prev) => ({ ...prev, [render.segmentId]: lastFrameUrl }));
+      }
+    },
     setPlateStill: onSetClipPlateStill,
     onProgress: (event) => setProgressText(animateProgressLabel(event)),
   });
@@ -760,12 +889,46 @@ export function SkidmarksScriptSequencePanel({
           : "Starting…"
     );
 
-    const targets: AnimateExistingPlatesTarget[] = segments.map((segment) => ({
-      segmentId: segment.id,
-      plateId: segment.plates[0]?.id ?? "",
-      plateStillUrl: segment.plates[0]?.still?.dataUrl,
-      plateStillSource: segment.plates[0]?.still?.source,
-    }));
+    const targets: AnimateExistingPlatesTarget[] = segments.map((segment, i) => {
+      const chainStatus = resolveClipChainStatus(segments, i);
+      return {
+        segmentId: segment.id,
+        plateId: segment.plates[0]?.id ?? "",
+        // "Chain from shot N" (per-clip, resolved above) wins over this
+        // clip's own plate still the moment it's ready — turning that
+        // clip's own toggle on is the deliberate action allowed to
+        // override it; see `lib/chainLastFrame.ts`'s
+        // `resolveRowStartPlateUrl` doc comment. `rowReadyToRender`'s
+        // Script Sequence equivalent (the "Render this"/"Generate"
+        // disabled checks below) already refuses to reach this call at
+        // all while any clip's chain isn't resolved yet.
+        plateStillUrl: resolveRowStartPlateUrl({ chainStatus, ownPlateUrl: segment.plates[0]?.still?.dataUrl }),
+        plateStillSource: chainStatus.kind === "ready" ? "chained" : segment.plates[0]?.still?.source,
+      };
+    });
+
+    // A clip with "Chain from shot N" on but not yet resolved (still
+    // waiting on that shot, mid free-extraction, or genuinely
+    // unavailable) blocks this run entirely — never fire with an
+    // ambiguous start image. `onlyClipIndex` only cares about that one
+    // clip; a full run checks every clip it's about to touch.
+    const blockedAt = segments.findIndex((segment, i) => {
+      if (onlyClipIndex !== undefined && i !== onlyClipIndex) return false;
+      if (i < startAtClipIndex && onlyClipIndex === undefined) return false;
+      if (segment.chainFromPrevious !== true) return false;
+      return chainFromPreviousBlocksRender(resolveClipChainStatus(segments, i));
+    });
+    if (blockedAt !== -1) {
+      setRunning(false);
+      setProgressText(null);
+      setResult({
+        ok: false,
+        message: `Clip ${blockedAt + 1}'s "Chain from shot ${blockedAt}" isn't resolved yet — ${
+          chainFromPreviousStatusText(resolveClipChainStatus(segments, blockedAt)) ?? "waiting."
+        }`,
+      });
+      return;
+    }
 
     const outcome = await runAnimateExistingPlates(
       buildIdentityParts(),
@@ -777,7 +940,11 @@ export function SkidmarksScriptSequencePanel({
       buildAnimateDeps(),
       startAtClipIndex,
       () => stopRequestedRef.current,
-      chainLastFrameToNext,
+      // The runner's own forward-auto-chain is permanently off — see
+      // `lib/chainLastFrame.ts`'s module doc comment and `buildAnimateDeps`
+      // above. "Chain from shot N" is resolved per-clip into
+      // `plateStillUrl` above instead.
+      false,
       scriptEngine,
       onlyClipIndex
     );
@@ -894,7 +1061,7 @@ export function SkidmarksScriptSequencePanel({
         <ScriptSequenceHighlightOverlay text={script} overlayRef={scriptHighlightRef} autoGrowMinRows={12} />
         <textarea
           value={script}
-          onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl, chainLastFrameToNext })}
+          onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl })}
           onBlur={() => flushSkidmarksSessionNow()}
           onScroll={(e) => {
             if (scriptHighlightRef.current) {
@@ -1029,7 +1196,7 @@ export function SkidmarksScriptSequencePanel({
               })}
             </div>
           )}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
             onClick={() => void handleGeneratePlates()}
@@ -1051,34 +1218,12 @@ export function SkidmarksScriptSequencePanel({
               incompleteRun
                 ? "Use Resume above — starting fresh would re-render and re-charge for clips already done."
                 : parts.length > 0
-                  ? chainLastFrameToNext
-                    ? `Animates plates for all ${parts.length} clips; after each render, chains last frame → next start when empty or already chained`
-                    : `Animates existing plates for all ${parts.length} clips — skips none that are missing a still`
+                  ? `Animates existing plates for all ${parts.length} clips — skips none that are missing a still`
                   : undefined
             }
             className="min-w-0 rounded-full bg-rose-400 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
           >
             {running === "render" ? "Rendering…" : "Generate"}
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              onSetScriptSequenceDraft({
-                script,
-                startingImageUrl,
-                chainLastFrameToNext: !chainLastFrameToNext,
-              })
-            }
-            disabled={!!running}
-            aria-pressed={chainLastFrameToNext}
-            title={chainLastFrameToggleTitle(chainLastFrameToNext)}
-            className={
-              chainLastFrameToNext
-                ? "min-w-0 rounded-full border border-emerald-400/50 bg-emerald-400/20 px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-emerald-100 transition-colors hover:bg-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
-                : "min-w-0 rounded-full border border-white/15 bg-white/[0.03] px-2 py-1.5 text-center text-[11px] font-medium leading-tight text-white/80 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:text-[12px]"
-            }
-          >
-            {chainLastFrameToggleLabel(chainLastFrameToNext)}
           </button>
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -1098,11 +1243,11 @@ export function SkidmarksScriptSequencePanel({
           <button
             type="button"
             onClick={() => void handleRenderThis()}
-            disabled={!!running || parts.length === 0}
+            disabled={!!running || parts.length === 0 || chainFromPreviousBlocksRender(focusedClipChainStatus)}
             title={
               parts.length > 0
-                ? chainLastFrameToNext
-                  ? `Animates clip ${focusedClipIndex + 1} only; with Chain ON, its last frame can fill the next empty start`
+                ? focusedClipChainFromPrevious
+                  ? `Animates clip ${focusedClipIndex + 1} only, starting from clip ${focusedClipIndex}'s last frame`
                   : `Animates clip ${focusedClipIndex + 1} only — full Generate still walks every clip`
                 : undefined
             }
@@ -1111,6 +1256,52 @@ export function SkidmarksScriptSequencePanel({
             {running === "render" ? "Rendering…" : "Render this"}
           </button>
         </div>
+        {focusedClipIndex > 0 && focusedSegment && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                onSetClipChainFromPrevious(focusedSegment.id, !focusedClipChainFromPrevious)
+              }
+              disabled={!!running}
+              aria-pressed={focusedClipChainFromPrevious}
+              title={chainFromPreviousButtonTitle(focusedClipChainFromPrevious, focusedClipIndex)}
+              className={
+                focusedClipChainFromPrevious
+                  ? "min-h-[36px] rounded-full border border-emerald-400/50 bg-emerald-400/20 px-3 text-[11px] font-semibold text-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  : "min-h-[36px] rounded-full border border-white/15 bg-white/[0.03] px-3 text-[11px] font-medium text-white/70 disabled:cursor-not-allowed disabled:opacity-60"
+              }
+            >
+              {chainFromPreviousLabel(focusedClipIndex)}
+            </button>
+            {focusedClipChainFromPrevious && focusedClipChainStatus.kind === "ready" && (
+              // eslint-disable-next-line @next/next/no-img-element -- a small live preview thumbnail, not worth next/image's overhead
+              <img
+                src={focusedClipChainStatus.url}
+                alt={`Starting frame, from clip ${focusedClipIndex}`}
+                title={`Starts from clip ${focusedClipIndex}'s last frame`}
+                className="h-9 w-9 shrink-0 rounded-md object-cover ring-1 ring-emerald-400/50"
+              />
+            )}
+            {focusedClipChainFromPrevious && chainFromPreviousStatusText(focusedClipChainStatus) && (
+              <p
+                role={focusedClipChainStatus.kind === "unavailable" ? "alert" : "status"}
+                className={
+                  focusedClipChainStatus.kind === "unavailable"
+                    ? "text-[10px] leading-snug text-rose-300/90"
+                    : "text-[10px] leading-snug text-white/45"
+                }
+              >
+                {chainFromPreviousStatusText(focusedClipChainStatus)}
+              </p>
+            )}
+          </div>
+        )}
+        {focusedClipIndex > 0 && !focusedSegment && (
+          <p className="text-[10px] leading-snug text-white/35">
+            Tap Generate plates or Generate first — chaining needs this clip&apos;s own timeline entry to exist.
+          </p>
+        )}
         <button
           type="button"
           onClick={toggleScriptEngine}
@@ -1126,9 +1317,8 @@ export function SkidmarksScriptSequencePanel({
           Engine: {scriptEngine === "siray" ? "Siray" : "Grok"} · Vocal on LTX
         </button>
         <p className="text-[10px] leading-snug text-white/30">
-          {chainLastFrameToNext
-            ? "Chain ON: last frame of each render → next clip start (skips Keep / upload / plated stills)"
-            : "Generate plates builds unique stills per clip · sleeve Keep for your collection"}
+          Generate plates builds unique stills per clip · sleeve Keep for your collection · tap a clip
+          chip above, then Chain from shot N to start it from the previous clip&apos;s last frame instead
         </p>
       </div>
 
