@@ -38,6 +38,7 @@ import {
 import { deckLocationKeyFromName } from "@/lib/deckLocations";
 import { findSunnyBanksLocation, studioLocationList, sunnyBanksLocationProblem } from "@/lib/sunnyBanksLocations";
 import { runSunnyBanksRenderQueue, sunnyBanksStoppedText } from "@/lib/sunnyBanksRenderQueue";
+import { chainLastFrameToggleLabel, chainLastFrameToggleTitle, planChainLastFrameFill } from "@/lib/chainLastFrame";
 import { downloadSunnyBanksActZip } from "@/lib/sunnyBanksClipsZip";
 import { buildSunnyBanksEpisodeBundle } from "@/lib/sunnyBanksEpisodeBundle";
 import { parseCastTagNames, sameShotCastName } from "@/lib/shotCast";
@@ -122,6 +123,11 @@ import { shortsShotCardStudioLive } from "@/lib/shortsShotCardStudio";
  * `runningKind` lock: one POST at a time, stop on first failure.
  * Explicit product ask for this panel; not music-video whole-song
  * auto-render, not parallel fan-out.
+ * **Chain last→first** (default off, persisted on the episode draft) and
+ * per-row **Render this** match Music video Script Sequence
+ * (`lib/chainLastFrame.ts`) — a finished clip's last frame may fill the
+ * next empty / already-chained start; Make plate stills are never
+ * overwritten. Full **Render N lines** stays the default.
  *
  * **Dense queue + Act pills + in-memory workspace shelf (2026-09-17)** —
  * queue rows are one spreadsheet-style line (not stacked cards) so a
@@ -556,6 +562,7 @@ interface GenerateBeatResponseBody {
   /** Multi-cast shots (2026-10-03): the shared picture and who's in it. */
   plateUrl?: unknown;
   castNames?: unknown;
+  lastFrameUrl?: unknown;
   /** Siray silent shots (2026-10-04): 202 while it renders. */
   pending?: unknown;
   sirayTaskId?: unknown;
@@ -2284,6 +2291,8 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   const locationPickTagsByAct = live.locationPickTags ?? {};
   const runtimeMapByAct = live.runtimeMap;
   const workspaceTitle = live.workspaceTitle;
+  /** Default OFF — same Music video Script Sequence toggle, persisted on this episode draft. */
+  const chainLastFrameToNext = live.chainLastFrameToNext === true;
   /** The show's engines (2026-10-04): Shorts adds Siray for silent rows and plates. */
   const profile = studioGenreProfile(genre);
   /** The silent-row switch (saved with the session): Grok/H3, or Siray/Grok/H3 on Shorts. */
@@ -2490,21 +2499,21 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     .reduce((sum, row) => sum + estimateRowVideoCostUsd(row.backendChoice.backend, SUNNY_BANKS_HOLD_DURATION_SEC), 0);
   const speakCount = pendingRows.filter((row) => row.kind === "speak").length;
 
+  const rowReadyToRender = (row: QueueRow): boolean => {
+    if (row.locationProblem || !row.location.image) return false;
+    if (preSendBlocks(rowPreSend(row))) return false;
+    if (isSunnyBanksLocationCutaway(row.chunk)) return true;
+    if (!row.character) return false;
+    if (rowMissingPictures(row).length > 0) return false;
+    if (row.kind === "speak") return !!row.character.voiceId && row.line.length > 0;
+    return true;
+  };
+
   const canRenderAll =
     pendingRows.length > 0 &&
     !running &&
     platingIndex === null &&
-    pendingRows.every((row) => {
-      if (row.locationProblem || !row.location.image) return false;
-      // The free pre-send check's blocks (the speaker isn't in the shot).
-      if (preSendBlocks(rowPreSend(row))) return false;
-      if (isSunnyBanksLocationCutaway(row.chunk)) return true;
-      if (!row.character) return false;
-      // No Cast card picture (anyone in the shot): never rendered (red note on the row).
-      if (rowMissingPictures(row).length > 0) return false;
-      if (row.kind === "speak") return !!row.character.voiceId && row.line.length > 0;
-      return true;
-    });
+    pendingRows.every((row) => rowReadyToRender(row));
 
   const resolveLocationDataUrl = async (image: string): Promise<string> => {
     const cached = locationDataUrlCacheRef.current[image];
@@ -2523,6 +2532,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         videoBackend?: RowVideoBackend;
         plateUrl?: string;
         castNames?: string[];
+        lastFrameUrl?: string;
       }
     | { ok: false; message: string; plateUrl?: string; castNames?: string[]; pending?: true; sirayTaskId?: string }
   > => {
@@ -2557,6 +2567,9 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         body.videoBackend === "ltx" || body.videoBackend === "grok" || body.videoBackend === "h3" || body.videoBackend === "siray"
           ? body.videoBackend
           : args.videoBackend ?? "ltx",
+      ...(typeof body.lastFrameUrl === "string" && /^https:\/\//i.test(body.lastFrameUrl)
+        ? { lastFrameUrl: body.lastFrameUrl }
+        : {}),
     };
   };
 
@@ -2658,7 +2671,13 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         return;
       }
       const castNames = made.castNames && made.castNames.length > 1 ? made.castNames : [lock.name];
-      writeRowRuntime(act, row.index, { lineKey: row.chunk.raw, status: "idle", plateUrl: made.plateUrl, castNames });
+      writeRowRuntime(act, row.index, {
+        lineKey: row.chunk.raw,
+        status: "idle",
+        plateUrl: made.plateUrl,
+        plateSource: "generated",
+        castNames,
+      });
     } catch (err) {
       setPlateNotice({ act, index: row.index, text: plateFailedMessage(err instanceof Error ? err.message : "network error") });
     } finally {
@@ -2713,7 +2732,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     row: QueueRow,
     i: number,
     act: SunnyBanksActId,
-    ctx: { scenePlatesThisRun: Record<string, string>; videoBackend?: RowVideoBackend }
+    ctx: { scenePlatesThisRun: Record<string, string>; chainedStarts: Record<number, string>; videoBackend?: RowVideoBackend }
   ): Promise<boolean> => {
     const writeRuntime = (index: number, next: RowRuntime) => writeRowRuntime(act, index, next);
     // An old "Plate not made" note goes: this render says what happens now.
@@ -2734,7 +2753,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     let scenePlateUrl = row.rowCast.cast.isMulti
       ? ((row.chunk.sceneKey ? ctx.scenePlatesThisRun[row.chunk.sceneKey] : undefined) ?? savedScenePlate(row))
       : undefined;
-    let rowPlateUrl = rowOwnPlate(row);
+    let rowPlateUrl = ctx.chainedStarts[i] ?? rowOwnPlate(row);
     const missing = row.rowCast.cast.isMulti && scenePlateUrl ? [] : rowMissingPictures(row);
     if (lock && !cutaway && missing.length > 0) {
       writeRuntime(i, { lineKey: row.chunk.raw, status: "failed", error: missingCastPictureMessage(missing[0]) });
@@ -2829,6 +2848,8 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         durationSec: result.durationSec,
         audioMuxed: result.audioMuxed,
         videoBackend: result.videoBackend,
+        ...(result.lastFrameUrl ? { lastFrameUrl: result.lastFrameUrl } : {}),
+        plateSource: ctx.chainedStarts[i] ? "chained" : plateFields.plateUrl ? "generated" : before.plateSource,
         error:
           result.audioMuxed === false
             ? result.videoBackend && result.videoBackend !== "ltx"
@@ -2836,6 +2857,39 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
               : "Clip finished, but the driving audio did not land in the file. Lips may move with no sound."
             : undefined,
       });
+      const next = queue[i + 1];
+      const nextRuntime = next ? runtimeFor(next.index, next.chunk.raw) : undefined;
+      const chainPlan = planChainLastFrameFill({
+        chainOn: chainLastFrameToNext,
+        fromIndex: i,
+        nextIndexExists: !!next && nextRuntime?.status !== "done",
+        lastFrameUrl: result.lastFrameUrl,
+        nextStill: next
+          ? {
+              source: nextRuntime?.plateSource ?? (ctx.chainedStarts[next.index] ? "chained" : undefined),
+              url: ctx.chainedStarts[next.index] ?? nextRuntime?.plateUrl,
+            }
+          : undefined,
+      });
+      if (chainPlan.action === "fail") {
+        setProgressText(chainPlan.message);
+        return false;
+      }
+      if (chainPlan.action === "fill" && next) {
+        ctx.chainedStarts[next.index] = chainPlan.url;
+        const nextLock = inStudioGenre(genre, () => speakerLock(next.characterName));
+        writeRuntime(next.index, {
+          lineKey: next.chunk.raw,
+          status: nextRuntime?.status === "failed" ? "idle" : nextRuntime?.status ?? "idle",
+          plateUrl: chainPlan.url,
+          plateSource: "chained",
+          castNames: next.rowCast.cast.isMulti
+            ? next.rowCast.cast.names
+            : nextLock
+              ? [nextLock.name]
+              : [next.characterName],
+        });
+      }
       return true;
     } catch (err) {
       writeRuntime(i, {
@@ -2867,13 +2921,14 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     /** Shared pictures made during this run, by scene, so a two-hander's
      * second line uses the first line's picture (2026-10-03). */
     const scenePlatesThisRun: Record<string, string> = {};
+    const chainedStarts: Record<number, string> = {};
     try {
       const run = await runSunnyBanksRenderQueue(queue, {
         skip: (row) => runtimeFor(row.index, row.chunk.raw).status === "done",
         // Stop (2026-09-30): read before each new line starts, so the
         // line that's rendering finishes and saves.
         shouldStop: () => stopRequestedRef.current,
-        render: (row, i) => renderRow(row, i, act, { scenePlatesThisRun }),
+        render: (row, i) => renderRow(row, i, act, { scenePlatesThisRun, chainedStarts }),
       });
       if (run.outcome === "stopped") setProgressText(sunnyBanksStoppedText(run.index));
       else if (run.outcome === "halted") setProgressText(`Stopped at line ${run.index + 1} — later lines were not billed.`);
@@ -2892,7 +2947,20 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     const act = activeAct;
     runningRef.current = true;
     try {
-      await renderRow(row, row.index, act, { scenePlatesThisRun: {}, videoBackend: "grok" });
+      await renderRow(row, row.index, act, { scenePlatesThisRun: {}, chainedStarts: {}, videoBackend: "grok" });
+    } finally {
+      finishRun();
+    }
+  };
+
+  const handleRenderThis = async (row: QueueRow) => {
+    if (runningRef.current || platingIndex !== null) return;
+    if (runtimeFor(row.index, row.chunk.raw).status === "done") return;
+    if (!rowReadyToRender(row)) return;
+    const act = activeAct;
+    runningRef.current = true;
+    try {
+      await renderRow(row, row.index, act, { scenePlatesThisRun: {}, chainedStarts: {} });
     } finally {
       finishRun();
     }
@@ -2923,6 +2991,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       runtimeMap: cloneActRecord(scriptUndo.runtimeMap, scriptUndo.actIds),
       workspaceTitle: scriptUndo.workspaceTitle,
       defaultLocationId,
+      chainLastFrameToNext: chainLastFrameToNext || undefined,
     }));
     setScriptUndo(null);
   };
@@ -3545,19 +3614,41 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                               />
                                             </details>
                                           )}
-                                          {/* Make plate first (2026-10-04): optional, and the cheap check for a refusal. */}
-                                          {canPlate && (
-                                            <button
-                                              type="button"
-                                              onClick={() => void handleMakePlate(row)}
-                                              disabled={running || platingIndex !== null || missingNow.length > 0}
-                                              aria-label={`${plateShown ? "Remake" : "Make"} plate for line ${row.index + 1}`}
-                                              className="mt-0.5 min-h-[32px] self-start rounded-md border border-cyan-300/25 px-2 text-[10px] font-semibold text-cyan-200/90 disabled:opacity-50"
-                                            >
-                                              {platingIndex === row.index
-                                                ? `Making plate on ${videoBackendName(plateEngine === "siray" ? "siray" : "grok")}…`
-                                                : `${plateShown ? "Remake plate" : "Make plate"} (~$${plateCostUsd.toFixed(2)})`}
-                                            </button>
+                                          {/* Make plate / Render this (one row — same Music video This plate / Render this). */}
+                                          {(canPlate ||
+                                            (!isStatic &&
+                                              (status === "idle" || status === "failed" || status === "rendering"))) && (
+                                            <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                                              {canPlate && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => void handleMakePlate(row)}
+                                                  disabled={running || platingIndex !== null || missingNow.length > 0}
+                                                  aria-label={`${plateShown ? "Remake" : "Make"} plate for line ${row.index + 1}`}
+                                                  className="min-h-[36px] self-start rounded-md border border-cyan-300/25 px-2 text-[10px] font-semibold text-cyan-200/90 disabled:opacity-50"
+                                                >
+                                                  {platingIndex === row.index
+                                                    ? `Making plate on ${videoBackendName(plateEngine === "siray" ? "siray" : "grok")}…`
+                                                    : `${plateShown ? "Remake plate" : "Make plate"} (~$${plateCostUsd.toFixed(2)})`}
+                                                </button>
+                                              )}
+                                              {!isStatic && (status === "idle" || status === "failed" || status === "rendering") && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => void handleRenderThis(row)}
+                                                  disabled={running || platingIndex !== null || !rowReadyToRender(row)}
+                                                  aria-label={`Render this line ${row.index + 1}`}
+                                                  title={
+                                                    chainLastFrameToNext
+                                                      ? "Animates this line only; with Chain ON, its last frame can fill the next empty start"
+                                                      : "Animates this line only — Render N lines still walks the rest of the act"
+                                                  }
+                                                  className="min-h-[36px] self-start rounded-md border border-amber-300/40 bg-amber-300/15 px-2 text-[10px] font-semibold text-amber-100 disabled:opacity-50"
+                                                >
+                                                  {running && runningIndex === row.index ? "Rendering…" : "Render this"}
+                                                </button>
+                                              )}
+                                            </div>
                                           )}
                                           {plateNotice?.act === activeAct && plateNotice.index === row.index && (
                                             <p role="alert" className="pt-0.5 text-[10px] leading-snug text-rose-300/90">
@@ -3765,47 +3856,74 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                 <span>~${plateCostUsd.toFixed(2)} a plate · made first, so a refusal costs only the plate</span>
               </div>
             )}
-            <div className="flex items-stretch gap-2">
-              <button
-                type="button"
-                onClick={() => void handleRenderAll()}
-                disabled={!canRenderAll}
-                className="min-h-[44px] min-w-0 flex-1 rounded-md bg-amber-300 px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {running
-                  ? `Rendering line ${(runningIndex ?? 0) + 1} of ${queue.length}…`
-                  : queue.length === 0
-                    ? "Render lines"
-                    : pendingRows.length === 0
-                      ? "Clips already loaded"
-                      : `Render ${pendingRows.length} line${pendingRows.length === 1 ? "" : "s"}`}
-              </button>
-              {/* Stop: only while rendering. The line on screen finishes
-                  and saves; nothing after it starts. */}
-              {running && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-stretch gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    stopRequestedRef.current = true;
-                    setStopRequested(true);
-                  }}
-                  disabled={stopRequested}
-                  aria-label={stopRequested ? "Stopping after this line" : "Stop after this line"}
-                  title="Stop after this line"
-                  className="shrink-0 rounded-md bg-rose-400 px-3 text-xs font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:opacity-60"
+                  onClick={() => void handleRenderAll()}
+                  disabled={!canRenderAll}
+                  className="min-h-[44px] min-w-0 flex-1 rounded-md bg-amber-300 px-3.5 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-amber-200 active:bg-amber-300/80 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {stopRequested ? "Stopping…" : "Stop"}
+                  {running
+                    ? `Rendering line ${(runningIndex ?? 0) + 1} of ${queue.length}…`
+                    : queue.length === 0
+                      ? "Render lines"
+                      : pendingRows.length === 0
+                        ? "Clips already loaded"
+                        : `Render ${pendingRows.length} line${pendingRows.length === 1 ? "" : "s"}`}
                 </button>
-              )}
+                {/* Stop: only while rendering. The line on screen finishes
+                    and saves; nothing after it starts. */}
+                {running && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopRequestedRef.current = true;
+                      setStopRequested(true);
+                    }}
+                    disabled={stopRequested}
+                    aria-label={stopRequested ? "Stopping after this line" : "Stop after this line"}
+                    title="Stop after this line"
+                    className="shrink-0 rounded-md bg-rose-400 px-3 text-xs font-semibold text-zinc-950 transition-colors hover:bg-rose-300 active:bg-rose-400/80 disabled:opacity-60"
+                  >
+                    {stopRequested ? "Stopping…" : "Stop"}
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  patchLive((prev) => ({
+                    ...prev,
+                    chainLastFrameToNext: prev.chainLastFrameToNext !== true,
+                  }))
+                }
+                disabled={running}
+                aria-pressed={chainLastFrameToNext}
+                title={chainLastFrameToggleTitle(chainLastFrameToNext)}
+                className={
+                  chainLastFrameToNext
+                    ? "min-h-[44px] w-full rounded-md border border-emerald-400/50 bg-emerald-400/20 px-3 text-[12px] font-semibold text-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    : "min-h-[44px] w-full rounded-md border border-white/15 bg-white/[0.03] px-3 text-[12px] font-semibold text-white/80 disabled:cursor-not-allowed disabled:opacity-60"
+                }
+              >
+                {chainLastFrameToggleLabel(chainLastFrameToNext)}
+              </button>
             </div>
             <p className="text-[10px] leading-snug text-white/40">
               {pendingRows.length === 0
                 ? "Existing Crash Lab clips are already in the strip below. Tap + on a row to insert a shot between them, or − on an Idle row to drop it — one clip at a time, never a batch of these 46."
-                : `One clip at a time — overlay ~$${overlayCostUsd.toFixed(2)}${
-                    pendingRows.filter((row) => row.kind === "hold").length > 0
-                      ? `, silent video ~$${holdVideoCostUsd.toFixed(2)}`
-                      : ""
-                  }${speakCount > 0 ? `, speak video ~$0.13/s after TTS` : ""}. Stops if a line fails so later lines are not billed. Route still loads the full character lock by name for the gold prompts.`}
+                : chainLastFrameToNext
+                  ? `Chain ON: last frame of each render → next empty start (skips Make plate). One clip at a time — overlay ~$${overlayCostUsd.toFixed(2)}${
+                      pendingRows.filter((row) => row.kind === "hold").length > 0
+                        ? `, silent video ~$${holdVideoCostUsd.toFixed(2)}`
+                        : ""
+                    }${speakCount > 0 ? `, speak video ~$0.13/s after TTS` : ""}. Stops if a line fails so later lines are not billed.`
+                  : `One clip at a time — overlay ~$${overlayCostUsd.toFixed(2)}${
+                      pendingRows.filter((row) => row.kind === "hold").length > 0
+                        ? `, silent video ~$${holdVideoCostUsd.toFixed(2)}`
+                        : ""
+                    }${speakCount > 0 ? `, speak video ~$0.13/s after TTS` : ""}. Stops if a line fails so later lines are not billed. Route still loads the full character lock by name for the gold prompts.`}
             </p>
           </>
         {progressText && (

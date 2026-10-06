@@ -60,6 +60,12 @@ export interface SunnyBanksRowRuntime {
   /** A Siray silent shot still rendering (2026-10-04, Shorts): checked
    * back on instead of submitted (and paid for) again. */
   sirayTaskId?: string;
+  /** Closing frame of this clip (Blob URL). Used when Chain last→first
+   * is on so the next empty / already-chained start can follow. */
+  lastFrameUrl?: string;
+  /** How this row's `plateUrl` got there. `chained` may be refreshed by
+   * the next last-frame fill; `generated` (Make plate) is locked. */
+  plateSource?: "chained" | "generated";
 }
 
 export interface SunnyBanksLiveState {
@@ -87,6 +93,12 @@ export interface SunnyBanksLiveState {
    * = nobody ticked (every Sunny Banks episode), and then it isn't part
    * of the fingerprint. */
   castIds?: string[];
+  /**
+   * Script Sequence "Chain last→first" (default off). Persist on the
+   * live episode draft so a reload keeps the continuity choice — same as
+   * Music video `scriptSequenceDraft.chainLastFrameToNext`.
+   */
+  chainLastFrameToNext?: boolean;
 }
 
 export interface SunnyBanksWorkspaceSnapshot {
@@ -108,6 +120,12 @@ export interface SunnyBanksWorkspaceSnapshot {
   mediaSlug?: string;
   /** See `SunnyBanksLiveState.castIds`. */
   castIds?: string[];
+  /**
+   * Script Sequence "Chain last→first" (default off). Persist on the
+   * episode draft so a reload keeps the continuity choice — same as
+   * Music video `scriptSequenceDraft.chainLastFrameToNext`.
+   */
+  chainLastFrameToNext?: boolean;
 }
 
 export interface SkidmarksSunnyBanksState {
@@ -167,6 +185,7 @@ export function cloneSunnyBanksLive(live: SunnyBanksLiveState): SunnyBanksLiveSt
   if (live.episodeId) next.episodeId = live.episodeId;
   if (live.mediaSlug) next.mediaSlug = live.mediaSlug;
   if (live.castIds && live.castIds.length > 0) next.castIds = [...live.castIds];
+  if (live.chainLastFrameToNext === true) next.chainLastFrameToNext = true;
   return next;
 }
 
@@ -184,6 +203,7 @@ export function liveFromSunnyBanksWorkspace(workspace: SunnyBanksWorkspaceSnapsh
     episodeId: workspace.id,
     mediaSlug: workspace.mediaSlug,
     castIds: workspace.castIds,
+    ...(workspace.chainLastFrameToNext === true ? { chainLastFrameToNext: true } : {}),
   });
 }
 
@@ -277,9 +297,10 @@ export function fingerprintWorkspace(snapshot: {
   episodeId?: string;
   mediaSlug?: string;
   castIds?: readonly string[];
+  chainLastFrameToNext?: boolean;
 }): string {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { episodeId, mediaSlug, locationPickTags, castIds, ...content } = snapshot;
+  const { episodeId, mediaSlug, locationPickTags, castIds, chainLastFrameToNext, ...content } = snapshot;
   // Empty or missing pick tags hash the same as before the field existed,
   // and always in the same place, however the object was built. Same
   // for the episode's ticked cast (2026-10-04): none ticked = as before.
@@ -410,6 +431,10 @@ function normalizeRowRuntime(value: unknown): SunnyBanksRowRuntime | null {
     if (names.length > 1 || (names.length === 1 && row.plateUrl)) row.castNames = names;
   }
   if (typeof v.sirayTaskId === "string" && /^[A-Za-z0-9_.:-]{1,128}$/.test(v.sirayTaskId)) row.sirayTaskId = v.sirayTaskId;
+  if (typeof v.lastFrameUrl === "string" && /^https:\/\/[^\s]+$/i.test(v.lastFrameUrl) && v.lastFrameUrl.length <= 1000) {
+    row.lastFrameUrl = v.lastFrameUrl;
+  }
+  if (v.plateSource === "chained" || v.plateSource === "generated") row.plateSource = v.plateSource;
   return row;
 }
 
@@ -528,6 +553,7 @@ export function normalizeSunnyBanksLive(value: unknown, genre: StudioGenre = "su
   if (isSafeDeckMediaSlug(v.mediaSlug)) live.mediaSlug = v.mediaSlug;
   const castIds = normalizeCastIds(v.castIds);
   if (castIds) live.castIds = castIds;
+  if (v.chainLastFrameToNext === true) live.chainLastFrameToNext = true;
   return live;
 }
 
@@ -622,6 +648,7 @@ export function buildSunnyBanksWorkspaceFromLive(
   if (cloned.locationPickTags) snapshot.locationPickTags = cloned.locationPickTags;
   if (cloned.mediaSlug) snapshot.mediaSlug = cloned.mediaSlug;
   if (cloned.castIds) snapshot.castIds = cloned.castIds;
+  if (cloned.chainLastFrameToNext === true) snapshot.chainLastFrameToNext = true;
   return snapshot;
 }
 

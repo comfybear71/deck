@@ -2560,7 +2560,11 @@ now (see "Explicitly out of scope" below).
     episode/beat model, no `lib/scriptSequenceRunner`, no per-beat
     pathname/shelf (renders upload to a plain timestamped Blob path, not
     the per-`(segmentId, plateId)` invariant the music-video render path
-    enforces), and no last-frame chaining between beats. Sequential
+    enforces). Last-frame chaining between beats is an optional
+    **Chain last→first** toggle (default off, `lib/chainLastFrame.ts`) —
+    never automatic, and never overwrites Make plate / Clip 1 upload /
+    sleeve Keep. Each Idle/failed God Script row has **Render this**
+    (one paid clip); full Render N lines stays the default. Sequential
     script Render is panel-local, explicit, and stops on failure — it is
     **not** music-video whole-song auto-render. Each of those already has
     real, working infrastructure elsewhere in this app (`lib/clipRenderBlob.ts`,

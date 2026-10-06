@@ -1348,6 +1348,26 @@ describe("runGeneratePlates", () => {
     expect(outcome).toEqual({ ok: true, platedCount: 1, skippedCount: 2 });
     expect((deps.setPlateStill as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toEqual(["seg-2"]);
   });
+
+  it("onlyClipIndex plates exactly that one clip and leaves the others", async () => {
+    const deps = fakePlatesDeps();
+    const outcome = await runGeneratePlates(
+      parts(),
+      targets(),
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      deps,
+      0,
+      undefined,
+      undefined,
+      1
+    );
+    expect(outcome).toEqual({ ok: true, platedCount: 1, skippedCount: 0 });
+    expect(deps.resolvePlaceStill).toHaveBeenCalledTimes(1);
+    expect(deps.generateIdentityStill).toHaveBeenCalledTimes(1);
+    expect((deps.setPlateStill as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toEqual(["seg-1"]);
+  });
 });
 
 describe("plateStillCountsAsReady", () => {
@@ -1677,6 +1697,80 @@ describe("runAnimateExistingPlates", () => {
       expect(outcome.message.toLowerCase()).toMatch(/last frame/);
     }
     expect(deps.setPlateStill).not.toHaveBeenCalled();
+  });
+
+  it("onlyClipIndex animates exactly that one clip — full Generate still walks the rest", async () => {
+    const deps = fakeAnimateDeps({
+      renderClip: vi.fn(async () => ({
+        ok: true as const,
+        videoUrl: "https://blob.example/clip.mp4",
+        persisted: true,
+        lastFrameUrl: "https://blob.example/last-1.jpg",
+      })),
+    });
+    const parts = titledParts().slice(0, 3);
+    const targets = platedTargets(["https://blob.example/p0.jpg", "https://blob.example/p1.jpg", "https://blob.example/p2.jpg"]);
+
+    const outcome = await runAnimateExistingPlates(
+      parts,
+      targets,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps,
+      0,
+      undefined,
+      false,
+      "grok",
+      1
+    );
+
+    expect(outcome).toEqual({ ok: true, renderedCount: 1 });
+    expect(deps.renderClip).toHaveBeenCalledTimes(1);
+    type ClipReq = { clipIndex?: number };
+    expect((deps.renderClip as ReturnType<typeof vi.fn>).mock.calls[0][0] as ClipReq).toMatchObject({ clipIndex: 1 });
+    expect(deps.setPlateStill).not.toHaveBeenCalled();
+  });
+
+  it("onlyClipIndex + chain ON: fills the next empty start but does not render it", async () => {
+    const deps = fakeAnimateDeps({
+      renderClip: vi.fn(async () => ({
+        ok: true as const,
+        videoUrl: "https://blob.example/clip.mp4",
+        persisted: true,
+        lastFrameUrl: "https://blob.example/last-0.jpg",
+      })),
+    });
+    const parts = titledParts().slice(0, 2);
+    const targets: AnimateExistingPlatesTarget[] = [
+      { segmentId: "seg-0", plateId: "plate-0", plateStillUrl: "https://blob.example/plate-0.jpg", plateStillSource: "generated" },
+      { segmentId: "seg-1", plateId: "plate-1" },
+    ];
+
+    const outcome = await runAnimateExistingPlates(
+      parts,
+      targets,
+      "Solar Rebel",
+      nova,
+      bandMembers,
+      "https://blob.example/song.mp3",
+      deps,
+      0,
+      undefined,
+      true,
+      "grok",
+      0
+    );
+
+    expect(outcome).toEqual({ ok: true, renderedCount: 1 });
+    expect(deps.renderClip).toHaveBeenCalledTimes(1);
+    expect(deps.setPlateStill).toHaveBeenCalledTimes(1);
+    expect(deps.setPlateStill).toHaveBeenCalledWith("seg-1", "plate-1", {
+      dataUrl: "https://blob.example/last-0.jpg",
+      source: "chained",
+      createdAt: expect.any(Number),
+    });
   });
 });
 
