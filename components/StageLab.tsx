@@ -3,9 +3,9 @@
 /**
  * Stage lab — `/stage-lab` only.
  *
- * Read-only Cast/Locations from saved session + deck_items. Own
- * localStorage key. Never writes the studio session. Make plate is a
- * real Grok still. Render is Phase 2 (disabled, cost shown).
+ * Hard-locked to Deliciae (Shorts folder `deliciae`). Read-only Cast/
+ * Locations from saved session + character/location deck_items. Own
+ * localStorage key. Never writes the studio session. No project picker.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -23,7 +23,6 @@ import {
   isTalkingPersonShot,
   lockedCameraFor,
   makeBlankShot,
-  mintStageId,
   presentActors,
   remapShotsToCast,
   renumberShots,
@@ -35,13 +34,7 @@ import {
   type StageScene,
   type StageShot,
 } from "@/lib/stageLab";
-import {
-  loadStageLabCast,
-  pickDefaultStageLabProject,
-  projectChipLabel,
-  type StageLabProject,
-  type StageLabProjectPack,
-} from "@/lib/stageLabCast";
+import { DELICIAE_NOT_FOUND, loadStageLabCast } from "@/lib/stageLabCast";
 import { makeStagePlate } from "@/lib/stageLabPlate";
 import { readStageLabStore, writeStageLabStore, hydrateStageShot } from "@/lib/stageLabStore";
 
@@ -76,10 +69,7 @@ function Chip({
 export function StageLab() {
   const [cast, setCast] = useState<StageCastMember[]>([]);
   const [locations, setLocations] = useState<StageLocation[]>([]);
-  const [projects, setProjects] = useState<StageLabProject[]>([]);
-  const [projectId, setProjectId] = useState<string | null>(null);
-  const [byProject, setByProject] = useState<Record<string, StageLabProjectPack>>({});
-  const [castStatus, setCastStatus] = useState<"loading" | "saved" | "empty">("loading");
+  const [castStatus, setCastStatus] = useState<"loading" | "saved" | "empty" | "missing">("loading");
   const [castError, setCastError] = useState<string | null>(null);
   const [scenes, setScenes] = useState<StageScene[]>([{ id: "scene_act1_kitchen", label: DELICIAE_SCENE_LABEL }]);
   const [shots, setShots] = useState<StageShot[]>([]);
@@ -95,46 +85,34 @@ export function StageLab() {
     window.setTimeout(() => setToast(null), 2800);
   }, []);
 
-  function onSelectProject(nextId: string) {
-    if (nextId === projectId) return;
-    const pack = byProject[nextId] ?? { actors: [], locations: [] };
-    setProjectId(nextId);
-    setCast(pack.actors);
-    setLocations(pack.locations);
-    setShots((all) => remapShotsToCast(all, pack.actors, pack.locations, locations));
-    setCastStatus(pack.actors.length || pack.locations.length ? "saved" : "empty");
-  }
-
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const snap = await loadStageLabCast();
       if (cancelled) return;
-      setProjects(snap.projects);
-      setByProject(snap.byProject);
-      const stored = readStageLabStore();
-      const chosen =
-        stored?.projectId && snap.byProject[stored.projectId]
-          ? snap.projects.find((p) => p.id === stored.projectId) ?? null
-          : pickDefaultStageLabProject(snap.projects);
-      const pack = (chosen && snap.byProject[chosen.id]) || { actors: snap.actors, locations: snap.locations };
-      setProjectId(chosen?.id ?? snap.defaultProjectId);
-      setCast(pack.actors);
-      setLocations(pack.locations);
-      setCastStatus(pack.actors.length || pack.locations.length ? "saved" : snap.source === "saved" ? "saved" : "empty");
+      setCast(snap.actors);
+      setLocations(snap.locations);
       setCastError(snap.error);
-      const restoreStored = Boolean(stored?.projectId && stored.shots.length > 0 && chosen && stored.projectId === chosen.id);
-      if (restoreStored && stored) {
+      if (!snap.found) {
+        setCastStatus("missing");
+        setShots([]);
+        setOpenId(null);
+        hydrated.current = true;
+        return;
+      }
+      setCastStatus(snap.source === "saved" ? "saved" : "empty");
+      const stored = readStageLabStore();
+      if (stored && stored.shots.length > 0) {
         setScenes(stored.scenes);
         const next = remapShotsToCast(
-          stored.shots.map((s) => hydrateStageShot(s, pack.actors)),
-          pack.actors,
-          pack.locations,
+          stored.shots.map((s) => hydrateStageShot(s, snap.actors)),
+          snap.actors,
+          snap.locations,
         );
         setShots(next);
         setOpenId(stored.openShotId && next.some((s) => s.id === stored.openShotId) ? stored.openShotId : next[0]?.id ?? null);
       } else {
-        const starter = buildDeliciaeStarter(pack.actors, pack.locations);
+        const starter = buildDeliciaeStarter(snap.actors, snap.locations);
         setScenes([starter.scene]);
         setShots(starter.shots);
         setOpenId(starter.shots[0]?.id ?? null);
@@ -148,14 +126,15 @@ export function StageLab() {
 
   useEffect(() => {
     if (!hydrated.current) return;
+    if (castStatus === "missing" || castStatus === "loading") return;
     if (persistTimer.current) window.clearTimeout(persistTimer.current);
     persistTimer.current = window.setTimeout(() => {
-      writeStageLabStore({ scenes, shots, openShotId: openId, projectId });
+      writeStageLabStore({ scenes, shots, openShotId: openId, projectId: "deliciae" });
     }, 200);
     return () => {
       if (persistTimer.current) window.clearTimeout(persistTimer.current);
     };
-  }, [scenes, shots, openId, projectId]);
+  }, [scenes, shots, openId, castStatus]);
 
   const shot = shots.find((s) => s.id === openId) ?? shots[0];
   const location = locations.find((l) => l.id === shot?.locationId) ?? null;
@@ -232,13 +211,14 @@ export function StageLab() {
     setShots(renumberShots(copy));
   }
 
-  function onAddScene() {
-    const n = scenes.length + 1;
-    const scene: StageScene = { id: mintStageId("scene"), label: `SCENE ${n}` };
-    const blank = makeBlankShot([], scene, cast, locations[0]?.id ?? null);
-    setScenes((all) => [...all, scene]);
-    setShots((all) => renumberShots([...all, blank]));
-    setOpenId(blank.id);
+  if (castStatus === "missing") {
+    return (
+      <div className="mx-auto min-h-dvh max-w-[430px] bg-black px-3 pt-8 text-white">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200/90">Stage lab · sandbox</p>
+        <h1 className="mt-1 text-[17px] font-semibold">Director board</h1>
+        <p className="mt-3 text-[13px] text-white/80">{castError || DELICIAE_NOT_FOUND}</p>
+      </div>
+    );
   }
 
   if (!shot) {
@@ -255,26 +235,8 @@ export function StageLab() {
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200/90">Stage lab · sandbox</p>
         <h1 className="text-[17px] font-semibold leading-tight">Director board</h1>
         <p className="mt-1 text-[11px] leading-snug text-white/55">
-          This project&apos;s Cast and Locations only. Shots save here, not into the episode.
+          Deliciae Cast and Locations only. Shots save here, not into Shorts.
         </p>
-        {projects.length > 0 ? (
-          <div
-            className="mt-2 flex gap-1.5 overflow-x-auto touch-pan-x pb-0.5"
-            style={{ WebkitOverflowScrolling: "touch" }}
-            role="list"
-            aria-label="Project"
-          >
-            {projects.map((project) => (
-              <Chip
-                key={project.id}
-                on={project.id === projectId}
-                onClick={() => onSelectProject(project.id)}
-              >
-                {projectChipLabel(project, projects)}
-              </Chip>
-            ))}
-          </div>
-        ) : null}
         <p className="mt-1 text-[10px] text-white/40">
           {castStatus === "loading"
             ? "Loading Cast…"
@@ -282,24 +244,6 @@ export function StageLab() {
           {castError ? ` · ${castError}` : ""}
         </p>
       </header>
-
-      <div className="px-3 pt-3">
-        <div className="flex gap-1.5 overflow-x-auto touch-pan-x pb-1" style={{ WebkitOverflowScrolling: "touch" }}>
-          {scenes.map((scene) => (
-            <span
-              key={scene.id}
-              className={`shrink-0 rounded-md px-2 py-1 text-[11px] ${
-                shot.sceneId === scene.id ? "bg-white/10 text-white" : "text-white/45"
-              }`}
-            >
-              {scene.label}
-            </span>
-          ))}
-          <button type="button" onClick={onAddScene} className="min-h-[36px] shrink-0 rounded-md px-2 text-[12px] text-white/70 ring-1 ring-white/15">
-            + Scene
-          </button>
-        </div>
-      </div>
 
       <div
         className="mt-2 flex gap-2 overflow-x-auto px-3 pb-2 touch-pan-x"

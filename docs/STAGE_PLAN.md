@@ -257,10 +257,10 @@ Do not skip to Phase 3 because the mock looks ready.
 
 ## 9. Decisions Stuart accepted (2026-10-08)
 
-1. **House** is an Object. Silent **Grok** shot. Voice is added in Resolve. No audio mux on this page yet. A Cast card with no picture (House) does not block Make plate — it is described in the prompt, never given a face. White-void is a missing Location picture.
-2. **The serving droid has not been created.** The lab must not add, seed, or show a droid / Service droid card. Deliciae Cast is that project's own strip: Arthur, Dennis, Mira, Pip, House.
+1. **House** is an Object. Silent **Grok** shot. Voice is added in Resolve. No audio mux on this page yet. House's Cast picture is the LoRA `referenceUrl` (wall speaker), same as the Shorts strip — empty `pictureUrls` on the extra must not read as "no picture". A Cast card that truly has no picture does not block Make plate. White-void is a missing Location picture.
+2. **The serving droid has not been created.** The lab must not add, seed, or show a droid / Service droid card. Deliciae Cast is that project's own strip (Arthur, Dennis, Mira, Pip, House, plus any card already on it such as Grokbot).
 3. **Chain across a location change is blocked** — the user gets a fresh plate instead.
-4. **`/stage-lab` loads ONE project's Cast and Locations strip** (Deliciae is a Shorts script episode, folder `deliciae`, even though the vibe-director chrome says Skidmarks). Default picker is Deliciae. Never dump every show (no town_street / park / courthouse). Kitchen is `arthur_kitchen`. Starter shot content stays Act I kitchen.
+4. **`/stage-lab` is hard-locked to Deliciae** (Shorts script episode, folder `deliciae`). No project picker. No episode/act chip row. Never enumerate or display another genre's episodes (no Baby Shower, Cornish Arsehole, Influencer Influx, …). Kitchen is `arthur_kitchen`. If that folder is missing: **Deliciae not found**, no fallback.
 5. **It stays a separate page** (`/stage-lab`). No links from, and no writes into, Sunny Banks, Skidmarks, Music video, or Shorts. Own storage key only (`the-tab:stage-lab-v1`).
 
 Length picker stays 5 / 8 / 10 / 12 / 15s. Merge into genres is still not this PR.
