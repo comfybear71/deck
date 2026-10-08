@@ -629,6 +629,14 @@ separate screen. It's locked through the clip timeline's plate/camera/
 model tags — voice, animate, and stitch are explicitly out of scope for
 now (see "Explicitly out of scope" below).
 
+**Stage lab** (`/stage-lab`) is a separate director-board sandbox, not a
+mode of Sunny Banks, Skidmarks, Music video, or Shorts. It is not linked
+from those screens. It loads **one project's** Cast and Locations strip
+read-only (default Deliciae, Shorts folder `deliciae`), keeps shots in
+its own `the-tab:stage-lab-v1` key, and can Make plate (~$0.02 Grok
+still). A Cast card with no picture does not block Make plate. Video
+Render is Phase 2 (disabled). See `docs/STAGE_PLAN.md`.
+
 - **Node face** (`components/SkidmarksNodeCard.tsx`) — the same warm
   rose/pink identity treatment as before (border, gradient wash, glow, ♥
   avatar) instead of the generic `GraphNodeCard`. Shows "No project yet —
@@ -2443,7 +2451,7 @@ now (see "Explicitly out of scope" below).
     iPhone)** the overlay is unmounted and the textarea draws its own
     plain white 16px text (`-webkit-text-size-adjust: 100%`,
     autocorrect/autocapitalize/spellcheck off) so the caret sits on the
-    glyphs you type; colours come back on blur / Done.     Same lock on
+    glyphs you type; colours come back on blur / Done. Same lock on
     Music video Script Sequence, Skidmarks, and Shorts. **Keep place after
     save (2026-10-08)** — the inline box remembers `scrollTop` and the caret
     across save / re-parse / overlay remount / Done, and Full screen opens
