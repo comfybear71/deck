@@ -430,6 +430,7 @@ export function SkidmarksScriptSequencePanel({
   /** One-level undo for the script box (Format / Full-screen Apply). */
   const [scriptUndo, setScriptUndo] = useState<string | null>(null);
   const [fullScreenScriptOpen, setFullScreenScriptOpen] = useState(false);
+  const [fullScreenPlace, setFullScreenPlace] = useState<ScriptBoxPlace | null>(null);
   const scriptHighlightRef = useRef<HTMLDivElement | null>(null);
   const scriptBoxRef = useRef<HTMLTextAreaElement>(null);
   const scriptBoxPlaceRef = useRef<ScriptBoxPlace | null>(null);
@@ -1174,6 +1175,7 @@ export function SkidmarksScriptSequencePanel({
           type="button"
           onClick={() => {
             rememberScriptBoxPlace();
+            setFullScreenPlace(scriptBoxPlaceRef.current);
             setFullScreenScriptOpen(true);
           }}
           disabled={!!running}
@@ -1263,7 +1265,7 @@ export function SkidmarksScriptSequencePanel({
       {fullScreenScriptOpen && (
         <ScriptSequenceFullScreenEditor
           initialText={script}
-          initialPlace={scriptBoxPlaceRef.current}
+          initialPlace={fullScreenPlace}
           onApply={handleFullScreenApply}
           onClose={() => setFullScreenScriptOpen(false)}
         />

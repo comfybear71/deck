@@ -3372,6 +3372,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
    * inside that component, not here — this panel deliberately learns
    * nothing about the edit until Done applies it in one go. */
   const [fullScreenScriptOpen, setFullScreenScriptOpen] = useState(false);
+  const [fullScreenPlace, setFullScreenPlace] = useState<ScriptBoxPlace | null>(null);
   useLayoutEffect(() => {
     if (fullScreenScriptOpen) return;
     const el = scriptBoxRef.current;
@@ -3698,6 +3699,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                 type="button"
                 onClick={() => {
                   rememberScriptBoxPlace();
+                  setFullScreenPlace(scriptBoxPlaceRef.current);
                   setFullScreenScriptOpen(true);
                 }}
                 disabled={running}
@@ -4227,7 +4229,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
             {fullScreenScriptOpen && (
               <SunnyBanksFullScreenScriptEditor
                 initialText={scriptText}
-                initialPlace={scriptBoxPlaceRef.current}
+                initialPlace={fullScreenPlace}
                 onApply={(next, place) => {
                   if (place) scriptBoxPlaceRef.current = place;
                   handleScriptChange(next);
