@@ -2443,8 +2443,27 @@ now (see "Explicitly out of scope" below).
     iPhone)** the overlay is unmounted and the textarea draws its own
     plain white 16px text (`-webkit-text-size-adjust: 100%`,
     autocorrect/autocapitalize/spellcheck off) so the caret sits on the
-    glyphs you type; colours come back on blur / Done. Same lock on
-    Music video Script Sequence, Skidmarks, and Shorts. **Full-screen God Script
+    glyphs you type; colours come back on blur / Done.     Same lock on
+    Music video Script Sequence, Skidmarks, and Shorts. **Keep place after
+    save (2026-10-08)** — the inline box remembers `scrollTop` and the caret
+    across save / re-parse / overlay remount / Done, and Full screen opens
+    on that same place instead of autoFocus dumping you at the end; tap-back
+    lands where you tapped, not at the bottom. **Scene dividers (idle
+    coloured view only)** — a full-width rule and brighter heading sit on
+    `=== ACT … — SCENE … ===` (Music video: each `Part N (` line); none
+    while typing. The Full screen editor has a Scenes jump strip when there
+    are two or more. **Shot list scene bars** — the numbered queue repeats
+    that heading when the scene changes, plus a short snippet of the
+    `[Action:]` (or spoken line); collapsed finished shots keep the grouping.
+    **`#N` badges (idle only)** — a small `#13` in the script gutter on the
+    `[Action:]` or speaker line of each shot, same number as the list row;
+    tap the badge to scroll to the row, tap the row number to scroll the
+    script. Display only, every genre, no parse/render/billing change.
+    **Chain from shot N does not inherit Cast (2026-10-08)** — a silent
+    `House:` after chaining from Arthur+Pip keeps House only (that row's
+    own speaker + names in its own `[Action:]`/`[Cast:]`); the previous
+    last frame is the start image, never their pictures, and that row's
+    own `[Location:]` still beats a stale dropdown pick. **Full-screen God Script
     editor (2026-09-18, Stuart's ask: "open the God Script box to full
     screen and edit everything in there without it updating before we
     update")** — `⤢ Full screen` beside `⇥ Format` opens

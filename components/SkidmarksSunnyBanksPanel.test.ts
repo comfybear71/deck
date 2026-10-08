@@ -12,6 +12,11 @@ import {
   parseSunnyBanksEpisodeHeader,
   parseSunnyBanksGodDocument,
   parseSunnyBanksSceneHeader,
+  listSunnyBanksSceneOffsets,
+  sunnyBanksSceneLabelByQueueIndex,
+  sunnyBanksRowSourceSnippet,
+  sunnyBanksVisibleQueueSceneBreaks,
+  sunnyBanksShotBadgeMarks,
   parseSunnyBanksScriptBlock,
   parseSunnyBanksTitledActHeader,
   isSunnyBanksGhostTargetLine,
@@ -1258,5 +1263,57 @@ describe("[GROK] / [LTX] / [H3] engine tags (2026-09-30)", () => {
     const kept = preserveRenderedRuntimes(parseSunnyBanksScriptBlock("Ranger Bazza: [H3]"), next);
     expect(kept[0].videoBackend).toBe("grok");
     expect(kept[0].status).toBe("done");
+  });
+});
+
+describe("idle scene dividers, shot-list scene bars, and #N badges (display only)", () => {
+  const script = [
+    "=== ACT I — SCENE 1 — KITCHEN ===",
+    "[Location: kitchen]",
+    "[Action: walks in]",
+    "Shazza: Oi",
+    "=== ACT I — SCENE 2 — YARD ===",
+    "[Action: stands still]",
+    "Dazza:",
+  ].join("\n");
+
+  it("lists scene heading offsets for the Full screen jump list", () => {
+    expect(listSunnyBanksSceneOffsets(script).map((s) => s.label)).toEqual([
+      "ACT I — SCENE 1 — KITCHEN",
+      "ACT I — SCENE 2 — YARD",
+    ]);
+  });
+
+  it("attaches the last scene header to each queue row", () => {
+    const chunks = parseSunnyBanksScriptBlock(script);
+    expect(sunnyBanksSceneLabelByQueueIndex(chunks)).toEqual([
+      "ACT I — SCENE 1 — KITCHEN",
+      "ACT I — SCENE 2 — YARD",
+    ]);
+  });
+
+  it("uses the [Action:] as the row snippet when there is one", () => {
+    const [speak, hold] = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(script));
+    expect(sunnyBanksRowSourceSnippet(speak)).toBe("walks in");
+    expect(sunnyBanksRowSourceSnippet(hold)).toBe("stands still");
+  });
+
+  it("keeps a scene bar when finished shots are collapsed", () => {
+    const rows = [
+      { sceneLabel: "ACT I — SCENE 1 — KITCHEN" },
+      { sceneLabel: "ACT I — SCENE 2 — YARD" },
+    ];
+    expect(sunnyBanksVisibleQueueSceneBreaks(rows).map((x) => x.sceneHeading)).toEqual([
+      "ACT I — SCENE 1 — KITCHEN",
+      "ACT I — SCENE 2 — YARD",
+    ]);
+  });
+
+  it("puts #N on the [Action:] line, same number as the shot list", () => {
+    const rows = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(script));
+    expect(sunnyBanksShotBadgeMarks(script, rows)).toEqual([
+      { shotNumber: 1, lineIndex: 2 },
+      { shotNumber: 2, lineIndex: 5 },
+    ]);
   });
 });

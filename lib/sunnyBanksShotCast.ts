@@ -68,8 +68,31 @@ export interface SunnyBanksRowCastInput {
   castLooks?: readonly { name: string; look: string }[];
   /** Everyone who has a line in the same scene. */
   sceneSpeakers?: readonly string[];
+  /** Set only on a shared two-hander (2+ talking rows under one Action/Cast). */
+  sceneKey?: string;
   /** The speaker's own `[Character Name: …]` look. */
   appearanceModifier?: string;
+}
+
+/**
+ * Cast for a row uses that row's own speaker, `[Cast:]`, `[Character X:]`
+ * and names in its own `[Action:]`. Other people from a *previous* shot
+ * (including the row "Chain from shot N" starts from) are never added.
+ * A later talking line in the same two-hander still sees the scene's
+ * shared Action / speakers — that is the same shot, not a chained one.
+ */
+export function shotTextForRowCast(row: Pick<SunnyBanksRowCastInput, "action" | "sceneAction" | "sceneKey">): string {
+  const own = row.action?.trim() ?? "";
+  if (own) return own;
+  if (row.sceneKey) return row.sceneAction?.trim() ?? "";
+  return "";
+}
+
+export function sceneSpeakersForRowCast(
+  row: Pick<SunnyBanksRowCastInput, "sceneKey" | "sceneSpeakers">
+): readonly string[] | undefined {
+  if (!row.sceneKey) return undefined;
+  return row.sceneSpeakers;
 }
 
 export interface SunnyBanksRowCast {
@@ -85,17 +108,18 @@ const EMPTY_CAST: ShotCast = { members: [], names: [], missingPicture: [], dropp
 /** Who is in one Sunnybank row, with each person's look and place in frame. */
 export function resolveSunnyBanksRowCast(row: SunnyBanksRowCastInput, cards: readonly SunnyBanksCastCard[]): SunnyBanksRowCast {
   if (row.cutaway || !row.characterName.trim()) return { cast: EMPTY_CAST, people: [], sceneSpeakers: [] };
-  const shotText = row.action?.trim() || row.sceneAction?.trim() || "";
+  const shotText = shotTextForRowCast(row);
+  const sceneSpeakersIn = sceneSpeakersForRowCast(row);
   const cast = resolveShotCast({
     cards,
     explicit: row.castNames,
     primary: row.characterName,
     characterTags: (row.castLooks ?? []).map((l) => l.name),
     shotText: [shotText],
-    sceneSpeakers: row.sceneSpeakers,
+    sceneSpeakers: sceneSpeakersIn,
     max: MAX_SHOT_CAST,
   });
-  const sceneSpeakers = (row.sceneSpeakers ?? [])
+  const sceneSpeakers = (sceneSpeakersIn ?? [])
     .map((n) => cast.names.find((c) => sameShotCastName(c, n)))
     .filter((n, i, all): n is string => Boolean(n) && all.indexOf(n) === i);
   if (!cast.isMulti) return { cast, people: [], sceneSpeakers };

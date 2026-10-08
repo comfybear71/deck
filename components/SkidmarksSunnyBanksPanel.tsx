@@ -5,11 +5,22 @@ import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 import {
   SCRIPT_BOX_EDITING_TEXT_CLASS,
+  SCRIPT_BOX_GUTTER_CLASS,
   SCRIPT_BOX_IOS_TEXTAREA_PROPS,
   SCRIPT_BOX_TEXTAREA_CLASS,
+  SCRIPT_SCENE_HEADING_CLASS,
+  groupHighlightSegmentsByLine,
+  readScriptBoxPlace,
+  revealScriptBoxPlace,
   scriptBoxTextClass,
+  scriptLineCharIndex,
+  scrollTextareaToIndex,
+  writeScriptBoxPlace,
+  type ScriptBoxPlace,
 } from "@/lib/textareaOverlayMirror";
-import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { ScriptShotNumberBadges } from "@/components/ScriptShotNumberBadges";
+import { flushSync } from "react-dom";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ESTIMATED_STILL_COST_USD, SIRAY_STILL_COST_USD } from "@/lib/autoPlate";
 import { preSendBlocks, preSendChecks, type PreSendIssue } from "@/lib/preSendChecks";
 import { triggerBlobDownload } from "@/lib/clipRenders";
@@ -508,7 +519,9 @@ export function sunnyBanksRowBeatArgs(args: {
       if (target) ownPlate.plateTarget = target;
     }
   }
-  if (args.rowPlateUrl && !rowCast.cast.isMulti && !args.plateOnly) ownPlate.plateUrl = args.rowPlateUrl;
+  // A chained last frame is the start image for any row (one person or
+  // several) — Cast pictures from the previous shot are never sent with it.
+  if (args.rowPlateUrl && !args.plateOnly) ownPlate.plateUrl = args.rowPlateUrl;
   if (args.plateEngine) ownPlate.plateEngine = args.plateEngine;
   if (args.sirayTaskId) ownPlate.sirayTaskId = args.sirayTaskId;
   return {
@@ -701,6 +714,99 @@ export function parseSunnyBanksSceneHeader(raw: string): string | null {
   if (!match) return null;
   const label = match[1].replace(/\s+/g, " ").trim();
   return label.length > 0 ? label : null;
+}
+
+/** Character offsets of `=== ACT … — SCENE … ===` (and any other
+ * `=== LABEL ===` scene header) for the Full screen jump list.
+ * Display / scroll only — never a parser change. */
+export function listSunnyBanksSceneOffsets(text: string): { label: string; index: number }[] {
+  const out: { label: string; index: number }[] = [];
+  let index = 0;
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const label = parseSunnyBanksSceneHeader(line.trim());
+    if (label) out.push({ label, index });
+    index += line.length + (i < lines.length - 1 ? 1 : 0);
+  }
+  return out;
+}
+
+/** Last scene header above each speak/hold queue row (same order as
+ * `sunnyBanksQueueChunks`). Rows before the first scene have no label. */
+export function sunnyBanksSceneLabelByQueueIndex(
+  chunks: readonly SunnyBanksScriptChunk[]
+): Array<string | undefined> {
+  let current: string | undefined;
+  const out: Array<string | undefined> = [];
+  for (const chunk of chunks) {
+    if (chunk.kind === "scene") {
+      current = chunk.line;
+      continue;
+    }
+    if (chunk.kind === "speak" || chunk.kind === "hold") out.push(current);
+  }
+  return out;
+}
+
+const ROW_SOURCE_SNIPPET_MAX = 42;
+
+/** First words of the row's `[Action:]` (or spoken line) so a numbered
+ * queue row can be matched back to the God Script. Display only. */
+export function sunnyBanksRowSourceSnippet(chunk: {
+  action?: string;
+  sceneAction?: string;
+  line: string;
+}): string {
+  const action = (chunk.action ?? chunk.sceneAction ?? "").trim();
+  const spoken = chunk.line.trim();
+  const source = action || spoken;
+  if (!source) return "";
+  if (source.length <= ROW_SOURCE_SNIPPET_MAX) return source;
+  const cut = source.slice(0, ROW_SOURCE_SNIPPET_MAX);
+  const sp = cut.lastIndexOf(" ");
+  return `${(sp > 20 ? cut.slice(0, sp) : cut).trimEnd()}…`;
+}
+
+/** When finished shots are collapsed, still emit a scene bar before the
+ * first *visible* row of each scene. */
+export function sunnyBanksVisibleQueueSceneBreaks<T extends { sceneLabel?: string }>(
+  rows: readonly T[]
+): Array<{ row: T; sceneHeading: string | null }> {
+  return rows.map((row, i) => {
+    const prev = i > 0 ? rows[i - 1] : undefined;
+    const sceneHeading =
+      row.sceneLabel && row.sceneLabel !== prev?.sceneLabel ? row.sceneLabel : null;
+    return { row, sceneHeading };
+  });
+}
+
+/** Idle `#N` badge line for one queue row: its `[Action:]` line when
+ * that tag sits in this shot's block, otherwise the speaker / silent
+ * name line. Same 1-based number as the shot list. Display only. */
+export function sunnyBanksShotBadgeLineIndex(
+  script: string,
+  chunk: { sourceLineIndex: number; action?: string },
+  previousSourceLineIndex: number
+): number {
+  if (!chunk.action?.trim()) return chunk.sourceLineIndex;
+  const lines = script.split(/\r?\n/);
+  const start = Math.max(0, previousSourceLineIndex + 1);
+  const end = Math.min(chunk.sourceLineIndex, lines.length - 1);
+  for (let i = start; i <= end; i += 1) {
+    if (/\[Action:/i.test(lines[i] ?? "")) return i;
+  }
+  return chunk.sourceLineIndex;
+}
+
+export function sunnyBanksShotBadgeMarks(
+  script: string,
+  chunks: readonly { sourceLineIndex: number; action?: string }[]
+): Array<{ shotNumber: number; lineIndex: number }> {
+  return chunks.map((chunk, i) => ({
+    shotNumber: i + 1,
+    lineIndex: sunnyBanksShotBadgeLineIndex(script, chunk, i > 0 ? chunks[i - 1]!.sourceLineIndex : -1),
+  }));
 }
 
 /** The saved characters for the God-script guide: the built-in cast with
@@ -1131,21 +1237,64 @@ function SunnyBanksScriptHighlightOverlay({
   autoGrowMinRows?: number;
 }) {
   const segments = buildSunnyBanksOverlaySegments(text);
+  const lines = groupHighlightSegmentsByLine(segments);
   useTextareaOverlayMirror(overlayRef, text, { autoGrowMinRows });
   return (
     <div ref={overlayRef} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full overflow-hidden">
-      <div className="whitespace-pre-wrap break-words px-3 py-2 text-base leading-6">
-        {segments.map((segment, index) => (
-          <span key={index} className={SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]}>
-            {segment.text}
-          </span>
-        ))}
+      <div className={`whitespace-pre-wrap break-words ${SCRIPT_BOX_GUTTER_CLASS} py-2 text-base leading-6`}>
+        {lines.map((line, lineIndex) => {
+          const heading = parseSunnyBanksSceneHeader(line.text.trim());
+          const inner = line.segments.map((segment, index) => (
+            <span key={index} className={SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]}>
+              {segment.text}
+            </span>
+          ));
+          if (!heading) return <span key={lineIndex}>{inner}</span>;
+          return (
+            <span key={lineIndex} className={SCRIPT_SCENE_HEADING_CLASS}>
+              {inner}
+            </span>
+          );
+        })}
         {/* Trailing newline: a native textarea always reserves room for one more
          * line after a final "\n" (where the caret sits); without this, the
          * overlay's own wrapped-line count falls one short and drifts up
          * relative to the real textarea once the script ends in a blank line. */}
         {text.endsWith("\n") ? <span>{"\u200b"}</span> : null}
       </div>
+    </div>
+  );
+}
+
+function ScriptSceneBar({ label }: { label: string }) {
+  return (
+    <div className="mt-2 border-t border-white/40 px-1 pt-1.5">
+      <p className="text-[11px] font-bold tracking-wide text-white">{label}</p>
+    </div>
+  );
+}
+
+function ScriptScenesJumpList({
+  scenes,
+  onJump,
+}: {
+  scenes: { label: string; index: number }[];
+  onJump: (index: number) => void;
+}) {
+  if (scenes.length < 2) return null;
+  return (
+    <div className="flex min-h-[40px] items-center gap-1.5 overflow-x-auto overscroll-x-contain border-b border-white/10 px-3 py-1 touch-pan-x [scrollbar-width:none]">
+      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-white/40">Scenes</span>
+      {scenes.map((scene) => (
+        <button
+          key={`${scene.index}:${scene.label}`}
+          type="button"
+          onClick={() => onJump(scene.index)}
+          className="min-h-[32px] shrink-0 rounded-md bg-white/[0.06] px-2 text-[10px] font-semibold text-white/80"
+        >
+          {scene.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -2042,17 +2191,25 @@ export async function downloadSunnyBanksEpisodeZip(
  */
 function SunnyBanksFullScreenScriptEditor({
   initialText,
+  initialPlace,
   onApply,
   onClose,
 }: {
   initialText: string;
-  onApply: (next: string) => void;
+  initialPlace: ScriptBoxPlace | null;
+  onApply: (next: string, place: ScriptBoxPlace | null) => void;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState(initialText);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formatFeedback = useScriptFormatFeedback();
   const viewportHeight = useVisualViewportHeight();
+  const scenes = listSunnyBanksSceneOffsets(draft);
+  const rememberPlace = () => {
+    const el = textareaRef.current;
+    return el ? readScriptBoxPlace(el) : null;
+  };
   const handleFormat = () => {
     const formatted = formatSunnyBanksGodScript(draft);
     if (formatted !== draft) setDraft(formatted);
@@ -2060,11 +2217,33 @@ function SunnyBanksFullScreenScriptEditor({
   };
   const dirty = draft !== initialText;
 
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (initialPlace) writeScriptBoxPlace(el, initialPlace);
+    else {
+      // iOS autoFocus dumps the caret at the end of a long script.
+      try {
+        el.setSelectionRange(0, 0);
+      } catch {
+        /* empty */
+      }
+      el.scrollTop = 0;
+    }
+    // One-shot restore on open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleCancel = () => {
     if (dirty && !confirmingDiscard) {
       setConfirmingDiscard(true);
       return;
     }
+    onClose();
+  };
+
+  const handleDone = () => {
+    onApply(draft, rememberPlace());
     onClose();
   };
 
@@ -2086,10 +2265,7 @@ function SunnyBanksFullScreenScriptEditor({
         </span>
         <button
           type="button"
-          onClick={() => {
-            onApply(draft);
-            onClose();
-          }}
+          onClick={handleDone}
           className="min-h-[44px] shrink-0 rounded-md bg-amber-300 px-4 text-[13px] font-semibold text-zinc-950"
         >
           Done
@@ -2102,8 +2278,19 @@ function SunnyBanksFullScreenScriptEditor({
         </p>
       )}
 
+      <ScriptScenesJumpList
+        scenes={scenes}
+        onJump={(index) => {
+          const el = textareaRef.current;
+          if (!el) return;
+          el.focus();
+          scrollTextareaToIndex(el, index);
+        }}
+      />
+
       <div className="relative min-h-0 flex-1">
         <textarea
+          ref={textareaRef}
           value={draft}
           onChange={(e) => {
             setDraft(e.target.value);
@@ -2345,6 +2532,9 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
    * than leaving Stuart to discover it by swiping. */
   const actStripRef = useRef<HTMLDivElement>(null);
   const scriptHighlightRef = useRef<HTMLDivElement>(null);
+  const scriptBoxRef = useRef<HTMLTextAreaElement>(null);
+  const scriptBoxPlaceRef = useRef<ScriptBoxPlace | null>(null);
+  const skipRevealRef = useRef(false);
   /** Inline God Script box is being typed in — hide the colour overlay
    * for the duration (real iPhone Safari, 2026-10-08). */
   const [scriptBoxEditing, setScriptBoxEditing] = useState(false);
@@ -2391,6 +2581,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
    * (Skidmarks: the open episode's own Cast). */
   const rowSpeakerChoices = sunnyBanksSpeakerList(studioState, genre);
   const sunnyBanksChunks = sunnyBanksQueueChunks(parsed);
+  const sceneLabels = sunnyBanksSceneLabelByQueueIndex(parsed);
   const queue = sunnyBanksChunks.map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
     const locationId = resolveSunnyBanksRowLocationId(chunk, locationOverrides[index], locationPickTags[index], defaultLocationId);
@@ -2423,6 +2614,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         castNames: chunk.castNames,
         castLooks: chunk.castLooks,
         sceneSpeakers: chunk.sceneSpeakers,
+        sceneKey: chunk.sceneKey,
         appearanceModifier: chunk.appearanceModifier,
       },
       castCardList
@@ -2456,8 +2648,11 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       rowCast,
       chainFromPrevious,
       chainStatus,
+      sceneLabel: sceneLabels[index],
+      sourceSnippet: sunnyBanksRowSourceSnippet(chunk),
     };
   });
+  const shotBadgeMarks = sunnyBanksShotBadgeMarks(scriptText, sunnyBanksChunks);
   type QueueRow = (typeof queue)[number];
   /** A scene's shared picture already made (a row in it kept its `plateUrl`). */
   // Only a picture made with these same people counts: change who's in
@@ -2563,6 +2758,59 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     : queue.filter(
         (row) => row.index === runningIndex || runtimeFor(row.index, row.chunk.raw).status !== "done"
       );
+  const visibleQueueWithScenes = sunnyBanksVisibleQueueSceneBreaks(visibleQueue);
+
+  const jumpToShotInScript = (shotNumber: number) => {
+    const mark = shotBadgeMarks.find((m) => m.shotNumber === shotNumber);
+    const el = scriptBoxRef.current;
+    if (!mark || !el) return;
+    setScriptOpen(true);
+    const index = scriptLineCharIndex(scriptText, mark.lineIndex);
+    const place: ScriptBoxPlace = {
+      scrollTop: el.scrollTop,
+      scrollLeft: 0,
+      selectionStart: index,
+      selectionEnd: index,
+    };
+    scriptBoxPlaceRef.current = place;
+    scrollTextareaToIndex(el, index);
+    revealScriptBoxPlace(el, readScriptBoxPlace(el));
+  };
+
+  const jumpToShotRow = (shotNumber: number) => {
+    const row = queue[shotNumber - 1];
+    if (!row) return;
+    const runtime = runtimeFor(row.index, row.chunk.raw);
+    if (!doneRowsOpen && runtime.status === "done" && row.index !== runningIndex) {
+      setDoneRowsOpen(true);
+    }
+    requestAnimationFrame(() => {
+      document.getElementById(`shot-row-${activeAct}-${shotNumber}`)?.scrollIntoView({
+        block: "nearest",
+        behavior: "smooth",
+      });
+    });
+  };
+
+  const rememberScriptBoxPlace = () => {
+    const el = scriptBoxRef.current;
+    if (el) scriptBoxPlaceRef.current = readScriptBoxPlace(el);
+  };
+
+  useLayoutEffect(() => {
+    const el = scriptBoxRef.current;
+    const place = scriptBoxPlaceRef.current;
+    if (!el || !place) return;
+    if (skipRevealRef.current) {
+      skipRevealRef.current = false;
+      return;
+    }
+    // Typing already moved the caret — putting the last snapshot back
+    // would fight every keystroke. Restore after blur / overlay remount
+    // / Full screen close (and Format, which edits while idle).
+    if (scriptBoxEditing) return;
+    revealScriptBoxPlace(el, place);
+  }, [scriptBoxEditing, scriptText]);
 
   const overlayCostUsd = pendingRows.length * plateCostUsd;
   // Per row, on the engine each row will use (estimates; LTX's is Deck's stand-in rate).
@@ -2888,10 +3136,6 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     }
     const before = runtimeFor(row.index, row.chunk.raw);
     const backend = ctx.videoBackend ?? row.backendChoice.backend;
-    // Shared picture for a scene: one made earlier this run, or kept on a row.
-    let scenePlateUrl = row.rowCast.cast.isMulti
-      ? ((row.chunk.sceneKey ? ctx.scenePlatesThisRun[row.chunk.sceneKey] : undefined) ?? savedScenePlate(row))
-      : undefined;
     // Per-row "Chain from shot N" (PR #258+): a `"ready"` chain status
     // is the deliberate override this row's own toggle asked for, and
     // wins over whatever plate it would otherwise use — see
@@ -2899,7 +3143,13 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     // `rowReadyToRender` already refuses to let Render fire while the
     // chain isn't resolved yet, so reaching here with `chainFromPrevious`
     // on means it's either `"ready"` or the row genuinely has no chain
-    // in play (`"off"`).
+    // in play (`"off"`). Chain only supplies the start frame — never the
+    // previous shot's Cast pictures or shared scene plate.
+    const chainReady = row.chainStatus.kind === "ready";
+    let scenePlateUrl =
+      !chainReady && row.rowCast.cast.isMulti
+        ? ((row.chunk.sceneKey ? ctx.scenePlatesThisRun[row.chunk.sceneKey] : undefined) ?? savedScenePlate(row))
+        : undefined;
     let rowPlateUrl = resolveRowStartPlateUrl({ chainStatus: row.chainStatus, ownPlateUrl: rowOwnPlate(row) });
     const missing = row.rowCast.cast.isMulti && scenePlateUrl ? [] : rowMissingPictures(row);
     if (lock && !cutaway && missing.length > 0) {
@@ -2924,7 +3174,11 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       // A Siray plate is its own call first (2026-10-04): it is slow, and a
       // refused or failed plate stops here, before the paid clip.
       const needsPlate =
-        lock && !cutaway && rowTakesPlate(row) && (row.rowCast.cast.isMulti ? !scenePlateUrl : !rowPlateUrl);
+        lock &&
+        !cutaway &&
+        rowTakesPlate(row) &&
+        !chainReady &&
+        (row.rowCast.cast.isMulti ? !scenePlateUrl : !rowPlateUrl);
       if (needsPlate && plateEngine === "siray") {
         setProgressText(`Line ${i + 1} of ${queue.length} — making the plate on Siray (~$${plateCostUsd.toFixed(2)})…`);
         const made = await postPlateOnly(
@@ -3118,6 +3372,12 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
    * inside that component, not here — this panel deliberately learns
    * nothing about the edit until Done applies it in one go. */
   const [fullScreenScriptOpen, setFullScreenScriptOpen] = useState(false);
+  useLayoutEffect(() => {
+    if (fullScreenScriptOpen) return;
+    const el = scriptBoxRef.current;
+    const place = scriptBoxPlaceRef.current;
+    if (el && place) revealScriptBoxPlace(el, place);
+  }, [fullScreenScriptOpen]);
 
   /** What the Format button last did, shown on the button itself for a
    * moment (2026-09-30). Live QA: on an already-tidy script Format was a
@@ -3436,7 +3696,10 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
               </button>
               <button
                 type="button"
-                onClick={() => setFullScreenScriptOpen(true)}
+                onClick={() => {
+                  rememberScriptBoxPlace();
+                  setFullScreenScriptOpen(true);
+                }}
                 disabled={running}
                 aria-label="Edit script full screen"
                 className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
@@ -3474,11 +3737,23 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                     <SunnyBanksScriptHighlightOverlay text={scriptText} overlayRef={scriptHighlightRef} autoGrowMinRows={12} />
                   )}
                   <textarea
+                    ref={scriptBoxRef}
                     value={scriptText}
                     onChange={(e) => handleScriptChange(e.target.value)}
+                    onPointerDown={() => {
+                      skipRevealRef.current = true;
+                      rememberScriptBoxPlace();
+                      if (!scriptBoxEditing) flushSync(() => setScriptBoxEditing(true));
+                    }}
+                    onSelect={rememberScriptBoxPlace}
+                    onKeyUp={rememberScriptBoxPlace}
                     onFocus={() => setScriptBoxEditing(true)}
-                    onBlur={() => setScriptBoxEditing(false)}
+                    onBlur={() => {
+                      rememberScriptBoxPlace();
+                      setScriptBoxEditing(false);
+                    }}
                     onScroll={(e) => {
+                      rememberScriptBoxPlace();
                       if (scriptHighlightRef.current) {
                         scriptHighlightRef.current.scrollTop = e.currentTarget.scrollTop;
                         scriptHighlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
@@ -3503,8 +3778,16 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                     }
                     rows={12}
                     {...SCRIPT_BOX_IOS_TEXTAREA_PROPS}
-                    className={`relative z-10 w-full resize-y bg-transparent px-3 py-2 leading-6 caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60 ${SCRIPT_BOX_TEXTAREA_CLASS} ${scriptBoxTextClass(scriptBoxEditing)}`}
+                    className={`relative z-10 w-full resize-y bg-transparent ${SCRIPT_BOX_GUTTER_CLASS} py-2 leading-6 caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60 ${SCRIPT_BOX_TEXTAREA_CLASS} ${scriptBoxTextClass(scriptBoxEditing)}`}
                   />
+                  {!scriptBoxEditing && (
+                    <ScriptShotNumberBadges
+                      marks={shotBadgeMarks}
+                      paddingTopPx={8}
+                      lineHeightPx={24}
+                      onJumpToRow={jumpToShotRow}
+                    />
+                  )}
                 </div>
                 {/* The prose hint that used to sit here (one-speaker-per-line,
                   * + / − rows, Unit 4S stays barefoot) is gone as of 2026-09-18 —
@@ -3566,7 +3849,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
 
                 {visibleQueue.length > 0 && (
                   <ol className="flex min-w-0 flex-col border-y border-white/10">
-                    {visibleQueue.map((row) => {
+                    {visibleQueueWithScenes.map(({ row, sceneHeading }) => {
                       const runtime = runtimeFor(row.index, row.chunk.raw);
                       const status = row.index === runningIndex ? "rendering" : runtime?.status ?? "idle";
                       const isStatic = status === "done";
@@ -3581,12 +3864,25 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                         planned: row.backendChoice.backend,
                       });
                       return (
-                        <li key={`${activeAct}:${row.index}:${row.chunk.sourceLineIndex}`} className="min-w-0">
+                        <li
+                          key={`${activeAct}:${row.index}:${row.chunk.sourceLineIndex}`}
+                          id={`shot-row-${activeAct}-${row.index + 1}`}
+                          className="min-w-0"
+                        >
+                          {sceneHeading ? <ScriptSceneBar label={sceneHeading} /> : null}
                           <div className="flex min-w-0 w-full items-start gap-1 overflow-x-hidden py-1.5 [touch-action:pan-y]">
-                            <span className="w-4 shrink-0 pt-1 text-center text-[10px] font-medium text-white/40">
+                            <button
+                              type="button"
+                              onClick={() => jumpToShotInScript(row.index + 1)}
+                              className="w-6 shrink-0 pt-1 text-center text-[10px] font-medium text-amber-200/80"
+                              aria-label={`Scroll script to shot ${row.index + 1}`}
+                            >
                               {row.index + 1}
-                            </span>
+                            </button>
                             <div className="min-w-0 flex-1">
+                              {row.sourceSnippet ? (
+                                <p className="truncate text-[10px] leading-snug text-white/40">{row.sourceSnippet}</p>
+                              ) : null}
                               <div className="flex min-h-[32px] min-w-0 items-center gap-1">
                                 {isStatic || cutaway ? (
                                   <span className="min-w-0 truncate text-[12px] font-semibold text-white/90">
@@ -3690,7 +3986,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                               </div>
                               {(() => {
                                 // Who's in the shot (2026-10-03): chips when it's two or more people.
-                                const chipNames = row.rowCast.cast.isMulti ? row.rowCast.cast.names : (runtime?.castNames ?? []);
+                                const chipNames = row.rowCast.cast.names;
                                 const missingNow = isStatic || cutaway ? [] : rowMissingPictures(row);
                                 return (
                                   <>
@@ -3931,7 +4227,11 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
             {fullScreenScriptOpen && (
               <SunnyBanksFullScreenScriptEditor
                 initialText={scriptText}
-                onApply={handleScriptChange}
+                initialPlace={scriptBoxPlaceRef.current}
+                onApply={(next, place) => {
+                  if (place) scriptBoxPlaceRef.current = place;
+                  handleScriptChange(next);
+                }}
                 onClose={() => setFullScreenScriptOpen(false)}
               />
             )}
