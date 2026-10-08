@@ -681,12 +681,12 @@ export function StageLabMock() {
         </div>
         <p className="mt-1 text-[10px] text-white/40">Chain copies the last frame only — not who is ticked.</p>
 
-        <details className="mt-3 rounded-md bg-white/[0.03] p-2 ring-1 ring-white/10">
+        <details key={`prompt-${shot.id}`} className="mt-3 rounded-md bg-white/[0.03] p-2 ring-1 ring-white/10">
           <summary className="min-h-[36px] cursor-pointer text-[12px] font-medium text-white/80">Prompt preview</summary>
           <pre className="mt-1 whitespace-pre-wrap text-[11px] leading-snug text-white/70">{prompt}</pre>
         </details>
 
-        <details className="mt-2 rounded-md bg-white/[0.03] p-2 ring-1 ring-white/10">
+        <details key={`god-${shot.id}`} className="mt-2 rounded-md bg-white/[0.03] p-2 ring-1 ring-white/10">
           <summary className="min-h-[36px] cursor-pointer text-[12px] font-medium text-white/80">
             God Script export (preview only)
           </summary>
