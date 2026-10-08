@@ -28,6 +28,11 @@ import {
   replaceSunnyBanksSourceLine,
   removeSunnyBanksSourceLine,
   rewriteSunnyBanksSpeakerLine,
+  rewriteSunnyBanksRowDurationTag,
+  parseGodScriptDurationToken,
+  resolvedRowDurationSec,
+  rowPickerDurationSec,
+  sunnyBanksBeatRequestBody,
   shiftKeyedIndexRecord,
   unshiftKeyedIndexRecord,
   preserveRenderedRuntimes,
@@ -46,6 +51,7 @@ import {
   formatSunnyBanksGodScript,
 } from "./SkidmarksSunnyBanksPanel";
 import { SUNNY_BANKS_CAST, getSunnyBanksLocation, buildSunnyBanksSpeakingPrompt } from "@/lib/sunnyBanks";
+import { estimateRowVideoCostUsd } from "@/lib/clipGeneration";
 
 describe("decodeSunnyBanksPastedScript", () => {
   it("turns a URL-encoded paste into real spaces and newlines", () => {
@@ -1315,5 +1321,89 @@ describe("idle scene dividers, shot-list scene bars, and #N badges (display only
       { shotNumber: 1, lineIndex: 2 },
       { shotNumber: 2, lineIndex: 5 },
     ]);
+  });
+});
+
+describe("[Duration: Ns] per God Script row (2026-10-08)", () => {
+  it("reads [Duration: 10s] on its own line in that row's block, that row only", () => {
+    const chunks = sunnyBanksQueueChunks(
+      parseSunnyBanksScriptBlock(
+        [
+          "[Location: office_storefront]",
+          "[Action: counts a stack of bills]",
+          "[Duration: 10s]",
+          "Shazza:",
+          "Dazza:",
+        ].join("\n")
+      )
+    );
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toMatchObject({ characterName: "Shazza", kind: "hold", durationSec: 10, action: "counts a stack of bills" });
+    expect(chunks[1]).toMatchObject({ characterName: "Dazza", kind: "hold" });
+    expect(chunks[1].durationSec).toBeUndefined();
+  });
+
+  it("does not mint a ghost Idle row from a tag-only Duration line", () => {
+    const chunks = parseSunnyBanksScriptBlock("[Duration: 8s]\nShazza: You right?");
+    expect(sunnyBanksQueueChunks(chunks)).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({ characterName: "Shazza", line: "You right?", durationSec: 8 });
+  });
+
+  it("parses 10s / 10 / 10 seconds, and the picker rewrite round-trips", () => {
+    expect(parseGodScriptDurationToken("10s")).toBe(10);
+    expect(parseGodScriptDurationToken("10")).toBe(10);
+    expect(parseGodScriptDurationToken("10 seconds")).toBe(10);
+    const script = "[Location: office_storefront]\n[Action: waits]\nShazza:";
+    const hold = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(script))[0];
+    const next = rewriteSunnyBanksRowDurationTag(script, hold.sourceLineIndex, 12);
+    expect(next).toContain("[Duration: 12s]");
+    const after = sunnyBanksQueueChunks(parseSunnyBanksScriptBlock(next));
+    expect(after[0].durationSec).toBe(12);
+    expect(after[0].action).toBe("waits");
+    expect(rewriteSunnyBanksRowDurationTag(next, after[0].sourceLineIndex, 8)).toContain("[Duration: 8s]");
+    expect(rewriteSunnyBanksRowDurationTag(next, after[0].sourceLineIndex, 8).match(/\[Duration:/g)).toHaveLength(1);
+  });
+
+  it("clamps Grok to 5–15s; a hold without a tag is 5s; a speak without a tag sends no duration", () => {
+    expect(rowPickerDurationSec({}, "grok")).toBe(5);
+    expect(resolvedRowDurationSec({ kind: "hold" }, "grok")).toBe(5);
+    expect(resolvedRowDurationSec({ kind: "hold", durationSec: 10 }, "grok")).toBe(10);
+    expect(resolvedRowDurationSec({ kind: "hold", durationSec: 3 }, "grok")).toBe(5);
+    expect(resolvedRowDurationSec({ kind: "hold", durationSec: 20 }, "grok")).toBe(15);
+    expect(resolvedRowDurationSec({ kind: "speak" }, "ltx")).toBeUndefined();
+    expect(resolvedRowDurationSec({ kind: "speak", durationSec: 10 }, "ltx")).toBe(10);
+  });
+
+  it("Render this body sends the clamped length; cost follows estimateRowVideoCostUsd", () => {
+    const hold = sunnyBanksBeatRequestBody({
+      kind: "hold",
+      characterName: "Shazza",
+      line: "",
+      locationId: "office_storefront",
+      locationImage: "x",
+      startImageDataUrl: "data:image/png;base64,xx",
+      videoBackend: "grok",
+      durationSec: 10,
+    });
+    expect(hold.durationSec).toBe(10);
+    expect(hold.kind).toBe("hold");
+    const speak = sunnyBanksBeatRequestBody({
+      kind: "speak",
+      characterName: "Shazza",
+      line: "You right?",
+      locationId: "office_storefront",
+      locationImage: "x",
+      startImageDataUrl: "data:image/png;base64,xx",
+    });
+    expect(speak.durationSec).toBeUndefined();
+    expect(estimateRowVideoCostUsd("grok", 10)).toBeGreaterThan(estimateRowVideoCostUsd("grok", 5));
+  });
+
+  it("colours [Duration: 10s] like Action, and Format puts it on its own line", () => {
+    const segments = buildSunnyBanksHighlightSegments("[Duration: 10s]");
+    expect(segments).toEqual([{ kind: "action", text: "[Duration: 10s]" }]);
+    expect(formatSunnyBanksGodScript("[Location: office_storefront][Duration: 10s]Shazza:")).toBe(
+      "[Location: office_storefront]\n[Duration: 10s]\nShazza:"
+    );
   });
 });

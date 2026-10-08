@@ -2463,7 +2463,17 @@ now (see "Explicitly out of scope" below).
     `House:` after chaining from Arthur+Pip keeps House only (that row's
     own speaker + names in its own `[Action:]`/`[Cast:]`); the previous
     last frame is the start image, never their pictures, and that row's
-    own `[Location:]` still beats a stale dropdown pick. **Full-screen God Script
+    own `[Location:]` still beats a stale dropdown pick. **Per-row length
+    (2026-10-08)** — silent Grok rows default to ~5s; optional
+    `[Duration: 10s]` on its own line in that row's block (with
+    `[Location:]`/`[Action:]`) sets that row only, clamped to the engine
+    window in `lib/clipGeneration.ts` (Grok 5–15s). A 5/8/10/12/15s
+    picker on the row writes/reads the same tag. **Render this** cost
+    uses `estimateRowVideoCostUsd` at that length. Talking LTX rows keep
+    the spoken audio unless the tag is longer, then the clip is padded.
+    Same God Script panel for Sunnybank, Skidmarks and Shorts (Music
+    video Script Sequence still sizes clips from Part start–end times).
+    **Full-screen God Script
     editor (2026-09-18, Stuart's ask: "open the God Script box to full
     screen and edit everything in there without it updating before we
     update")** — `⤢ Full screen` beside `⇥ Format` opens

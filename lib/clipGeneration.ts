@@ -283,7 +283,7 @@ export interface PlateDurationBounds {
   max: number;
 }
 
-const GROK_DURATION_BOUNDS: PlateDurationBounds = { min: MIN_CLIP_DURATION_SEC, max: MAX_CLIP_DURATION_SEC };
+export const GROK_DURATION_BOUNDS: PlateDurationBounds = { min: MIN_CLIP_DURATION_SEC, max: MAX_CLIP_DURATION_SEC };
 /** Passed to `computePlateDurationSec`/`computePlateTimeRange` for a
  * Vocal clip — see this module's doc comment's "Vocal -> Comfy Cloud
  * LTX" note for why this range differs from Grok's. */
@@ -295,6 +295,26 @@ export const LTX_DURATION_BOUNDS: PlateDurationBounds = {
  * skidmarks `sirayI2v.ts`). Used when the clip's Instrumental switch is
  * on Siray so a 17s music-video part is not clamped to Grok/H3's 15s. */
 export const SIRAY_DURATION_BOUNDS: PlateDurationBounds = { min: 2, max: 30 };
+
+/** Length picker on a God Script row — sits inside Grok/H3/LTX's 5–15s
+ * window. A typed `[Duration: 20s]` on Siray can still clamp to 20
+ * (Siray's own 2–30s range); the picker adds that extra value. */
+export const ROW_DURATION_PICKER_SEC = [5, 8, 10, 12, 15] as const;
+
+/** Grok/H3 use `[5, 15]`; LTX talking/hold the same; Siray `[2, 30]`. */
+export function rowVideoDurationBounds(backend: RowVideoBackend): PlateDurationBounds {
+  if (backend === "siray") return SIRAY_DURATION_BOUNDS;
+  if (backend === "ltx") return LTX_DURATION_BOUNDS;
+  return GROK_DURATION_BOUNDS;
+}
+
+/** Whole seconds inside that backend's documented window. Junk / missing
+ * → the floor (5s on Grok/H3/LTX, 2s on Siray). */
+export function clampRowVideoDurationSec(backend: RowVideoBackend, durationSec: number | undefined | null): number {
+  const bounds = rowVideoDurationBounds(backend);
+  if (durationSec == null || !Number.isFinite(durationSec)) return bounds.min;
+  return Math.min(bounds.max, Math.max(bounds.min, Math.round(durationSec)));
+}
 
 export function computeSirayPlateDurationSec(
   segmentLengthSec: number,

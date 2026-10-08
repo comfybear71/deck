@@ -18,6 +18,10 @@ import {
   MIN_CLIP_DURATION_SEC,
   MIN_LTX_CLIP_DURATION_SEC,
   MAX_MOTION_PROMPT_LENGTH,
+  clampRowVideoDurationSec,
+  estimateRowVideoCostUsd,
+  GROK_DURATION_BOUNDS,
+  ROW_DURATION_PICKER_SEC,
 } from "./clipGeneration";
 import type { SkidmarksMember } from "./skidmarks";
 
@@ -69,6 +73,27 @@ describe("computeLtxPlateDurationSec", () => {
   it("still splits evenly across multiple plates the same way as the Grok range", () => {
     expect(computeLtxPlateDurationSec(40, 3, 0)).toBe(13);
     expect(computeLtxPlateDurationSec(40, 3, 2)).toBe(14);
+  });
+});
+
+describe("clampRowVideoDurationSec (God Script row length)", () => {
+  it("clamps Grok into 5–15s, matching GROK_DURATION_BOUNDS", () => {
+    expect(GROK_DURATION_BOUNDS).toEqual({ min: MIN_CLIP_DURATION_SEC, max: MAX_CLIP_DURATION_SEC });
+    expect(clampRowVideoDurationSec("grok", 3)).toBe(5);
+    expect(clampRowVideoDurationSec("grok", 10)).toBe(10);
+    expect(clampRowVideoDurationSec("grok", 20)).toBe(15);
+    expect(clampRowVideoDurationSec("grok", undefined)).toBe(5);
+    expect(clampRowVideoDurationSec("h3", 12)).toBe(12);
+    expect(clampRowVideoDurationSec("siray", 20)).toBe(20);
+    expect(clampRowVideoDurationSec("siray", 40)).toBe(30);
+  });
+
+  it("picker values sit inside Grok's window, and cost scales with length", () => {
+    expect([...ROW_DURATION_PICKER_SEC]).toEqual([5, 8, 10, 12, 15]);
+    for (const sec of ROW_DURATION_PICKER_SEC) {
+      expect(clampRowVideoDurationSec("grok", sec)).toBe(sec);
+    }
+    expect(estimateRowVideoCostUsd("grok", 10)).toBeCloseTo(estimateRowVideoCostUsd("grok", 5) * 2 - 0.01, 5);
   });
 });
 

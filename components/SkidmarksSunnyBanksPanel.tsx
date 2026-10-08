@@ -29,7 +29,7 @@ import { TrashIcon } from "@/components/SkidmarksRenderedClipsShelf";
 import { EpisodeExtrasRow } from "@/components/EpisodeExtrasRow";
 import { episodeExtrasZipEntries, type EpisodeExtra } from "@/lib/episodeExtras";
 import { ShotGrid, type ShotTileView } from "@/components/ShotGrid";
-import { estimateRowVideoCostUsd } from "@/lib/clipGeneration";
+import { clampRowVideoDurationSec, estimateRowVideoCostUsd, ROW_DURATION_PICKER_SEC } from "@/lib/clipGeneration";
 import {
   extractVideoBackendOverride,
   ignoredVideoBackendWarning,
@@ -360,6 +360,10 @@ export interface SunnyBanksScriptChunk {
    * above it (2026-09-30): overrides which engine renders the row. Never
    * part of `raw`, `line` or TTS. */
   videoBackend?: RowVideoBackend;
+  /** Optional `[Duration: 10s]` on this row's block (2026-10-08). Raw
+   * seconds as typed, before the backend clamp. Missing = default 5s
+   * hold / audio-driven speak. */
+  durationSec?: number;
   /** `[Cast: A, B]` above this row or its scene (2026-10-03): exactly
    * who is in the shot. Names as typed; matched to Cast cards later. */
   castNames?: string[];
@@ -420,6 +424,11 @@ export interface SunnyBanksBeatArgs {
    * `plateEngine`, a Siray `sirayTaskId`. Empty for a plain one-click
    * render, so its request is exactly what it was before. */
   ownPlate?: Record<string, unknown>;
+  /** Optional `[Duration: Ns]` for this row, already clamped to the
+   * engine's window. Hold always sends one (default 5s). Speak sends
+   * only when the tag is present — audio length wins unless this is
+   * longer. */
+  durationSec?: number;
 }
 
 /**
@@ -432,6 +441,8 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
   const mediaTarget = args.mediaTarget ? { mediaTarget: args.mediaTarget } : {};
   const speaker = args.speaker ?? {};
   const genre = args.genre && args.genre !== "sunnybank" ? { genre: args.genre } : {};
+  const durationSec =
+    typeof args.durationSec === "number" && Number.isFinite(args.durationSec) ? { durationSec: args.durationSec } : {};
   // `action` and `appearanceModifier` travel as two separate fields —
   // the route itself merges them into the motion prompt (2026-09-18).
   return (
@@ -451,6 +462,7 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
           ...(args.multiCast ?? {}),
           ...genre,
           ...(args.ownPlate ?? {}),
+          ...durationSec,
         }
       : {
           characterName: args.characterName,
@@ -466,6 +478,7 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
           ...(args.multiCast ?? {}),
           ...genre,
           ...(args.ownPlate ?? {}),
+          ...durationSec,
         }
   );
 }
@@ -524,6 +537,8 @@ export function sunnyBanksRowBeatArgs(args: {
   if (args.rowPlateUrl && !args.plateOnly) ownPlate.plateUrl = args.rowPlateUrl;
   if (args.plateEngine) ownPlate.plateEngine = args.plateEngine;
   if (args.sirayTaskId) ownPlate.sirayTaskId = args.sirayTaskId;
+  const videoBackend = chunk.kind === "hold" ? args.videoBackend : ("ltx" as const);
+  const durationSec = resolvedRowDurationSec(chunk, videoBackend);
   return {
     kind: chunk.kind,
     characterName: args.characterName,
@@ -536,6 +551,7 @@ export function sunnyBanksRowBeatArgs(args: {
     appearanceModifier: chunk.appearanceModifier,
     speaker: args.speaker,
     videoBackend: chunk.kind === "hold" ? args.videoBackend : undefined,
+    ...(durationSec != null ? { durationSec } : {}),
     multiCast: sunnyBanksMultiCastRequest({
       people: rowCast.people ?? [],
       sceneAction: chunk.action ? undefined : chunk.sceneAction,
@@ -908,6 +924,21 @@ export function buildSunnyBanksLocationCutawayPrompt(action: string | undefined)
   return `Use the provided start image as the first frame. ${motion} No dialogue.`;
 }
 
+/** First number in a `[Duration: …]` token — `10s`, `10`, `10 seconds`. */
+export function parseGodScriptDurationToken(token: string): number | undefined {
+  const match = token.trim().match(/(\d+(?:\.\d+)?)/);
+  if (!match) return undefined;
+  const n = Number(match[1]);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n;
+}
+
+export function godScriptDurationTag(durationSec: number): string {
+  return `[Duration: ${Math.round(durationSec)}s]`;
+}
+
+const DURATION_TAG_RE = /\[Duration:\s*([^\]]*)\]/gi;
+
 function extractGodScriptTags(raw: string): {
   rest: string;
   locationId?: SunnyBanksLocationId;
@@ -917,11 +948,13 @@ function extractGodScriptTags(raw: string): {
   /** `[Cast: A, B]` names (2026-10-03). */
   castNames: string[];
   videoBackend?: RowVideoBackend;
+  durationSec?: number;
 } {
   let locationId: SunnyBanksLocationId | undefined;
   const actions: string[] = [];
   const looks: Array<{ name: string | null; look: string }> = [];
   const castNames: string[] = [];
+  let durationSec: number | undefined;
   const backend = extractVideoBackendOverride(raw);
   const rest = backend.rest
     .replace(/\[Location:\s*([^\]]*)\]/gi, (_, token: string) => {
@@ -943,11 +976,75 @@ function extractGodScriptTags(raw: string): {
       castNames.push(...parseCastTagNames(inner));
       return " ";
     })
+    .replace(DURATION_TAG_RE, (_, token: string) => {
+      const parsed = parseGodScriptDurationToken(token);
+      if (parsed != null) durationSec = parsed;
+      return " ";
+    })
     .replace(/\s+/g, " ")
     .trim();
-  return backend.override
-    ? { rest, locationId, actions, looks, castNames, videoBackend: backend.override }
-    : { rest, locationId, actions, looks, castNames };
+  return {
+    rest,
+    locationId,
+    actions,
+    looks,
+    castNames,
+    ...(backend.override ? { videoBackend: backend.override } : {}),
+    ...(durationSec != null ? { durationSec } : {}),
+  };
+}
+
+/** Hold: tag or the 5s default, clamped. Speak: clamped tag only — no tag
+ * means the route keeps the audio length. */
+export function resolvedRowDurationSec(
+  chunk: Pick<SunnyBanksScriptChunk, "kind" | "durationSec">,
+  backend: RowVideoBackend
+): number | undefined {
+  if (chunk.kind === "hold") {
+    return clampRowVideoDurationSec(backend, chunk.durationSec ?? SUNNY_BANKS_HOLD_DURATION_SEC);
+  }
+  if (chunk.durationSec == null) return undefined;
+  return clampRowVideoDurationSec("ltx", chunk.durationSec);
+}
+
+/** What the row length picker shows: the tag, else 5s, clamped. */
+export function rowPickerDurationSec(
+  chunk: Pick<SunnyBanksScriptChunk, "durationSec">,
+  backend: RowVideoBackend
+): number {
+  return clampRowVideoDurationSec(backend, chunk.durationSec ?? SUNNY_BANKS_HOLD_DURATION_SEC);
+}
+
+/**
+ * Writes `[Duration: 10s]` into this speaker's own block (the tag-only
+ * lines immediately above it, or the speaker line itself). That row
+ * only — the next speaker is untouched.
+ */
+export function rewriteSunnyBanksRowDurationTag(
+  script: string,
+  speakerSourceLineIndex: number,
+  durationSec: number
+): string {
+  const lines = script.split(/\r?\n/);
+  if (speakerSourceLineIndex < 0 || speakerSourceLineIndex >= lines.length) return script;
+  const tag = godScriptDurationTag(durationSec);
+  const inlineRe = /\[Duration:\s*[^\]]*\]/gi;
+  if (inlineRe.test(lines[speakerSourceLineIndex])) {
+    lines[speakerSourceLineIndex] = lines[speakerSourceLineIndex].replace(/\[Duration:\s*[^\]]*\]/gi, tag);
+    return lines.join("\n");
+  }
+  for (let i = speakerSourceLineIndex - 1; i >= 0; i -= 1) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) break;
+    const tagged = extractGodScriptTags(trimmed);
+    if (tagged.rest) break;
+    if (tagged.durationSec != null) {
+      lines[i] = tag;
+      return lines.join("\n");
+    }
+  }
+  lines.splice(speakerSourceLineIndex, 0, tag);
+  return lines.join("\n");
 }
 
 /**
@@ -978,7 +1075,7 @@ function splitLooksForRow(
 /** Highlight category for one bracket tag in the raw God Script text —
  * display-only. This never changes parsing: `extractGodScriptTags`
  * above is still the only thing that decides what a tag *does*. A
- * bracket that isn't one of these three literal shapes (e.g. a plain
+ * bracket that isn't one of these parsed shapes (e.g. a plain
  * parenthetical, or `[silent]`/`[silence]` used as if it silenced a
  * line) is intentionally left uncolored ("plain") — coloring it here
  * would visually imply the parser treats it specially, which it
@@ -994,12 +1091,14 @@ export type SunnyBanksHighlightSegment =
    * for `formatSunnyBanksGodScript`. */
   | { kind: "speaker"; text: string };
 
-/** Same three literal shapes `extractGodScriptTags` recognizes, plus a
- * literal `[silence]` grouped into the same "action" color per Stuart's
- * explicit ask — `[silence]` is not a real parsed tag (see doc comment
- * above), only a display-only alias colored the same as `[Action: ]`. */
+/** Same picture-tag shapes `extractGodScriptTags` recognizes, plus
+ * `[Duration: …]` and a literal `[silence]` grouped into the "action"
+ * color per Stuart's explicit ask — `[silence]` is not a real parsed
+ * tag (see doc comment above), only a display-only alias colored the
+ * same as `[Action: ]`. */
 const GOD_SCRIPT_HIGHLIGHT_TAG_RE = new RegExp(
-  String.raw`\[Location:[^\]]*\]|\[Character\b[^\]]*\]|\[Cast:[^\]]*\]|\[Action:[^\]]*\]|\[silence\]|` + VIDEO_BACKEND_OVERRIDE_TAG_SOURCE,
+  String.raw`\[Location:[^\]]*\]|\[Character\b[^\]]*\]|\[Cast:[^\]]*\]|\[Action:[^\]]*\]|\[Duration:[^\]]*\]|\[silence\]|` +
+    VIDEO_BACKEND_OVERRIDE_TAG_SOURCE,
   "gi"
 );
 const VIDEO_BACKEND_TAG_EXACT_RE = new RegExp(`^${VIDEO_BACKEND_OVERRIDE_TAG_SOURCE}$`, "i");
@@ -1490,6 +1589,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
   let pendingLooks: Array<{ name: string | null; look: string }> = [];
   let pendingCast: string[] = [];
   let pendingBackend: RowVideoBackend | undefined;
+  let pendingDuration: number | undefined;
   // Scenes (2026-10-03): a tag block, then the rows under it until the
   // next tag line or scene header. Only a block with [Action:] or
   // [Cast:] and two or more talking rows becomes a shared-picture scene.
@@ -1543,6 +1643,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     if (tagged.looks.length > 0) pendingLooks = [...pendingLooks, ...tagged.looks];
     if (tagged.castNames.length > 0) pendingCast = [...pendingCast, ...tagged.castNames];
     if (tagged.videoBackend) pendingBackend = tagged.videoBackend;
+    if (tagged.durationSec != null) pendingDuration = tagged.durationSec;
     if (!tagged.rest) continue;
     const ghostName = parseSunnyBanksGhostTargetName(tagged.rest);
     if (ghostName) {
@@ -1566,6 +1667,8 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       if (taggedLocation) chunk.locationTag = taggedLocation;
       if (pendingBackend) chunk.videoBackend = pendingBackend;
       pendingBackend = undefined;
+      if (pendingDuration != null) chunk.durationSec = pendingDuration;
+      pendingDuration = undefined;
       chunks.push(chunk);
       continue;
     }
@@ -1603,6 +1706,8 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     if (taggedLocation) chunk.locationTag = taggedLocation;
     if (pendingBackend) chunk.videoBackend = pendingBackend;
     pendingBackend = undefined;
+    if (pendingDuration != null) chunk.durationSec = pendingDuration;
+    pendingDuration = undefined;
     chunks.push(chunk);
     block.rows.push(chunk);
     // Inline tags on the speaker's own line end its block there.
@@ -2635,6 +2740,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       extracting: chainExtractingFor[extractKey] === true,
       extractionError: chainExtractError[extractKey],
     });
+    const renderDurationSec = rowPickerDurationSec(chunk, backendChoice.backend);
     return {
       chunk,
       index,
@@ -2645,6 +2751,8 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       line,
       kind: chunk.kind,
       backendChoice,
+      renderDurationSec,
+      renderCostUsd: estimateRowVideoCostUsd(backendChoice.backend, renderDurationSec),
       rowCast,
       chainFromPrevious,
       chainStatus,
@@ -2816,7 +2924,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
   // Per row, on the engine each row will use (estimates; LTX's is Deck's stand-in rate).
   const holdVideoCostUsd = pendingRows
     .filter((row) => row.kind === "hold")
-    .reduce((sum, row) => sum + estimateRowVideoCostUsd(row.backendChoice.backend, SUNNY_BANKS_HOLD_DURATION_SEC), 0);
+    .reduce((sum, row) => sum + row.renderCostUsd, 0);
   const speakCount = pendingRows.filter((row) => row.kind === "speak").length;
 
   const rowReadyToRender = (row: QueueRow): boolean => {
@@ -3165,9 +3273,9 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     const engine = videoBackendName(backend);
     setProgressText(
       cutaway
-        ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} on ${engine} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+        ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} on ${engine} (~${row.renderDurationSec}s)…`
         : row.kind === "hold"
-          ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} on ${engine} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+          ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} on ${engine} (~${row.renderDurationSec}s)…`
           : `Line ${i + 1} of ${queue.length} — rendering ${lock!.name}'s line…`
     );
     try {
@@ -3395,6 +3503,12 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       setScriptOpen(true);
     }
     formatFeedback.show(changed);
+  };
+
+  const handleRowDurationChange = (row: QueueRow, nextSec: number) => {
+    if (running) return;
+    const next = rewriteSunnyBanksRowDurationTag(scriptText, row.chunk.sourceLineIndex, nextSec);
+    if (next !== scriptText) handleScriptChange(next);
   };
 
   const handleScriptChange = (value: string) => {
@@ -3809,7 +3923,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-green-300" />
-                      <span className="text-green-300/90">[Action: ] / [silence]</span>
+                      <span className="text-green-300/90">[Action: ] / [Duration: ] / [silence]</span>
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
@@ -4057,20 +4171,42 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                                 </button>
                                               )}
                                               {!isStatic && (status === "idle" || status === "failed" || status === "rendering") && (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => void handleRenderThis(row)}
-                                                  disabled={running || platingIndex !== null || !rowReadyToRender(row)}
-                                                  aria-label={`Render this line ${row.index + 1}`}
-                                                  title={
-                                                    row.chainFromPrevious
-                                                      ? `Animates this line only, starting from shot ${row.index}'s last frame`
-                                                      : "Animates this line only — Render N lines still walks the rest of the act"
-                                                  }
-                                                  className="min-h-[36px] self-start rounded-md border border-amber-300/40 bg-amber-300/15 px-2 text-[10px] font-semibold text-amber-100 disabled:opacity-50"
-                                                >
-                                                  {running && runningIndex === row.index ? "Rendering…" : "Render this"}
-                                                </button>
+                                                <>
+                                                  <select
+                                                    value={String(row.renderDurationSec)}
+                                                    onChange={(e) => handleRowDurationChange(row, Number(e.target.value))}
+                                                    disabled={running}
+                                                    aria-label={`Length for line ${row.index + 1}`}
+                                                    title="This row's clip length. Writes [Duration: Ns] in the script."
+                                                    className="h-9 min-h-[36px] shrink-0 rounded-md border border-white/15 bg-white/[0.03] px-1 text-[10px] font-semibold text-white/80 disabled:opacity-50"
+                                                  >
+                                                    {Array.from(
+                                                      new Set<number>([...ROW_DURATION_PICKER_SEC, row.renderDurationSec])
+                                                    )
+                                                      .sort((a, b) => a - b)
+                                                      .map((sec) => (
+                                                        <option key={sec} value={sec} className="bg-zinc-900">
+                                                          {sec}s
+                                                        </option>
+                                                      ))}
+                                                  </select>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => void handleRenderThis(row)}
+                                                    disabled={running || platingIndex !== null || !rowReadyToRender(row)}
+                                                    aria-label={`Render this line ${row.index + 1}`}
+                                                    title={
+                                                      row.chainFromPrevious
+                                                        ? `Animates this line only, starting from shot ${row.index}'s last frame (~$${row.renderCostUsd.toFixed(2)})`
+                                                        : `Animates this line only — Render N lines still walks the rest of the act (~$${row.renderCostUsd.toFixed(2)})`
+                                                    }
+                                                    className="min-h-[36px] self-start rounded-md border border-amber-300/40 bg-amber-300/15 px-2 text-[10px] font-semibold text-amber-100 disabled:opacity-50"
+                                                  >
+                                                    {running && runningIndex === row.index
+                                                      ? "Rendering…"
+                                                      : `Render this (~$${row.renderCostUsd.toFixed(2)})`}
+                                                  </button>
+                                                </>
                                               )}
                                               {!isStatic && row.index > 0 && (
                                                 <button
@@ -4207,7 +4343,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                   aria-label={`Try line ${row.index + 1} with Grok`}
                                   className="min-h-[36px] rounded-md border border-red-300/30 px-2.5 text-[11px] font-semibold text-red-200 disabled:opacity-50"
                                 >
-                                  Try with Grok (~${estimateRowVideoCostUsd("grok", SUNNY_BANKS_HOLD_DURATION_SEC).toFixed(2)})
+                                  Try with Grok (~${estimateRowVideoCostUsd("grok", row.renderDurationSec).toFixed(2)})
                                 </button>
                               </div>
                             )}

@@ -40,7 +40,9 @@ Everything in this file is about Skidmarks unless said otherwise.
   speak/hold beat at a time (ElevenLabs voice clone → Comfy
   Cloud LTX 2.3 IA2V, `/api/skidmarks/sunnybank/generate-speak-beat`,
   proven in PR #95; **Silent Hold** is a line with no dialogue, same
-  route, `kind: "hold"`, 5s silent MP3 +
+  route, `kind: "hold"`, silent MP3 of 5s unless that row has
+  `[Duration: 10s]` (picker 5/8/10/12/15s, clamped in
+  `lib/clipGeneration.ts`, Grok 5–15s) +
   `buildSunnyBanksHoldPrompt`). Still not the full episode wizard (no
   Neon episode/beat rows, no `lib/scriptSequenceRunner`) — optional
   **Chain last→first** (default off, `lib/chainLastFrame.ts`) can fill
