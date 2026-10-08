@@ -1,6 +1,6 @@
-# Stage — director board (plan only)
+# Stage — director board
 
-This is a plan and a clickable mock. **Nothing in Sunny Banks, Skidmarks, Music video, or Shorts changes.** Stage does not live inside those screens. Merging it in is a later decision, and only after Stuart has used the sandbox and said yes.
+Phase 1 of the `/stage-lab` sandbox is built. **Nothing in Sunny Banks, Skidmarks, Music video, or Shorts changes.** Stage does not live inside those screens. Merging it in is a later decision, and only after Stuart has used the sandbox and said yes.
 
 Related work already in flight (do not duplicate): [PR #261](https://github.com/comfybear71/deck/pull/261) (script-box place, scene bars, `#N` badges, Chain no longer copies Cast, `[Duration: Ns]` + length picker). Stage builds on that shape later. It does not patch those files now.
 
@@ -19,7 +19,7 @@ On the lab you:
 3. Give each ticked actor their **action**. Give the speaker their **line** (blank = silent).
 4. Pick **camera move** and **framing**, and **how long**.
 5. Choose **start**: a fresh plate from the real Cast + Location pictures, or **chain** from a previous shot’s last frame (chain only copies the picture, never who is in the shot).
-6. **See a still first.** Approve it. Then **Render** that one shot, with the dollar amount on the button. Never a batch, never a surprise.
+6. **See a still first.** Approve it. **Render** that one shot is Phase 2 on this page (button shows the dollar amount, stays disabled). Never a batch, never a surprise.
 
 The long God Script box stays the way episodes work today. Stage can **show** the same shot as God Script text (export / import later). Old episodes keep opening as they do now.
 
@@ -35,7 +35,7 @@ The long God Script box stays the way episodes work today. Stage can **show** th
 | Person / Animal / Object | `lib/castKind.ts` (Pip = Animal, House = Object) | Object/Animal never go down the LTX “human face talks” path. |
 | Locations + stills | `LocationsRow`, `lib/sunnyBanksLocations.ts`, `lib/deckLocations.ts` | Read-only set picker. Honour “People already in this picture”. |
 | Who is in a shot | `lib/shotCast.ts` `resolveShotCast` | **Do not use the “names in `[Action:]` auto-tick” path on Stage.** Stage’s ticks *are* the cast list (same as an explicit `[Cast: A, B]`). |
-| Plate still (~$0.02 Grok / ~$0.04 Siray) | `generate-still`, `lib/sunnyBanksComposite.ts`, `lib/autoPlate.ts` `ESTIMATED_STILL_COST_USD` | “Make plate” stays a cheap still. Lab Phase 1 may fake this; a later lab slice can call the real still route **from `/stage-lab` only**. |
+| Plate still (~$0.02 Grok / ~$0.04 Siray) | `generate-still`, `lib/sunnyBanksComposite.ts`, `lib/autoPlate.ts` `ESTIMATED_STILL_COST_USD` | Phase 1 Make plate on `/stage-lab` calls the real Grok still route. |
 | Chain last frame → first | `lib/chainLastFrame.ts`, `lib/extractLastFrame.ts`, per-row **Chain from shot N** (PR #258 / #261) | Same rule: chain is a start frame, not a Cast copy. |
 | Video engines | `lib/videoBackendRouting.ts` | Talking **person** → LTX. Silent → Grok (or H3 / Siray where that show already offers them). Object “voice” (House) → **not LTX**. |
 | Length + cost | `lib/clipGeneration.ts` (`MIN/MAX_CLIP_DURATION_SEC` 5–15, `estimateRowVideoCostUsd`). PR #261 `[Duration: Ns]` | Same picker and same numbers on the Render button. |
@@ -199,23 +199,23 @@ Music video remains the awkward sibling (song parts, not God Script rows). The l
 
 ## 6. Phased build
 
-### Phase 1 — smallest useful slice (this is the next *build*, after this plan/mock)
+### Phase 1 — built (this PR)
 
 **A standalone `/stage-lab` page.** Not linked from the graph, the four genre sheets, or any episode row.
 
-- Sample (and later: read-only Cast + Locations from the session **without writing**).
-- Own storage: a dedicated module, e.g. `lib/stageLabStore.ts`, key along the lines of `the-tab:stage-lab-v1`. **Not** `lib/skidmarks.ts` `persist()`, **not** the Neon `skidmarks_sessions` episode JSON, **not** `deck_items`, **not** `SKIDMARKS_PROTECTED_STATE_KEYS`. Refreshing `/stage-lab` may keep lab shots; opening Shorts cannot see them; saving an episode cannot include them.
-- One scene strip + one open Shot card (the mock’s layout).
-- Explicit actor ticks, action fields, line, camera, framing, length, plate | chain, prompt preview.
-- **Make plate / Approve / Render** in the UI. Phase 1a can still be fake stills (no paid call) so Stuart can judge the board. Phase 1b, only after he asks, may call existing still/video routes **from this page**, still never from a genre screen, still one tap, still cost on the button, still no auto-fire.
+- Read-only Cast + Locations from GET session + GET `deck_items` (**without writing**).
+- Own storage: `lib/stageLabStore.ts`, key `the-tab:stage-lab-v1`. **Not** `lib/skidmarks.ts` `persist()`, **not** the Neon `skidmarks_sessions` episode JSON, **not** `deck_items`, **not** `SKIDMARKS_PROTECTED_STATE_KEYS`.
+- Scene strip + shot cards: set, ticked actors + per-actor action, speaker/line, camera, framing, length 5–15s, fresh plate or chain, add/reorder/delete.
+- **Make plate** is a real Grok still (~$0.02) via existing `generatePlateStill`. Prompt preview lists the exact prompt and reference images. Approve is per card.
+- **Chain** pulls the previous shot’s rendered last frame only (no Cast copy). Blocked on a location change. If there is no previous render, the button explains that.
+- **Render** is **Phase 2**: disabled, labelled, with the dollar estimate on the button. One-shot video through Grok/LTX is not wired in this PR so a genre render route is not forked. Never batch, never auto-render.
 - Isolation tests: genre panels do not reference `/stage-lab`; the lab does not call episode save/delete.
 
 ### Phase 2 — only after Stuart uses the lab and says the board is right
 
-- Real stills from Cast + Location pictures (read-only).
-- Real one-shot render from the lab (same routes, same keys, same cost rules).
+- Real one-shot render from the lab (same backends, same keys, same cost rules, Approve + confirm).
 - Object/Animal LTX skip live-tested on House.
-- Talking-person Hold + MCU lock live-tested.
+- Talking-person Hold + MCU lock live-tested on a paid clip.
 - God Script export of the lab scene (copy/paste), not a silent overwrite of an episode.
 
 ### Phase 3 — merge into genres, **only with an explicit OK**
@@ -251,25 +251,26 @@ Do not skip to Phase 3 because the mock looks ready.
 - Missing Cast picture / missing Location still / unapproved still: refuse before billing.
 - Lab storage cannot clobber an episode. A bug in the lab must not be able to `persist()` the session.
 - Paid routes still send `x-deck-build` / `stale_page` when the lab is allowed to bill (Phase 2).
-- This plan/mock PR fires **no** paid renders.
+- Phase 1 Make plate is a cheap Grok still (~$0.02). Video Render is disabled until Phase 2.
 
 ---
 
-## 9. Open questions for Stuart
+## 9. Decisions Stuart accepted (2026-10-08)
 
-1. **House’s greeting** — Grok picture of the speaker (maybe with the line as caption in the prompt) for now, or mux ElevenLabs audio onto that silent clip in Phase 2?
-2. **Service droid** — its own Object Cast card, or a one-off extra on the kitchen set?
-3. **Default length** for silent shots stays 5s, with 10s as a picker value (as in PR #261), yes?
-4. **Chain across a location change** — allow, or force a fresh plate when the set changes?
-5. **When you first open `/stage-lab`**, use the Deliciae sample forever, or a read-only snapshot of whichever Cast/Locations are currently saved (still not the open episode’s shots)?
-6. **Merge** — even after the lab feels right, should Stage *replace* the Script card, sit as a second tab, or stay a separate URL?
+1. **House** is an Object. Silent **Grok** shot. Voice is added in Resolve. No audio mux on this page yet.
+2. **Service droid** gets its own Object Cast card with a picture (like House). The lab matches that card by name; it does not write a new card into `deck_items`.
+3. **Chain across a location change is blocked** — the user gets a fresh plate instead.
+4. **`/stage-lab` loads the real saved Cast and Locations read-only** (pictures, names, looks). It keeps the Deliciae Act I kitchen as starter *shot content*.
+5. **It stays a separate page** (`/stage-lab`). No links from, and no writes into, Sunny Banks, Skidmarks, Music video, or Shorts. Own storage key only (`the-tab:stage-lab-v1`).
+
+Length picker stays 5 / 8 / 10 / 12 / 15s. Merge into genres is still not this PR.
 
 ---
 
 ## 10. What this PR is
 
-- This document.
-- A **clickable mock** of the lab at **`/stage-lab`** (Deliciae Act I kitchen as sample content). Not linked from genre UI. No session writes. No paid APIs.
-- Screenshots of that mock at iPhone 13 width (WebKit).
+- This document, updated for the accepted decisions.
+- A **real Phase 1 lab** at **`/stage-lab`**: saved Cast/Locations read-only, own shot storage, real Make plate, Approve, chain rules, iPhone layout. Render stays Phase 2 (disabled, honest label).
+- Isolation tests. WebKit iPhone 13 screenshots in the PR body.
 
-What this PR is not: a change to God Script parsing, Cast ticking, chain, duration, or any episode save path.
+What this PR is not: a change to God Script parsing, Cast ticking, chain, duration, or any episode save path on the four genre screens.

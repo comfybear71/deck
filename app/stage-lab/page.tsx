@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { StageLabMock } from "@/components/StageLabMock";
+import { StageLab } from "@/components/StageLab";
 
 export const metadata: Metadata = {
   title: "Stage lab — Deck (sandbox)",
@@ -9,8 +9,8 @@ export const metadata: Metadata = {
 
 /**
  * Development/test page only. Not linked from the graph or any genre
- * screen. Mock UI — no session writes, no paid renders.
+ * screen. Own storage. Read-only Cast/Locations. No session writes.
  */
 export default function StageLabPage() {
-  return <StageLabMock />;
+  return <StageLab />;
 }
