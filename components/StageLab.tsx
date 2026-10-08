@@ -25,6 +25,7 @@ import {
   makeBlankShot,
   mintStageId,
   presentActors,
+  remapShotsToCast,
   renumberShots,
   resolveStageChain,
   stageVideoBackend,
@@ -34,7 +35,13 @@ import {
   type StageScene,
   type StageShot,
 } from "@/lib/stageLab";
-import { loadStageLabCast } from "@/lib/stageLabCast";
+import {
+  loadStageLabCast,
+  pickDefaultStageLabProject,
+  projectChipLabel,
+  type StageLabProject,
+  type StageLabProjectPack,
+} from "@/lib/stageLabCast";
 import { makeStagePlate } from "@/lib/stageLabPlate";
 import { readStageLabStore, writeStageLabStore, hydrateStageShot } from "@/lib/stageLabStore";
 
@@ -69,6 +76,9 @@ function Chip({
 export function StageLab() {
   const [cast, setCast] = useState<StageCastMember[]>([]);
   const [locations, setLocations] = useState<StageLocation[]>([]);
+  const [projects, setProjects] = useState<StageLabProject[]>([]);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [byProject, setByProject] = useState<Record<string, StageLabProjectPack>>({});
   const [castStatus, setCastStatus] = useState<"loading" | "saved" | "empty">("loading");
   const [castError, setCastError] = useState<string | null>(null);
   const [scenes, setScenes] = useState<StageScene[]>([{ id: "scene_act1_kitchen", label: DELICIAE_SCENE_LABEL }]);
@@ -85,23 +95,46 @@ export function StageLab() {
     window.setTimeout(() => setToast(null), 2800);
   }, []);
 
+  function onSelectProject(nextId: string) {
+    if (nextId === projectId) return;
+    const pack = byProject[nextId] ?? { actors: [], locations: [] };
+    setProjectId(nextId);
+    setCast(pack.actors);
+    setLocations(pack.locations);
+    setShots((all) => remapShotsToCast(all, pack.actors, pack.locations, locations));
+    setCastStatus(pack.actors.length || pack.locations.length ? "saved" : "empty");
+  }
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const snap = await loadStageLabCast();
       if (cancelled) return;
-      setCast(snap.actors);
-      setLocations(snap.locations);
-      setCastStatus(snap.source === "saved" ? "saved" : "empty");
-      setCastError(snap.error);
+      setProjects(snap.projects);
+      setByProject(snap.byProject);
       const stored = readStageLabStore();
-      if (stored && stored.shots.length > 0) {
+      const chosen =
+        stored?.projectId && snap.byProject[stored.projectId]
+          ? snap.projects.find((p) => p.id === stored.projectId) ?? null
+          : pickDefaultStageLabProject(snap.projects);
+      const pack = (chosen && snap.byProject[chosen.id]) || { actors: snap.actors, locations: snap.locations };
+      setProjectId(chosen?.id ?? snap.defaultProjectId);
+      setCast(pack.actors);
+      setLocations(pack.locations);
+      setCastStatus(pack.actors.length || pack.locations.length ? "saved" : snap.source === "saved" ? "saved" : "empty");
+      setCastError(snap.error);
+      const restoreStored = Boolean(stored?.projectId && stored.shots.length > 0 && chosen && stored.projectId === chosen.id);
+      if (restoreStored && stored) {
         setScenes(stored.scenes);
-        const next = stored.shots.map((s) => hydrateStageShot(s, snap.actors));
+        const next = remapShotsToCast(
+          stored.shots.map((s) => hydrateStageShot(s, pack.actors)),
+          pack.actors,
+          pack.locations,
+        );
         setShots(next);
         setOpenId(stored.openShotId && next.some((s) => s.id === stored.openShotId) ? stored.openShotId : next[0]?.id ?? null);
       } else {
-        const starter = buildDeliciaeStarter(snap.actors, snap.locations);
+        const starter = buildDeliciaeStarter(pack.actors, pack.locations);
         setScenes([starter.scene]);
         setShots(starter.shots);
         setOpenId(starter.shots[0]?.id ?? null);
@@ -117,12 +150,12 @@ export function StageLab() {
     if (!hydrated.current) return;
     if (persistTimer.current) window.clearTimeout(persistTimer.current);
     persistTimer.current = window.setTimeout(() => {
-      writeStageLabStore({ scenes, shots, openShotId: openId });
+      writeStageLabStore({ scenes, shots, openShotId: openId, projectId });
     }, 200);
     return () => {
       if (persistTimer.current) window.clearTimeout(persistTimer.current);
     };
-  }, [scenes, shots, openId]);
+  }, [scenes, shots, openId, projectId]);
 
   const shot = shots.find((s) => s.id === openId) ?? shots[0];
   const location = locations.find((l) => l.id === shot?.locationId) ?? null;
@@ -218,19 +251,34 @@ export function StageLab() {
 
   return (
     <div className="mx-auto min-h-dvh max-w-[430px] bg-black text-white">
-      <header className="sticky top-0 z-10 border-b border-amber-300/25 bg-black/95 px-3 pb-2.5 pt-[max(0.75rem,env(safe-area-inset-top))]">
+      <header className="border-b border-amber-300/25 bg-black px-3 pb-2.5 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200/90">Stage lab · sandbox</p>
         <h1 className="text-[17px] font-semibold leading-tight">Director board</h1>
         <p className="mt-1 text-[11px] leading-snug text-white/55">
-          Separate page. Read-only Cast and Locations from your saved cards. Shots save only here — not into Sunny
-          Banks, Skidmarks, Music video, or Shorts.
+          This project&apos;s Cast and Locations only. Shots save here, not into the episode.
         </p>
+        {projects.length > 0 ? (
+          <div
+            className="mt-2 flex gap-1.5 overflow-x-auto touch-pan-x pb-0.5"
+            style={{ WebkitOverflowScrolling: "touch" }}
+            role="list"
+            aria-label="Project"
+          >
+            {projects.map((project) => (
+              <Chip
+                key={project.id}
+                on={project.id === projectId}
+                onClick={() => onSelectProject(project.id)}
+              >
+                {projectChipLabel(project, projects)}
+              </Chip>
+            ))}
+          </div>
+        ) : null}
         <p className="mt-1 text-[10px] text-white/40">
           {castStatus === "loading"
             ? "Loading Cast…"
-            : castStatus === "saved"
-              ? `${cast.length} Cast · ${locations.length} Locations`
-              : "No saved Cast pictures on this device yet."}
+            : `${cast.length} Cast · ${locations.length} Locations`}
           {castError ? ` · ${castError}` : ""}
         </p>
       </header>
