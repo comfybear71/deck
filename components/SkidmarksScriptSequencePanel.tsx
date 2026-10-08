@@ -5,14 +5,28 @@ import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 import {
   SCRIPT_BOX_EDITING_TEXT_CLASS,
+  SCRIPT_BOX_GUTTER_CLASS,
   SCRIPT_BOX_IOS_TEXTAREA_PROPS,
   SCRIPT_BOX_TEXTAREA_CLASS,
+  SCRIPT_SCENE_HEADING_CLASS,
+  groupHighlightSegmentsByLine,
+  readScriptBoxPlace,
+  revealScriptBoxPlace,
   scriptBoxTextClass,
+  scriptLineCharIndex,
+  scrollTextareaToIndex,
+  writeScriptBoxPlace,
+  type ScriptBoxPlace,
 } from "@/lib/textareaOverlayMirror";
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { ScriptShotNumberBadges } from "@/components/ScriptShotNumberBadges";
+import { flushSync } from "react-dom";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   buildScriptSequenceHighlightSegments,
   formatScriptSequencePartTitles,
+  isScriptSequencePartHeaderLine,
+  listScriptSequencePartOffsets,
+  listScriptSequenceShotBadgeMarks,
   parseScriptSequence,
   SCRIPT_SEQUENCE_COLOUR_TAGS,
   SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES,
@@ -206,15 +220,25 @@ function ScriptSequenceHighlightOverlay({
   autoGrowMinRows?: number;
 }) {
   const segments = buildScriptSequenceHighlightSegments(text);
+  const lines = groupHighlightSegmentsByLine(segments);
   useTextareaOverlayMirror(overlayRef, text, { autoGrowMinRows });
   return (
     <div ref={overlayRef} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full overflow-hidden">
-      <div className="whitespace-pre-wrap break-words px-3 py-2.5 text-base leading-6">
-        {segments.map((segment, index) => (
-          <span key={index} className={SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[segment.kind]}>
-            {segment.text}
-          </span>
-        ))}
+      <div className={`whitespace-pre-wrap break-words ${SCRIPT_BOX_GUTTER_CLASS} py-2.5 text-base leading-6`}>
+        {lines.map((line, lineIndex) => {
+          const heading = isScriptSequencePartHeaderLine(line.text);
+          const inner = line.segments.map((segment, index) => (
+            <span key={index} className={SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[segment.kind]}>
+              {segment.text}
+            </span>
+          ));
+          if (!heading) return <span key={lineIndex}>{inner}</span>;
+          return (
+            <span key={lineIndex} className={SCRIPT_SCENE_HEADING_CLASS}>
+              {inner}
+            </span>
+          );
+        })}
         {text.endsWith("\n") ? <span>{"\u200b"}</span> : null}
       </div>
     </div>
@@ -238,18 +262,38 @@ function ScriptSequenceHighlightOverlay({
  */
 function ScriptSequenceFullScreenEditor({
   initialText,
+  initialPlace,
   onApply,
   onClose,
 }: {
   initialText: string;
-  onApply: (next: string) => void;
+  initialPlace: ScriptBoxPlace | null;
+  onApply: (next: string, place: ScriptBoxPlace | null) => void;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState(initialText);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dirty = draft !== initialText;
   const formatFeedback = useScriptFormatFeedback();
   const viewportHeight = useVisualViewportHeight();
+  const scenes = listScriptSequencePartOffsets(draft);
+
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (initialPlace) writeScriptBoxPlace(el, initialPlace);
+    else {
+      try {
+        el.setSelectionRange(0, 0);
+      } catch {
+        /* empty */
+      }
+      el.scrollTop = 0;
+    }
+    // One-shot restore on open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleCancel = () => {
     if (dirty && !confirmingDiscard) {
@@ -278,7 +322,8 @@ function ScriptSequenceFullScreenEditor({
         <button
           type="button"
           onClick={() => {
-            onApply(draft);
+            const el = textareaRef.current;
+            onApply(draft, el ? readScriptBoxPlace(el) : null);
             onClose();
           }}
           className="min-h-[44px] shrink-0 rounded-md bg-rose-400 px-4 text-[13px] font-semibold text-zinc-950"
@@ -293,8 +338,30 @@ function ScriptSequenceFullScreenEditor({
         </p>
       )}
 
+      {scenes.length >= 2 && (
+        <div className="flex min-h-[40px] items-center gap-1.5 overflow-x-auto overscroll-x-contain border-b border-white/10 px-3 py-1 touch-pan-x [scrollbar-width:none]">
+          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-white/40">Scenes</span>
+          {scenes.map((scene) => (
+            <button
+              key={`${scene.index}:${scene.label}`}
+              type="button"
+              onClick={() => {
+                const el = textareaRef.current;
+                if (!el) return;
+                el.focus();
+                scrollTextareaToIndex(el, scene.index);
+              }}
+              className="min-h-[32px] shrink-0 rounded-md bg-white/[0.06] px-2 text-[10px] font-semibold text-white/80"
+            >
+              {scene.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="relative min-h-0 flex-1">
         <textarea
+          ref={textareaRef}
           value={draft}
           onChange={(e) => {
             setDraft(e.target.value);
@@ -363,7 +430,11 @@ export function SkidmarksScriptSequencePanel({
   /** One-level undo for the script box (Format / Full-screen Apply). */
   const [scriptUndo, setScriptUndo] = useState<string | null>(null);
   const [fullScreenScriptOpen, setFullScreenScriptOpen] = useState(false);
+  const [fullScreenPlace, setFullScreenPlace] = useState<ScriptBoxPlace | null>(null);
   const scriptHighlightRef = useRef<HTMLDivElement | null>(null);
+  const scriptBoxRef = useRef<HTMLTextAreaElement>(null);
+  const scriptBoxPlaceRef = useRef<ScriptBoxPlace | null>(null);
+  const skipRevealRef = useRef(false);
   /** Inline script box is being typed in — hide the colour overlay. */
   const [scriptBoxEditing, setScriptBoxEditing] = useState(false);
   /** Which script part "This plate" / "Render this" targets. Tap a chip;
@@ -412,6 +483,7 @@ export function SkidmarksScriptSequencePanel({
     }
   };
   const parts = useMemo(() => parseScriptSequence(script), [script]);
+  const shotBadgeMarks = useMemo(() => listScriptSequenceShotBadgeMarks(script), [script]);
   const focusedClipIndex = parts.length === 0 ? 0 : Math.min(selectedClipIndex, parts.length - 1);
   /** One parsed kind per part, positionally aligned with `parts` — see
    * `lib/scriptSequenceRunner.ts`'s `parseScriptPartKind` doc comment
@@ -599,9 +671,54 @@ export function SkidmarksScriptSequencePanel({
     setScriptUndo(null);
   };
 
-  const handleFullScreenApply = (next: string) => {
+  const handleFullScreenApply = (next: string, place: ScriptBoxPlace | null) => {
+    if (place) scriptBoxPlaceRef.current = place;
     applyScriptText(next, true);
   };
+
+  const rememberScriptBoxPlace = () => {
+    const el = scriptBoxRef.current;
+    if (el) scriptBoxPlaceRef.current = readScriptBoxPlace(el);
+  };
+
+  const jumpToShotInScript = (shotNumber: number) => {
+    const mark = shotBadgeMarks.find((m) => m.shotNumber === shotNumber);
+    const el = scriptBoxRef.current;
+    if (!mark || !el) return;
+    const index = scriptLineCharIndex(script, mark.lineIndex);
+    scrollTextareaToIndex(el, index);
+    revealScriptBoxPlace(el, readScriptBoxPlace(el));
+  };
+
+  const jumpToShotChip = (shotNumber: number) => {
+    const i = shotNumber - 1;
+    if (i < 0 || i >= parts.length) return;
+    setSelectedClipIndex(i);
+    document.getElementById(`mv-shot-chip-${shotNumber}`)?.scrollIntoView({
+      block: "nearest",
+      inline: "center",
+      behavior: "smooth",
+    });
+  };
+
+  useLayoutEffect(() => {
+    const el = scriptBoxRef.current;
+    const place = scriptBoxPlaceRef.current;
+    if (!el || !place) return;
+    if (skipRevealRef.current) {
+      skipRevealRef.current = false;
+      return;
+    }
+    if (scriptBoxEditing) return;
+    revealScriptBoxPlace(el, place);
+  }, [scriptBoxEditing, script]);
+
+  useLayoutEffect(() => {
+    if (fullScreenScriptOpen) return;
+    const el = scriptBoxRef.current;
+    const place = scriptBoxPlaceRef.current;
+    if (el && place) revealScriptBoxPlace(el, place);
+  }, [fullScreenScriptOpen]);
 
   const buildPlatesDeps = (): GeneratePlatesDeps =>
     scriptEngine === "siray" ? buildSirayPlatesDeps() : buildGrokPlatesDeps();
@@ -1056,7 +1173,11 @@ export function SkidmarksScriptSequencePanel({
         </button>
         <button
           type="button"
-          onClick={() => setFullScreenScriptOpen(true)}
+          onClick={() => {
+            rememberScriptBoxPlace();
+            setFullScreenPlace(scriptBoxPlaceRef.current);
+            setFullScreenScriptOpen(true);
+          }}
           disabled={!!running}
           aria-label="Edit script full screen"
           className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
@@ -1079,14 +1200,27 @@ export function SkidmarksScriptSequencePanel({
           <ScriptSequenceHighlightOverlay text={script} overlayRef={scriptHighlightRef} autoGrowMinRows={12} />
         )}
         <textarea
+          ref={scriptBoxRef}
           value={script}
-          onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl })}
+          onChange={(e) => {
+            onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl });
+            rememberScriptBoxPlace();
+          }}
+          onPointerDown={() => {
+            skipRevealRef.current = true;
+            rememberScriptBoxPlace();
+            if (!scriptBoxEditing) flushSync(() => setScriptBoxEditing(true));
+          }}
+          onSelect={rememberScriptBoxPlace}
+          onKeyUp={rememberScriptBoxPlace}
           onFocus={() => setScriptBoxEditing(true)}
           onBlur={() => {
+            rememberScriptBoxPlace();
             setScriptBoxEditing(false);
             flushSkidmarksSessionNow();
           }}
           onScroll={(e) => {
+            rememberScriptBoxPlace();
             if (scriptHighlightRef.current) {
               scriptHighlightRef.current.scrollTop = e.currentTarget.scrollTop;
               scriptHighlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
@@ -1099,8 +1233,16 @@ export function SkidmarksScriptSequencePanel({
           }
           rows={12}
           {...SCRIPT_BOX_IOS_TEXTAREA_PROPS}
-          className={`relative z-10 w-full resize-y bg-transparent px-3 py-2.5 leading-6 caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60 ${SCRIPT_BOX_TEXTAREA_CLASS} ${scriptBoxTextClass(scriptBoxEditing)}`}
+          className={`relative z-10 w-full resize-y bg-transparent ${SCRIPT_BOX_GUTTER_CLASS} py-2.5 leading-6 caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60 ${SCRIPT_BOX_TEXTAREA_CLASS} ${scriptBoxTextClass(scriptBoxEditing)}`}
         />
+        {!scriptBoxEditing && (
+          <ScriptShotNumberBadges
+            marks={shotBadgeMarks}
+            paddingTopPx={10}
+            lineHeightPx={24}
+            onJumpToRow={jumpToShotChip}
+          />
+        )}
       </div>
 
       <p className="text-[10px] leading-snug text-white/40">
@@ -1123,6 +1265,7 @@ export function SkidmarksScriptSequencePanel({
       {fullScreenScriptOpen && (
         <ScriptSequenceFullScreenEditor
           initialText={script}
+          initialPlace={fullScreenPlace}
           onApply={handleFullScreenApply}
           onClose={() => setFullScreenScriptOpen(false)}
         />
@@ -1203,9 +1346,13 @@ export function SkidmarksScriptSequencePanel({
                 return (
                   <button
                     key={i}
+                    id={`mv-shot-chip-${i + 1}`}
                     type="button"
                     aria-pressed={selected}
-                    onClick={() => setSelectedClipIndex(i)}
+                    onClick={() => {
+                      setSelectedClipIndex(i);
+                      jumpToShotInScript(i + 1);
+                    }}
                     disabled={!!running}
                     className={
                       selected

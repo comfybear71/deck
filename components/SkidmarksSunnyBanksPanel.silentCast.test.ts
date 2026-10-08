@@ -129,6 +129,7 @@ function requestFor(all: Row[], index: number, genre: Genre = "skidmarks", video
       castNames: chunk.castNames,
       castLooks: chunk.castLooks,
       sceneSpeakers: chunk.sceneSpeakers,
+      sceneKey: chunk.sceneKey,
       appearanceModifier: chunk.appearanceModifier,
     },
     sunnyBanksCastCards(STATE, genre),

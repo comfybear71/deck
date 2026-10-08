@@ -135,7 +135,7 @@ describe("SUNNY_BANKS_GOD_SCRIPT_EXAMPLE", () => {
       expect(chunk.line).not.toMatch(/\[(Outfit|silence|beat|SFX)\b/i);
       // A real tag that survived into the spoken line means the parser
       // stopped stripping it — exactly the bug this guide warns about.
-      expect(chunk.line).not.toMatch(/\[(Location|Character|Action)\b/i);
+      expect(chunk.line).not.toMatch(/\[(Location|Character|Action|Duration)\b/i);
     }
   });
 });
@@ -163,6 +163,14 @@ describe("buildSunnyBanksGodScriptPrompt", () => {
     expect(prompt).toContain("[Outfit: ...]");
     expect(prompt).toContain("[silence]");
     expect(prompt).toContain("Never invent another picture tag");
+    expect(prompt).toContain("[Duration: 10s]");
+  });
+
+  it("the duration rule's example parses as one silent row at 10s", () => {
+    const rule = SUNNY_BANKS_GOD_SCRIPT_RULES.find((r) => r.title.includes("longer than 5s"))!;
+    const rows = parseSunnyBanksScriptBlock(rule.example!);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ characterName: "Shazza", kind: "hold", durationSec: 10 });
   });
 
   it("teaches voice tags inside the line, after the colon — never on their own line", () => {

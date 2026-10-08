@@ -7,7 +7,9 @@ import {
   isIosWebKit,
   MIRRORED_TEXT_STYLE_PROPERTIES,
   overlayPadding,
+  readScriptBoxPlace,
   resolveOverlayShellHeightPx,
+  writeScriptBoxPlace,
 } from "@/lib/textareaOverlayMirror";
 
 function px(value: string): number {
@@ -105,7 +107,10 @@ export function useTextareaOverlayMirror(
       if (!autoGrowMinRows) return;
       // Measure the text's natural height without losing a height the
       // drag handle set: collapse, read, put the height back, and hold
-      // the box open with min-height instead.
+      // the box open with min-height instead. Setting height to "auto"
+      // is what iOS Safari uses to jump the caret to the end of a long
+      // script — snapshot and put it back.
+      const place = readScriptBoxPlace(textarea);
       const keptHeight = textarea.style.height;
       textarea.style.minHeight = "0px";
       textarea.style.height = "auto";
@@ -120,6 +125,7 @@ export function useTextareaOverlayMirror(
       });
       textarea.style.height = keptHeight;
       textarea.style.minHeight = `${needed}px`;
+      writeScriptBoxPlace(textarea, place);
     };
 
     const sync = () => {

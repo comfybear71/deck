@@ -48,6 +48,169 @@ export function scriptBoxTextClass(editing: boolean): string {
   return editing ? SCRIPT_BOX_EDITING_TEXT_CLASS : SCRIPT_BOX_IDLE_TEXT_CLASS;
 }
 
+/**
+ * Where the caret and the script box were scrolled to. Restored after
+ * save / re-parse / overlay remount so Done/Apply doesn't dump Stuart
+ * at the bottom of a long God Script (2026-10-08 live iPhone QA).
+ */
+export interface ScriptBoxPlace {
+  scrollTop: number;
+  scrollLeft: number;
+  selectionStart: number;
+  selectionEnd: number;
+}
+
+export function readScriptBoxPlace(el: HTMLTextAreaElement): ScriptBoxPlace {
+  return {
+    scrollTop: el.scrollTop,
+    scrollLeft: el.scrollLeft,
+    selectionStart: el.selectionStart ?? 0,
+    selectionEnd: el.selectionEnd ?? 0,
+  };
+}
+
+function clampIndex(n: number, max: number): number {
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n > max ? max : Math.round(n);
+}
+
+/**
+ * Put the caret and scroll back. If the textarea was not focused,
+ * blur it again afterwards — `setSelectionRange` can steal focus on
+ * iOS, which would pop the keyboard after Done.
+ */
+export function writeScriptBoxPlace(el: HTMLTextAreaElement, place: ScriptBoxPlace): void {
+  const max = el.value.length;
+  const start = clampIndex(place.selectionStart, max);
+  const end = clampIndex(place.selectionEnd, max);
+  const wasFocused = typeof document !== "undefined" && document.activeElement === el;
+  try {
+    el.setSelectionRange(start, end);
+  } catch {
+    // Hidden / not yet in the document.
+  }
+  el.scrollTop = Math.max(0, place.scrollTop);
+  el.scrollLeft = Math.max(0, place.scrollLeft);
+  if (!wasFocused && typeof document !== "undefined" && document.activeElement === el) {
+    el.blur();
+  }
+}
+
+/** Line-height based scroll so a given character index is in view. */
+export function scrollTextareaToIndex(el: HTMLTextAreaElement, index: number): void {
+  const place: ScriptBoxPlace = {
+    scrollTop: 0,
+    scrollLeft: 0,
+    selectionStart: index,
+    selectionEnd: index,
+  };
+  const max = el.value.length;
+  const clamped = clampIndex(index, max);
+  const cs = typeof getComputedStyle === "function" ? getComputedStyle(el) : null;
+  const lineHeight = cs ? parseFloat(cs.lineHeight) || 24 : 24;
+  const paddingTop = cs ? parseFloat(cs.paddingTop) || 0 : 0;
+  const line = el.value.slice(0, clamped).split("\n").length;
+  place.scrollTop = Math.max(0, paddingTop + (line - 2) * lineHeight);
+  writeScriptBoxPlace(el, { ...place, selectionStart: clamped, selectionEnd: clamped });
+}
+
+function nearestScrollParent(el: HTMLElement): HTMLElement | null {
+  let parent = el.parentElement;
+  while (parent) {
+    const oy = getComputedStyle(parent).overflowY;
+    if ((oy === "auto" || oy === "scroll" || oy === "overlay") && parent.scrollHeight > parent.clientHeight + 1) {
+      return parent;
+    }
+    parent = parent.parentElement;
+  }
+  return (document.scrollingElement as HTMLElement | null) ?? document.documentElement;
+}
+
+/**
+ * Restore caret/scroll on the textarea *and* scroll the sheet so that
+ * line stays on screen. Auto-grow makes a long script as tall as its
+ * text, so `scrollTop` alone is 0 — the place you were is a position
+ * in the parent scroller.
+ */
+export function revealScriptBoxPlace(el: HTMLTextAreaElement, place: ScriptBoxPlace): void {
+  writeScriptBoxPlace(el, place);
+  const cs = getComputedStyle(el);
+  const lineHeight = parseFloat(cs.lineHeight) || 24;
+  const paddingTop = parseFloat(cs.paddingTop) || 0;
+  const line = el.value.slice(0, clampIndex(place.selectionStart, el.value.length)).split("\n").length - 1;
+  const yInBox = paddingTop + line * lineHeight - el.scrollTop;
+  const caretY = el.getBoundingClientRect().top + yInBox;
+  const scroller = nearestScrollParent(el);
+  if (!scroller) return;
+  const srect = scroller.getBoundingClientRect();
+  const margin = 72;
+  if (caretY < srect.top + margin || caretY > srect.bottom - margin) {
+    scroller.scrollTop += caretY - (srect.top + srect.height * 0.35);
+  }
+}
+
+/**
+ * Split highlight segments on newlines without dropping the newline
+ * (so concatenating every piece still equals the original). Used to
+ * wrap scene / Part heading lines with a divider in the idle overlay.
+ */
+export function groupHighlightSegmentsByLine<T extends { text: string }>(
+  segments: readonly T[]
+): Array<{ segments: T[]; text: string }> {
+  const lines: Array<{ segments: T[]; text: string }> = [];
+  let currentSegs: T[] = [];
+  let currentText = "";
+  const flush = () => {
+    if (currentSegs.length === 0 && currentText === "") return;
+    lines.push({ segments: currentSegs, text: currentText });
+    currentSegs = [];
+    currentText = "";
+  };
+  for (const segment of segments) {
+    let buf = "";
+    for (const ch of segment.text) {
+      buf += ch;
+      if (ch === "\n") {
+        currentSegs.push({ ...segment, text: buf });
+        currentText += buf;
+        flush();
+        buf = "";
+      }
+    }
+    if (buf) {
+      currentSegs.push({ ...segment, text: buf });
+      currentText += buf;
+    }
+  }
+  flush();
+  return lines;
+}
+
+/** Idle overlay: full-width rule above a scene / Part heading, bold. */
+export const SCRIPT_SCENE_HEADING_CLASS =
+  "box-border mt-1.5 block w-full border-t border-white/40 pt-2 font-semibold text-white";
+
+/** Idle-only `#13` badge on the left of a shot's Action / speaker line. */
+export const SCRIPT_SHOT_BADGE_CLASS =
+  "absolute z-20 min-h-[18px] rounded-sm bg-zinc-950/90 px-1 text-left text-[9px] font-bold leading-[18px] text-amber-200";
+
+/** Extra left padding so `#13` sits in a gutter, not on the first letters.
+ * Same idle and editing so the caret doesn't jump when the overlay remounts. */
+export const SCRIPT_BOX_GUTTER_CLASS = "pl-9 pr-3";
+
+export function scriptLineCharIndex(text: string, lineIndex: number): number {
+  const lines = text.split("\n");
+  const last = Math.max(0, Math.min(Math.max(0, lineIndex), lines.length));
+  let index = 0;
+  for (let i = 0; i < last; i += 1) index += (lines[i]?.length ?? 0) + 1;
+  return index;
+}
+
+/** Top of a 0-based source line inside a script box (`leading-6` + padding). */
+export function scriptLineTopPx(lineIndex: number, lineHeightPx: number, paddingTopPx: number): number {
+  return Math.max(0, paddingTopPx) + Math.max(0, lineIndex) * Math.max(1, lineHeightPx);
+}
+
 /** WebKit's fixed extra inset on each side of textarea text (iOS). */
 export const IOS_TEXTAREA_INSET_PX = 3;
 

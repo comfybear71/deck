@@ -535,6 +535,38 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
     expect(graph["340:331"]?.inputs?.value).toBeLessThan(4.6);
   });
 
+  it("a talking row with durationSec 10 pads past a 4s line", async () => {
+    const lineAudio = encodeTestMp3(4);
+    mockElevenLabs(lineAudio);
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/padded.mp4" });
+
+    const padded = await POST(speakBeatRequest({ durationSec: 10 }));
+    const paddedBody = await padded.json();
+    expect(padded.status).toBe(200);
+    expect(paddedBody.durationSec).toBeGreaterThanOrEqual(10);
+    expect(paddedBody.durationSec).toBeLessThanOrEqual(15);
+  });
+
+  it("a talking row keeps audio-driven length when the tag is shorter", async () => {
+    const longerAudio = encodeTestMp3(8);
+    mockElevenLabs(longerAudio);
+    mockXaiComposite();
+    mockUploads();
+    mockSubmit();
+    mockJobPoll();
+    mockDownload(new Uint8Array([1]));
+    putMock.mockResolvedValueOnce({ url: "https://blob.example/kept.mp4" });
+
+    const kept = await POST(speakBeatRequest({ durationSec: 5 }));
+    const keptBody = await kept.json();
+    expect(keptBody.durationSec).toBeCloseTo(estimateMp3DurationSec(longerAudio), 1);
+  });
+
   it("still returns the render, honestly flagged as unsaved, when the Blob upload fails", async () => {
     mockElevenLabs(encodeTestMp3(4));
     mockXaiComposite();
@@ -893,6 +925,24 @@ describe("POST /api/skidmarks/sunnybank/generate-speak-beat", () => {
       // Same readable name an LTX hold gets (`mediaTarget`).
       expect(String(putMock.mock.calls[0][0])).toContain("deck/sunnybank/episodes/ep01/act-ii/");
       expect(String(putMock.mock.calls[0][0])).toContain("ep01-act-ii-beat-05-ranger-bazza-hold");
+    });
+
+    it("a Grok hold with durationSec 10 asks Grok for 10s, not the 5s default", async () => {
+      vi.stubEnv("COMFY_CLOUD_API_KEY", "");
+      mockXaiComposite();
+      fetchMock
+        .mockResolvedValueOnce(json({ request_id: "grok-10" }))
+        .mockResolvedValueOnce(json({ status: "done", video: { url: "https://vidgen.x.ai/v10.mp4", duration: 10, respect_moderation: true } }))
+        .mockResolvedValueOnce(new Response(new Uint8Array([7, 7, 7]), { status: 200 }));
+      putMock.mockResolvedValueOnce({ url: "https://blob.example/bazza-10s.mp4" });
+
+      const res = await POST(holdBeatRequest({ characterName: "Ranger Bazza", videoBackend: "grok", durationSec: 10 }));
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.durationSec).toBe(10);
+      const start = fetchMock.mock.calls.find(([url]) => String(url) === "https://api.x.ai/v1/videos/generations");
+      expect(start).toBeTruthy();
+      expect(JSON.parse(start![1].body as string).duration).toBe(10);
     });
 
     it("a Crowd cutaway on H3: no composite, MiniMax-H3 at 768P for 5s on the location still", async () => {

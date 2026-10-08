@@ -3,6 +3,9 @@ import {
   buildScriptSequenceHighlightSegments,
   canonicalizeScriptPartTitle,
   formatScriptSequencePartTitles,
+  isScriptSequencePartHeaderLine,
+  listScriptSequencePartOffsets,
+  listScriptSequenceShotBadgeMarks,
   parseScriptSequence,
   SCRIPT_SEQUENCE_COLOUR_TAGS,
   SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES,
@@ -567,5 +570,33 @@ minors, logos, text`;
     expect(parts[0].prompt).toContain("Adult party glitter rain");
     expect(parts[0].prompt).not.toContain("Positive Prompt");
     expect(parts[0].negativePrompt).toContain("minors");
+  });
+});
+
+describe("idle Part dividers and #N badges (display only)", () => {
+  const script = `Part 1 (0:00 - 0:06)
+Instrumental
+Positive Prompt:
+glitter
+Part 2 (0:06 - 0:12)
+Vocal
+Positive Prompt:
+sing`;
+
+  it("spots a Part header line", () => {
+    expect(isScriptSequencePartHeaderLine("Part 1 (0:00 - 0:06)")).toBe(true);
+    expect(isScriptSequencePartHeaderLine("Instrumental")).toBe(false);
+  });
+
+  it("lists Part offsets for the Full screen jump list", () => {
+    const offsets = listScriptSequencePartOffsets(script);
+    expect(offsets.map((o) => o.label)).toEqual(["Part 1", "Part 2"]);
+  });
+
+  it("numbers badges in clip-chip order on each Part header line", () => {
+    expect(listScriptSequenceShotBadgeMarks(script)).toEqual([
+      { shotNumber: 1, lineIndex: 0 },
+      { shotNumber: 2, lineIndex: 4 },
+    ]);
   });
 });

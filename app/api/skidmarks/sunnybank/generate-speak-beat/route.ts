@@ -52,6 +52,7 @@ import {
   uploadComfyCloudInput,
 } from "@/lib/comfyCloud";
 import { muxClipAudio } from "@/lib/muxClipAudio";
+import { clampRowVideoDurationSec } from "@/lib/clipGeneration";
 import { renderSilentShotVideo, SILENT_SHOT_PROMPT_SUFFIX } from "@/lib/silentShotVideo";
 import {
   parseRowVideoBackend,
@@ -288,6 +289,10 @@ interface GenerateSpeakBeatRequestBody {
   plateEngine?: unknown;
   /** A Siray silent shot submitted by an earlier call, to check back on. */
   sirayTaskId?: unknown;
+  /** Optional `[Duration: Ns]` from the God Script row (2026-10-08).
+   * Hold: this length, default 5s, clamped to the engine. Speak: keep
+   * the audio unless this is longer, then pad. */
+  durationSec?: unknown;
 }
 
 const SIRAY_TASK_ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
@@ -498,8 +503,14 @@ export async function POST(request: Request) {
    * `eleven_multilingual_v2` when v3 refused and the tags were dropped. */
   let ttsModel: string | undefined;
 
+  const requestedDurationSec =
+    typeof body.durationSec === "number" && Number.isFinite(body.durationSec) && body.durationSec > 0
+      ? body.durationSec
+      : undefined;
+
   if (kind === "hold") {
-    audioBytes = encodeSilentMp3(SUNNY_BANKS_HOLD_DURATION_SEC);
+    const holdSec = clampRowVideoDurationSec(videoBackend, requestedDurationSec ?? SUNNY_BANKS_HOLD_DURATION_SEC);
+    audioBytes = encodeSilentMp3(holdSec);
     audioContentType = "audio/mpeg";
     const silentDurationSec = estimateMp3DurationSec(audioBytes);
     if (silentDurationSec < MIN_LTX_AUDIO_INPUT_SEC) {
@@ -511,7 +522,10 @@ export async function POST(request: Request) {
         { status: 422 }
       );
     }
-    durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, silentDurationSec);
+    // Grok/H3/Siray want a whole-second duration in their own window.
+    // LTX follows the silent MP3 so LoadAudio and node 340:331 match.
+    durationSec =
+      videoBackend === "ltx" ? Math.min(MAX_LTX_CLIP_DURATION_SEC, silentDurationSec) : holdSec;
     prompt = isLocationCutaway
       ? buildLocationCutawayPrompt(action, profile)
       : // With an [Action:], the action sets framing and movement (2026-10-01).
@@ -553,7 +567,7 @@ export async function POST(request: Request) {
       rawDurationSec < MIN_LTX_AUDIO_INPUT_SEC
         ? padMp3ToMinimumDurationSec(speechOutcome.bytes, MIN_LTX_AUDIO_INPUT_SEC)
         : speechOutcome.bytes;
-    const paddedDurationSec = estimateMp3DurationSec(audioBytes);
+    let paddedDurationSec = estimateMp3DurationSec(audioBytes);
     if (paddedDurationSec < MIN_LTX_AUDIO_INPUT_SEC) {
       return NextResponse.json(
         {
@@ -567,7 +581,15 @@ export async function POST(request: Request) {
     }
     // No settle lead-in: the composed plate above already shows the
     // appearance change on frame 0, so the beat goes straight to the
-    // new action place and starts talking. Duration is the real audio.
+    // new action place and starts talking. Duration is the real audio
+    // unless `[Duration: Ns]` is longer — then pad silence on the tail.
+    if (requestedDurationSec != null) {
+      const want = clampRowVideoDurationSec("ltx", requestedDurationSec);
+      if (want > paddedDurationSec) {
+        audioBytes = padMp3ToMinimumDurationSec(audioBytes, want);
+        paddedDurationSec = estimateMp3DurationSec(audioBytes);
+      }
+    }
     durationSec = Math.min(MAX_LTX_CLIP_DURATION_SEC, paddedDurationSec);
     // `line` went to ElevenLabs with its audio tags (`[whispers]`,
     // `[pause]`, …) intact — Eleven v3 performs them. The picture prompt
