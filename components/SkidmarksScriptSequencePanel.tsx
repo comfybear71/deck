@@ -3,6 +3,12 @@
 import { useScriptFormatFeedback } from "@/hooks/useScriptFormatFeedback";
 import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
+import {
+  SCRIPT_BOX_EDITING_TEXT_CLASS,
+  SCRIPT_BOX_IOS_TEXTAREA_PROPS,
+  SCRIPT_BOX_TEXTAREA_CLASS,
+  scriptBoxTextClass,
+} from "@/lib/textareaOverlayMirror";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   buildScriptSequenceHighlightSegments,
@@ -185,16 +191,10 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
  * chrome pattern as Sunny Banks' God Script box, but colours MV part
  * Part / type / Duration / Prompt-label fields. Display-only; never changes parsing.
  *
- * Two nested divs, not one (2026-10-08) — see
- * `useTextareaOverlayMirror`'s own doc comment for why: a box can never
- * be rendered shorter than its own padding, so a single `absolute
- * inset-0` div carrying the deliberately oversized "scroll room"
- * bottom padding always rendered taller than its own container,
- * bleeding coloured text past the box's real bottom edge. The outer div
- * here is a plain, padding-free clipping shell (fixed to the textarea's
- * height); the inner div carries the real font/padding mirror and the
- * colour spans, and is allowed to render taller than the shell on
- * purpose — `overflow-hidden` on the shell clips it normally. */
+ * Idle-only (2026-10-08 live iPhone QA after PR #259): while the
+ * textarea is focused the parent unmounts this overlay and lets the
+ * textarea draw its own white text. Two nested divs for the idle
+ * coloured view — see `useTextareaOverlayMirror`. */
 function ScriptSequenceHighlightOverlay({
   text,
   overlayRef,
@@ -227,6 +227,10 @@ function ScriptSequenceHighlightOverlay({
  * until Apply, so mid-edit keystrokes don't remint the clip timeline.
  * Format here only rewrites header type words on the local draft.
  *
+ * Full-screen is an **editing** surface: no colour overlay while it is
+ * open (2026-10-08 live iPhone QA). The textarea draws its own plain
+ * white text. Colours come back on Apply, when this sheet closes.
+ *
  * Height is pinned to `useVisualViewportHeight()` (same as Sunny
  * Banks' full-screen editor, see that hook's own doc comment) so the
  * iOS keyboard shrinks the box above it instead of drawing over its
@@ -243,7 +247,6 @@ function ScriptSequenceFullScreenEditor({
 }) {
   const [draft, setDraft] = useState(initialText);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
-  const overlayRef = useRef<HTMLDivElement>(null);
   const dirty = draft !== initialText;
   const formatFeedback = useScriptFormatFeedback();
   const viewportHeight = useVisualViewportHeight();
@@ -291,23 +294,16 @@ function ScriptSequenceFullScreenEditor({
       )}
 
       <div className="relative min-h-0 flex-1">
-        <ScriptSequenceHighlightOverlay text={draft} overlayRef={overlayRef} />
         <textarea
           value={draft}
           onChange={(e) => {
             setDraft(e.target.value);
             setConfirmingDiscard(false);
           }}
-          onScroll={(e) => {
-            if (overlayRef.current) {
-              overlayRef.current.scrollTop = e.currentTarget.scrollTop;
-              overlayRef.current.scrollLeft = e.currentTarget.scrollLeft;
-            }
-          }}
           autoFocus
-          spellCheck={false}
+          {...SCRIPT_BOX_IOS_TEXTAREA_PROPS}
           aria-label="Script sequence full screen editor"
-          className="relative z-10 h-full w-full resize-none bg-transparent px-3 py-2.5 text-base leading-6 text-transparent caret-rose-300 focus:outline-none"
+          className={`relative z-10 h-full w-full resize-none bg-transparent px-3 py-2.5 leading-6 caret-rose-300 focus:outline-none ${SCRIPT_BOX_TEXTAREA_CLASS} ${SCRIPT_BOX_EDITING_TEXT_CLASS}`}
         />
       </div>
 
@@ -368,6 +364,8 @@ export function SkidmarksScriptSequencePanel({
   const [scriptUndo, setScriptUndo] = useState<string | null>(null);
   const [fullScreenScriptOpen, setFullScreenScriptOpen] = useState(false);
   const scriptHighlightRef = useRef<HTMLDivElement | null>(null);
+  /** Inline script box is being typed in — hide the colour overlay. */
+  const [scriptBoxEditing, setScriptBoxEditing] = useState(false);
   /** Which script part "This plate" / "Render this" targets. Tap a chip;
    * 0-based. Clamped when the paste shrinks. */
   const [selectedClipIndex, setSelectedClipIndex] = useState(0);
@@ -1077,11 +1075,17 @@ export function SkidmarksScriptSequencePanel({
       </div>
 
       <div className="relative rounded-xl border border-white/10 bg-white/[0.03] focus-within:border-rose-400/40">
-        <ScriptSequenceHighlightOverlay text={script} overlayRef={scriptHighlightRef} autoGrowMinRows={12} />
+        {!scriptBoxEditing && (
+          <ScriptSequenceHighlightOverlay text={script} overlayRef={scriptHighlightRef} autoGrowMinRows={12} />
+        )}
         <textarea
           value={script}
           onChange={(e) => onSetScriptSequenceDraft({ script: e.target.value, startingImageUrl })}
-          onBlur={() => flushSkidmarksSessionNow()}
+          onFocus={() => setScriptBoxEditing(true)}
+          onBlur={() => {
+            setScriptBoxEditing(false);
+            flushSkidmarksSessionNow();
+          }}
           onScroll={(e) => {
             if (scriptHighlightRef.current) {
               scriptHighlightRef.current.scrollTop = e.currentTarget.scrollTop;
@@ -1094,8 +1098,8 @@ export function SkidmarksScriptSequencePanel({
             "Types: Vocal (singing / LTX) or Instrumental (not singing / Grok). Format maps Intro/Outro/Bridge/Lead/Break → Instrumental."
           }
           rows={12}
-          spellCheck={false}
-          className="relative z-10 w-full resize-y bg-transparent px-3 py-2.5 text-base leading-6 text-transparent caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60"
+          {...SCRIPT_BOX_IOS_TEXTAREA_PROPS}
+          className={`relative z-10 w-full resize-y bg-transparent px-3 py-2.5 leading-6 caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60 ${SCRIPT_BOX_TEXTAREA_CLASS} ${scriptBoxTextClass(scriptBoxEditing)}`}
         />
       </div>
 

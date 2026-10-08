@@ -1,11 +1,17 @@
 /**
  * Colour-highlight script boxes (Music video Script Sequence, Sunnybank
- * God Script) draw the text in a div *behind* a transparent textarea.
- * The caret and selection belong to the textarea; the coloured words
- * belong to the div. If the two wrap lines at different widths, the
- * caret drifts a word or two away from the word it's really on.
+ * God Script) draw the text in a div *behind* a transparent textarea
+ * **only while the box is not being edited**. A real iPhone Safari
+ * live QA (2026-10-08, after PR #259): the overlay's caret never lined
+ * up with the coloured words — wrapping, keyboard, autocorrect bar and
+ * text-size-adjust all differ from Playwright WebKit. While the box is
+ * focused (inline) or the full-screen editor is open, the overlay is
+ * unmounted and the textarea draws its own plain white text, which is
+ * the only thing that can stay under the caret. Colours come back on
+ * blur / Done.
  *
- * Two things made the textarea's text box narrower than the div's:
+ * The padding math below is still load-bearing for the idle (coloured)
+ * view. Two things made the textarea's text box narrower than the div's:
  *  1. iOS Safari/WebKit indents textarea text by 3px on each side, and
  *     that inset can't be styled away.
  *  2. When the textarea scrolls, desktop browsers give it a scrollbar
@@ -14,6 +20,33 @@
  * `overlayPadding` works out the padding the div needs so its text box
  * is exactly as wide as the textarea's.
  */
+
+/**
+ * Spread onto every script-box `<textarea>` (inline + full-screen,
+ * every genre). A God Script is tags + spoken lines, not a sentence to
+ * auto-correct — iOS Safari's autocorrect bar is also what sat on top
+ * of leaked colour text in the 2026-10-08 live screenshots.
+ */
+export const SCRIPT_BOX_IOS_TEXTAREA_PROPS = {
+  autoCorrect: "off",
+  autoCapitalize: "off",
+  spellCheck: false,
+} as const;
+
+/**
+ * Class on every script-box textarea: `script-box` is the
+ * `-webkit-text-size-adjust: 100%` lock in `app/globals.css`;
+ * `text-base` is 16px so iOS will not auto-zoom on focus.
+ */
+export const SCRIPT_BOX_TEXTAREA_CLASS = "script-box text-base";
+
+/** Idle (coloured overlay showing through) vs editing (textarea draws). */
+export const SCRIPT_BOX_IDLE_TEXT_CLASS = "text-transparent";
+export const SCRIPT_BOX_EDITING_TEXT_CLASS = "text-white";
+
+export function scriptBoxTextClass(editing: boolean): string {
+  return editing ? SCRIPT_BOX_EDITING_TEXT_CLASS : SCRIPT_BOX_IDLE_TEXT_CLASS;
+}
 
 /** WebKit's fixed extra inset on each side of textarea text (iOS). */
 export const IOS_TEXTAREA_INSET_PX = 3;

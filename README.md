@@ -2431,14 +2431,20 @@ now (see "Explicitly out of scope" below).
     audio-input minimum, not a deliberate pause. Don't reintroduce a
     lead-in without him asking. **Script textarea text was invisible
     (2026-09-18)** — `SunnyBanksScriptHighlightOverlay` is the only
-    thing that draws the God Script textarea at all (the real
+    thing that draws the God Script textarea **while idle** (the real
     `<textarea>` is `text-transparent` so the colored tags can show
     through it), and it shipped with a `text-white/0` base with only tag
     spans colored. On a real iPhone every ordinary dialogue line
     rendered black-on-black and only the bracket tags were visible.
     `SUNNY_BANKS_HIGHLIGHT_CLASSES` now carries a `plain: "text-white"`
     entry and the overlay colors every segment from that one table; a
-    unit test asserts no entry is transparent. **Full-screen God Script
+    unit test asserts no entry is transparent. **While focused /
+    full-screen (2026-10-08, after PR #259 still drifted on a real
+    iPhone)** the overlay is unmounted and the textarea draws its own
+    plain white 16px text (`-webkit-text-size-adjust: 100%`,
+    autocorrect/autocapitalize/spellcheck off) so the caret sits on the
+    glyphs you type; colours come back on blur / Done. Same lock on
+    Music video Script Sequence, Skidmarks, and Shorts. **Full-screen God Script
     editor (2026-09-18, Stuart's ask: "open the God Script box to full
     screen and edit everything in there without it updating before we
     update")** — `⤢ Full screen` beside `⇥ Format` opens
@@ -2450,8 +2456,8 @@ now (see "Explicitly out of scope" below).
     half-typed line stops matching its rendered clip,
     `preserveRenderedRuntimes` can't rebind it, and the row flickers back
     to Idle mid-edit (nothing is billed by that: Render is still a
-    deliberate tap). It carries the same tag-highlight overlay and its
-    own Format button. Deliberate trade-off, stated in the sheet's own
+    deliberate tap). No colour overlay while it is open (same 2026-10-08
+    lock); its own Format button stays. Deliberate trade-off, stated in the sheet's own
     header: while it is open the draft is **not saved** — the one screen
     in this panel that opts out of keystroke autosave — and Cancel on a
     changed draft asks before discarding. A localStorage draft mirror
