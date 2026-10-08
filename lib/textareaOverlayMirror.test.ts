@@ -7,6 +7,11 @@ import {
   MIRRORED_TEXT_STYLE_PROPERTIES,
   overlayPadding,
   resolveOverlayShellHeightPx,
+  SCRIPT_BOX_EDITING_TEXT_CLASS,
+  SCRIPT_BOX_IDLE_TEXT_CLASS,
+  SCRIPT_BOX_IOS_TEXTAREA_PROPS,
+  SCRIPT_BOX_TEXTAREA_CLASS,
+  scriptBoxTextClass,
 } from "./textareaOverlayMirror";
 
 const base = {
@@ -121,5 +126,29 @@ describe("innerScrollRoomPaddingBottomPx", () => {
     const wouldBeShellHeightIfMisapplied = basePaddingTop + scrollRoomBottom;
     expect(wouldBeShellHeightIfMisapplied).toBeGreaterThan(textareaHeight);
     expect(wouldBeShellHeightIfMisapplied - textareaHeight).toBe(basePaddingTop + basePaddingBottom);
+  });
+});
+
+describe("scriptBoxTextClass", () => {
+  it("shows the textarea's own white text while editing, and goes transparent so the colour overlay can show when idle", () => {
+    expect(scriptBoxTextClass(true)).toBe(SCRIPT_BOX_EDITING_TEXT_CLASS);
+    expect(scriptBoxTextClass(false)).toBe(SCRIPT_BOX_IDLE_TEXT_CLASS);
+    expect(SCRIPT_BOX_EDITING_TEXT_CLASS).toBe("text-white");
+    expect(SCRIPT_BOX_IDLE_TEXT_CLASS).toBe("text-transparent");
+  });
+});
+
+describe("SCRIPT_BOX_IOS_TEXTAREA_PROPS", () => {
+  it("turns off autocorrect, autocapitalize and spellcheck — a script is tags, not a sentence", () => {
+    expect(SCRIPT_BOX_IOS_TEXTAREA_PROPS).toEqual({
+      autoCorrect: "off",
+      autoCapitalize: "off",
+      spellCheck: false,
+    });
+  });
+
+  it("locks the typing surface at 16px via text-base + the script-box class", () => {
+    expect(SCRIPT_BOX_TEXTAREA_CLASS).toContain("text-base");
+    expect(SCRIPT_BOX_TEXTAREA_CLASS).toContain("script-box");
   });
 });

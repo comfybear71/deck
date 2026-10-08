@@ -958,10 +958,11 @@ describe("buildSunnyBanksOverlaySegments (what the script box colours)", () => {
 
 describe("SUNNY_BANKS_HIGHLIGHT_CLASSES", () => {
   it("live QA (2026-09-18): plain script text is opaque, not invisible on the black card", () => {
-    // The real <textarea> is `text-transparent` so the colored tags can
-    // show through it, which makes this overlay the only thing drawing
-    // the script at all. It shipped with a `text-white/0` base and every
-    // non-tag line rendered as black-on-black.
+    // While idle the real <textarea> is `text-transparent` so the
+    // colored tags can show through it, which makes this overlay the
+    // only thing drawing the script. It shipped with a `text-white/0`
+    // base and every non-tag line rendered as black-on-black. (While
+    // focused the overlay is hidden and the textarea draws white text.)
     expect(SUNNY_BANKS_HIGHLIGHT_CLASSES.plain).toBe("text-white");
   });
 

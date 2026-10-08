@@ -18,6 +18,18 @@ body {
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
 
+/* Script box (God Script / Script Sequence): iOS Safari auto-zooms any
+ * focused field under 16px and can still inflate text via
+ * `-webkit-text-size-adjust` even at 16px. Both would walk the caret
+ * off the coloured overlay — we no longer try to keep that overlay
+ * lined up *while typing*, but the typing surface itself must still
+ * stay at a locked 16px so the page doesn't jump on focus. */
+textarea.script-box {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  font-size: 16px;
+}
+
 @keyframes suit-pulse {
   0%,
   100% {

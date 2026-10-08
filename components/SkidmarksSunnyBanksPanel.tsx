@@ -3,6 +3,12 @@
 import { useScriptFormatFeedback } from "@/hooks/useScriptFormatFeedback";
 import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
+import {
+  SCRIPT_BOX_EDITING_TEXT_CLASS,
+  SCRIPT_BOX_IOS_TEXTAREA_PROPS,
+  SCRIPT_BOX_TEXTAREA_CLASS,
+  scriptBoxTextClass,
+} from "@/lib/textareaOverlayMirror";
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ESTIMATED_STILL_COST_USD, SIRAY_STILL_COST_USD } from "@/lib/autoPlate";
 import { preSendBlocks, preSendChecks, type PreSendIssue } from "@/lib/preSendChecks";
@@ -970,14 +976,15 @@ export function buildSunnyBanksOverlaySegments(raw: string): SunnyBanksHighlight
  * Text color for every segment the overlay draws — tags *and* plain
  * text.
  *
- * `plain` is not decoration: the overlay is the **only** thing that
- * draws this textarea's text at all (the real `<textarea>` is
+ * `plain` is not decoration: while the box is idle the overlay is the
+ * **only** thing drawing this textarea's text (the real `<textarea>` is
  * `text-transparent` so the colored tags can show through it), so plain
  * text needs a real, opaque color here or it renders as nothing. Live
  * QA (2026-09-18, real iPhone): the overlay shipped with a base of
  * `text-white/0` and every non-tag line was invisible — black text on
  * the black card, with only the bracket tags showing. Keep every value
- * in this table opaque.
+ * in this table opaque. While the box is focused the overlay is hidden
+ * and the textarea draws its own white text (2026-10-08).
  */
 export const SUNNY_BANKS_HIGHLIGHT_CLASSES: Record<SunnyBanksHighlightSegment["kind"], string> = {
   plain: "text-white",
@@ -1105,19 +1112,14 @@ function isSunnyBanksSpeechFormatLine(line: string): boolean {
  * element's `scrollTop`) rather than through React state, so it can't
  * lag a frame behind a fast scroll/paste.
  *
- * Two nested divs, not one (2026-10-08 — see
- * `useTextareaOverlayMirror`'s own doc comment for the full "a box can
- * never be shorter than its own padding" root cause). The outer div is
- * a plain clipping shell — fixed to the textarea's own height, no
- * padding of its own, nothing for `useTextareaOverlayMirror` to touch
- * except its `scrollTop`. The inner div is where the real font/padding
- * mirroring and the colour spans live; it is deliberately allowed to
- * render taller than the shell (that's what gives it room to scroll as
- * far as the textarea can) and `overflow-hidden` on the shell clips it
- * the ordinary way. Collapsing this back into one div reintroduces the
- * bug: a long script's last visible line spilling down behind whatever
- * sits after the box (the full-screen editor's own bottom toolbar, live
- * QA'd and screenshotted). */
+ * Idle-only (2026-10-08 live iPhone QA after PR #259): while the
+ * textarea is focused the parent unmounts this overlay and lets the
+ * textarea draw its own white text — real iOS Safari never kept the
+ * caret on the coloured words. Colours come back on blur / Done.
+ *
+ * Two nested divs, not one (see `useTextareaOverlayMirror`'s own doc
+ * comment). The outer div is a plain clipping shell; the inner div
+ * carries the font/padding mirror and the colour spans. */
 function SunnyBanksScriptHighlightOverlay({
   text,
   overlayRef,
@@ -2024,10 +2026,12 @@ export async function downloadSunnyBanksEpisodeZip(
  * your draft?" prompt on reopen is the obvious next step if a real
  * session ever loses work here; not built speculatively.
  *
- * Reuses `SunnyBanksScriptHighlightOverlay` so the tag colours (and the
- * "white text means the parser doesn't know this and will read it out
- * loud" tell) work at full size too, and carries its own Format button
- * since reflowing a pasted block is the main reason to be in here.
+ * Full-screen is an **editing** surface: no colour overlay while it is
+ * open (2026-10-08 live iPhone QA — overlay caret never lined up on
+ * real Safari). The textarea draws its own plain white text. Colours
+ * come back on Done, when this sheet closes onto the idle inline box.
+ * Carries its own Format button since reflowing a pasted block is the
+ * main reason to be in here.
  *
  * Height is pinned to `useVisualViewportHeight()` (falling back to
  * ordinary `inset-0` sizing when that API isn't available) rather than
@@ -2047,7 +2051,6 @@ function SunnyBanksFullScreenScriptEditor({
 }) {
   const [draft, setDraft] = useState(initialText);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
-  const overlayRef = useRef<HTMLDivElement>(null);
   const formatFeedback = useScriptFormatFeedback();
   const viewportHeight = useVisualViewportHeight();
   const handleFormat = () => {
@@ -2100,18 +2103,11 @@ function SunnyBanksFullScreenScriptEditor({
       )}
 
       <div className="relative min-h-0 flex-1">
-        <SunnyBanksScriptHighlightOverlay text={draft} overlayRef={overlayRef} />
         <textarea
           value={draft}
           onChange={(e) => {
             setDraft(e.target.value);
             setConfirmingDiscard(false);
-          }}
-          onScroll={(e) => {
-            if (overlayRef.current) {
-              overlayRef.current.scrollTop = e.currentTarget.scrollTop;
-              overlayRef.current.scrollLeft = e.currentTarget.scrollLeft;
-            }
           }}
           onPaste={(e) => {
             const raw = e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
@@ -2124,9 +2120,9 @@ function SunnyBanksFullScreenScriptEditor({
             setDraft(`${el.value.slice(0, start)}${decoded}${el.value.slice(end)}`);
           }}
           autoFocus
-          spellCheck={false}
+          {...SCRIPT_BOX_IOS_TEXTAREA_PROPS}
           aria-label="God Script full screen editor"
-          className="relative z-10 h-full w-full resize-none bg-transparent px-3 py-2 text-base leading-6 text-transparent caret-amber-300 focus:outline-none"
+          className={`relative z-10 h-full w-full resize-none bg-transparent px-3 py-2 leading-6 caret-amber-300 focus:outline-none ${SCRIPT_BOX_TEXTAREA_CLASS} ${SCRIPT_BOX_EDITING_TEXT_CLASS}`}
         />
       </div>
 
@@ -2349,6 +2345,9 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
    * than leaving Stuart to discover it by swiping. */
   const actStripRef = useRef<HTMLDivElement>(null);
   const scriptHighlightRef = useRef<HTMLDivElement>(null);
+  /** Inline God Script box is being typed in — hide the colour overlay
+   * for the duration (real iPhone Safari, 2026-10-08). */
+  const [scriptBoxEditing, setScriptBoxEditing] = useState(false);
   const locationDataUrlCacheRef = useRef<Record<string, string>>({});
   const runningRef = useRef(false);
   /** Stop (2026-09-30): the queue ends before the next line starts; the
@@ -3471,10 +3470,14 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
             {scriptOpen && (
               <div className="flex touch-pan-y flex-col gap-2.5 overscroll-y-contain">
                 <div className="relative rounded-xl border border-white/10 bg-white/[0.03] focus-within:border-amber-300/40">
-                  <SunnyBanksScriptHighlightOverlay text={scriptText} overlayRef={scriptHighlightRef} autoGrowMinRows={12} />
+                  {!scriptBoxEditing && (
+                    <SunnyBanksScriptHighlightOverlay text={scriptText} overlayRef={scriptHighlightRef} autoGrowMinRows={12} />
+                  )}
                   <textarea
                     value={scriptText}
                     onChange={(e) => handleScriptChange(e.target.value)}
+                    onFocus={() => setScriptBoxEditing(true)}
+                    onBlur={() => setScriptBoxEditing(false)}
                     onScroll={(e) => {
                       if (scriptHighlightRef.current) {
                         scriptHighlightRef.current.scrollTop = e.currentTarget.scrollTop;
@@ -3499,7 +3502,8 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                         : "Shazza: You right?\nDazza: Yeah nah, she'll be right.\nRanger Bazza:"
                     }
                     rows={12}
-                    className="relative z-10 w-full resize-y bg-transparent px-3 py-2 text-base leading-6 text-transparent caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60"
+                    {...SCRIPT_BOX_IOS_TEXTAREA_PROPS}
+                    className={`relative z-10 w-full resize-y bg-transparent px-3 py-2 leading-6 caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60 ${SCRIPT_BOX_TEXTAREA_CLASS} ${scriptBoxTextClass(scriptBoxEditing)}`}
                   />
                 </div>
                 {/* The prose hint that used to sit here (one-speaker-per-line,
