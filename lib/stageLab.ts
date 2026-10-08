@@ -11,7 +11,7 @@
 import { CAST_KIND_LABEL, subjectWordForCastKind, type CastKind } from "./castKind";
 import { ESTIMATED_STILL_COST_USD } from "./autoPlate";
 import { MAX_CLIP_DURATION_SEC, MIN_CLIP_DURATION_SEC, estimateRowVideoCostUsd } from "./clipGeneration";
-import { MAX_SHOT_CAST } from "./shotCast";
+import { MAX_SHOT_CAST, shotCastNameKey } from "./shotCast";
 import { SKIDMARKS_LOOK, SHORTS_LOOK, type StudioGenre } from "./studioGenre";
 import { SUNNY_BANKS_LOOK, type StudioLook } from "./sunnyBanks";
 import { pickRowVideoBackend, type RowVideoBackend } from "./videoBackendRouting";
@@ -223,14 +223,18 @@ export function resolveStageChain(shots: readonly StageShot[], shot: StageShot):
   return { ok: true, fromNumber, previousId: previous.id };
 }
 
+/** White-void guard: missing Location picture only. A Cast card with no
+ * picture (House the wall speaker, a prop) is an object in the prompt,
+ * never a refused plate. */
 export function missingPlatePictures(shot: StageShot, location: StageLocation | null): string[] {
   const missing: string[] = [];
   if (!location?.pictureUrl) missing.push(location?.name ? `${location.name} has no picture` : "No Location picture");
-  if (location?.peopleInPicture) return missing;
-  for (const actor of presentActors(shot)) {
-    if (!actor.pictureUrl) missing.push(`${actor.name} has no Cast picture`);
-  }
   return missing;
+}
+
+/** No Cast picture → describe as an object, never send a face. */
+export function stageTreatAsObject(actor: Pick<StageActorOnShot, "kind" | "pictureUrl">): boolean {
+  return actor.kind !== "person" || !actor.pictureUrl;
 }
 
 export interface StageReferenceImage {
@@ -252,14 +256,16 @@ export function stageReferenceImages(
       : `Location “${location?.name ?? "unset"}”`;
   const images: StageReferenceImage[] = [{ index: 1, role: "location", label: startLabel, url: startUrl }];
   if (location?.peopleInPicture) return images;
-  presentActors(shot).forEach((actor, i) => {
-    images.push({
-      index: i + 2,
-      role: "actor",
-      label: `${actor.name} Cast card (${STAGE_KIND_LABEL[actor.kind]})`,
-      url: actor.pictureUrl,
+  presentActors(shot)
+    .filter((actor) => actor.pictureUrl)
+    .forEach((actor, i) => {
+      images.push({
+        index: i + 2,
+        role: "actor",
+        label: `${actor.name} Cast card (${STAGE_KIND_LABEL[actor.kind]})`,
+        url: actor.pictureUrl,
+      });
     });
-  });
   return images;
 }
 
@@ -271,8 +277,8 @@ function lookForShot(shot: StageShot): StudioLook {
 }
 
 function objectLockLine(actor: StageActorOnShot): string {
-  const word = subjectWordForCastKind(actor.kind);
-  if (actor.kind === "person") return "";
+  if (!stageTreatAsObject(actor)) return "";
+  const word = actor.kind === "person" ? "object" : subjectWordForCastKind(actor.kind);
   return `${actor.name} is an ${word}. Never give this ${word} a human face, eyes, mouth, or body. Do not turn ${actor.name} into a person.`;
 }
 
@@ -366,7 +372,7 @@ export function compileStagePrompt(
         : "Remove any extra people or crowds already in image 1 — empty place only, then add only the ticked figures below."
     }`,
     figureLine,
-    ...present.map((actor, i) => imageLabelForActor(actor, i + 2)),
+    ...present.filter((actor) => actor.pictureUrl).map((actor, i) => imageLabelForActor(actor, i + 2)),
     ...present.map(objectLockLine).filter(Boolean),
     talking && speaker ? talkingHumanPlateLock(speaker, framing) : "",
     onStage,
@@ -472,15 +478,6 @@ export const DELICIAE_STARTER_ROLES: {
     look: "palm-sized robot dog",
     fallbackKind: "animal",
   },
-  {
-    nameHints: ["service droid", "servicedroid", "droid"],
-    presentOn: [4],
-    actionByShot: {
-      4: "Gets eggs on toast and a cappuccino from the PLATTER INC replicator and serves Arthur",
-    },
-    look: "kitchen service droid",
-    fallbackKind: "object",
-  },
 ];
 
 export const DELICIAE_STARTER_SHOTS: {
@@ -526,12 +523,12 @@ export const DELICIAE_STARTER_SHOTS: {
   {
     number: 4,
     line: "",
-    speakerHint: "droid",
+    speakerHint: "arthur",
     cameraMove: "pan",
     framing: "wide",
     durationSec: 8,
     startMode: "plate",
-    note: "Fresh plate — droid is Object, Arthur stays seated",
+    note: "Fresh plate — Arthur stays seated. No droid card exists yet.",
   },
 ];
 
@@ -582,7 +579,7 @@ export function tickActor(shot: StageShot, actorId: string, present: boolean): S
   };
 }
 
-/** Match a real Cast card to a Deliciae name hint. Loose: "Service droid" ≈ "droid". */
+/** Match a real Cast card to a Deliciae name hint. Never invents a missing card. */
 export function matchCastByHints(cast: readonly StageCastMember[], hints: readonly string[]): StageCastMember | undefined {
   const keys = hints.map((h) => h.replace(/[^a-z0-9]+/gi, "").toLowerCase());
   return cast.find((c) => {
@@ -592,9 +589,67 @@ export function matchCastByHints(cast: readonly StageCastMember[], hints: readon
 }
 
 export function findKitchenLocation(locations: readonly StageLocation[]): StageLocation | null {
+  const arthurKitchen = locations.find((l) => /arthur_kitchen/i.test(l.key) || /arthur_kitchen/i.test(l.name));
+  if (arthurKitchen) return arthurKitchen;
   const kitchen = locations.find((l) => /kitchen/i.test(l.name) || /kitchen/i.test(l.key));
   if (kitchen) return kitchen;
   return locations.find((l) => l.pictureUrl) ?? locations[0] ?? null;
+}
+
+export function remapShotLocation(
+  shot: StageShot,
+  locations: readonly StageLocation[],
+  previous?: StageLocation | null,
+): StageShot {
+  if (shot.locationId && locations.some((l) => l.id === shot.locationId)) return shot;
+  const byKey =
+    previous &&
+    locations.find(
+      (l) => l.key === previous.key || shotCastNameKey(l.name) === shotCastNameKey(previous.name),
+    );
+  const next = byKey ?? findKitchenLocation(locations) ?? locations[0] ?? null;
+  return { ...shot, locationId: next?.id ?? null };
+}
+
+export function remapShotsToCast(
+  shots: readonly StageShot[],
+  cast: readonly StageCastMember[],
+  locations: readonly StageLocation[],
+  previousLocations: readonly StageLocation[] = [],
+): StageShot[] {
+  return shots.map((shot) => {
+    const prevLoc = previousLocations.find((l) => l.id === shot.locationId) ?? null;
+    const presentNames = new Set(
+      shot.actors.filter((a) => a.present).map((a) => shotCastNameKey(a.name)),
+    );
+    const actionById: Record<string, string> = {};
+    const lookById: Record<string, string> = {};
+    const presentIds = new Set<string>();
+    for (const member of cast) {
+      const key = shotCastNameKey(member.name);
+      const prev = shot.actors.find((a) => a.id === member.id || shotCastNameKey(a.name) === key);
+      if (prev?.action) actionById[member.id] = prev.action;
+      if (prev?.lookOverride) lookById[member.id] = prev.lookOverride;
+      if (presentNames.has(key) || shot.actors.some((a) => a.id === member.id && a.present)) {
+        presentIds.add(member.id);
+      }
+    }
+    const speaker =
+      cast.find((c) => c.id === shot.speakerId) ??
+      cast.find((c) => {
+        const prev = shot.actors.find((a) => a.id === shot.speakerId);
+        return prev ? shotCastNameKey(c.name) === shotCastNameKey(prev.name) : false;
+      });
+    return remapShotLocation(
+      {
+        ...shot,
+        actors: actorsOnShotFromCast(cast, presentIds, actionById, lookById),
+        speakerId: speaker?.id ?? null,
+      },
+      locations,
+      prevLoc,
+    );
+  });
 }
 
 export function actorsOnShotFromCast(

@@ -4,6 +4,7 @@ import {
   buildDeliciaeStarter,
   compileStagePrompt,
   emptyStageShot,
+  findKitchenLocation,
   isTalkingPersonShot,
   lockedCameraFor,
   matchCastByHints,
@@ -11,6 +12,7 @@ import {
   presentActors,
   resolveStageChain,
   stageFramingLine,
+  stageTreatAsObject,
   stageVideoBackend,
   tickActor,
   type StageCastMember,
@@ -34,21 +36,28 @@ function shotFrom(partial: Partial<StageShot> & { actors: StageShot["actors"] })
     number: 1,
     sceneId: "sc",
     sceneLabel: "ACT I — KITCHEN",
-    locationId: "loc_kitchen",
+    locationId: kitchen.id,
     ...partial,
   });
 }
 
 const kitchen: StageLocation = {
-  id: "loc_kitchen",
+  id: "loc_adult_shorts_arthur_kitchen",
+  key: "arthur_kitchen",
+  name: "arthur_kitchen",
+  pictureUrl: "https://example.com/arthur_kitchen.jpg",
+};
+
+const genericKitchen: StageLocation = {
+  id: "loc_skidmarks_kitchen",
   key: "kitchen",
   name: "Kitchen",
   pictureUrl: "https://example.com/kitchen.jpg",
 };
 
-const house = member({ id: "sk:house", name: "House", kind: "object" });
-const arthur = member({ id: "sk:arthur", name: "Arthur", kind: "person" });
-const droid = member({ id: "sk:droid", name: "Service droid", kind: "object" });
+const house = member({ id: "asx:chr_house", name: "House", kind: "object", pictureUrl: null });
+const arthur = member({ id: "asx:chr_arthur", name: "Arthur", kind: "person" });
+const droid = member({ id: "asx:chr_droid", name: "Service droid", kind: "object" });
 
 function onStage(members: StageCastMember[], presentIds: string[], actions: Record<string, string> = {}): StageShot["actors"] {
   return members.map((m) => ({
@@ -64,7 +73,7 @@ describe("Stage prompt compile", () => {
     const shot = shotFrom({
       framing: "cu",
       line: "",
-      actors: onStage([arthur], ["sk:arthur"]),
+      actors: onStage([arthur], [arthur.id]),
     });
     const compiled = compileStagePrompt(shot, kitchen);
     const prompt = compiled.platePrompt;
@@ -74,9 +83,10 @@ describe("Stage prompt compile", () => {
   });
 
   it("never auto-ticks anyone named only in action text", () => {
+    const picturedHouse = { ...house, pictureUrl: "https://example.com/house.jpg" };
     const shot = shotFrom({
-      actors: onStage([house, arthur, droid], ["sk:house"], { "sk:house": "House greets Arthur from the wall" }),
-      speakerId: "sk:house",
+      actors: onStage([picturedHouse, arthur, droid], [picturedHouse.id], { [picturedHouse.id]: "House greets Arthur from the wall" }),
+      speakerId: picturedHouse.id,
       line: "Good morning, Arthur.",
     });
     const names = presentActors(shot).map((a) => a.name);
@@ -94,8 +104,8 @@ describe("Stage prompt compile", () => {
       cameraMove: "pan",
       framing: "wide",
       line: "Eggs on toast.",
-      speakerId: "sk:arthur",
-      actors: onStage([arthur], ["sk:arthur"], { "sk:arthur": "At the counter" }),
+      speakerId: arthur.id,
+      actors: onStage([arthur], [arthur.id], { [arthur.id]: "At the counter" }),
     });
     expect(isTalkingPersonShot(shot)).toBe(true);
     expect(lockedCameraFor(shot)).toEqual({ cameraMove: "hold", framing: "mcu" });
@@ -112,8 +122,8 @@ describe("Stage prompt compile", () => {
   it("objects never get a human face and never route to LTX", () => {
     const shot = shotFrom({
       line: "Good morning, Arthur.",
-      speakerId: "sk:house",
-      actors: onStage([house, arthur], ["sk:house", "sk:arthur"]),
+      speakerId: house.id,
+      actors: onStage([house, arthur], [house.id, arthur.id]),
     });
     expect(isTalkingPersonShot(shot)).toBe(false);
     expect(stageVideoBackend(shot)).toBe("grok");
@@ -125,20 +135,30 @@ describe("Stage prompt compile", () => {
 
   it("always includes the Location picture — never a white void", () => {
     const shot = shotFrom({
-      actors: onStage([arthur], ["sk:arthur"]),
+      actors: onStage([arthur], [arthur.id]),
     });
     const compiled = compileStagePrompt(shot, kitchen);
     expect(compiled.images[0]).toMatchObject({ role: "location", url: kitchen.pictureUrl });
     expect(compiled.platePrompt).toMatch(/Never a white void/);
-    expect(compiled.platePrompt).toMatch(/Kitchen/);
-    expect(missingPlatePictures(shot, { ...kitchen, pictureUrl: null })).toContain("Kitchen has no picture");
+    expect(compiled.platePrompt).toMatch(/arthur_kitchen/);
+    expect(missingPlatePictures(shot, { ...kitchen, pictureUrl: null, name: "Kitchen" })).toContain("Kitchen has no picture");
   });
 
-  it("refuses a missing Cast picture on a ticked actor", () => {
+  it("does not refuse a ticked House with no Cast picture when the Location has a picture", () => {
     const shot = shotFrom({
-      actors: onStage([{ ...droid, pictureUrl: null }], ["sk:droid"]),
+      actors: onStage([house, arthur], [house.id, arthur.id]),
+      speakerId: house.id,
+      line: "Good morning, Arthur.",
     });
-    expect(missingPlatePictures(shot, kitchen).join(" ")).toMatch(/Service droid has no Cast picture/);
+    expect(house.pictureUrl).toBeNull();
+    expect(stageTreatAsObject(house)).toBe(true);
+    expect(missingPlatePictures(shot, kitchen)).toEqual([]);
+    const compiled = compileStagePrompt(shot, kitchen);
+    expect(compiled.images.filter((i) => i.role === "actor").map((i) => i.label)).toEqual([
+      "Arthur Cast card (Person)",
+    ]);
+    expect(compiled.platePrompt).toMatch(/House is an object/i);
+    expect(compiled.platePrompt).toMatch(/Never give this object a human face/i);
   });
 });
 
@@ -150,7 +170,7 @@ describe("Stage chain", () => {
       locationId: "kitchen",
       renderStatus: "done",
       renderUrl: "https://example.com/a.mp4",
-      actors: onStage([arthur], ["sk:arthur"]),
+      actors: onStage([arthur], [arthur.id]),
     });
     const b = shotFrom({
       id: "b",
@@ -158,7 +178,7 @@ describe("Stage chain", () => {
       locationId: "bedroom",
       startMode: "chain",
       chainFromNumber: 1,
-      actors: onStage([arthur], ["sk:arthur"]),
+      actors: onStage([arthur], [arthur.id]),
     });
     const status = resolveStageChain([a, b], b);
     expect(status.ok).toBe(false);
@@ -171,7 +191,7 @@ describe("Stage chain", () => {
       number: 1,
       locationId: "kitchen",
       renderStatus: "idle",
-      actors: onStage([arthur], ["sk:arthur"]),
+      actors: onStage([arthur], [arthur.id]),
     });
     const b = shotFrom({
       id: "b",
@@ -179,7 +199,7 @@ describe("Stage chain", () => {
       locationId: "kitchen",
       startMode: "chain",
       chainFromNumber: 1,
-      actors: onStage([arthur], ["sk:arthur"]),
+      actors: onStage([arthur], [arthur.id]),
     });
     const status = resolveStageChain([a, b], b);
     expect(status.ok).toBe(false);
@@ -193,7 +213,7 @@ describe("Stage chain", () => {
       locationId: "kitchen",
       renderStatus: "done",
       renderUrl: "https://example.com/a.mp4",
-      actors: onStage([house, arthur], ["sk:house", "sk:arthur"]),
+      actors: onStage([house, arthur], [house.id, arthur.id]),
     });
     const b = shotFrom({
       id: "b",
@@ -201,7 +221,7 @@ describe("Stage chain", () => {
       locationId: "kitchen",
       startMode: "chain",
       chainFromNumber: 1,
-      actors: onStage([arthur], ["sk:arthur"]),
+      actors: onStage([arthur], [arthur.id]),
     });
     expect(resolveStageChain([a, b], b)).toEqual({ ok: true, fromNumber: 1, previousId: "a" });
     expect(presentActors(b).map((x) => x.name)).toEqual(["Arthur"]);
@@ -209,19 +229,25 @@ describe("Stage chain", () => {
 });
 
 describe("Deliciae starter + Cast match", () => {
-  it("matches House, Arthur and Service droid by name onto real Cast", () => {
+  it("matches House and Arthur by name and never ticks a droid", () => {
     expect(matchCastByHints([house, arthur, droid], ["house"])?.name).toBe("House");
-    expect(matchCastByHints([house, arthur, droid], ["service droid", "droid"])?.name).toBe("Service droid");
     const starter = buildDeliciaeStarter([house, arthur, droid], [kitchen]);
     expect(starter.shots).toHaveLength(4);
     expect(presentActors(starter.shots[0]).map((a) => a.name).sort()).toEqual(["Arthur", "House"]);
     expect(starter.shots[0].line).toBe("Good morning, Arthur.");
-    expect(presentActors(starter.shots[3]).map((a) => a.name).sort()).toEqual(["Arthur", "Service droid"]);
+    expect(presentActors(starter.shots[3]).map((a) => a.name)).toEqual(["Arthur"]);
+    expect(starter.shots.some((s) => presentActors(s).some((a) => /droid/i.test(a.name)))).toBe(false);
   });
 
   it("does not invent a Service droid card when Cast has none", () => {
     const starter = buildDeliciaeStarter([house, arthur], [kitchen]);
-    expect(starter.shots[3].actors.some((a) => /droid/i.test(a.name) && a.present)).toBe(false);
+    expect(starter.shots.flatMap((s) => s.actors).some((a) => /droid/i.test(a.name))).toBe(false);
+    expect(starter.shots[3].locationId).toBe(kitchen.id);
+  });
+
+  it("prefers arthur_kitchen over a generic kitchen from another show", () => {
+    expect(findKitchenLocation([genericKitchen, kitchen])?.key).toBe("arthur_kitchen");
+    expect(findKitchenLocation([kitchen, genericKitchen])?.key).toBe("arthur_kitchen");
   });
 
   it("caps ticks at MAX_SHOT_CAST", () => {

@@ -48,6 +48,8 @@ export interface StageLabPersisted {
   scenes: StageScene[];
   shots: StageLabPersistedShot[];
   openShotId: string | null;
+  /** The project whose Cast/Locations strip the shots were last bound to. */
+  projectId?: string | null;
 }
 
 const MOVES: readonly StageCameraMove[] = ["hold", "push-in", "pull-back", "pan", "tracking", "dutch"];
@@ -168,6 +170,7 @@ export function parseStageLabPersisted(value: unknown): StageLabPersisted | null
     scenes: scenes.length ? scenes : [{ id: "scene", label: "Scene" }],
     shots,
     openShotId: typeof v.openShotId === "string" ? v.openShotId : shots[0]?.id ?? null,
+    projectId: typeof v.projectId === "string" ? v.projectId : null,
   };
 }
 
@@ -182,13 +185,19 @@ export function readStageLabStore(): StageLabPersisted | null {
   }
 }
 
-export function writeStageLabStore(state: { scenes: StageScene[]; shots: StageShot[]; openShotId: string | null }): void {
+export function writeStageLabStore(state: {
+  scenes: StageScene[];
+  shots: StageShot[];
+  openShotId: string | null;
+  projectId?: string | null;
+}): void {
   if (typeof window === "undefined") return;
   const body: StageLabPersisted = {
     version: 1,
     scenes: state.scenes,
     shots: state.shots.map(serializeStageShot),
     openShotId: state.openShotId,
+    projectId: state.projectId ?? null,
   };
   window.localStorage.setItem(STAGE_LAB_STORAGE_KEY, JSON.stringify(body));
 }

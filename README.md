@@ -631,9 +631,11 @@ now (see "Explicitly out of scope" below).
 
 **Stage lab** (`/stage-lab`) is a separate director-board sandbox, not a
 mode of Sunny Banks, Skidmarks, Music video, or Shorts. It is not linked
-from those screens. It loads saved Cast and Locations read-only, keeps
-shots in its own `the-tab:stage-lab-v1` key, and can Make plate (~$0.02
-Grok still). Video Render is Phase 2 (disabled). See `docs/STAGE_PLAN.md`.
+from those screens. It loads **one project's** Cast and Locations strip
+read-only (default Deliciae, Shorts folder `deliciae`), keeps shots in
+its own `the-tab:stage-lab-v1` key, and can Make plate (~$0.02 Grok
+still). A Cast card with no picture does not block Make plate. Video
+Render is Phase 2 (disabled). See `docs/STAGE_PLAN.md`.
 
 - **Node face** (`components/SkidmarksNodeCard.tsx`) — the same warm
   rose/pink identity treatment as before (border, gradient wash, glow, ♥

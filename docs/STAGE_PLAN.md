@@ -15,7 +15,7 @@ You asked to work like a director: see the actors, the set, what they do, what t
 On the lab you:
 
 1. Pick the **set** (a Location picture).
-2. Tap who is **on stage** (Arthur, Pip, House…). Only people you tick are in the shot. House is an Object, not a made-up human face. Names in an action sentence do not secretly add extra bodies.
+2. Tap who is **on stage** (Arthur, Dennis, Mira, Pip, House on Deliciae — no droid). Only people you tick are in the shot. House is an Object, not a made-up human face, and needs no Cast picture. Names in an action sentence do not secretly add extra bodies.
 3. Give each ticked actor their **action**. Give the speaker their **line** (blank = silent).
 4. Pick **camera move** and **framing**, and **how long**.
 5. Choose **start**: a fresh plate from the real Cast + Location pictures, or **chain** from a previous shot’s last frame (chain only copies the picture, never who is in the shot).
@@ -257,10 +257,10 @@ Do not skip to Phase 3 because the mock looks ready.
 
 ## 9. Decisions Stuart accepted (2026-10-08)
 
-1. **House** is an Object. Silent **Grok** shot. Voice is added in Resolve. No audio mux on this page yet.
-2. **Service droid** gets its own Object Cast card with a picture (like House). The lab matches that card by name; it does not write a new card into `deck_items`.
+1. **House** is an Object. Silent **Grok** shot. Voice is added in Resolve. No audio mux on this page yet. A Cast card with no picture (House) does not block Make plate — it is described in the prompt, never given a face. White-void is a missing Location picture.
+2. **The serving droid has not been created.** The lab must not add, seed, or show a droid / Service droid card. Deliciae Cast is that project's own strip: Arthur, Dennis, Mira, Pip, House.
 3. **Chain across a location change is blocked** — the user gets a fresh plate instead.
-4. **`/stage-lab` loads the real saved Cast and Locations read-only** (pictures, names, looks). It keeps the Deliciae Act I kitchen as starter *shot content*.
+4. **`/stage-lab` loads ONE project's Cast and Locations strip** (Deliciae is a Shorts script episode, folder `deliciae`, even though the vibe-director chrome says Skidmarks). Default picker is Deliciae. Never dump every show (no town_street / park / courthouse). Kitchen is `arthur_kitchen`. Starter shot content stays Act I kitchen.
 5. **It stays a separate page** (`/stage-lab`). No links from, and no writes into, Sunny Banks, Skidmarks, Music video, or Shorts. Own storage key only (`the-tab:stage-lab-v1`).
 
 Length picker stays 5 / 8 / 10 / 12 / 15s. Merge into genres is still not this PR.

@@ -48,6 +48,14 @@ describe("Stage lab store", () => {
     expect(live.actors[0]?.action).toBe("At the counter");
     expect(live.actors[0]?.pictureUrl).toBe(arthur.pictureUrl);
     expect(live.plateUrl).toBe("https://blob.example/plate.jpg");
+    const withProject = parseStageLabPersisted({
+      version: 1,
+      scenes: [{ id: "sc", label: "ACT I — KITCHEN" }],
+      shots: [raw],
+      openShotId: "shot_1",
+      projectId: "ws-deliciae",
+    });
+    expect(withProject?.projectId).toBe("ws-deliciae");
   });
 
   it("rejects junk JSON", () => {
