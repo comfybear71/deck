@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   autoGrowMinHeightPx,
+  innerScrollRoomPaddingBottomPx,
   IOS_TEXTAREA_INSET_PX,
   isIosWebKit,
   MIRRORED_TEXT_STYLE_PROPERTIES,
   overlayPadding,
+  resolveOverlayShellHeightPx,
 } from "./textareaOverlayMirror";
 
 const base = {
@@ -73,5 +75,51 @@ describe("MIRRORED_TEXT_STYLE_PROPERTIES", () => {
     for (const prop of ["font-weight", "font-kerning", "font-variant-ligatures", "tab-size", "white-space", "overflow-wrap", "word-break"]) {
       expect(MIRRORED_TEXT_STYLE_PROPERTIES).toContain(prop);
     }
+  });
+});
+
+// Regression coverage for the 2026-10-08 "cursor and type don't match
+// up" bug (Shorts' Deliciae God Script, reported on iPhone Safari,
+// worst near the bottom of a long script): a real `getBoundingClientRect`
+// measurement on a live page showed the single-div overlay always
+// rendering exactly `2 * verticalPadding` taller than the textarea it
+// was meant to clip to (e.g. 562px vs. a 546px textarea, with 8px of
+// ordinary top/bottom padding each) — a CSS box can never be rendered
+// shorter than its own padding, and the overlay's own giant
+// "scroll room" bottom padding (`paddingBottom + textarea.clientHeight`)
+// already exceeds the box's intended height on its own. These two
+// functions are the fix: `resolveOverlayShellHeightPx` is the number
+// applied to the *clipping* shell (never touched by padding),
+// `innerScrollRoomPaddingBottomPx` is the number applied to the
+// *unclipped* inner child instead (where overflowing past the shell's
+// height is the whole point — `overflow-hidden` on the shell clips it
+// normally). This sandbox has no jsdom/real layout engine to assert the
+// resulting pixel geometry end-to-end — covered instead by this exact
+// scenario in real iPhone-Safari-emulated Playwright QA, see the PR.
+describe("resolveOverlayShellHeightPx", () => {
+  it("is always exactly the textarea's own height, independent of any padding", () => {
+    expect(resolveOverlayShellHeightPx(546)).toBe(546);
+    expect(resolveOverlayShellHeightPx(1432)).toBe(1432);
+  });
+});
+
+describe("innerScrollRoomPaddingBottomPx", () => {
+  it("adds the textarea's own visible height on top of the ordinary bottom padding", () => {
+    expect(innerScrollRoomPaddingBottomPx(8, 546)).toBe(554);
+  });
+
+  it("the result would already force a box taller than the textarea's own height if it ever landed on the shell instead of the inner child — exactly why it never does", () => {
+    const basePaddingBottom = 8;
+    const basePaddingTop = 8;
+    const textareaHeight = 546;
+    const scrollRoomBottom = innerScrollRoomPaddingBottomPx(basePaddingBottom, textareaHeight);
+    // A box's own padding alone sets a hard floor on its rendered
+    // height — if this padding sum ever landed on the shell (the box
+    // that's supposed to clip to `textareaHeight`), the shell would be
+    // forced taller than its container by exactly `2 * basePadding`,
+    // matching the real 16px (2 * 8px) overflow measured live.
+    const wouldBeShellHeightIfMisapplied = basePaddingTop + scrollRoomBottom;
+    expect(wouldBeShellHeightIfMisapplied).toBeGreaterThan(textareaHeight);
+    expect(wouldBeShellHeightIfMisapplied - textareaHeight).toBe(basePaddingTop + basePaddingBottom);
   });
 });

@@ -2,6 +2,7 @@
 
 import { useScriptFormatFeedback } from "@/hooks/useScriptFormatFeedback";
 import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
+import { useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   buildScriptSequenceHighlightSegments,
@@ -182,7 +183,18 @@ function animateProgressLabel(event: AnimateExistingPlatesEvent): string {
  */
 /** Highlight overlay behind the (transparent) script textarea — same
  * chrome pattern as Sunny Banks' God Script box, but colours MV part
- * Part / type / Duration / Prompt-label fields. Display-only; never changes parsing. */
+ * Part / type / Duration / Prompt-label fields. Display-only; never changes parsing.
+ *
+ * Two nested divs, not one (2026-10-08) — see
+ * `useTextareaOverlayMirror`'s own doc comment for why: a box can never
+ * be rendered shorter than its own padding, so a single `absolute
+ * inset-0` div carrying the deliberately oversized "scroll room"
+ * bottom padding always rendered taller than its own container,
+ * bleeding coloured text past the box's real bottom edge. The outer div
+ * here is a plain, padding-free clipping shell (fixed to the textarea's
+ * height); the inner div carries the real font/padding mirror and the
+ * colour spans, and is allowed to render taller than the shell on
+ * purpose — `overflow-hidden` on the shell clips it normally. */
 function ScriptSequenceHighlightOverlay({
   text,
   overlayRef,
@@ -196,17 +208,15 @@ function ScriptSequenceHighlightOverlay({
   const segments = buildScriptSequenceHighlightSegments(text);
   useTextareaOverlayMirror(overlayRef, text, { autoGrowMinRows });
   return (
-    <div
-      ref={overlayRef}
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2.5 text-base leading-6"
-    >
-      {segments.map((segment, index) => (
-        <span key={index} className={SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[segment.kind]}>
-          {segment.text}
-        </span>
-      ))}
-      {text.endsWith("\n") ? <span>{"\u200b"}</span> : null}
+    <div ref={overlayRef} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full overflow-hidden">
+      <div className="whitespace-pre-wrap break-words px-3 py-2.5 text-base leading-6">
+        {segments.map((segment, index) => (
+          <span key={index} className={SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES[segment.kind]}>
+            {segment.text}
+          </span>
+        ))}
+        {text.endsWith("\n") ? <span>{"\u200b"}</span> : null}
+      </div>
     </div>
   );
 }
@@ -216,6 +226,11 @@ function ScriptSequenceHighlightOverlay({
  * Banks' full-screen God Script flow: nothing touches the live draft
  * until Apply, so mid-edit keystrokes don't remint the clip timeline.
  * Format here only rewrites header type words on the local draft.
+ *
+ * Height is pinned to `useVisualViewportHeight()` (same as Sunny
+ * Banks' full-screen editor, see that hook's own doc comment) so the
+ * iOS keyboard shrinks the box above it instead of drawing over its
+ * bottom toolbar and whatever's being typed there.
  */
 function ScriptSequenceFullScreenEditor({
   initialText,
@@ -231,6 +246,7 @@ function ScriptSequenceFullScreenEditor({
   const overlayRef = useRef<HTMLDivElement>(null);
   const dirty = draft !== initialText;
   const formatFeedback = useScriptFormatFeedback();
+  const viewportHeight = useVisualViewportHeight();
 
   const handleCancel = () => {
     if (dirty && !confirmingDiscard) {
@@ -241,7 +257,10 @@ function ScriptSequenceFullScreenEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950">
+    <div
+      className="fixed inset-0 z-50 flex flex-col bg-zinc-950"
+      style={viewportHeight != null ? { height: viewportHeight } : undefined}
+    >
       <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
         <button
           type="button"

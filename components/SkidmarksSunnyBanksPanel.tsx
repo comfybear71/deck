@@ -2,6 +2,7 @@
 
 import { useScriptFormatFeedback } from "@/hooks/useScriptFormatFeedback";
 import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
+import { useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ESTIMATED_STILL_COST_USD, SIRAY_STILL_COST_USD } from "@/lib/autoPlate";
 import { preSendBlocks, preSendChecks, type PreSendIssue } from "@/lib/preSendChecks";
@@ -1102,7 +1103,21 @@ function isSunnyBanksSpeechFormatLine(line: string): boolean {
  * `SUNNY_BANKS_HIGHLIGHT_CLASSES`, never a transparent base. Scroll
  * position is synced imperatively (`onScroll` on the textarea sets this
  * element's `scrollTop`) rather than through React state, so it can't
- * lag a frame behind a fast scroll/paste. */
+ * lag a frame behind a fast scroll/paste.
+ *
+ * Two nested divs, not one (2026-10-08 — see
+ * `useTextareaOverlayMirror`'s own doc comment for the full "a box can
+ * never be shorter than its own padding" root cause). The outer div is
+ * a plain clipping shell — fixed to the textarea's own height, no
+ * padding of its own, nothing for `useTextareaOverlayMirror` to touch
+ * except its `scrollTop`. The inner div is where the real font/padding
+ * mirroring and the colour spans live; it is deliberately allowed to
+ * render taller than the shell (that's what gives it room to scroll as
+ * far as the textarea can) and `overflow-hidden` on the shell clips it
+ * the ordinary way. Collapsing this back into one div reintroduces the
+ * bug: a long script's last visible line spilling down behind whatever
+ * sits after the box (the full-screen editor's own bottom toolbar, live
+ * QA'd and screenshotted). */
 function SunnyBanksScriptHighlightOverlay({
   text,
   overlayRef,
@@ -1116,21 +1131,19 @@ function SunnyBanksScriptHighlightOverlay({
   const segments = buildSunnyBanksOverlaySegments(text);
   useTextareaOverlayMirror(overlayRef, text, { autoGrowMinRows });
   return (
-    <div
-      ref={overlayRef}
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-base leading-6"
-    >
-      {segments.map((segment, index) => (
-        <span key={index} className={SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]}>
-          {segment.text}
-        </span>
-      ))}
-      {/* Trailing newline: a native textarea always reserves room for one more
-       * line after a final "\n" (where the caret sits); without this, the
-       * overlay's own wrapped-line count falls one short and drifts up
-       * relative to the real textarea once the script ends in a blank line. */}
-      {text.endsWith("\n") ? <span>{"\u200b"}</span> : null}
+    <div ref={overlayRef} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full overflow-hidden">
+      <div className="whitespace-pre-wrap break-words px-3 py-2 text-base leading-6">
+        {segments.map((segment, index) => (
+          <span key={index} className={SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]}>
+            {segment.text}
+          </span>
+        ))}
+        {/* Trailing newline: a native textarea always reserves room for one more
+         * line after a final "\n" (where the caret sits); without this, the
+         * overlay's own wrapped-line count falls one short and drifts up
+         * relative to the real textarea once the script ends in a blank line. */}
+        {text.endsWith("\n") ? <span>{"\u200b"}</span> : null}
+      </div>
     </div>
   );
 }
@@ -2015,6 +2028,13 @@ export async function downloadSunnyBanksEpisodeZip(
  * "white text means the parser doesn't know this and will read it out
  * loud" tell) work at full size too, and carries its own Format button
  * since reflowing a pasted block is the main reason to be in here.
+ *
+ * Height is pinned to `useVisualViewportHeight()` (falling back to
+ * ordinary `inset-0` sizing when that API isn't available) rather than
+ * just `fixed inset-0` — see that hook's own doc comment: a bare
+ * `fixed inset-0` box keeps the full pre-keyboard screen height on iOS
+ * Safari, so the iOS keyboard simply draws over its bottom toolbar and
+ * whatever's being typed there instead of the box shrinking above it.
  */
 function SunnyBanksFullScreenScriptEditor({
   initialText,
@@ -2029,6 +2049,7 @@ function SunnyBanksFullScreenScriptEditor({
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
   const formatFeedback = useScriptFormatFeedback();
+  const viewportHeight = useVisualViewportHeight();
   const handleFormat = () => {
     const formatted = formatSunnyBanksGodScript(draft);
     if (formatted !== draft) setDraft(formatted);
@@ -2045,7 +2066,10 @@ function SunnyBanksFullScreenScriptEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950">
+    <div
+      className="fixed inset-0 z-50 flex flex-col bg-zinc-950"
+      style={viewportHeight != null ? { height: viewportHeight } : undefined}
+    >
       <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
         <button
           type="button"
