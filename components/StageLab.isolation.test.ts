@@ -48,6 +48,7 @@ describe("Stage lab isolation", () => {
       expect(text, file).not.toMatch(/subscribeSkidmarks\b/);
       expect(text, file).not.toMatch(/patchCharacterLoras/);
       expect(text, file).not.toMatch(/deleteSunnyBanksWorkspace/);
+      expect(text, file).not.toMatch(/method:\s*["']PUT["']/);
     }
   });
 

@@ -1,78 +1,49 @@
 /**
- * Read-only Cast + Locations for `/stage-lab`.
+ * Read-only Deliciae Cast + Locations for `/stage-lab`.
  *
- * GET `/api/skidmarks/session` and GET `/api/deck/items` only. Never
- * the studio session writer (that would also subscribe and PUT), never a
- * deck_items write.
+ * GET `/api/skidmarks/session` and GET `/api/deck/items?kind=character|location`
+ * only. Never the studio session writer, never a deck_items write, never
+ * another genre's episode list.
  *
- * The lab shows ONE project's Cast and Locations strip — the same cards
- * that project already saved. Deliciae is a Shorts script episode
- * (`shortsStudio`, folder `deliciae`): Arthur, Dennis, Mira, Pip, House
- * and that episode's own places. It does not dump every show, and it
- * never seeds a droid.
+ * Hard-locked to the Shorts script episode whose folder is `deliciae`.
+ * Other shorts / Skidmarks / Sunnybank cards are not enumerated, fetched,
+ * or shown. Missing that folder → "Deliciae not found", no fallback.
+ *
+ * Cast main picture = the same one the Shorts Cast strip shows: LoRA
+ * `referenceUrl`, else the extra's `pictureUrls[0]`, else first training
+ * picture. Kind (Person / Animal / Object) does not skip the lookup.
  */
 
 import { overlayCharacterItems } from "./characterItems";
 import { emptyCharacterLorasState, type CharacterLoraEntry } from "./characterLoras";
-import { ADULT_SHORT_ITEMS } from "./adultShortItems";
-import { adultShortStarring, normalizeAdultShortsState, type AdultShortsState } from "./adultShorts";
 import { castKindFrom } from "./castKind";
 import type { DeckItemRecord } from "./deckItems";
 import { overlayDeckItems } from "./deckItemSync";
 import { LOCATION_ITEMS } from "./locationItems";
-import { effectiveDeckLocations, type DeckLocation } from "./deckLocations";
+import type { DeckLocation } from "./deckLocations";
 import { episodeOwnLocations, isInEpisode, type EpisodeScope } from "./episodeCast";
 import {
   normalizeRosterExtrasState,
   rosterExtraSourceKey,
   type RosterExtraCharacter,
 } from "./rosterExtras";
-import { SHORTS_EPISODE_ITEMS, SKIDMARKS_EPISODE_ITEMS } from "./skidmarksEpisodeItems";
 import { normalizeSkidmarksState, type SkidmarksState } from "./skidmarks";
-import { normalizeSkidmarksEpisodesState } from "./skidmarksEpisodes";
-import {
-  skidmarksEpisodeCast,
-  skidmarksEpisodeLocations,
-  skidmarksEpisodeScopeOf,
-} from "./skidmarksEpisodeCast";
-import { shortsStudioEpisodeScopeOf } from "./shortsEpisodeCast";
 import { shotCastNameKey } from "./shotCast";
-import { SUNNYBANK_EPISODE_ITEMS } from "./sunnybankEpisodeItems";
-import { SUNNY_BANKS_CAST } from "./sunnyBanks";
-import {
-  liveFromSunnyBanksWorkspace,
-  type SkidmarksSunnyBanksState,
-  type SunnyBanksWorkspaceSnapshot,
-} from "./sunnyBanksWorkspace";
+import { buildSunnyBanksWorkspaceFromLive, type SunnyBanksWorkspaceSnapshot } from "./sunnyBanksWorkspace";
 import type { StageCastMember, StageLocation } from "./stageLab";
-import type { StudioGenre } from "./studioGenre";
 
-export type StageLabProjectGenre = StudioGenre;
+/** Shorts media folder the lab is locked to. Not Good Boy, not a label match. */
+export const DELICIAE_SHORTS_FOLDER = "deliciae";
 
-export interface StageLabProject {
-  id: string;
-  label: string;
-  genre: StageLabProjectGenre;
-  mediaSlug: string | null;
-}
-
-export interface StageLabProjectPack {
-  actors: StageCastMember[];
-  locations: StageLocation[];
-}
+export const DELICIAE_NOT_FOUND = "Deliciae not found";
 
 export interface StageLabCastSnapshot {
+  found: boolean;
   actors: StageCastMember[];
   locations: StageLocation[];
-  projects: StageLabProject[];
-  defaultProjectId: string | null;
-  byProject: Record<string, StageLabProjectPack>;
-  source: "saved" | "empty";
+  source: "saved" | "empty" | "missing";
   error: string | null;
 }
-
-/** Deliciae / the old Human Pet / Good Boy names. Prefer folder `deliciae`. */
-export const DELICIAE_PROJECT_MATCH = /deliciae|human\s*pet|good\s*boy/i;
 
 function itemsFromBody(body: unknown): { items: DeckItemRecord[]; deleted: string[] } {
   if (!body || typeof body !== "object") return { items: [], deleted: [] };
@@ -99,29 +70,6 @@ function overlayCharacters(local: CharacterLoraEntry[], items: DeckItemRecord[],
   return overlayCharacterItems(local, items, deleted).characters;
 }
 
-function overlayWorkspaces(
-  local: SunnyBanksWorkspaceSnapshot[] | undefined,
-  items: DeckItemRecord[],
-  deleted: string[],
-  config: typeof SHORTS_EPISODE_ITEMS,
-): SunnyBanksWorkspaceSnapshot[] {
-  return overlayDeckItems(config, local ?? [], items, deleted).entries;
-}
-
-function overlayStudio(
-  local: SkidmarksSunnyBanksState | null | undefined,
-  items: DeckItemRecord[],
-  deleted: string[],
-  config: typeof SHORTS_EPISODE_ITEMS,
-): SkidmarksSunnyBanksState | null {
-  const workspaces = overlayWorkspaces(local?.workspaces, items, deleted, config);
-  if (!local) {
-    if (workspaces.length === 0) return null;
-    return { live: liveFromSunnyBanksWorkspace(workspaces[0]), workspaces, saveSeq: 0 };
-  }
-  return { ...local, workspaces };
-}
-
 function toStageLocation(loc: DeckLocation): StageLocation {
   return {
     id: loc.id,
@@ -144,23 +92,69 @@ function stageLocationsFromList(list: readonly DeckLocation[]): StageLocation[] 
   return out;
 }
 
-function voiceFor(cards: readonly CharacterLoraEntry[], sourceKey: string, extraId?: string): string | null {
-  const hit =
-    cards.find((c) => c.sourceKey === sourceKey && c.voiceId) ??
-    (extraId ? cards.find((c) => c.id === extraId && c.voiceId) : undefined);
-  return hit?.voiceId ?? null;
+function isDeliciaeFolder(slug: string | null | undefined): boolean {
+  return (slug ?? "").trim().toLowerCase() === DELICIAE_SHORTS_FOLDER;
 }
 
-function extraToMember(extra: RosterExtraCharacter, group: StageCastMember["group"], cards: readonly CharacterLoraEntry[]): StageCastMember {
-  const sourceKey = rosterExtraSourceKey(group === "shorts" ? "adult-shorts" : group === "sunnybank" ? "sunny-banks" : "music-video", extra.id);
+export const DELICIAE_EPISODE_SCOPE: EpisodeScope = {
+  episode: DELICIAE_SHORTS_FOLDER,
+  legacy: false,
+  tickedIds: [],
+};
+
+/** The Deliciae Shorts workspace card, or null. Never falls back to Good Boy or another show. */
+export function findDeliciaeShortsWorkspace(state: SkidmarksState): SunnyBanksWorkspaceSnapshot | null {
+  const studio = state.shortsStudio;
+  if (!studio) return null;
+  const card = (studio.workspaces ?? []).find((w) => isDeliciaeFolder(w.mediaSlug));
+  if (card) return card;
+  if (isDeliciaeFolder(studio.live?.mediaSlug)) {
+    return { ...buildSunnyBanksWorkspaceFromLive(studio.live, 0, 0, "shorts"), mediaSlug: DELICIAE_SHORTS_FOLDER };
+  }
+  return null;
+}
+
+function shortsSourceKey(extraId: string): string {
+  return rosterExtraSourceKey("adult-shorts", extraId);
+}
+
+function loraForExtra(cards: readonly CharacterLoraEntry[], extra: RosterExtraCharacter): CharacterLoraEntry | undefined {
+  const sourceKey = shortsSourceKey(extra.id);
+  return cards.find((c) => c.sourceKey === sourceKey) ?? cards.find((c) => c.id === extra.id);
+}
+
+function firstHttp(url: string | null | undefined): string | null {
+  const u = typeof url === "string" ? url.trim() : "";
+  return u && /^(https:|data:image\/|\/)/.test(u) ? u : null;
+}
+
+/**
+ * Same main picture the Shorts Cast strip shows (`referenceUrl` on the
+ * LoRA card, else the extra's first picture, else first training still).
+ * Object / Animal / Person all use this path.
+ */
+export function stageCastMainPicture(
+  extra: Pick<RosterExtraCharacter, "id" | "pictureUrls">,
+  cards: readonly CharacterLoraEntry[],
+): string | null {
+  const card = loraForExtra(cards, extra as RosterExtraCharacter);
+  return firstHttp(card?.referenceUrl) ?? firstHttp(extra.pictureUrls?.[0]) ?? firstHttp(card?.trainingImageUrls?.[0]) ?? null;
+}
+
+function voiceFor(cards: readonly CharacterLoraEntry[], extra: RosterExtraCharacter): string | null {
+  const card = loraForExtra(cards, extra);
+  return card?.voiceId ?? null;
+}
+
+export function extraToStageMember(extra: RosterExtraCharacter, cards: readonly CharacterLoraEntry[]): StageCastMember {
   return {
-    id: sourceKey,
+    id: shortsSourceKey(extra.id),
     name: extra.name,
     kind: castKindFrom(extra),
-    pictureUrl: extra.pictureUrls[0] ?? null,
-    voiceId: voiceFor(cards, sourceKey, extra.id),
+    pictureUrl: stageCastMainPicture(extra, cards),
+    voiceId: voiceFor(cards, extra),
     look: extra.look,
-    group,
+    group: "shorts",
   };
 }
 
@@ -177,187 +171,58 @@ function pushUnique(out: StageCastMember[], member: StageCastMember): void {
   out.push(member);
 }
 
-function shortsScopeFor(project: StageLabProject, state: SkidmarksState): EpisodeScope {
-  const studio = state.shortsStudio;
-  const card = studio?.workspaces.find((w) => w.id === project.id);
-  if (!studio || !card) {
-    return { episode: project.mediaSlug, legacy: false, tickedIds: [] };
-  }
-  return shortsStudioEpisodeScopeOf({ ...studio, live: liveFromSunnyBanksWorkspace(card) }, state.adultShorts);
-}
-
-function skidmarksScopeFor(project: StageLabProject, state: SkidmarksState): EpisodeScope {
-  const studio = state.skidmarksStudio;
-  const card = studio?.workspaces.find((w) => w.id === project.id);
-  const live = card ? liveFromSunnyBanksWorkspace(card) : { workspaceTitle: project.label, mediaSlug: project.mediaSlug ?? undefined, episodeId: project.id };
-  return skidmarksEpisodeScopeOf(live, studio?.workspaces ?? []);
-}
-
-function shortsActors(state: SkidmarksState, scope: EpisodeScope): StageCastMember[] {
+function deliciaeActors(state: SkidmarksState): StageCastMember[] {
   const cards = state.characterLoras?.characters ?? emptyCharacterLorasState().characters;
   const extras = normalizeRosterExtrasState(state.rosterExtras)?.["adult-shorts"] ?? [];
   const out: StageCastMember[] = [];
   for (const extra of extras) {
-    if (!isInEpisode(extra, scope)) continue;
-    pushUnique(out, extraToMember(extra, "shorts", cards));
-  }
-  const adult = normalizeAdultShortsState(state.adultShorts);
-  if (adult?.ageConfirmed && scope.episode) {
-    const folderOf = (id: string, mediaSlug?: string) => mediaSlug ?? (id === adult.currentSavedId ? adult.mediaSlug : undefined);
-    for (const saved of adult.saved) {
-      if (folderOf(saved.id, saved.mediaSlug) !== scope.episode) continue;
-      for (const person of adultShortStarring(saved)) {
-        const name = person.name?.trim();
-        if (!name) continue;
-        pushUnique(out, {
-          id: `as:${shotCastNameKey(name)}`,
-          name,
-          kind: "person",
-          pictureUrl: person.referenceUrls?.[0] ?? null,
-          voiceId: null,
-          look: person.look ?? "",
-          group: "shorts",
-        });
-      }
-    }
+    if (!isInEpisode(extra, DELICIAE_EPISODE_SCOPE)) continue;
+    pushUnique(out, extraToStageMember(extra, cards));
   }
   return out;
 }
 
-function skidmarksActors(state: SkidmarksState, scope: EpisodeScope): StageCastMember[] {
-  const cards = state.characterLoras?.characters ?? emptyCharacterLorasState().characters;
-  const cast = skidmarksEpisodeCast(normalizeSkidmarksEpisodesState(state.skidmarksEpisodes)?.cast ?? [], scope);
-  const out: StageCastMember[] = [];
-  for (const c of cast) {
-    const sourceKey = `sk:${c.id}`;
-    pushUnique(out, {
-      id: sourceKey,
-      name: c.name,
-      kind: castKindFrom(c),
-      pictureUrl: c.pictureUrls?.[0] ?? null,
-      voiceId: voiceFor(cards, sourceKey, c.id),
-      look: c.look,
-      group: "skidmarks",
-    });
-  }
-  return out;
+function deliciaeLocations(state: SkidmarksState): StageLocation[] {
+  return stageLocationsFromList(episodeOwnLocations(state.locations, "adult-shorts", DELICIAE_EPISODE_SCOPE));
 }
 
-function sunnybankActors(state: SkidmarksState): StageCastMember[] {
-  const cards = state.characterLoras?.characters ?? emptyCharacterLorasState().characters;
-  const extras = normalizeRosterExtrasState(state.rosterExtras)?.["sunny-banks"] ?? [];
-  const out: StageCastMember[] = [];
-  for (const lock of Object.values(SUNNY_BANKS_CAST)) {
-    const name = lock.name.trim();
-    const card = cards.find((c) => shotCastNameKey(c.name) === shotCastNameKey(name));
-    pushUnique(out, {
-      id: `sb:${shotCastNameKey(name)}`,
-      name,
-      kind: "person",
-      pictureUrl: card?.referenceUrl ?? card?.trainingImageUrls?.[0] ?? null,
-      voiceId: card?.voiceId ?? lock.voiceId ?? null,
-      look: lock.look,
-      group: "sunnybank",
-    });
-  }
-  for (const extra of extras) {
-    pushUnique(out, extraToMember(extra, "sunnybank", cards));
-  }
-  return out;
-}
-
-export function listStageLabProjects(state: SkidmarksState): StageLabProject[] {
-  const out: StageLabProject[] = [];
-  const seen = new Set<string>();
-  const pushStudio = (studio: SkidmarksSunnyBanksState | null | undefined, genre: StageLabProjectGenre) => {
-    for (const w of studio?.workspaces ?? []) {
-      if (!w?.id || seen.has(w.id)) continue;
-      seen.add(w.id);
-      out.push({
-        id: w.id,
-        label: (w.label ?? "").trim() || "Untitled",
-        genre,
-        mediaSlug: w.mediaSlug ?? null,
-      });
-    }
-  };
-  pushStudio(state.shortsStudio, "shorts");
-  pushStudio(state.skidmarksStudio, "skidmarks");
-  pushStudio(state.sunnyBanks, "sunnybank");
-  return out;
-}
-
-export function pickDefaultStageLabProject(projects: readonly StageLabProject[]): StageLabProject | null {
-  const hits = projects.filter(
-    (p) => DELICIAE_PROJECT_MATCH.test(p.label) || DELICIAE_PROJECT_MATCH.test(p.mediaSlug ?? ""),
-  );
-  const exact = hits.find((p) => (p.mediaSlug ?? "").toLowerCase() === "deliciae");
-  if (exact) return exact;
-  if (hits[0]) return hits[0];
-  return projects[0] ?? null;
-}
-
-export function stagePackForProject(state: SkidmarksState, project: StageLabProject): StageLabProjectPack {
-  if (project.genre === "shorts") {
-    const scope = shortsScopeFor(project, state);
+export function deliciaeStagePack(state: SkidmarksState): StageLabCastSnapshot {
+  if (!findDeliciaeShortsWorkspace(state)) {
     return {
-      actors: shortsActors(state, scope),
-      locations: stageLocationsFromList(episodeOwnLocations(state.locations, "adult-shorts", scope)),
+      found: false,
+      actors: [],
+      locations: [],
+      source: "missing",
+      error: DELICIAE_NOT_FOUND,
     };
   }
-  if (project.genre === "skidmarks") {
-    const scope = skidmarksScopeFor(project, state);
-    return {
-      actors: skidmarksActors(state, scope),
-      locations: stageLocationsFromList(skidmarksEpisodeLocations(state.locations, scope)),
-    };
-  }
+  const actors = deliciaeActors(state);
+  const locations = deliciaeLocations(state);
+  const hasReal =
+    actors.length > 0 ||
+    locations.length > 0 ||
+    actors.some((a) => a.pictureUrl) ||
+    locations.some((l) => l.pictureUrl);
   return {
-    actors: sunnybankActors(state),
-    locations: stageLocationsFromList(effectiveDeckLocations(state.locations, "sunnybank")),
+    found: true,
+    actors,
+    locations,
+    source: hasReal ? "saved" : "empty",
+    error: null,
   };
-}
-
-export function stageLabFromState(state: SkidmarksState): Pick<StageLabCastSnapshot, "projects" | "defaultProjectId" | "byProject"> {
-  const projects = listStageLabProjects(state);
-  const byProject: Record<string, StageLabProjectPack> = {};
-  for (const project of projects) {
-    byProject[project.id] = stagePackForProject(state, project);
-  }
-  return {
-    projects,
-    defaultProjectId: pickDefaultStageLabProject(projects)?.id ?? null,
-    byProject,
-  };
-}
-
-export function projectChipLabel(project: StageLabProject, projects: readonly StageLabProject[]): string {
-  const dup = projects.filter((p) => p.label === project.label).length > 1;
-  if (dup && project.mediaSlug) return `${project.label} · ${project.mediaSlug}`;
-  return project.label;
-}
-
-function overlayAdultShorts(local: AdultShortsState | null, items: DeckItemRecord[], deleted: string[]): AdultShortsState | null {
-  if (!local && items.length === 0) return local;
-  const saved = overlayDeckItems(ADULT_SHORT_ITEMS, local?.saved ?? [], items, deleted).entries;
-  if (!local) return normalizeAdultShortsState({ saved, ageConfirmed: true });
-  return { ...local, saved };
 }
 
 /**
- * Load Stuart's saved projects, then each project's own Cast and
- * Locations. Read-only: GET only, no session PUT.
+ * Load only Deliciae's Cast and Locations. Read-only: GET only, no session PUT.
+ * Does not fetch shorts-episode / skidmarks-episode / sunnybank-episode /
+ * adult-short item lists (those would enumerate other shows).
  */
 export async function loadStageLabCast(): Promise<StageLabCastSnapshot> {
   try {
-    const [sessionBody, characterBody, locationBody, shortsEpBody, skidEpBody, sunnyEpBody, adultShortBody] = await Promise.all([
+    const [sessionBody, characterBody, locationBody] = await Promise.all([
       getJson("/api/skidmarks/session"),
       getJson("/api/deck/items?kind=character").catch(() => null),
       getJson("/api/deck/items?kind=location").catch(() => null),
-      getJson("/api/deck/items?kind=shorts-episode").catch(() => null),
-      getJson("/api/deck/items?kind=skidmarks-episode").catch(() => null),
-      getJson("/api/deck/items?kind=sunnybank-episode").catch(() => null),
-      getJson("/api/deck/items?kind=adult-short").catch(() => null),
     ]);
     const session = sessionBody as { configured?: unknown; state?: unknown; error?: unknown };
     const base =
@@ -366,46 +231,30 @@ export async function loadStageLabCast(): Promise<StageLabCastSnapshot> {
         : normalizeSkidmarksState({});
     const charPack = itemsFromBody(characterBody);
     const locPack = itemsFromBody(locationBody);
-    const shortsPack = itemsFromBody(shortsEpBody);
-    const skidPack = itemsFromBody(skidEpBody);
-    const sunnyPack = itemsFromBody(sunnyEpBody);
-    const adultPack = itemsFromBody(adultShortBody);
     const characters = overlayCharacters(base.characterLoras?.characters ?? [], charPack.items, charPack.deleted);
     const locations = overlayLocations(base.locations?.locations ?? [], locPack.items, locPack.deleted);
     const state: SkidmarksState = {
       ...base,
       characterLoras: { characters },
       locations: { locations },
-      shortsStudio: overlayStudio(base.shortsStudio, shortsPack.items, shortsPack.deleted, SHORTS_EPISODE_ITEMS),
-      skidmarksStudio: overlayStudio(base.skidmarksStudio, skidPack.items, skidPack.deleted, SKIDMARKS_EPISODE_ITEMS),
-      sunnyBanks: overlayStudio(base.sunnyBanks, sunnyPack.items, sunnyPack.deleted, SUNNYBANK_EPISODE_ITEMS),
-      adultShorts: overlayAdultShorts(base.adultShorts ?? null, adultPack.items, adultPack.deleted),
     };
-    const { projects, defaultProjectId, byProject } = stageLabFromState(state);
-    const pack = (defaultProjectId && byProject[defaultProjectId]) || { actors: [], locations: [] };
-    const hasReal =
-      pack.actors.length > 0 ||
-      pack.locations.length > 0 ||
-      pack.actors.some((a) => a.pictureUrl) ||
-      pack.locations.some((l) => l.pictureUrl);
-    return {
-      actors: pack.actors,
-      locations: pack.locations,
-      projects,
-      defaultProjectId,
-      byProject,
-      source: hasReal ? "saved" : "empty",
-      error: typeof session?.error === "string" && session.configured !== true ? session.error : null,
-    };
+    const pack = deliciaeStagePack(state);
+    if (!pack.found) {
+      return {
+        ...pack,
+        error:
+          pack.error ??
+          (typeof session?.error === "string" && session.configured !== true ? session.error : DELICIAE_NOT_FOUND),
+      };
+    }
+    return pack;
   } catch (err) {
     return {
+      found: false,
       actors: [],
       locations: [],
-      projects: [],
-      defaultProjectId: null,
-      byProject: {},
-      source: "empty",
-      error: err instanceof Error ? err.message : "Could not load saved Cast.",
+      source: "missing",
+      error: err instanceof Error ? err.message : DELICIAE_NOT_FOUND,
     };
   }
 }
