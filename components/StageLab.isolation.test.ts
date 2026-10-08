@@ -16,24 +16,38 @@ const GENRE_UI = [
   "components/GraphView.tsx",
 ] as const;
 
-/**
- * Stage lab must stay a separate sandbox. Genre screens must not link
- * to it; the lab must not import those screens or the session persist
- * path (so a tap cannot rewrite an episode).
- */
+const LAB_UI = ["components/StageLab.tsx", "app/stage-lab/page.tsx"] as const;
+
+const LAB_LIBS = [
+  "lib/stageLab.ts",
+  "lib/stageLabStore.ts",
+  "lib/stageLabCast.ts",
+  "lib/stageLabPlate.ts",
+] as const;
+
 describe("Stage lab isolation", () => {
-  it("the lab does not import genre panels or session persist", () => {
-    const files = ["components/StageLabMock.tsx", "app/stage-lab/page.tsx"];
-    for (const file of files) {
+  it("the lab UI does not import genre panels or session persist", () => {
+    for (const file of LAB_UI) {
       const text = src(file);
       expect(text).not.toMatch(/SkidmarksSunnyBanksPanel/);
       expect(text).not.toMatch(/AdultShortsPanel/);
       expect(text).not.toMatch(/SkidmarksScriptSequencePanel/);
       expect(text).not.toMatch(/SkidmarksDetailSheet/);
       expect(text).not.toMatch(/GraphView/);
-      expect(text).not.toMatch(/deckItemSync/);
       expect(text).not.toMatch(/from ["']@\/lib\/skidmarks["']/);
       expect(text).not.toMatch(/from ["']@\/lib\/deckItemSync["']/);
+      expect(text).not.toMatch(/persist\s*\(/);
+    }
+  });
+
+  it("lab libs never call persist() or genre panel imports", () => {
+    for (const file of LAB_LIBS) {
+      const text = src(file);
+      expect(text, file).not.toMatch(/SkidmarksSunnyBanksPanel/);
+      expect(text, file).not.toMatch(/\bpersist\s*\(/);
+      expect(text, file).not.toMatch(/subscribeSkidmarks\b/);
+      expect(text, file).not.toMatch(/patchCharacterLoras/);
+      expect(text, file).not.toMatch(/deleteSunnyBanksWorkspace/);
     }
   });
 
@@ -41,7 +55,7 @@ describe("Stage lab isolation", () => {
     for (const file of GENRE_UI) {
       const text = src(file);
       expect(text, file).not.toMatch(/stage-lab/);
-      expect(text, file).not.toMatch(/StageLabMock/);
+      expect(text, file).not.toMatch(/StageLab/);
     }
   });
 });

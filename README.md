@@ -629,6 +629,12 @@ separate screen. It's locked through the clip timeline's plate/camera/
 model tags — voice, animate, and stitch are explicitly out of scope for
 now (see "Explicitly out of scope" below).
 
+**Stage lab** (`/stage-lab`) is a separate director-board sandbox, not a
+mode of Sunny Banks, Skidmarks, Music video, or Shorts. It is not linked
+from those screens. It loads saved Cast and Locations read-only, keeps
+shots in its own `the-tab:stage-lab-v1` key, and can Make plate (~$0.02
+Grok still). Video Render is Phase 2 (disabled). See `docs/STAGE_PLAN.md`.
+
 - **Node face** (`components/SkidmarksNodeCard.tsx`) — the same warm
   rose/pink identity treatment as before (border, gradient wash, glow, ♥
   avatar) instead of the generic `GraphNodeCard`. Shows "No project yet —
