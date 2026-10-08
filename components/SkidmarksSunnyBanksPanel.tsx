@@ -5,11 +5,22 @@ import { useTextareaOverlayMirror } from "@/hooks/useTextareaOverlayMirror";
 import { useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 import {
   SCRIPT_BOX_EDITING_TEXT_CLASS,
+  SCRIPT_BOX_GUTTER_CLASS,
   SCRIPT_BOX_IOS_TEXTAREA_PROPS,
   SCRIPT_BOX_TEXTAREA_CLASS,
+  SCRIPT_SCENE_HEADING_CLASS,
+  groupHighlightSegmentsByLine,
+  readScriptBoxPlace,
+  revealScriptBoxPlace,
   scriptBoxTextClass,
+  scriptLineCharIndex,
+  scrollTextareaToIndex,
+  writeScriptBoxPlace,
+  type ScriptBoxPlace,
 } from "@/lib/textareaOverlayMirror";
-import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { ScriptShotNumberBadges } from "@/components/ScriptShotNumberBadges";
+import { flushSync } from "react-dom";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ESTIMATED_STILL_COST_USD, SIRAY_STILL_COST_USD } from "@/lib/autoPlate";
 import { preSendBlocks, preSendChecks, type PreSendIssue } from "@/lib/preSendChecks";
 import { triggerBlobDownload } from "@/lib/clipRenders";
@@ -18,7 +29,7 @@ import { TrashIcon } from "@/components/SkidmarksRenderedClipsShelf";
 import { EpisodeExtrasRow } from "@/components/EpisodeExtrasRow";
 import { episodeExtrasZipEntries, type EpisodeExtra } from "@/lib/episodeExtras";
 import { ShotGrid, type ShotTileView } from "@/components/ShotGrid";
-import { estimateRowVideoCostUsd } from "@/lib/clipGeneration";
+import { clampRowVideoDurationSec, estimateRowVideoCostUsd, ROW_DURATION_PICKER_SEC } from "@/lib/clipGeneration";
 import {
   extractVideoBackendOverride,
   ignoredVideoBackendWarning,
@@ -349,6 +360,10 @@ export interface SunnyBanksScriptChunk {
    * above it (2026-09-30): overrides which engine renders the row. Never
    * part of `raw`, `line` or TTS. */
   videoBackend?: RowVideoBackend;
+  /** Optional `[Duration: 10s]` on this row's block (2026-10-08). Raw
+   * seconds as typed, before the backend clamp. Missing = default 5s
+   * hold / audio-driven speak. */
+  durationSec?: number;
   /** `[Cast: A, B]` above this row or its scene (2026-10-03): exactly
    * who is in the shot. Names as typed; matched to Cast cards later. */
   castNames?: string[];
@@ -409,6 +424,11 @@ export interface SunnyBanksBeatArgs {
    * `plateEngine`, a Siray `sirayTaskId`. Empty for a plain one-click
    * render, so its request is exactly what it was before. */
   ownPlate?: Record<string, unknown>;
+  /** Optional `[Duration: Ns]` for this row, already clamped to the
+   * engine's window. Hold always sends one (default 5s). Speak sends
+   * only when the tag is present — audio length wins unless this is
+   * longer. */
+  durationSec?: number;
 }
 
 /**
@@ -421,6 +441,8 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
   const mediaTarget = args.mediaTarget ? { mediaTarget: args.mediaTarget } : {};
   const speaker = args.speaker ?? {};
   const genre = args.genre && args.genre !== "sunnybank" ? { genre: args.genre } : {};
+  const durationSec =
+    typeof args.durationSec === "number" && Number.isFinite(args.durationSec) ? { durationSec: args.durationSec } : {};
   // `action` and `appearanceModifier` travel as two separate fields —
   // the route itself merges them into the motion prompt (2026-09-18).
   return (
@@ -440,6 +462,7 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
           ...(args.multiCast ?? {}),
           ...genre,
           ...(args.ownPlate ?? {}),
+          ...durationSec,
         }
       : {
           characterName: args.characterName,
@@ -455,6 +478,7 @@ export function sunnyBanksBeatRequestBody(args: SunnyBanksBeatArgs): Record<stri
           ...(args.multiCast ?? {}),
           ...genre,
           ...(args.ownPlate ?? {}),
+          ...durationSec,
         }
   );
 }
@@ -508,9 +532,13 @@ export function sunnyBanksRowBeatArgs(args: {
       if (target) ownPlate.plateTarget = target;
     }
   }
-  if (args.rowPlateUrl && !rowCast.cast.isMulti && !args.plateOnly) ownPlate.plateUrl = args.rowPlateUrl;
+  // A chained last frame is the start image for any row (one person or
+  // several) — Cast pictures from the previous shot are never sent with it.
+  if (args.rowPlateUrl && !args.plateOnly) ownPlate.plateUrl = args.rowPlateUrl;
   if (args.plateEngine) ownPlate.plateEngine = args.plateEngine;
   if (args.sirayTaskId) ownPlate.sirayTaskId = args.sirayTaskId;
+  const videoBackend = chunk.kind === "hold" ? args.videoBackend : ("ltx" as const);
+  const durationSec = resolvedRowDurationSec(chunk, videoBackend);
   return {
     kind: chunk.kind,
     characterName: args.characterName,
@@ -523,6 +551,7 @@ export function sunnyBanksRowBeatArgs(args: {
     appearanceModifier: chunk.appearanceModifier,
     speaker: args.speaker,
     videoBackend: chunk.kind === "hold" ? args.videoBackend : undefined,
+    ...(durationSec != null ? { durationSec } : {}),
     multiCast: sunnyBanksMultiCastRequest({
       people: rowCast.people ?? [],
       sceneAction: chunk.action ? undefined : chunk.sceneAction,
@@ -703,6 +732,99 @@ export function parseSunnyBanksSceneHeader(raw: string): string | null {
   return label.length > 0 ? label : null;
 }
 
+/** Character offsets of `=== ACT … — SCENE … ===` (and any other
+ * `=== LABEL ===` scene header) for the Full screen jump list.
+ * Display / scroll only — never a parser change. */
+export function listSunnyBanksSceneOffsets(text: string): { label: string; index: number }[] {
+  const out: { label: string; index: number }[] = [];
+  let index = 0;
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const label = parseSunnyBanksSceneHeader(line.trim());
+    if (label) out.push({ label, index });
+    index += line.length + (i < lines.length - 1 ? 1 : 0);
+  }
+  return out;
+}
+
+/** Last scene header above each speak/hold queue row (same order as
+ * `sunnyBanksQueueChunks`). Rows before the first scene have no label. */
+export function sunnyBanksSceneLabelByQueueIndex(
+  chunks: readonly SunnyBanksScriptChunk[]
+): Array<string | undefined> {
+  let current: string | undefined;
+  const out: Array<string | undefined> = [];
+  for (const chunk of chunks) {
+    if (chunk.kind === "scene") {
+      current = chunk.line;
+      continue;
+    }
+    if (chunk.kind === "speak" || chunk.kind === "hold") out.push(current);
+  }
+  return out;
+}
+
+const ROW_SOURCE_SNIPPET_MAX = 42;
+
+/** First words of the row's `[Action:]` (or spoken line) so a numbered
+ * queue row can be matched back to the God Script. Display only. */
+export function sunnyBanksRowSourceSnippet(chunk: {
+  action?: string;
+  sceneAction?: string;
+  line: string;
+}): string {
+  const action = (chunk.action ?? chunk.sceneAction ?? "").trim();
+  const spoken = chunk.line.trim();
+  const source = action || spoken;
+  if (!source) return "";
+  if (source.length <= ROW_SOURCE_SNIPPET_MAX) return source;
+  const cut = source.slice(0, ROW_SOURCE_SNIPPET_MAX);
+  const sp = cut.lastIndexOf(" ");
+  return `${(sp > 20 ? cut.slice(0, sp) : cut).trimEnd()}…`;
+}
+
+/** When finished shots are collapsed, still emit a scene bar before the
+ * first *visible* row of each scene. */
+export function sunnyBanksVisibleQueueSceneBreaks<T extends { sceneLabel?: string }>(
+  rows: readonly T[]
+): Array<{ row: T; sceneHeading: string | null }> {
+  return rows.map((row, i) => {
+    const prev = i > 0 ? rows[i - 1] : undefined;
+    const sceneHeading =
+      row.sceneLabel && row.sceneLabel !== prev?.sceneLabel ? row.sceneLabel : null;
+    return { row, sceneHeading };
+  });
+}
+
+/** Idle `#N` badge line for one queue row: its `[Action:]` line when
+ * that tag sits in this shot's block, otherwise the speaker / silent
+ * name line. Same 1-based number as the shot list. Display only. */
+export function sunnyBanksShotBadgeLineIndex(
+  script: string,
+  chunk: { sourceLineIndex: number; action?: string },
+  previousSourceLineIndex: number
+): number {
+  if (!chunk.action?.trim()) return chunk.sourceLineIndex;
+  const lines = script.split(/\r?\n/);
+  const start = Math.max(0, previousSourceLineIndex + 1);
+  const end = Math.min(chunk.sourceLineIndex, lines.length - 1);
+  for (let i = start; i <= end; i += 1) {
+    if (/\[Action:/i.test(lines[i] ?? "")) return i;
+  }
+  return chunk.sourceLineIndex;
+}
+
+export function sunnyBanksShotBadgeMarks(
+  script: string,
+  chunks: readonly { sourceLineIndex: number; action?: string }[]
+): Array<{ shotNumber: number; lineIndex: number }> {
+  return chunks.map((chunk, i) => ({
+    shotNumber: i + 1,
+    lineIndex: sunnyBanksShotBadgeLineIndex(script, chunk, i > 0 ? chunks[i - 1]!.sourceLineIndex : -1),
+  }));
+}
+
 /** The saved characters for the God-script guide: the built-in cast with
  *  any voice saved on their card (Hans), plus characters added with "+". */
 function guideCast() {
@@ -802,6 +924,21 @@ export function buildSunnyBanksLocationCutawayPrompt(action: string | undefined)
   return `Use the provided start image as the first frame. ${motion} No dialogue.`;
 }
 
+/** First number in a `[Duration: …]` token — `10s`, `10`, `10 seconds`. */
+export function parseGodScriptDurationToken(token: string): number | undefined {
+  const match = token.trim().match(/(\d+(?:\.\d+)?)/);
+  if (!match) return undefined;
+  const n = Number(match[1]);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n;
+}
+
+export function godScriptDurationTag(durationSec: number): string {
+  return `[Duration: ${Math.round(durationSec)}s]`;
+}
+
+const DURATION_TAG_RE = /\[Duration:\s*([^\]]*)\]/gi;
+
 function extractGodScriptTags(raw: string): {
   rest: string;
   locationId?: SunnyBanksLocationId;
@@ -811,11 +948,13 @@ function extractGodScriptTags(raw: string): {
   /** `[Cast: A, B]` names (2026-10-03). */
   castNames: string[];
   videoBackend?: RowVideoBackend;
+  durationSec?: number;
 } {
   let locationId: SunnyBanksLocationId | undefined;
   const actions: string[] = [];
   const looks: Array<{ name: string | null; look: string }> = [];
   const castNames: string[] = [];
+  let durationSec: number | undefined;
   const backend = extractVideoBackendOverride(raw);
   const rest = backend.rest
     .replace(/\[Location:\s*([^\]]*)\]/gi, (_, token: string) => {
@@ -837,11 +976,75 @@ function extractGodScriptTags(raw: string): {
       castNames.push(...parseCastTagNames(inner));
       return " ";
     })
+    .replace(DURATION_TAG_RE, (_, token: string) => {
+      const parsed = parseGodScriptDurationToken(token);
+      if (parsed != null) durationSec = parsed;
+      return " ";
+    })
     .replace(/\s+/g, " ")
     .trim();
-  return backend.override
-    ? { rest, locationId, actions, looks, castNames, videoBackend: backend.override }
-    : { rest, locationId, actions, looks, castNames };
+  return {
+    rest,
+    locationId,
+    actions,
+    looks,
+    castNames,
+    ...(backend.override ? { videoBackend: backend.override } : {}),
+    ...(durationSec != null ? { durationSec } : {}),
+  };
+}
+
+/** Hold: tag or the 5s default, clamped. Speak: clamped tag only — no tag
+ * means the route keeps the audio length. */
+export function resolvedRowDurationSec(
+  chunk: Pick<SunnyBanksScriptChunk, "kind" | "durationSec">,
+  backend: RowVideoBackend
+): number | undefined {
+  if (chunk.kind === "hold") {
+    return clampRowVideoDurationSec(backend, chunk.durationSec ?? SUNNY_BANKS_HOLD_DURATION_SEC);
+  }
+  if (chunk.durationSec == null) return undefined;
+  return clampRowVideoDurationSec("ltx", chunk.durationSec);
+}
+
+/** What the row length picker shows: the tag, else 5s, clamped. */
+export function rowPickerDurationSec(
+  chunk: Pick<SunnyBanksScriptChunk, "durationSec">,
+  backend: RowVideoBackend
+): number {
+  return clampRowVideoDurationSec(backend, chunk.durationSec ?? SUNNY_BANKS_HOLD_DURATION_SEC);
+}
+
+/**
+ * Writes `[Duration: 10s]` into this speaker's own block (the tag-only
+ * lines immediately above it, or the speaker line itself). That row
+ * only — the next speaker is untouched.
+ */
+export function rewriteSunnyBanksRowDurationTag(
+  script: string,
+  speakerSourceLineIndex: number,
+  durationSec: number
+): string {
+  const lines = script.split(/\r?\n/);
+  if (speakerSourceLineIndex < 0 || speakerSourceLineIndex >= lines.length) return script;
+  const tag = godScriptDurationTag(durationSec);
+  const inlineRe = /\[Duration:\s*[^\]]*\]/gi;
+  if (inlineRe.test(lines[speakerSourceLineIndex])) {
+    lines[speakerSourceLineIndex] = lines[speakerSourceLineIndex].replace(/\[Duration:\s*[^\]]*\]/gi, tag);
+    return lines.join("\n");
+  }
+  for (let i = speakerSourceLineIndex - 1; i >= 0; i -= 1) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) break;
+    const tagged = extractGodScriptTags(trimmed);
+    if (tagged.rest) break;
+    if (tagged.durationSec != null) {
+      lines[i] = tag;
+      return lines.join("\n");
+    }
+  }
+  lines.splice(speakerSourceLineIndex, 0, tag);
+  return lines.join("\n");
 }
 
 /**
@@ -872,7 +1075,7 @@ function splitLooksForRow(
 /** Highlight category for one bracket tag in the raw God Script text —
  * display-only. This never changes parsing: `extractGodScriptTags`
  * above is still the only thing that decides what a tag *does*. A
- * bracket that isn't one of these three literal shapes (e.g. a plain
+ * bracket that isn't one of these parsed shapes (e.g. a plain
  * parenthetical, or `[silent]`/`[silence]` used as if it silenced a
  * line) is intentionally left uncolored ("plain") — coloring it here
  * would visually imply the parser treats it specially, which it
@@ -888,12 +1091,14 @@ export type SunnyBanksHighlightSegment =
    * for `formatSunnyBanksGodScript`. */
   | { kind: "speaker"; text: string };
 
-/** Same three literal shapes `extractGodScriptTags` recognizes, plus a
- * literal `[silence]` grouped into the same "action" color per Stuart's
- * explicit ask — `[silence]` is not a real parsed tag (see doc comment
- * above), only a display-only alias colored the same as `[Action: ]`. */
+/** Same picture-tag shapes `extractGodScriptTags` recognizes, plus
+ * `[Duration: …]` and a literal `[silence]` grouped into the "action"
+ * color per Stuart's explicit ask — `[silence]` is not a real parsed
+ * tag (see doc comment above), only a display-only alias colored the
+ * same as `[Action: ]`. */
 const GOD_SCRIPT_HIGHLIGHT_TAG_RE = new RegExp(
-  String.raw`\[Location:[^\]]*\]|\[Character\b[^\]]*\]|\[Cast:[^\]]*\]|\[Action:[^\]]*\]|\[silence\]|` + VIDEO_BACKEND_OVERRIDE_TAG_SOURCE,
+  String.raw`\[Location:[^\]]*\]|\[Character\b[^\]]*\]|\[Cast:[^\]]*\]|\[Action:[^\]]*\]|\[Duration:[^\]]*\]|\[silence\]|` +
+    VIDEO_BACKEND_OVERRIDE_TAG_SOURCE,
   "gi"
 );
 const VIDEO_BACKEND_TAG_EXACT_RE = new RegExp(`^${VIDEO_BACKEND_OVERRIDE_TAG_SOURCE}$`, "i");
@@ -1131,21 +1336,64 @@ function SunnyBanksScriptHighlightOverlay({
   autoGrowMinRows?: number;
 }) {
   const segments = buildSunnyBanksOverlaySegments(text);
+  const lines = groupHighlightSegmentsByLine(segments);
   useTextareaOverlayMirror(overlayRef, text, { autoGrowMinRows });
   return (
     <div ref={overlayRef} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full overflow-hidden">
-      <div className="whitespace-pre-wrap break-words px-3 py-2 text-base leading-6">
-        {segments.map((segment, index) => (
-          <span key={index} className={SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]}>
-            {segment.text}
-          </span>
-        ))}
+      <div className={`whitespace-pre-wrap break-words ${SCRIPT_BOX_GUTTER_CLASS} py-2 text-base leading-6`}>
+        {lines.map((line, lineIndex) => {
+          const heading = parseSunnyBanksSceneHeader(line.text.trim());
+          const inner = line.segments.map((segment, index) => (
+            <span key={index} className={SUNNY_BANKS_HIGHLIGHT_CLASSES[segment.kind]}>
+              {segment.text}
+            </span>
+          ));
+          if (!heading) return <span key={lineIndex}>{inner}</span>;
+          return (
+            <span key={lineIndex} className={SCRIPT_SCENE_HEADING_CLASS}>
+              {inner}
+            </span>
+          );
+        })}
         {/* Trailing newline: a native textarea always reserves room for one more
          * line after a final "\n" (where the caret sits); without this, the
          * overlay's own wrapped-line count falls one short and drifts up
          * relative to the real textarea once the script ends in a blank line. */}
         {text.endsWith("\n") ? <span>{"\u200b"}</span> : null}
       </div>
+    </div>
+  );
+}
+
+function ScriptSceneBar({ label }: { label: string }) {
+  return (
+    <div className="mt-2 border-t border-white/40 px-1 pt-1.5">
+      <p className="text-[11px] font-bold tracking-wide text-white">{label}</p>
+    </div>
+  );
+}
+
+function ScriptScenesJumpList({
+  scenes,
+  onJump,
+}: {
+  scenes: { label: string; index: number }[];
+  onJump: (index: number) => void;
+}) {
+  if (scenes.length < 2) return null;
+  return (
+    <div className="flex min-h-[40px] items-center gap-1.5 overflow-x-auto overscroll-x-contain border-b border-white/10 px-3 py-1 touch-pan-x [scrollbar-width:none]">
+      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-white/40">Scenes</span>
+      {scenes.map((scene) => (
+        <button
+          key={`${scene.index}:${scene.label}`}
+          type="button"
+          onClick={() => onJump(scene.index)}
+          className="min-h-[32px] shrink-0 rounded-md bg-white/[0.06] px-2 text-[10px] font-semibold text-white/80"
+        >
+          {scene.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -1341,6 +1589,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
   let pendingLooks: Array<{ name: string | null; look: string }> = [];
   let pendingCast: string[] = [];
   let pendingBackend: RowVideoBackend | undefined;
+  let pendingDuration: number | undefined;
   // Scenes (2026-10-03): a tag block, then the rows under it until the
   // next tag line or scene header. Only a block with [Action:] or
   // [Cast:] and two or more talking rows becomes a shared-picture scene.
@@ -1394,6 +1643,7 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     if (tagged.looks.length > 0) pendingLooks = [...pendingLooks, ...tagged.looks];
     if (tagged.castNames.length > 0) pendingCast = [...pendingCast, ...tagged.castNames];
     if (tagged.videoBackend) pendingBackend = tagged.videoBackend;
+    if (tagged.durationSec != null) pendingDuration = tagged.durationSec;
     if (!tagged.rest) continue;
     const ghostName = parseSunnyBanksGhostTargetName(tagged.rest);
     if (ghostName) {
@@ -1417,6 +1667,8 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
       if (taggedLocation) chunk.locationTag = taggedLocation;
       if (pendingBackend) chunk.videoBackend = pendingBackend;
       pendingBackend = undefined;
+      if (pendingDuration != null) chunk.durationSec = pendingDuration;
+      pendingDuration = undefined;
       chunks.push(chunk);
       continue;
     }
@@ -1454,6 +1706,8 @@ export function parseSunnyBanksScriptBlock(text: string): SunnyBanksScriptChunk[
     if (taggedLocation) chunk.locationTag = taggedLocation;
     if (pendingBackend) chunk.videoBackend = pendingBackend;
     pendingBackend = undefined;
+    if (pendingDuration != null) chunk.durationSec = pendingDuration;
+    pendingDuration = undefined;
     chunks.push(chunk);
     block.rows.push(chunk);
     // Inline tags on the speaker's own line end its block there.
@@ -2042,17 +2296,25 @@ export async function downloadSunnyBanksEpisodeZip(
  */
 function SunnyBanksFullScreenScriptEditor({
   initialText,
+  initialPlace,
   onApply,
   onClose,
 }: {
   initialText: string;
-  onApply: (next: string) => void;
+  initialPlace: ScriptBoxPlace | null;
+  onApply: (next: string, place: ScriptBoxPlace | null) => void;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState(initialText);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formatFeedback = useScriptFormatFeedback();
   const viewportHeight = useVisualViewportHeight();
+  const scenes = listSunnyBanksSceneOffsets(draft);
+  const rememberPlace = () => {
+    const el = textareaRef.current;
+    return el ? readScriptBoxPlace(el) : null;
+  };
   const handleFormat = () => {
     const formatted = formatSunnyBanksGodScript(draft);
     if (formatted !== draft) setDraft(formatted);
@@ -2060,11 +2322,33 @@ function SunnyBanksFullScreenScriptEditor({
   };
   const dirty = draft !== initialText;
 
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (initialPlace) writeScriptBoxPlace(el, initialPlace);
+    else {
+      // iOS autoFocus dumps the caret at the end of a long script.
+      try {
+        el.setSelectionRange(0, 0);
+      } catch {
+        /* empty */
+      }
+      el.scrollTop = 0;
+    }
+    // One-shot restore on open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleCancel = () => {
     if (dirty && !confirmingDiscard) {
       setConfirmingDiscard(true);
       return;
     }
+    onClose();
+  };
+
+  const handleDone = () => {
+    onApply(draft, rememberPlace());
     onClose();
   };
 
@@ -2086,10 +2370,7 @@ function SunnyBanksFullScreenScriptEditor({
         </span>
         <button
           type="button"
-          onClick={() => {
-            onApply(draft);
-            onClose();
-          }}
+          onClick={handleDone}
           className="min-h-[44px] shrink-0 rounded-md bg-amber-300 px-4 text-[13px] font-semibold text-zinc-950"
         >
           Done
@@ -2102,8 +2383,19 @@ function SunnyBanksFullScreenScriptEditor({
         </p>
       )}
 
+      <ScriptScenesJumpList
+        scenes={scenes}
+        onJump={(index) => {
+          const el = textareaRef.current;
+          if (!el) return;
+          el.focus();
+          scrollTextareaToIndex(el, index);
+        }}
+      />
+
       <div className="relative min-h-0 flex-1">
         <textarea
+          ref={textareaRef}
           value={draft}
           onChange={(e) => {
             setDraft(e.target.value);
@@ -2345,6 +2637,9 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
    * than leaving Stuart to discover it by swiping. */
   const actStripRef = useRef<HTMLDivElement>(null);
   const scriptHighlightRef = useRef<HTMLDivElement>(null);
+  const scriptBoxRef = useRef<HTMLTextAreaElement>(null);
+  const scriptBoxPlaceRef = useRef<ScriptBoxPlace | null>(null);
+  const skipRevealRef = useRef(false);
   /** Inline God Script box is being typed in — hide the colour overlay
    * for the duration (real iPhone Safari, 2026-10-08). */
   const [scriptBoxEditing, setScriptBoxEditing] = useState(false);
@@ -2391,6 +2686,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
    * (Skidmarks: the open episode's own Cast). */
   const rowSpeakerChoices = sunnyBanksSpeakerList(studioState, genre);
   const sunnyBanksChunks = sunnyBanksQueueChunks(parsed);
+  const sceneLabels = sunnyBanksSceneLabelByQueueIndex(parsed);
   const queue = sunnyBanksChunks.map((chunk, index) => {
     const characterName = characterOverrides[index] ?? chunk.characterName;
     const locationId = resolveSunnyBanksRowLocationId(chunk, locationOverrides[index], locationPickTags[index], defaultLocationId);
@@ -2423,6 +2719,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
         castNames: chunk.castNames,
         castLooks: chunk.castLooks,
         sceneSpeakers: chunk.sceneSpeakers,
+        sceneKey: chunk.sceneKey,
         appearanceModifier: chunk.appearanceModifier,
       },
       castCardList
@@ -2443,6 +2740,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       extracting: chainExtractingFor[extractKey] === true,
       extractionError: chainExtractError[extractKey],
     });
+    const renderDurationSec = rowPickerDurationSec(chunk, backendChoice.backend);
     return {
       chunk,
       index,
@@ -2453,11 +2751,16 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       line,
       kind: chunk.kind,
       backendChoice,
+      renderDurationSec,
+      renderCostUsd: estimateRowVideoCostUsd(backendChoice.backend, renderDurationSec),
       rowCast,
       chainFromPrevious,
       chainStatus,
+      sceneLabel: sceneLabels[index],
+      sourceSnippet: sunnyBanksRowSourceSnippet(chunk),
     };
   });
+  const shotBadgeMarks = sunnyBanksShotBadgeMarks(scriptText, sunnyBanksChunks);
   type QueueRow = (typeof queue)[number];
   /** A scene's shared picture already made (a row in it kept its `plateUrl`). */
   // Only a picture made with these same people counts: change who's in
@@ -2563,12 +2866,65 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     : queue.filter(
         (row) => row.index === runningIndex || runtimeFor(row.index, row.chunk.raw).status !== "done"
       );
+  const visibleQueueWithScenes = sunnyBanksVisibleQueueSceneBreaks(visibleQueue);
+
+  const jumpToShotInScript = (shotNumber: number) => {
+    const mark = shotBadgeMarks.find((m) => m.shotNumber === shotNumber);
+    const el = scriptBoxRef.current;
+    if (!mark || !el) return;
+    setScriptOpen(true);
+    const index = scriptLineCharIndex(scriptText, mark.lineIndex);
+    const place: ScriptBoxPlace = {
+      scrollTop: el.scrollTop,
+      scrollLeft: 0,
+      selectionStart: index,
+      selectionEnd: index,
+    };
+    scriptBoxPlaceRef.current = place;
+    scrollTextareaToIndex(el, index);
+    revealScriptBoxPlace(el, readScriptBoxPlace(el));
+  };
+
+  const jumpToShotRow = (shotNumber: number) => {
+    const row = queue[shotNumber - 1];
+    if (!row) return;
+    const runtime = runtimeFor(row.index, row.chunk.raw);
+    if (!doneRowsOpen && runtime.status === "done" && row.index !== runningIndex) {
+      setDoneRowsOpen(true);
+    }
+    requestAnimationFrame(() => {
+      document.getElementById(`shot-row-${activeAct}-${shotNumber}`)?.scrollIntoView({
+        block: "nearest",
+        behavior: "smooth",
+      });
+    });
+  };
+
+  const rememberScriptBoxPlace = () => {
+    const el = scriptBoxRef.current;
+    if (el) scriptBoxPlaceRef.current = readScriptBoxPlace(el);
+  };
+
+  useLayoutEffect(() => {
+    const el = scriptBoxRef.current;
+    const place = scriptBoxPlaceRef.current;
+    if (!el || !place) return;
+    if (skipRevealRef.current) {
+      skipRevealRef.current = false;
+      return;
+    }
+    // Typing already moved the caret — putting the last snapshot back
+    // would fight every keystroke. Restore after blur / overlay remount
+    // / Full screen close (and Format, which edits while idle).
+    if (scriptBoxEditing) return;
+    revealScriptBoxPlace(el, place);
+  }, [scriptBoxEditing, scriptText]);
 
   const overlayCostUsd = pendingRows.length * plateCostUsd;
   // Per row, on the engine each row will use (estimates; LTX's is Deck's stand-in rate).
   const holdVideoCostUsd = pendingRows
     .filter((row) => row.kind === "hold")
-    .reduce((sum, row) => sum + estimateRowVideoCostUsd(row.backendChoice.backend, SUNNY_BANKS_HOLD_DURATION_SEC), 0);
+    .reduce((sum, row) => sum + row.renderCostUsd, 0);
   const speakCount = pendingRows.filter((row) => row.kind === "speak").length;
 
   const rowReadyToRender = (row: QueueRow): boolean => {
@@ -2888,10 +3244,6 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     }
     const before = runtimeFor(row.index, row.chunk.raw);
     const backend = ctx.videoBackend ?? row.backendChoice.backend;
-    // Shared picture for a scene: one made earlier this run, or kept on a row.
-    let scenePlateUrl = row.rowCast.cast.isMulti
-      ? ((row.chunk.sceneKey ? ctx.scenePlatesThisRun[row.chunk.sceneKey] : undefined) ?? savedScenePlate(row))
-      : undefined;
     // Per-row "Chain from shot N" (PR #258+): a `"ready"` chain status
     // is the deliberate override this row's own toggle asked for, and
     // wins over whatever plate it would otherwise use — see
@@ -2899,7 +3251,13 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     // `rowReadyToRender` already refuses to let Render fire while the
     // chain isn't resolved yet, so reaching here with `chainFromPrevious`
     // on means it's either `"ready"` or the row genuinely has no chain
-    // in play (`"off"`).
+    // in play (`"off"`). Chain only supplies the start frame — never the
+    // previous shot's Cast pictures or shared scene plate.
+    const chainReady = row.chainStatus.kind === "ready";
+    let scenePlateUrl =
+      !chainReady && row.rowCast.cast.isMulti
+        ? ((row.chunk.sceneKey ? ctx.scenePlatesThisRun[row.chunk.sceneKey] : undefined) ?? savedScenePlate(row))
+        : undefined;
     let rowPlateUrl = resolveRowStartPlateUrl({ chainStatus: row.chainStatus, ownPlateUrl: rowOwnPlate(row) });
     const missing = row.rowCast.cast.isMulti && scenePlateUrl ? [] : rowMissingPictures(row);
     if (lock && !cutaway && missing.length > 0) {
@@ -2915,16 +3273,20 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
     const engine = videoBackendName(backend);
     setProgressText(
       cutaway
-        ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} on ${engine} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+        ? `Line ${i + 1} of ${queue.length} — cutaway at ${row.location.label} on ${engine} (~${row.renderDurationSec}s)…`
         : row.kind === "hold"
-          ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} on ${engine} (~${SUNNY_BANKS_HOLD_DURATION_SEC}s)…`
+          ? `Line ${i + 1} of ${queue.length} — holding ${lock!.name} at ${row.location.label} on ${engine} (~${row.renderDurationSec}s)…`
           : `Line ${i + 1} of ${queue.length} — rendering ${lock!.name}'s line…`
     );
     try {
       // A Siray plate is its own call first (2026-10-04): it is slow, and a
       // refused or failed plate stops here, before the paid clip.
       const needsPlate =
-        lock && !cutaway && rowTakesPlate(row) && (row.rowCast.cast.isMulti ? !scenePlateUrl : !rowPlateUrl);
+        lock &&
+        !cutaway &&
+        rowTakesPlate(row) &&
+        !chainReady &&
+        (row.rowCast.cast.isMulti ? !scenePlateUrl : !rowPlateUrl);
       if (needsPlate && plateEngine === "siray") {
         setProgressText(`Line ${i + 1} of ${queue.length} — making the plate on Siray (~$${plateCostUsd.toFixed(2)})…`);
         const made = await postPlateOnly(
@@ -3118,6 +3480,13 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
    * inside that component, not here — this panel deliberately learns
    * nothing about the edit until Done applies it in one go. */
   const [fullScreenScriptOpen, setFullScreenScriptOpen] = useState(false);
+  const [fullScreenPlace, setFullScreenPlace] = useState<ScriptBoxPlace | null>(null);
+  useLayoutEffect(() => {
+    if (fullScreenScriptOpen) return;
+    const el = scriptBoxRef.current;
+    const place = scriptBoxPlaceRef.current;
+    if (el && place) revealScriptBoxPlace(el, place);
+  }, [fullScreenScriptOpen]);
 
   /** What the Format button last did, shown on the button itself for a
    * moment (2026-09-30). Live QA: on an already-tidy script Format was a
@@ -3134,6 +3503,12 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
       setScriptOpen(true);
     }
     formatFeedback.show(changed);
+  };
+
+  const handleRowDurationChange = (row: QueueRow, nextSec: number) => {
+    if (running) return;
+    const next = rewriteSunnyBanksRowDurationTag(scriptText, row.chunk.sourceLineIndex, nextSec);
+    if (next !== scriptText) handleScriptChange(next);
   };
 
   const handleScriptChange = (value: string) => {
@@ -3436,7 +3811,11 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
               </button>
               <button
                 type="button"
-                onClick={() => setFullScreenScriptOpen(true)}
+                onClick={() => {
+                  rememberScriptBoxPlace();
+                  setFullScreenPlace(scriptBoxPlaceRef.current);
+                  setFullScreenScriptOpen(true);
+                }}
                 disabled={running}
                 aria-label="Edit script full screen"
                 className="min-h-[40px] shrink-0 rounded-md bg-zinc-800 px-3 text-xs font-medium text-white/80 disabled:opacity-40"
@@ -3474,11 +3853,23 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                     <SunnyBanksScriptHighlightOverlay text={scriptText} overlayRef={scriptHighlightRef} autoGrowMinRows={12} />
                   )}
                   <textarea
+                    ref={scriptBoxRef}
                     value={scriptText}
                     onChange={(e) => handleScriptChange(e.target.value)}
+                    onPointerDown={() => {
+                      skipRevealRef.current = true;
+                      rememberScriptBoxPlace();
+                      if (!scriptBoxEditing) flushSync(() => setScriptBoxEditing(true));
+                    }}
+                    onSelect={rememberScriptBoxPlace}
+                    onKeyUp={rememberScriptBoxPlace}
                     onFocus={() => setScriptBoxEditing(true)}
-                    onBlur={() => setScriptBoxEditing(false)}
+                    onBlur={() => {
+                      rememberScriptBoxPlace();
+                      setScriptBoxEditing(false);
+                    }}
                     onScroll={(e) => {
+                      rememberScriptBoxPlace();
                       if (scriptHighlightRef.current) {
                         scriptHighlightRef.current.scrollTop = e.currentTarget.scrollTop;
                         scriptHighlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
@@ -3503,8 +3894,16 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                     }
                     rows={12}
                     {...SCRIPT_BOX_IOS_TEXTAREA_PROPS}
-                    className={`relative z-10 w-full resize-y bg-transparent px-3 py-2 leading-6 caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60 ${SCRIPT_BOX_TEXTAREA_CLASS} ${scriptBoxTextClass(scriptBoxEditing)}`}
+                    className={`relative z-10 w-full resize-y bg-transparent ${SCRIPT_BOX_GUTTER_CLASS} py-2 leading-6 caret-white placeholder:text-white/30 focus:outline-none disabled:opacity-60 ${SCRIPT_BOX_TEXTAREA_CLASS} ${scriptBoxTextClass(scriptBoxEditing)}`}
                   />
+                  {!scriptBoxEditing && (
+                    <ScriptShotNumberBadges
+                      marks={shotBadgeMarks}
+                      paddingTopPx={8}
+                      lineHeightPx={24}
+                      onJumpToRow={jumpToShotRow}
+                    />
+                  )}
                 </div>
                 {/* The prose hint that used to sit here (one-speaker-per-line,
                   * + / − rows, Unit 4S stays barefoot) is gone as of 2026-09-18 —
@@ -3524,7 +3923,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-green-300" />
-                      <span className="text-green-300/90">[Action: ] / [silence]</span>
+                      <span className="text-green-300/90">[Action: ] / [Duration: ] / [silence]</span>
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
@@ -3566,7 +3965,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
 
                 {visibleQueue.length > 0 && (
                   <ol className="flex min-w-0 flex-col border-y border-white/10">
-                    {visibleQueue.map((row) => {
+                    {visibleQueueWithScenes.map(({ row, sceneHeading }) => {
                       const runtime = runtimeFor(row.index, row.chunk.raw);
                       const status = row.index === runningIndex ? "rendering" : runtime?.status ?? "idle";
                       const isStatic = status === "done";
@@ -3581,12 +3980,25 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                         planned: row.backendChoice.backend,
                       });
                       return (
-                        <li key={`${activeAct}:${row.index}:${row.chunk.sourceLineIndex}`} className="min-w-0">
+                        <li
+                          key={`${activeAct}:${row.index}:${row.chunk.sourceLineIndex}`}
+                          id={`shot-row-${activeAct}-${row.index + 1}`}
+                          className="min-w-0"
+                        >
+                          {sceneHeading ? <ScriptSceneBar label={sceneHeading} /> : null}
                           <div className="flex min-w-0 w-full items-start gap-1 overflow-x-hidden py-1.5 [touch-action:pan-y]">
-                            <span className="w-4 shrink-0 pt-1 text-center text-[10px] font-medium text-white/40">
+                            <button
+                              type="button"
+                              onClick={() => jumpToShotInScript(row.index + 1)}
+                              className="w-6 shrink-0 pt-1 text-center text-[10px] font-medium text-amber-200/80"
+                              aria-label={`Scroll script to shot ${row.index + 1}`}
+                            >
                               {row.index + 1}
-                            </span>
+                            </button>
                             <div className="min-w-0 flex-1">
+                              {row.sourceSnippet ? (
+                                <p className="truncate text-[10px] leading-snug text-white/40">{row.sourceSnippet}</p>
+                              ) : null}
                               <div className="flex min-h-[32px] min-w-0 items-center gap-1">
                                 {isStatic || cutaway ? (
                                   <span className="min-w-0 truncate text-[12px] font-semibold text-white/90">
@@ -3690,7 +4102,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                               </div>
                               {(() => {
                                 // Who's in the shot (2026-10-03): chips when it's two or more people.
-                                const chipNames = row.rowCast.cast.isMulti ? row.rowCast.cast.names : (runtime?.castNames ?? []);
+                                const chipNames = row.rowCast.cast.names;
                                 const missingNow = isStatic || cutaway ? [] : rowMissingPictures(row);
                                 return (
                                   <>
@@ -3759,20 +4171,42 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                                 </button>
                                               )}
                                               {!isStatic && (status === "idle" || status === "failed" || status === "rendering") && (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => void handleRenderThis(row)}
-                                                  disabled={running || platingIndex !== null || !rowReadyToRender(row)}
-                                                  aria-label={`Render this line ${row.index + 1}`}
-                                                  title={
-                                                    row.chainFromPrevious
-                                                      ? `Animates this line only, starting from shot ${row.index}'s last frame`
-                                                      : "Animates this line only — Render N lines still walks the rest of the act"
-                                                  }
-                                                  className="min-h-[36px] self-start rounded-md border border-amber-300/40 bg-amber-300/15 px-2 text-[10px] font-semibold text-amber-100 disabled:opacity-50"
-                                                >
-                                                  {running && runningIndex === row.index ? "Rendering…" : "Render this"}
-                                                </button>
+                                                <>
+                                                  <select
+                                                    value={String(row.renderDurationSec)}
+                                                    onChange={(e) => handleRowDurationChange(row, Number(e.target.value))}
+                                                    disabled={running}
+                                                    aria-label={`Length for line ${row.index + 1}`}
+                                                    title="This row's clip length. Writes [Duration: Ns] in the script."
+                                                    className="h-9 min-h-[36px] shrink-0 rounded-md border border-white/15 bg-white/[0.03] px-1 text-[10px] font-semibold text-white/80 disabled:opacity-50"
+                                                  >
+                                                    {Array.from(
+                                                      new Set<number>([...ROW_DURATION_PICKER_SEC, row.renderDurationSec])
+                                                    )
+                                                      .sort((a, b) => a - b)
+                                                      .map((sec) => (
+                                                        <option key={sec} value={sec} className="bg-zinc-900">
+                                                          {sec}s
+                                                        </option>
+                                                      ))}
+                                                  </select>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => void handleRenderThis(row)}
+                                                    disabled={running || platingIndex !== null || !rowReadyToRender(row)}
+                                                    aria-label={`Render this line ${row.index + 1}`}
+                                                    title={
+                                                      row.chainFromPrevious
+                                                        ? `Animates this line only, starting from shot ${row.index}'s last frame (~$${row.renderCostUsd.toFixed(2)})`
+                                                        : `Animates this line only — Render N lines still walks the rest of the act (~$${row.renderCostUsd.toFixed(2)})`
+                                                    }
+                                                    className="min-h-[36px] self-start rounded-md border border-amber-300/40 bg-amber-300/15 px-2 text-[10px] font-semibold text-amber-100 disabled:opacity-50"
+                                                  >
+                                                    {running && runningIndex === row.index
+                                                      ? "Rendering…"
+                                                      : `Render this (~$${row.renderCostUsd.toFixed(2)})`}
+                                                  </button>
+                                                </>
                                               )}
                                               {!isStatic && row.index > 0 && (
                                                 <button
@@ -3909,7 +4343,7 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
                                   aria-label={`Try line ${row.index + 1} with Grok`}
                                   className="min-h-[36px] rounded-md border border-red-300/30 px-2.5 text-[11px] font-semibold text-red-200 disabled:opacity-50"
                                 >
-                                  Try with Grok (~${estimateRowVideoCostUsd("grok", SUNNY_BANKS_HOLD_DURATION_SEC).toFixed(2)})
+                                  Try with Grok (~${estimateRowVideoCostUsd("grok", row.renderDurationSec).toFixed(2)})
                                 </button>
                               </div>
                             )}
@@ -3931,7 +4365,11 @@ export function SkidmarksSunnyBanksPanel({ genre = "sunnybank" }: { genre?: Stud
             {fullScreenScriptOpen && (
               <SunnyBanksFullScreenScriptEditor
                 initialText={scriptText}
-                onApply={handleScriptChange}
+                initialPlace={fullScreenPlace}
+                onApply={(next, place) => {
+                  if (place) scriptBoxPlaceRef.current = place;
+                  handleScriptChange(next);
+                }}
                 onClose={() => setFullScreenScriptOpen(false)}
               />
             )}

@@ -537,12 +537,11 @@ export function buildLtxSpeakingCore(name: string, subject: string, line: string
 }
 
 /**
- * Fixed Hold length — not a picker. Matches the director-brain default
- * (~5s) and sits inside LTX's `[2, 15]`s audio/duration window
- * (`MIN_LTX_AUDIO_INPUT_SEC` / `MAX_LTX_CLIP_DURATION_SEC` on the
- * speak-beat route). Speak beats still take their duration from the
- * real ElevenLabs audio; Holds have no speech, so this is the one
- * number the silent-MP3 + graph duration both use.
+ * Default Hold length when the row has no `[Duration: Ns]` tag.
+ * Optional per-row tag + picker (5/8/10/12/15s) override this, clamped
+ * to the engine's window in `lib/clipGeneration.ts` (Grok 5–15s).
+ * Speak beats still take their duration from the real ElevenLabs audio
+ * unless the tag is longer, then the clip is padded to it.
  */
 export const SUNNY_BANKS_HOLD_DURATION_SEC = 5;
 

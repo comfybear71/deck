@@ -130,6 +130,7 @@ function requestFor(all: Row[], index: number, opts: { scenePlateUrl?: string; v
       castNames: chunk.castNames,
       castLooks: chunk.castLooks,
       sceneSpeakers: chunk.sceneSpeakers,
+      sceneKey: chunk.sceneKey,
       appearanceModifier: chunk.appearanceModifier,
     },
     sunnyBanksCastCards(STATE),

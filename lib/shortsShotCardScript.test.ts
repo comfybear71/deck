@@ -198,7 +198,7 @@ describe("the converted script", () => {
       const lock = resolveSunnyBanksSpeaker(c.characterName, STATE, "shorts");
       const rc = inStudioGenre("shorts", () =>
         resolveSunnyBanksRowCast(
-          { kind: c.kind, characterName: c.characterName, cutaway: c.kind === "hold" && !lock, action: c.action, sceneAction: c.sceneAction, castNames: c.castNames, castLooks: c.castLooks, sceneSpeakers: c.sceneSpeakers, appearanceModifier: c.appearanceModifier },
+          { kind: c.kind, characterName: c.characterName, cutaway: c.kind === "hold" && !lock, action: c.action, sceneAction: c.sceneAction, castNames: c.castNames, castLooks: c.castLooks, sceneSpeakers: c.sceneSpeakers, sceneKey: c.sceneKey, appearanceModifier: c.appearanceModifier },
           cards,
         ),
       );

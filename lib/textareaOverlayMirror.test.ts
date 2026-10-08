@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   autoGrowMinHeightPx,
+  groupHighlightSegmentsByLine,
   innerScrollRoomPaddingBottomPx,
   IOS_TEXTAREA_INSET_PX,
   isIosWebKit,
@@ -8,10 +9,14 @@ import {
   overlayPadding,
   resolveOverlayShellHeightPx,
   SCRIPT_BOX_EDITING_TEXT_CLASS,
+  SCRIPT_BOX_GUTTER_CLASS,
   SCRIPT_BOX_IDLE_TEXT_CLASS,
   SCRIPT_BOX_IOS_TEXTAREA_PROPS,
   SCRIPT_BOX_TEXTAREA_CLASS,
+  SCRIPT_SCENE_HEADING_CLASS,
   scriptBoxTextClass,
+  scriptLineCharIndex,
+  scriptLineTopPx,
 } from "./textareaOverlayMirror";
 
 const base = {
@@ -150,5 +155,29 @@ describe("SCRIPT_BOX_IOS_TEXTAREA_PROPS", () => {
   it("locks the typing surface at 16px via text-base + the script-box class", () => {
     expect(SCRIPT_BOX_TEXTAREA_CLASS).toContain("text-base");
     expect(SCRIPT_BOX_TEXTAREA_CLASS).toContain("script-box");
+  });
+});
+
+describe("idle overlay scene headings and shot-badge gutter", () => {
+  it("keeps a left gutter so #N badges don't sit on the first letters", () => {
+    expect(SCRIPT_BOX_GUTTER_CLASS).toContain("pl-9");
+    expect(SCRIPT_SCENE_HEADING_CLASS).toContain("border-t");
+  });
+
+  it("maps a 0-based line to a character index and a pixel top", () => {
+    expect(scriptLineCharIndex("a\nbb\nccc", 0)).toBe(0);
+    expect(scriptLineCharIndex("a\nbb\nccc", 1)).toBe(2);
+    expect(scriptLineCharIndex("a\nbb\nccc", 2)).toBe(5);
+    expect(scriptLineTopPx(0, 24, 8)).toBe(8);
+    expect(scriptLineTopPx(2, 24, 8)).toBe(56);
+  });
+
+  it("splits highlight segments on newlines without dropping the newline", () => {
+    const lines = groupHighlightSegmentsByLine([
+      { text: "=== ACT I ===\n", kind: "scene" },
+      { text: "Shazza: hi", kind: "plain" },
+    ]);
+    expect(lines.map((l) => l.text)).toEqual(["=== ACT I ===\n", "Shazza: hi"]);
+    expect(lines.map((l) => l.segments.map((s) => s.text).join(""))).toEqual(lines.map((l) => l.text));
   });
 });

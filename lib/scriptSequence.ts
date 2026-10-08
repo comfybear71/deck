@@ -489,6 +489,39 @@ export const SCRIPT_SEQUENCE_HIGHLIGHT_CLASSES: Record<ScriptSequenceHighlightKi
  * Intro/Outro/Bridge/Lead/Break/Other Singer are not legend keys
  * (Format maps the section aliases → Instrumental).
  */
+/** A `Part N (start - end)` line — idle overlay divider + Full screen jump. */
+export function isScriptSequencePartHeaderLine(line: string): boolean {
+  return /^\s*#{0,6}\s*Part\s+\d+\s*\(/i.test(line);
+}
+
+export function listScriptSequencePartOffsets(text: string): { label: string; index: number }[] {
+  const out: { label: string; index: number }[] = [];
+  let index = 0;
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (isScriptSequencePartHeaderLine(line)) {
+      const match = line.match(/Part\s+(\d+)/i);
+      out.push({ label: match ? `Part ${match[1]}` : line.trim(), index });
+    }
+    index += line.length + (i < lines.length - 1 ? 1 : 0);
+  }
+  return out;
+}
+
+/** Idle `#N` badges: one per Part header line, numbered in list order
+ * (same 1, 2, 3… as the clip chips below). Display only. */
+export function listScriptSequenceShotBadgeMarks(text: string): { shotNumber: number; lineIndex: number }[] {
+  const lines = text.split("\n");
+  const marks: { shotNumber: number; lineIndex: number }[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (isScriptSequencePartHeaderLine(lines[i] ?? "")) {
+      marks.push({ shotNumber: marks.length + 1, lineIndex: i });
+    }
+  }
+  return marks;
+}
+
 export const SCRIPT_SEQUENCE_COLOUR_TAGS: { label: string; kind: ScriptSequenceHighlightKind }[] = [
   { label: "Part", kind: "part" },
   { label: "Vocal", kind: "vocal" },

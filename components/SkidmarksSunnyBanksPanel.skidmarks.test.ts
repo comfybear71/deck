@@ -135,6 +135,7 @@ function requestFor(all: Row[], index: number, videoBackend: "ltx" | "grok" | "h
       castNames: chunk.castNames,
       castLooks: chunk.castLooks,
       sceneSpeakers: chunk.sceneSpeakers,
+      sceneKey: chunk.sceneKey,
       appearanceModifier: chunk.appearanceModifier,
     },
     sunnyBanksCastCards(STATE, "skidmarks"),

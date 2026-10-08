@@ -101,7 +101,7 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
     title: "There are exactly four picture tags",
     body: [
       "[Location: …], [Character …], [Action: …] and [Cast: …] change the picture. Each goes on its own line and is never spoken.",
-      "Don't invent more: no [Outfit:], no [SFX:], no [silence]. Coloured = a picture tag. White = the spoken line.",
+      "Don't invent more: no [Outfit:], no [SFX:], no [silence]. [Duration: 10s] is a length tag, not a picture tag — see below. Coloured = a picture or length tag. White = the spoken line.",
     ],
     example: "[Location: office_storefront]\n[Character Shazza: holding a rusty tin]\n[Action: counts a stack of bills]",
   },
@@ -138,6 +138,15 @@ export const SUNNY_BANKS_GOD_SCRIPT_RULES: SunnyBanksGuideRule[] = [
       "A name with nothing after the colon is a silent hold. That is the only way to write silence — never [silence].",
     ],
     example: "Shazza: Are you kidding me?   ← speaks\nShazza:                        ← silent hold",
+  },
+  {
+    title: "Silent rows can be longer than 5s",
+    body: [
+      "A silent Grok/H3 row is 5 seconds unless you say otherwise. Put [Duration: 10s] on its own line in that row's block (with [Location:] / [Action:]) — that row only, not the next one.",
+      "The length picker on the row writes the same tag. 5, 8, 10, 12 or 15 seconds (Grok stays inside 5–15s). Talking LTX rows keep the spoken audio unless this tag is longer, then the clip is padded to it.",
+    ],
+    example:
+      "[Location: office_storefront]\n[Action: counts a stack of bills]\n[Duration: 10s]\nShazza:",
   },
   {
     title: "A silent character shot needs no voice",
@@ -298,6 +307,10 @@ Follow these rules exactly. Do not improvise new syntax.${showNote}
       [Cast: <Name>, <Name>]
    Never invent another picture tag — no [Outfit: ...], [SFX: ...],
    [silence], [Scene: ...] or other stage directions on their own line.
+   [Duration: 10s] is a LENGTH tag, not a picture tag: optional, own
+   line in that row's block, that row only. Silent rows default to 5s.
+   Talking rows keep the spoken audio unless this tag is longer.
+
    Anything the parser doesn't recognise on its own line becomes
    dialogue for the previous speaker and costs a paid clip.
 

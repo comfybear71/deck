@@ -91,6 +91,7 @@ function rowCast(chunk: Chunk) {
       castNames: chunk.castNames,
       castLooks: chunk.castLooks,
       sceneSpeakers: chunk.sceneSpeakers,
+      sceneKey: chunk.sceneKey,
       appearanceModifier: chunk.appearanceModifier,
     },
     sunnyBanksCastCards(STATE),

@@ -2452,7 +2452,36 @@ Render is Phase 2 (disabled). See `docs/STAGE_PLAN.md`.
     plain white 16px text (`-webkit-text-size-adjust: 100%`,
     autocorrect/autocapitalize/spellcheck off) so the caret sits on the
     glyphs you type; colours come back on blur / Done. Same lock on
-    Music video Script Sequence, Skidmarks, and Shorts. **Full-screen God Script
+    Music video Script Sequence, Skidmarks, and Shorts. **Keep place after
+    save (2026-10-08)** — the inline box remembers `scrollTop` and the caret
+    across save / re-parse / overlay remount / Done, and Full screen opens
+    on that same place instead of autoFocus dumping you at the end; tap-back
+    lands where you tapped, not at the bottom. **Scene dividers (idle
+    coloured view only)** — a full-width rule and brighter heading sit on
+    `=== ACT … — SCENE … ===` (Music video: each `Part N (` line); none
+    while typing. The Full screen editor has a Scenes jump strip when there
+    are two or more. **Shot list scene bars** — the numbered queue repeats
+    that heading when the scene changes, plus a short snippet of the
+    `[Action:]` (or spoken line); collapsed finished shots keep the grouping.
+    **`#N` badges (idle only)** — a small `#13` in the script gutter on the
+    `[Action:]` or speaker line of each shot, same number as the list row;
+    tap the badge to scroll to the row, tap the row number to scroll the
+    script. Display only, every genre, no parse/render/billing change.
+    **Chain from shot N does not inherit Cast (2026-10-08)** — a silent
+    `House:` after chaining from Arthur+Pip keeps House only (that row's
+    own speaker + names in its own `[Action:]`/`[Cast:]`); the previous
+    last frame is the start image, never their pictures, and that row's
+    own `[Location:]` still beats a stale dropdown pick. **Per-row length
+    (2026-10-08)** — silent Grok rows default to ~5s; optional
+    `[Duration: 10s]` on its own line in that row's block (with
+    `[Location:]`/`[Action:]`) sets that row only, clamped to the engine
+    window in `lib/clipGeneration.ts` (Grok 5–15s). A 5/8/10/12/15s
+    picker on the row writes/reads the same tag. **Render this** cost
+    uses `estimateRowVideoCostUsd` at that length. Talking LTX rows keep
+    the spoken audio unless the tag is longer, then the clip is padded.
+    Same God Script panel for Sunnybank, Skidmarks and Shorts (Music
+    video Script Sequence still sizes clips from Part start–end times).
+    **Full-screen God Script
     editor (2026-09-18, Stuart's ask: "open the God Script box to full
     screen and edit everything in there without it updating before we
     update")** — `⤢ Full screen` beside `⇥ Format` opens
